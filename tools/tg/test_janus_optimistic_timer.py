@@ -41,7 +41,7 @@ class _API:
 
 def _setup(monkeypatch, toggl_cur, ui_cur):
     monkeypatch.setattr(J, "toggl_api", _API(toggl_cur))
-    monkeypatch.setattr(J, "_toggl_blocked", lambda: False)
+    monkeypatch.setattr(J, "_toggl_blocked", lambda *a, **k: False)
     J.STATE.current = ui_cur
     J.STATE.optimistic = None
 

@@ -1024,7 +1024,7 @@ def _toggl_covers_block(target_date: dt.date, start_hour: int, end_hour: int) ->
     try:
         start = target_date.isoformat()
         end = (target_date + dt.timedelta(days=1)).isoformat()
-        entries = _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
+        entries = _toggl_entries(start, end)
     except Exception as e:
         log(f"toggl coverage check: ERROR {e}")
         return False
@@ -2019,16 +2019,20 @@ def _load_toggl_key() -> str:
     return ""
 
 
-def _toggl_get(path: str):
+def _toggl_entries(start: str, end: str) -> list:
+    """Time entries starting on local days [start, end) via the shared client
+    (Reports-backed get_entries: workspace quota, 600/hr). Replaces a raw
+    GET /me/time_entries, which is charged to the 30/hr user bucket on every
+    plan and had no throttle or cooldown handling (2026-10-20)."""
     key = _load_toggl_key()
     if not key:
         raise RuntimeError("No TOGGL_API_KEY found")
-    url = f"{TOGGL_API_BASE}{path}"
-    creds = base64.b64encode(f"{key}:api_token".encode()).decode()
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Basic {creds}")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    os.environ.setdefault("TOGGL_API_KEY", key)
+    root = str(Path.home() / "i446-monorepo")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from mcp.toggl_server import toggl_api  # noqa: E402
+    return toggl_api.get_entries(start, end) or []
 
 
 def _entry_effective_minutes(e: dict, target_date: dt.date, now_ts: dt.datetime):
@@ -2088,7 +2092,7 @@ def compute_toggl_point_tag_minutes(target_date: dt.date) -> dict[str, int]:
     unconditionally would silently misbehave if a future point tag ever were."""
     start = target_date.isoformat()
     end = (target_date + dt.timedelta(days=1)).isoformat()
-    entries = _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
+    entries = _toggl_entries(start, end)
     now_ts = dt.datetime.now(dt.timezone.utc)
     tag_minutes: dict[str, int] = {}
     for e in entries:

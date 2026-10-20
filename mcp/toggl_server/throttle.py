@@ -1,11 +1,24 @@
 """Cross-process, client-side rate limiter for the Toggl API.
 
-Toggl's free tier is ~a 1 req/sec leaky bucket; bursts come back as 402 (Payment
-Required) or 429. The tricky part: `tg-fast` spawns a fresh PROCESS per /tg
-command, so an in-process limiter can't coordinate across invocations. This
-paces EVERY caller (the MCP server, toggl_cli/tg-fast, janus, 0t-fast) through
-one shared token bucket kept in a small fcntl-locked state file, plus a shared
-cooldown that all processes honour after a 402/429.
+Toggl enforces two different limits (engineering.toggl.com/docs/track, 2026-10):
+
+1. A ~1 req/sec leaky bucket per API token -> HTTP 429. Short; the shared
+   `cooldown_until` (COOLDOWN, 60s) covers it.
+2. An HOURLY sliding-window quota per BUCKET -> HTTP 402 with "Your quota will
+   reset in N seconds". User-scoped requests (`/api/v9/me/*`) get 30/hr on
+   EVERY plan (Toggl offers no higher quota for them, whatever the 402 body's
+   "upgrade" text says). Workspace-scoped requests (`/workspaces/{id}/*`, the
+   Reports API) get the plan's quota: 600/hr on Premium. A 402 on one bucket
+   says nothing about the other, so the quota cooldown is tracked PER BUCKET
+   (`quota_until_user`, `quota_until_ws`) -- before 2026-10-20 one exhausted
+   /me/current bucket parked every write too, with 580 workspace requests
+   still available.
+
+The tricky part: `tg-fast` spawns a fresh PROCESS per /tg command, so an
+in-process limiter can't coordinate across invocations. This paces EVERY
+caller (the MCP server, toggl_cli/tg-fast, janus, 0t-fast) through one shared
+token bucket kept in a small fcntl-locked state file, plus the shared
+cooldowns that all processes honour after a 402/429.
 
 Design notes:
 - Proactive PACING (token bucket) is what actually prevents tripping the limit;
@@ -41,6 +54,19 @@ COOLDOWN = float(os.environ.get("TOGGL_THROTTLE_COOLDOWN", "60.0"))  # after a 4
 MAX_COOLDOWN = float(os.environ.get("TOGGL_THROTTLE_MAX_COOLDOWN", "3600.0"))
 RESET_MARGIN = 5.0  # s past the server's reset estimate before the first retry
 _RESET_RE = re.compile(r"reset in (\d+) seconds", re.IGNORECASE)
+
+# Toggl's hourly quota buckets. "user" = /api/v9/me/* (30/hr on every plan);
+# "ws" = everything workspace-scoped, including the Reports API.
+BUCKETS = ("user", "ws")
+
+
+def bucket_for(path: str) -> str:
+    """Which hourly-quota bucket an API path is charged to."""
+    return "user" if (path or "").startswith("/me") else "ws"
+
+
+def _quota_key(bucket: str) -> str:
+    return f"quota_until_{bucket}"
 
 
 def parse_reset_seconds(body: str | bytes | None) -> float | None:
@@ -131,44 +157,73 @@ def acquire(max_wait: float | None = None) -> float:
         waited += nap
 
 
-def cooling_down() -> bool:
-    """True while a post-402 cooldown is active (read from the shared state file).
-    Lets EVERY process go quiet after a 402 — not just the one that hit it — so
-    background pollers (janus) stop adding load and the limit can recover, rather
-    than dribbling calls through and re-tripping it."""
+def _read_state() -> dict:
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _until_values(d: dict, bucket: str | None) -> list:
+    """The cooldown deadlines that apply: the global 429 one always, plus the
+    named bucket's quota deadline (or EVERY bucket's when bucket is None, the
+    conservative legacy reading used by callers that don't say which bucket
+    they're about to hit)."""
+    vals = [float(d.get("cooldown_until", 0.0) or 0.0)]
+    for b in (BUCKETS if bucket is None else (bucket,)):
+        vals.append(float(d.get(_quota_key(b), 0.0) or 0.0))
+    return vals
+
+
+def cooling_down(bucket: str | None = None) -> bool:
+    """True while a cooldown that applies to `bucket` is active (read from the
+    shared state file): the global 429 cooldown, or that bucket's hourly-quota
+    cooldown. bucket=None = any. Lets EVERY process go quiet after a 402/429,
+    not just the one that hit it, so background pollers (janus) stop adding
+    load and the limit can recover rather than dribbling calls through and
+    re-tripping it."""
     if fcntl is None:
         return False
-    try:
-        d = json.loads(STATE.read_text())
-        return time.time() < float(d.get("cooldown_until", 0.0))
-    except (OSError, ValueError, json.JSONDecodeError, TypeError):
-        return False
+    return time.time() < max(_until_values(_read_state(), bucket))
 
 
-def cooldown_remaining() -> float:
-    """Seconds left on the shared post-402 cooldown (0.0 when clear)."""
+def cooldown_remaining(bucket: str | None = None) -> float:
+    """Seconds left on the cooldown that applies to `bucket` (0.0 when clear).
+    bucket=None = the longest across all buckets."""
     if fcntl is None:
         return 0.0
-    try:
-        d = json.loads(STATE.read_text())
-        return max(0.0, float(d.get("cooldown_until", 0.0)) - time.time())
-    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+    return max(0.0, max(_until_values(_read_state(), bucket)) - time.time())
+
+
+def quota_remaining(bucket: str) -> float:
+    """Seconds left on `bucket`'s hourly-quota (402) cooldown alone, ignoring
+    the global 429 cooldown. 0.0 when that bucket is open. A caller about to
+    hit an exhausted bucket should not send: the request is a guaranteed 402
+    (and, before 2026-10-20, acquire()'s 8s wait-cap let exactly those doomed
+    requests through)."""
+    if fcntl is None:
         return 0.0
+    d = _read_state()
+    return max(0.0, float(d.get(_quota_key(bucket), 0.0) or 0.0) - time.time())
 
 
-def note_quota_reset(estimate: float | None) -> None:
+def note_quota_reset(estimate: float | None, bucket: str | None = None) -> None:
     """Back off for the server's own reset estimate (the hourly-cap 402 body,
     see parse_reset_seconds), padded by RESET_MARGIN, never below the default
-    COOLDOWN and never above MAX_COOLDOWN. None = no estimate: the default."""
+    COOLDOWN and never above MAX_COOLDOWN. None = no estimate: the default.
+    With a bucket, only that bucket's quota cooldown is armed (a /me 402 must
+    not park workspace writes); without one, the legacy global cooldown."""
     if estimate is None:
-        note_rate_limit()
+        secs = None
     else:
-        note_rate_limit(min(MAX_COOLDOWN, max(COOLDOWN, estimate + RESET_MARGIN)))
+        secs = min(MAX_COOLDOWN, max(COOLDOWN, estimate + RESET_MARGIN))
+    note_rate_limit(secs, bucket=bucket)
 
 
-def note_rate_limit(seconds: float | None = None) -> None:
+def note_rate_limit(seconds: float | None = None, bucket: str | None = None) -> None:
     """Record that Toggl rate-limited us (402/429) so every process backs off
-    until the shared cooldown clears. Best-effort."""
+    until the shared cooldown clears. bucket=None arms the global (429)
+    cooldown; a bucket name arms that bucket's quota cooldown. Best-effort."""
     if fcntl is None:
         return
     s = COOLDOWN if seconds is None else seconds
@@ -180,7 +235,7 @@ def note_rate_limit(seconds: float | None = None) -> None:
     try:
         fcntl.flock(fh, fcntl.LOCK_EX)
         d = _load(fh)
-        d["cooldown_until"] = time.time() + s
+        d["cooldown_until" if bucket is None else _quota_key(bucket)] = time.time() + s
         _store(fh, d)
     finally:
         try:

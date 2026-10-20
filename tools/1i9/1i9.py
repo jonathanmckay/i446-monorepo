@@ -15,15 +15,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import datetime as _dt
 import importlib.util
 import json
 import re
 import sys
-import urllib.request
 from pathlib import Path
-from urllib.parse import quote
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import run_bounded  # noqa: E402
@@ -69,16 +66,26 @@ def _toggl_key() -> str:
 
 def i9_minutes(start: _dt.date, end: _dt.date) -> int:
     """Minutes on the i9 Toggl project for Sun-Sat, local-tz boundaries."""
-    tz = _dt.datetime.now().astimezone().tzinfo
-    s = _dt.datetime.combine(start, _dt.time.min, tzinfo=tz)
-    e = _dt.datetime.combine(end + _dt.timedelta(days=1), _dt.time.min, tzinfo=tz)
-    url = ("https://api.track.toggl.com/api/v9/me/time_entries"
-           f"?start_date={quote(s.isoformat())}&end_date={quote(e.isoformat())}")
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", "Basic " + base64.b64encode(
-        f"{_toggl_key()}:api_token".encode()).decode())
-    with urllib.request.urlopen(req, timeout=20) as r:
-        entries = json.loads(r.read())
+    # Shared client, Reports-backed (workspace quota) instead of a raw
+    # GET /me/time_entries (30/hr user bucket on every plan, 2026-10-20).
+    # get_entries filters on local DATES; keep the Sun-Sat local-day check.
+    import os
+    os.environ.setdefault("TOGGL_API_KEY", _toggl_key())
+    root = str(Path.home() / "i446-monorepo")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from mcp.toggl_server import toggl_api  # noqa: E402
+    raw = toggl_api.get_entries(start.isoformat(), (end + _dt.timedelta(days=1)).isoformat(),
+                                include_running=False) or []
+    entries = []
+    for e in raw:
+        try:
+            d = _dt.datetime.fromisoformat(
+                str(e["start"]).replace("Z", "+00:00")).astimezone().date()
+        except (KeyError, ValueError):
+            continue
+        if start <= d <= end:
+            entries.append(e)
     return sum(int(e.get("duration", 0)) // 60 for e in entries
                if e.get("project_id") == I9_PROJECT_ID and int(e.get("duration", 0)) > 0)
 

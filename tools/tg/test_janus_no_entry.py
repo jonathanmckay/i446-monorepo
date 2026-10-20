@@ -19,8 +19,8 @@ def _load():
     spec.loader.exec_module(m)
     # Isolate from the shared cross-process cooldown file (a live cooldown there
     # would make _toggl_blocked() skip the fetch these tests exercise).
-    m.toggl_throttle.cooling_down = lambda: False
-    m.STATE.toggl_blocked_until = 0.0
+    m.toggl_throttle.cooling_down = lambda *a, **k: False
+    m.STATE.toggl_blocked_until = {"user": 0.0, "ws": 0.0}
     return m
 
 
@@ -159,6 +159,8 @@ def test_fetch_current_marks_unknown_on_rate_limit(monkeypatch):
         raise RuntimeError("Toggl API GET /me/time_entries/current -> 402: hourly limit")
 
     monkeypatch.setattr(m.toggl_api, "get_current", _boom)
+
+    monkeypatch.setattr(m.toggl_api, "get_current_cached", _boom)
     m.fetch_current()
     assert m.STATE.current_known is False
     assert m.STATE.current is sentinel, "must keep last-known current on failure"
@@ -169,6 +171,7 @@ def test_fetch_current_marks_known_on_success(monkeypatch):
     m.STATE.current_known = False
     entry = {"description": "hci", "project_id": None, "start": "x"}
     monkeypatch.setattr(m.toggl_api, "get_current", lambda: entry)
+    monkeypatch.setattr(m.toggl_api, "get_current_cached", lambda: entry)
     m.fetch_current()
     assert m.STATE.current_known is True
     assert m.STATE.current is entry
@@ -186,6 +189,7 @@ def test_fetch_current_sets_no_timer_since_on_first_idle_observation(monkeypatch
     m.STATE.current = {"description": "work", "project_id": None, "start": "x"}
     m.STATE.no_timer_since = None
     monkeypatch.setattr(m.toggl_api, "get_current", lambda: None)
+    monkeypatch.setattr(m.toggl_api, "get_current_cached", lambda: None)
     m.fetch_current()
     assert m.STATE.current is None
     assert m.STATE.no_timer_since is not None, \
@@ -199,6 +203,7 @@ def test_fetch_current_does_not_rewind_no_timer_since_on_repeat_idle_polls(monke
     first = 12345.0
     m.STATE.no_timer_since = first
     monkeypatch.setattr(m.toggl_api, "get_current", lambda: None)
+    monkeypatch.setattr(m.toggl_api, "get_current_cached", lambda: None)
     m.fetch_current()
     assert m.STATE.no_timer_since == first, \
         "a later idle poll must not reset the grace-period clock"
@@ -210,6 +215,7 @@ def test_fetch_current_clears_no_timer_since_when_timer_starts(monkeypatch):
     m.STATE.no_timer_since = 12345.0
     entry = {"description": "work", "project_id": None, "start": "x"}
     monkeypatch.setattr(m.toggl_api, "get_current", lambda: entry)
+    monkeypatch.setattr(m.toggl_api, "get_current_cached", lambda: entry)
     m.fetch_current()
     assert m.STATE.no_timer_since is None
 

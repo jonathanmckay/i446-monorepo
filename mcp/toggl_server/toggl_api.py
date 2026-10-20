@@ -13,6 +13,17 @@ from . import throttle
 from .config import TOGGL_API_KEY, TOGGL_WORKSPACE_ID
 
 BASE_URL = "https://api.track.toggl.com/api/v9"
+# Reports API v3: workspace-scoped, so it is charged to the plan's hourly
+# quota (600/hr on Premium) instead of the fixed 30/hr that every /me/* read
+# shares on every plan (Toggl docs, 2026-10-20). All entry READS go through
+# it; see get_entries. It never returns the running entry (verified live).
+REPORTS_URL = "https://api.track.toggl.com/reports/api/v3"
+REPORTS_PAGE_SIZE = 1000
+# Reports rows carry tag_ids, not names; the workspace tag list (one
+# workspace-bucket call) is cached here and refetched only when an unknown
+# id shows up (a tag created since).
+TAGS_CACHE = Path.home() / ".cache" / "toggl-tags.json"
+TAGS_REFETCH_MIN_S = 600.0
 
 # janus polls the running timer only every 30s; signalling it after a
 # timer-state change makes it refresh immediately. This lives in toggl_api
@@ -20,14 +31,23 @@ BASE_URL = "https://api.track.toggl.com/api/v9"
 # /d357, not just the toggl_cli path that previously had its own nudge.
 JANUS_PID = Path.home() / ".cache" / "janus.pid"
 
-# Shared running-timer cache. Toggl is a ~1 req/sec leaky bucket, and several
-# processes poll /current independently (janus every 30s, every open dtd picker
-# via dtd-ticker, …). Each live get_current() write-throughs here; pollers read
-# this file within CURRENT_CACHE_TTL instead of each hitting the API — collapsing
-# N independent pollers into ~one network read per window. Load scales with UI
-# activity (idle → zero), which a standalone 24/7 daemon would not give.
+# Shared running-timer cache. /me/time_entries/current is the ONE read that
+# has no workspace-scoped equivalent (every /workspaces/... variant is a 405),
+# so it is charged to the 30/hr user bucket on every plan. Several processes
+# poll it (janus every 30s, every open dtd picker via dtd-ticker, …), so:
+#  - every live get_current() write-throughs here and pollers read this file
+#    within CURRENT_CACHE_TTL instead of each hitting the API (N pollers ->
+#    ~one network read per window: 12/hr at the 5-minute TTL);
+#  - every MUTATION write-throughs the running state it already knows from
+#    its own response (start -> the new entry, stop/delete -> None) instead of
+#    invalidating and making every poller re-read. Before 2026-10-20 a morning
+#    of 15 habit switches cost ~45 user-bucket reads and 402'd by 09:00.
+# The TTL only bounds how late a timer changed from ANOTHER client (the phone
+# app) is noticed; the elapsed clock is computed from the entry's start.
 CURRENT_CACHE = Path.home() / ".cache" / "toggl-current.json"
-CURRENT_CACHE_TTL = 30.0  # seconds; matches janus's steady-state poll cadence
+CURRENT_CACHE_TTL = 300.0  # seconds
+# A reading older than this is not merged into get_entries as "running".
+CURRENT_CACHE_MAX_MERGE_AGE = 600.0
 
 
 def _notify_tui():
@@ -53,12 +73,34 @@ def _write_current_cache(entry):
 
 
 def _invalidate_current_cache():
-    """Drop the cache so the next read fetches fresh. Called after any mutation
-    (start/stop/create/delete) since those can change what's running."""
+    """Drop the cache so the next read fetches fresh. Only for callers that
+    changed the running state through a path whose response they did not keep
+    (janus's bulk edits); the mutation helpers below write-through instead."""
     try:
         CURRENT_CACHE.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _read_current_cache(max_age=None):
+    """(found, entry) from the shared cache with NO network fallback. found is
+    False when the file is missing, torn, or older than max_age (None = any
+    age). Lets mutations and get_entries consult the last observation without
+    spending a user-bucket read."""
+    try:
+        raw = json.loads(CURRENT_CACHE.read_text())
+        if max_age is not None and time.time() - float(raw["ts"]) > max_age:
+            return False, None
+        return True, raw["entry"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False, None
+
+
+def _cached_is(entry_id):
+    """True when the shared cache's last observation says `entry_id` is the
+    running entry."""
+    found, cur = _read_current_cache()
+    return bool(found and isinstance(cur, dict) and cur.get("id") == entry_id)
 
 
 def _auth_header():
@@ -74,9 +116,26 @@ _MAX_429_RETRIES = int(os.environ.get("TOGGL_MAX_429_RETRIES", "3"))
 _MAX_429_DELAY = float(os.environ.get("TOGGL_MAX_429_DELAY", "30"))
 
 
-def _request(method, path, body=None):
-    url = f"{BASE_URL}{path}"
+def _request(method, path, body=None, base=None, want_headers=False):
+    """One Toggl HTTP call. `path` is relative to BASE_URL (v9) or `base`.
+
+    Quota handling (2026-10-20): the path's hourly-quota bucket is checked
+    FIRST; while that bucket is in a 402 cooldown the call raises at once with
+    no network request (a send would be a guaranteed 402, and acquire()'s wait
+    cap used to let exactly those through). A 402 arms only ITS bucket's
+    cooldown for the server's own reset estimate; a 429 arms the short global
+    one and is retried. When a successful response says the bucket just hit
+    zero (X-Toggl-Quota-Remaining: 0) the cooldown is armed proactively, so
+    the next caller doesn't have to eat the 402 to learn it.
+    want_headers=True returns (result, headers) for paginated endpoints."""
+    url = f"{base or BASE_URL}{path}"
     data = json.dumps(body).encode() if body else None
+    bucket = throttle.bucket_for(path)
+    left = throttle.quota_remaining(bucket)
+    if left > 0:
+        raise RuntimeError(
+            f"Toggl API {method} {path} -> 402 (hourly quota for the {bucket} bucket is "
+            f"exhausted; resets in {int(left)}s; request not sent)")
     # On 429, honour Retry-After (Toggl doesn't always send it, so fall back to
     # capped exponential backoff). Without this a tripped limit raises straight
     # to the UI and the next poll re-trips it — the same pattern ibx/slack.py
@@ -89,26 +148,47 @@ def _request(method, path, body=None):
         try:
             with urllib.request.urlopen(req) as resp:
                 if resp.status == 200:
-                    result = json.loads(resp.read())
+                    raw = resp.read()
+                    result = json.loads(raw) if raw else None
+                    headers = getattr(resp, "headers", None)
+                    _note_quota_headers(headers, bucket)
                     if method != "GET":  # a mutation succeeded → wake janus now
-                        _invalidate_current_cache()  # running state may have changed
                         _notify_tui()
-                    return result
-                return None
+                    return (result, headers) if want_headers else result
+                return (None, None) if want_headers else None
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else ""
-            # 402 (free-tier cap) and 429 both mean "slow down": arm the shared
-            # cooldown so every process — not just this one — backs off. The
-            # hourly-cap 402 says how long ("reset in N seconds"); use it, or
-            # every poller spends the rest of the hour re-tripping the cap.
-            if e.code in (402, 429):
-                throttle.note_quota_reset(throttle.parse_reset_seconds(error_body))
-            if e.code == 429 and attempt < _MAX_429_RETRIES - 1:
-                retry_after = e.headers.get("Retry-After")
-                delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
-                time.sleep(min(delay, _MAX_429_DELAY))
-                continue
+            if e.code == 402:
+                # Hourly quota: the body says how long ("reset in N seconds"),
+                # the header too. Arm THIS bucket only.
+                est = throttle.parse_reset_seconds(error_body)
+                if est is None:
+                    est = _header_float(e.headers, "X-Toggl-Quota-Resets-In")
+                throttle.note_quota_reset(est, bucket=bucket)
+            elif e.code == 429:
+                throttle.note_rate_limit()  # short global leaky-bucket cooldown
+                if attempt < _MAX_429_RETRIES - 1:
+                    retry_after = e.headers.get("Retry-After")
+                    delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
+                    time.sleep(min(delay, _MAX_429_DELAY))
+                    continue
             raise RuntimeError(f"Toggl API {method} {path} -> {e.code}: {error_body}")
+
+
+def _header_float(headers, name):
+    try:
+        v = headers.get(name) if headers is not None else None
+        return float(v) if v is not None else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _note_quota_headers(headers, bucket):
+    """Arm the bucket's cooldown when a SUCCESSFUL response reports the quota
+    just ran out, so the next request doesn't have to 402 to find out."""
+    rem = _header_float(headers, "X-Toggl-Quota-Remaining")
+    if rem is not None and rem <= 0:
+        throttle.note_quota_reset(_header_float(headers, "X-Toggl-Quota-Resets-In"), bucket=bucket)
 
 
 def _record_create(entry):
@@ -165,11 +245,15 @@ def start_timer(description, project_id=None, tags=None, start_time=None):
         body["tags"] = tags
     entry = _request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body)
     _record_create(entry)
+    if isinstance(entry, dict):
+        _write_current_cache(entry)  # we KNOW what's running now: no re-read
     return entry
 
 
 def stop_timer(entry_id):
     entry = _request("PATCH", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}/stop")
+    # Only one entry can run per user, so a successful stop means idle.
+    _write_current_cache(None)
     # Value-tag 媒分 credit (2026-09-16): every stop path funnels through
     # here, so an explicitly #-1/#-2/#-3-tagged entry is credited exactly
     # once regardless of who stopped it. Best-effort; see tag_credits.py.
@@ -180,7 +264,9 @@ def stop_timer(entry_id):
 
 def get_current():
     """Live fetch of the running entry (None when idle). Write-throughs to the
-    shared cache so concurrent pollers can ride this fetch via get_current_cached."""
+    shared cache so concurrent pollers can ride this fetch via get_current_cached.
+    USER-BUCKET read (30/hr on every plan): prefer get_current_cached unless a
+    just-changed-elsewhere timer must be caught right now."""
     entry = _request("GET", "/me/time_entries/current")
     _write_current_cache(entry)
     return entry
@@ -191,26 +277,160 @@ def get_current_cached(max_age=CURRENT_CACHE_TTL):
     live get_current() (which refreshes the cache). Lets many pollers share ~one
     network read per max_age window. The footer/elapsed clock is computed from the
     entry's start time, so a slightly stale entry still renders an exact clock;
-    only detection of an externally-changed timer lags by up to max_age, and any
-    mutation invalidates the cache immediately. Falls back to live on any cache
-    problem (missing, torn, malformed)."""
-    try:
-        raw = json.loads(CURRENT_CACHE.read_text())
-        if time.time() - float(raw["ts"]) <= max_age:
-            return raw["entry"]
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
+    only detection of a timer changed from ANOTHER client lags by up to max_age.
+    Every mutation made through this module write-throughs the cache at once.
+    Falls back to live on any cache problem (missing, torn, malformed)."""
+    found, entry = _read_current_cache(max_age)
+    if found:
+        return entry
     return get_current()
 
 
-def get_entries(start_date=None, end_date=None):
-    params = []
-    if start_date:
-        params.append(f"start_date={start_date}")
-    if end_date:
-        params.append(f"end_date={end_date}")
-    qs = "?" + "&".join(params) if params else ""
-    return _request("GET", f"/me/time_entries{qs}")
+def _date_part(value, default):
+    """A date from a 'YYYY-MM-DD' or RFC3339 string (tz-aware ones converted
+    to the active local zone first), a date/datetime, or `default` when None."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, datetime):
+        d = value
+    elif hasattr(value, "year") and not isinstance(value, str):
+        return value  # a date
+    else:
+        text = str(value).replace("Z", "+00:00")
+        try:
+            d = datetime.fromisoformat(text)
+        except ValueError:
+            return datetime.strptime(text[:10], "%Y-%m-%d").date()
+        if len(text) <= 10:
+            return d.date()
+    if d.tzinfo is not None:
+        d = d.astimezone(_local_tz())
+    return d.date()
+
+
+def _local_tz():
+    try:
+        sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+        import daytime
+        return daytime.active_zone()
+    except Exception:  # noqa: BLE001
+        return datetime.now().astimezone().tzinfo
+
+
+def _tag_names(tag_ids):
+    """tag id -> name for the given ids, via the disk-cached workspace tag
+    list; refetched (one workspace-bucket call) when an id is unknown. Ids
+    still unknown after that (fetch failed) fall back to their str()."""
+    ids = {int(t) for t in tag_ids if t is not None}
+    try:
+        raw = json.loads(TAGS_CACHE.read_text())
+        cache = {int(k): v for k, v in raw.get("tags", {}).items()}
+        fetched_at = float(raw.get("fetched_at", 0.0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        cache, fetched_at = {}, 0.0
+    # An id that stays unknown (a tag deleted after use) must not trigger a
+    # refetch on every call: at most one per TAGS_REFETCH_MIN_S.
+    if ids - set(cache) and time.time() - fetched_at >= TAGS_REFETCH_MIN_S:
+        try:
+            fresh = _request("GET", f"/workspaces/{TOGGL_WORKSPACE_ID}/tags") or []
+            cache = {int(t["id"]): t["name"] for t in fresh if "id" in t}
+            TAGS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = TAGS_CACHE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"fetched_at": time.time(),
+                                       "tags": {str(k): v for k, v in cache.items()}}))
+            tmp.replace(TAGS_CACHE)
+        except (RuntimeError, OSError, KeyError, TypeError, ValueError):
+            pass
+    return {i: cache.get(i, str(i)) for i in ids}
+
+
+def _reports_search(start, end):
+    """Every completed entry whose start falls on [start, end] (inclusive,
+    workspace-local dates) from Reports v3, flattened to v9-shaped dicts.
+    Paginates via X-Next-Row-Number."""
+    out = []
+    first_row = 1
+    for _ in range(200):  # hard stop; a day has far fewer than 200k rows
+        body = {"start_date": start.isoformat(), "end_date": end.isoformat(),
+                "page_size": REPORTS_PAGE_SIZE, "first_row_number": first_row}
+        groups, headers = _request("POST", f"/workspace/{TOGGL_WORKSPACE_ID}/search/time_entries",
+                                   body, base=REPORTS_URL, want_headers=True)
+        if not groups:
+            break
+        for g in groups:
+            for te in g.get("time_entries") or []:
+                secs = te.get("seconds")
+                out.append({
+                    "id": te.get("id"),
+                    "workspace_id": TOGGL_WORKSPACE_ID,
+                    "user_id": g.get("user_id"),
+                    "project_id": g.get("project_id"),
+                    "task_id": g.get("task_id"),
+                    "billable": g.get("billable"),
+                    "description": g.get("description") or "",
+                    "start": te.get("start"),
+                    "stop": te.get("stop"),
+                    "duration": int(secs) if secs is not None else 0,
+                    "tag_ids": list(g.get("tag_ids") or []),
+                    "at": te.get("at"),
+                })
+        nxt = _header_float(headers, "X-Next-Row-Number")
+        if nxt is None or int(nxt) <= first_row:
+            break
+        first_row = int(nxt)
+    all_ids = {t for e in out for t in e["tag_ids"]}
+    names = _tag_names(all_ids) if all_ids else {}
+    for e in out:
+        e["tags"] = [names.get(int(t), str(t)) for t in e["tag_ids"]]
+    return out
+
+
+def get_entries(start_date=None, end_date=None, include_running=True):
+    """Time entries starting on the local days [start_date, end_date), v9
+    shaped (id, description, start, stop, duration -- negative while running
+    --, project_id, tags as NAMES, ...). Same signature and shape as the old
+    GET /me/time_entries wrapper so every caller moved at once, but sourced
+    from the Reports API (workspace bucket, 600/hr) instead of /me (30/hr).
+
+    Differences from v9 to know about: v9 filtered on UTC instants and
+    end-exclusive; Reports filters on workspace-local DATES, inclusive, so
+    end_date here is mapped to end_date - 1 day. Every existing caller widens
+    its window by a day each side and clips locally, so this is a superset
+    for them. RFC3339 bounds are reduced to their local date.
+
+    Reports never returns the RUNNING entry; it is merged in from the shared
+    current cache when that observation is recent (no network: a cold cache
+    on a machine without janus simply yields no running row). Pass
+    include_running=False when only completed time matters."""
+    tz = _local_tz()
+    today = datetime.now(tz).date()
+    start = _date_part(start_date, today)
+    end_excl = _date_part(end_date, start + timedelta(days=1))
+    end = max(start, end_excl - timedelta(days=1))
+    # Reports filters on WORKSPACE-local dates; the active zone can differ
+    # (/travel). Query a day wider each side (no extra requests, just rows)
+    # and keep exactly the entries whose start falls on [start, end] in the
+    # active zone, so callers get the same answer wherever JM is.
+    rows = _reports_search(start - timedelta(days=1), end + timedelta(days=1))
+    entries = [e for e in rows if start <= (_start_day(e, tz) or start - timedelta(days=1)) <= end]
+    if include_running:
+        found, cur = _read_current_cache(CURRENT_CACHE_MAX_MERGE_AGE)
+        if found and isinstance(cur, dict) and cur.get("id") is not None:
+            if all(e["id"] != cur.get("id") for e in entries):
+                cur_day = _start_day(cur, tz)
+                if cur_day is not None and start <= cur_day <= end:
+                    entries.append(dict(cur))
+    entries.sort(key=lambda e: e.get("start") or "")
+    return entries
+
+
+def _start_day(entry, tz):
+    """The local (active-zone) date an entry started on, or None."""
+    try:
+        return datetime.fromisoformat(
+            str(entry.get("start")).replace("Z", "+00:00")).astimezone(tz).date()
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def get_projects():
@@ -240,37 +460,55 @@ def update_entry(entry_id, **fields):
     Setting `stop` on the RUNNING entry is a stop in all but name (janus
     retime, janus-mobile), so it gets the same value-tag credit as
     stop_timer; a retime of an already-closed entry does not (2026-09-17)."""
-    was_running = False
-    if fields.get("stop"):
+    found, cur = _read_current_cache()
+    if not found:
+        # Cold cache (no janus on this machine): one live read is worth it so
+        # a value-tagged running entry still gets its 媒分 credit on stop.
         try:
             cur = get_current_cached()
-            was_running = bool(cur) and cur.get("id") == entry_id
         except Exception:  # noqa: BLE001
-            was_running = False
+            cur = None
+    was_running = isinstance(cur, dict) and cur.get("id") == entry_id
     body = {"workspace_id": TOGGL_WORKSPACE_ID}
     body.update(fields)
     entry = _request("PUT", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}", body)
-    if was_running and isinstance(entry, dict):
-        _credit_value_tags(entry)
+    if was_running and fields.get("stop"):
+        _write_current_cache(None)  # the running entry was closed
+        if isinstance(entry, dict):
+            _credit_value_tags(entry)
+    elif isinstance(entry, dict) and (entry.get("duration") or 0) < 0:
+        # Still running with fields changed, OR a closed entry REOPENED
+        # (janus: stop=None, duration=-epoch): either way this is what runs now.
+        _write_current_cache(entry)
     return entry
 
 
 def delete_entry(entry_id):
-    url = f"{BASE_URL}/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
+    path = f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
+    left = throttle.quota_remaining(throttle.bucket_for(path))
+    if left > 0:
+        raise RuntimeError(f"Toggl API DELETE {path} -> 402 (hourly quota exhausted; "
+                           f"resets in {int(left)}s; request not sent)")
+    was_running = _cached_is(entry_id)
     throttle.acquire()  # same client-side pacing as _request()
-    req = urllib.request.Request(url, method="DELETE")
+    req = urllib.request.Request(f"{BASE_URL}{path}", method="DELETE")
     req.add_header("Authorization", _auth_header())
     try:
         with urllib.request.urlopen(req) as resp:
             ok = resp.status in (200, 204)
-            if ok:  # deleting the running entry changes current → drop the cache
-                _invalidate_current_cache()
+            if ok:
+                if was_running:  # deleting the running entry → idle
+                    _write_current_cache(None)
                 _notify_tui()
             return ok
     except urllib.error.HTTPError as e:
-        if e.code in (402, 429):
+        body = e.read().decode() if e.fp else ""
+        if e.code == 402:
+            throttle.note_quota_reset(throttle.parse_reset_seconds(body),
+                                      bucket=throttle.bucket_for(path))
+        elif e.code == 429:
             throttle.note_rate_limit()
-        raise RuntimeError(f"Toggl API DELETE -> {e.code}: {e.read().decode()}")
+        raise RuntimeError(f"Toggl API DELETE -> {e.code}: {body}")
 
 
 def trim_range(start_dt, end_dt, exclude_ids=None):

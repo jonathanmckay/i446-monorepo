@@ -35,18 +35,20 @@ def test_parse_reset_seconds():
 def test_402_body_reset_seconds_reach_the_shared_cooldown(monkeypatch):
     seen = []
     monkeypatch.setattr(toggl_api.throttle, "acquire", lambda *a, **k: 0.0)
-    monkeypatch.setattr(toggl_api.throttle, "note_quota_reset", lambda s=None: seen.append(s))
+    monkeypatch.setattr(toggl_api.throttle, "note_quota_reset",
+                        lambda s=None, bucket=None: seen.append((s, bucket)))
     monkeypatch.setattr(toggl_api.urllib.request, "urlopen",
                         lambda req, *a, **k: (_ for _ in ()).throw(_http_error(402, BODY_402)))
     with pytest.raises(RuntimeError, match="402"):
         toggl_api.get_current()
-    assert seen == [653.0]
+    assert seen == [(653.0, "user")], "a /me 402 arms the USER bucket only"
 
 
 def test_402_without_reset_hint_keeps_default_cooldown(monkeypatch):
     seen = []
     monkeypatch.setattr(toggl_api.throttle, "acquire", lambda *a, **k: 0.0)
-    monkeypatch.setattr(toggl_api.throttle, "note_quota_reset", lambda s=None: seen.append(s))
+    monkeypatch.setattr(toggl_api.throttle, "note_quota_reset",
+                        lambda s=None, bucket=None: seen.append(s))
     monkeypatch.setattr(toggl_api.urllib.request, "urlopen",
                         lambda req, *a, **k: (_ for _ in ()).throw(_http_error(402, b"nope")))
     with pytest.raises(RuntimeError):

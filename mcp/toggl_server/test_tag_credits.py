@@ -118,12 +118,15 @@ def test_stop_timer_survives_a_credit_failure(monkeypatch):
     assert entry["_tag_credits"] == [] and entry["id"] == 1
 
 
-def test_update_entry_stop_on_the_running_entry_credits(monkeypatch):
+def test_update_entry_stop_on_the_running_entry_credits(monkeypatch, tmp_path):
     """janus retime / janus-mobile close the running entry with
     update_entry(stop=...), never stop_timer — same credit (2026-09-17)."""
     sys.path.insert(0, str(HERE.parent))
     from toggl_server import tag_credits as real_tc
     from toggl_server import toggl_api as api
+    # update_entry consults the shared current-cache FILE first (2026-10-20);
+    # keep the developer's live cache out of the test.
+    monkeypatch.setattr(api, "CURRENT_CACHE", tmp_path / "absent-current.json")
     monkeypatch.setattr(api, "get_current_cached", lambda *a, **k: {"id": 7})
     monkeypatch.setattr(api, "_request", lambda *a, **k: {"id": 7, "tags": ["-2"], "description": "x"})
     monkeypatch.setattr(real_tc, "credit_entry", lambda e: ["#-2 +5m → 0n"])
@@ -131,10 +134,11 @@ def test_update_entry_stop_on_the_running_entry_credits(monkeypatch):
     assert entry["_tag_credits"] == ["#-2 +5m → 0n"]
 
 
-def test_update_entry_retime_of_a_closed_entry_does_not_credit(monkeypatch):
+def test_update_entry_retime_of_a_closed_entry_does_not_credit(monkeypatch, tmp_path):
     sys.path.insert(0, str(HERE.parent))
     from toggl_server import tag_credits as real_tc
     from toggl_server import toggl_api as api
+    monkeypatch.setattr(api, "CURRENT_CACHE", tmp_path / "absent-current.json")
     monkeypatch.setattr(api, "get_current_cached", lambda *a, **k: {"id": 99})
     monkeypatch.setattr(api, "_request", lambda *a, **k: {"id": 7, "tags": ["-2"], "description": "x"})
     called = []

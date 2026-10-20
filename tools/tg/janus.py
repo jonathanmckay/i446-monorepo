@@ -572,7 +572,10 @@ class State:
         # When Toggl returns a 402 (free-tier rate limit), back off until this
         # monotonic time instead of hammering every tick/keypress — continuing to
         # call during the limit only prolongs it.
-        self.toggl_blocked_until = 0.0
+        # Per quota bucket (2026-10-20): "user" = /me/current reads (30/hr on
+        # every plan), "ws" = entries reads/writes (600/hr). A user-bucket 402
+        # must not stop the timeline refreshing or writes going out.
+        self.toggl_blocked_until = {"user": 0.0, "ws": 0.0}
         self.day_reload_token = 0  # debounce guard for Ctrl+←/→ day scrubbing
         self.sigusr1_token = 0  # debounce guard for a burst of mutation nudges
         # Event cursor (dtd-style highlight, scoped to the current block's
@@ -668,23 +671,26 @@ STATE = State()
 
 # ─── Data fetchers ─────────────────────────────────────────────────────────
 
-def _toggl_blocked() -> bool:
-    """True while inside a post-402 cooldown — skip Toggl reads entirely. Honors
-    BOTH this process's own back-off AND the shared cross-process cooldown, so a
-    402 tripped by any /tg/0t backfill silences janus's pollers for the window
-    (instead of them dribbling GETs through and re-tripping the limit)."""
-    return time.monotonic() < STATE.toggl_blocked_until or toggl_throttle.cooling_down()
+def _toggl_blocked(bucket: str = "user") -> bool:
+    """True while inside a post-402 cooldown for `bucket` — skip that read.
+    Honors BOTH this process's own back-off AND the shared cross-process
+    cooldown, so a 402 tripped by any /tg/0t backfill silences janus's pollers
+    for the window (instead of them dribbling GETs through and re-tripping the
+    limit). Buckets (2026-10-20): "user" for the running-timer read, "ws" for
+    entries; an exhausted user bucket no longer blocks the timeline."""
+    return (time.monotonic() < STATE.toggl_blocked_until.get(bucket, 0.0)
+            or toggl_throttle.cooling_down(bucket))
 
 
-def _note_rate_limit():
-    """Enter the back-off window and tell the user how long we're holding off.
-    The shared throttle knows the server's own reset estimate (the hourly-cap
-    402 says "reset in N seconds"); hold off for the longer of that and the
-    local default, and keep the reason on screen for the whole wait. Before
-    2026-10-16 this flashed for 60s, then every ticker re-polled into the cap
-    and the screen just stopped updating with no explanation."""
-    secs = max(RATE_LIMIT_COOLDOWN, toggl_throttle.cooldown_remaining())
-    STATE.toggl_blocked_until = time.monotonic() + secs
+def _note_rate_limit(bucket: str = "user"):
+    """Enter the back-off window for `bucket` and tell the user how long we're
+    holding off. The shared throttle knows the server's own reset estimate
+    (the hourly-cap 402 says "reset in N seconds"); hold off for the longer of
+    that and the local default, and keep the reason on screen for the whole
+    wait. Before 2026-10-16 this flashed for 60s, then every ticker re-polled
+    into the cap and the screen just stopped updating with no explanation."""
+    secs = max(RATE_LIMIT_COOLDOWN, toggl_throttle.cooldown_remaining(bucket))
+    STATE.toggl_blocked_until[bucket] = time.monotonic() + secs
     _flash_cooldown(secs)
 
 
@@ -813,15 +819,17 @@ async def _confirm_after_tg(app) -> None:
             return
 
 
-def fetch_current(cached=False):
-    """Refresh the running timer. cached=True rides the shared current cache
-    (used by the steady 30s ticker, so janus and every open dtd picker share
-    ~one fetch per window); the post-command bursts pass cached=False to force a
-    live read that beats Toggl's /current propagation lag.
+def fetch_current(cached=True):
+    """Refresh the running timer. cached=True (default) rides the shared current
+    cache, which every mutation in toggl_api now write-throughs from its own
+    response (2026-10-20), so a post-command refresh sees the new state with
+    no network read at all; janus and every open dtd picker share ~one live
+    /me/current read per 5-minute window (12/hr against the 30/hr user
+    bucket). cached=False forces a live read: startup and ^R only.
 
-    Skipped entirely during a rate-limit cooldown so a 402 isn't made worse by
-    the 30s ticker continuing to poll."""
-    if _toggl_blocked():
+    Skipped entirely during a user-bucket cooldown so a 402 isn't made worse
+    by the 30s ticker continuing to poll."""
+    if _toggl_blocked("user"):
         _show_shared_cooldown()
         return
     try:
@@ -841,7 +849,7 @@ def fetch_current(cached=False):
         # as-is (last known) but mark it unconfirmed so the idle nag stays off.
         STATE.current_known = False
         if "402" in str(e):
-            _note_rate_limit()
+            _note_rate_limit("user")
         else:
             flash(f"toggl current err: {e}")
 
@@ -927,8 +935,8 @@ def fetch_today(force=False):
     and bypasses the burst throttle. force=False (the 5-min ticker, day-nav keys)
     coalesces: it's skipped if another fetch landed within TOGGL_MIN_INTERVAL, so
     rapid Ctrl+←/→ scrubbing or back-to-back commands don't each hit the API. All
-    fetches are skipped during a post-402 cooldown."""
-    if _toggl_blocked():
+    fetches are skipped during a workspace-bucket post-402 cooldown."""
+    if _toggl_blocked("ws"):
         # Skipped, not failed: still never leave ANOTHER day's entries on
         # screen (2026-10-06: a 402 cooldown spanning midnight kept showing
         # 10/5's entries at their clock times on 10/6, and a restart during
@@ -995,7 +1003,7 @@ def fetch_today(force=False):
         # one exists, rather than leaving mismatched-day data in place.
         _load_viewed_day_cache(force=True)
         if "402" in str(e):
-            _note_rate_limit()
+            _note_rate_limit("ws")
         else:
             flash(f"toggl today err: {e}")
 
@@ -6433,11 +6441,8 @@ def _on_enter(event):
                 else:
                     for eid in ids:
                         await asyncio.to_thread(toggl_api.update_entry, eid, **fields)
-                if reopen:
-                    # update_entry doesn't know a PUT just changed which
-                    # entry is live — drop the shared current-cache so the
-                    # fetch_current below (and every other poller) sees it.
-                    toggl_api._invalidate_current_cache()
+                # (reopen: update_entry write-throughs the reopened entry as
+                # the running one from the PUT response, 2026-10-20.)
                 # Value-tag 媒分 credit — completed entry credits at once
                 # (minutes known); a running one queues until it stops
                 # (fetch_today resolves). Journaled so re-edits can't
@@ -7039,8 +7044,8 @@ def _(event):
     flash("refreshing…")
 
     async def _refresh():
-        STATE.toggl_blocked_until = 0.0  # manual refresh clears any back-off
-        await asyncio.to_thread(fetch_current)
+        STATE.toggl_blocked_until = {"user": 0.0, "ws": 0.0}  # manual refresh clears any back-off
+        await asyncio.to_thread(fetch_current, False)  # ^R: a deliberate live read
         await asyncio.to_thread(fetch_today, True)
         await asyncio.to_thread(fetch_gcal, True)
         flash("refreshed")
@@ -7407,7 +7412,7 @@ def _release_pid_file():
 async def ticker_current(app):
     while True:
         await asyncio.sleep(30)
-        fetch_current(cached=True)  # ride the shared cache; bursts stay live
+        fetch_current()  # shared cache; a live read at most every 5 min
         _assert_pid_file()
         app.invalidate()
 
@@ -7516,7 +7521,7 @@ async def main():
         pass
 
     # Fast fetches only (sub-second) — enough content for an instant first paint.
-    fetch_current()
+    fetch_current(cached=False)  # startup: one live read, then the shared cache
     fetch_today(True)  # forced: the startup load must not be throttled/coalesced
     fetch_short_names()  # dtd's abbreviated labels (local file read)
 

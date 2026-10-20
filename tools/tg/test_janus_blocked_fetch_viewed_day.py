@@ -23,7 +23,7 @@ def _load(tmp_path):
     sys.modules["janus_blocked_day"] = mod
     spec.loader.exec_module(mod)
     mod.DAY_CACHE_PATH = tmp_path / "day-cache.json"
-    mod._toggl_blocked = lambda: True
+    mod._toggl_blocked = lambda *a, **k: True
     mod.STATE.day_offset = 0
     return mod
 

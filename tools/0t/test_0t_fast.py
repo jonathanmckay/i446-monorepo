@@ -23,17 +23,19 @@ def test_get_toggl_entries_memoized_across_overlapping_callers():
     memoized. This guards the actual fix (fetch count), not just that the
     code still runs -- a regression that re-wrapped or bypassed the
     lru_cache would still pass every other test in this file since they all
-    patch get_toggl_entries directly rather than the underlying _toggl_get."""
+    patch get_toggl_entries directly rather than the underlying shared client."""
     zerot_fast.get_toggl_entries.cache_clear()
     calls = []
 
-    def fake_toggl_get(path):
-        calls.append(path)
-        return []
+    class _FakeApi:
+        @staticmethod
+        def get_entries(start, end, **kw):
+            calls.append((start, end))
+            return []
 
     d1 = date(2026, 8, 31)
     d2 = date(2026, 9, 1)
-    with patch.object(zerot_fast, "_toggl_get", side_effect=fake_toggl_get):
+    with patch.object(zerot_fast, "_toggl_api", return_value=_FakeApi):
         # Simulate the 4 overlapping call sites within one /0t run.
         zerot_fast.gather_entries_local(d1, d2)   # e.g. compute_sleep
         zerot_fast.gather_entries_local(d1)       # e.g. compute_tag_minutes
@@ -41,7 +43,7 @@ def test_get_toggl_entries_memoized_across_overlapping_callers():
         zerot_fast.gather_entries_local(d1, d2)   # e.g. main()
 
     assert len(calls) == 2, (
-        f"expected exactly 2 underlying _toggl_get calls (one per distinct "
+        f"expected exactly 2 underlying get_entries calls (one per distinct "
         f"date: {d1}, {d2}) across 4 overlapping gather_entries_local calls, "
         f"got {len(calls)} -- get_toggl_entries is refetching instead of "
         f"reusing its memoized result"

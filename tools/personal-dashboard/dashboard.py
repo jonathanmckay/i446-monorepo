@@ -456,6 +456,18 @@ def load_cache_data():
     return result
 
 
+def _toggl_api():
+    """The shared Toggl client (mcp/toggl_server/toggl_api.py). Entry reads go
+    through its Reports-backed get_entries (workspace quota, 600/hr) instead of
+    a raw GET /me/time_entries (30/hr on every plan, 2026-10-20), and share
+    the cross-process throttle/cooldown with every other caller."""
+    root = str(Path.home() / "i446-monorepo")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from mcp.toggl_server import toggl_api  # noqa: E402
+    return toggl_api
+
+
 def load_toggl_data():
     """Fetch Toggl entries for last DAYS days, return {date_str: {project: minutes}}."""
     api_key = os.environ.get("TOGGL_API_KEY", "")
@@ -466,16 +478,10 @@ def load_toggl_data():
     start = (today - timedelta(days=DAYS)).isoformat()
     end = (today + timedelta(days=1)).isoformat()
 
-    url = f"https://api.track.toggl.com/api/v9/me/time_entries?start_date={start}&end_date={end}"
-    creds = base64.b64encode(f"{api_key}:api_token".encode()).decode()
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Basic {creds}")
-    req.add_header("Content-Type", "application/json")
-
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            entries = json.loads(resp.read())
-    except Exception:
+        entries = _toggl_api().get_entries(start, end, include_running=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"load_toggl_data: toggl read failed: {e}", file=sys.stderr, flush=True)
         return {}
 
     result = defaultdict(lambda: defaultdict(int))
@@ -564,24 +570,18 @@ def _fetch_toggl_entries(days, end=None):
     today; empty list on any failure). Shared by load_toggl_range
     (day-bucketed) and the per-block chart builder (2-hour-bucketed) so both
     consume the same API call shape without duplicating the request/auth
-    boilerplate. Note the v9 endpoint only reaches back ~90 days; older
-    windows come back empty (the daily Toggl cache covers those for the
-    day/week/month views)."""
+    boilerplate. Reports-backed since 2026-10-20 (see _toggl_api); the daily
+    Toggl cache still covers the older day/week/month views."""
     api_key = os.environ.get("TOGGL_API_KEY", "")
     if not api_key:
         return []
     last = end or date.today()
     start = (last - timedelta(days=days)).isoformat()
     end = (last + timedelta(days=1)).isoformat()
-    url = f"https://api.track.toggl.com/api/v9/me/time_entries?start_date={start}&end_date={end}"
-    creds = base64.b64encode(f"{api_key}:api_token".encode()).decode()
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Basic {creds}")
-    req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except Exception:
+        return _toggl_api().get_entries(start, end, include_running=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"_fetch_toggl_entries: toggl read failed: {e}", file=sys.stderr, flush=True)
         return []
 
 
