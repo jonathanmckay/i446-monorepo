@@ -350,11 +350,20 @@ def toggl_start(
 def toggl_stop() -> str:
     """Stop the currently running timer."""
     try:
-        current = toggl_api.get_current()
-        if not current:
-            return "No timer is currently running."
-
-        entry = toggl_api.stop_timer(current["id"])
+        # Shared cache first; /me/current is a 30/hr user-bucket read (2026-10-20).
+        current = toggl_api.get_current_cached()
+        entry = None
+        if current:
+            try:
+                entry = toggl_api.stop_timer(current["id"])
+            except RuntimeError as e:
+                if "402" in str(e):
+                    raise
+        if entry is None:
+            current = toggl_api.get_current()  # cache said idle or was stale: confirm live
+            if not current:
+                return "No timer is currently running."
+            entry = toggl_api.stop_timer(current["id"])
         credits = entry.get("_tag_credits") or []
         return f"Stopped: {_format_entry(entry)}" + "".join(f"\nCredited: {c}" for c in credits)
 
@@ -366,7 +375,7 @@ def toggl_stop() -> str:
 def toggl_current() -> str:
     """Get the currently running timer, if any."""
     try:
-        current = toggl_api.get_current()
+        current = toggl_api.get_current_cached()
         if not current:
             return "No timer is currently running."
         return f"Running: {_format_entry(current)}"

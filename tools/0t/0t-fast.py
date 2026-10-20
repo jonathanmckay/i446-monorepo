@@ -79,20 +79,17 @@ def _load_toggl_key() -> str:
 TOGGL_API_KEY = _load_toggl_key()
 
 
-def _toggl_get(path: str) -> list | dict:
-    import base64
-    url = f"{TOGGL_API_BASE}{path}"
-    creds = base64.b64encode(f"{TOGGL_API_KEY}:api_token".encode()).decode()
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Basic {creds}")
-    _throttle.acquire()  # share the cross-process pacing + post-402 cooldown
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code in (402, 429):
-            _throttle.note_rate_limit()
-        raise
+def _toggl_api():
+    """The shared Toggl client. Entry reads use its Reports-backed get_entries
+    (workspace quota, 600/hr) instead of a raw GET /me/time_entries (30/hr
+    user bucket on every plan, 2026-10-20); throttle/cooldowns are shared."""
+    os.environ.setdefault("TOGGL_API_KEY", TOGGL_API_KEY)
+    root = str(Path.home() / "i446-monorepo")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from mcp.toggl_server import toggl_api  # noqa: E402
+    return toggl_api
+
 
 # did-fast
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
@@ -122,9 +119,7 @@ def get_toggl_entries(d: date) -> list[dict]:
     none), and all reads happen before any Toggl-mutating action within the
     same process. Small, cheap to be generous with (maxsize=8) since a run
     only ever touches 2-3 distinct dates."""
-    start = d.isoformat()
-    end = (d + timedelta(days=1)).isoformat()
-    return _toggl_get(f"/me/time_entries?start_date={start}&end_date={end}")
+    return _toggl_api().get_entries(d.isoformat(), (d + timedelta(days=1)).isoformat())
 
 
 # Toggl returns timestamps in UTC; all hour/date logic must be done in local time.
@@ -153,10 +148,10 @@ def entry_local_dt(e: dict) -> datetime | None:
 
 
 def gather_entries_local(*days: date) -> list[dict]:
-    """Fetch entries across one or more UTC day-buckets and dedupe by id.
+    """Fetch entries across one or more local day-buckets and dedupe by id.
 
-    A PDT evening entry lands in the *next* UTC bucket, so the overnight window
-    must be reconstructed from both yesterday's and today's fetches.
+    get_entries buckets by local start date (Reports-backed, 2026-10-20); the
+    overnight window still spans yesterday's and today's buckets.
     """
     seen: dict = {}
     for d in days:

@@ -274,26 +274,21 @@ def _toggl_minutes_by_day(dates: list[_dt.date]) -> dict[_dt.date, int]:
     """Tracked minutes per local day for the week, via the Toggl v9 API.
     Empty dict on any failure (the gate then skips the tracking check
     rather than false-blocking on a network error)."""
-    import base64
-    import urllib.request
     try:
         cj = json.loads((Path.home() / ".claude.json").read_text())
         key = cj["mcpServers"]["toggl_server"]["env"]["TOGGL_API_KEY"]
-        # Bare dates are read as UTC midnights, which chops the last ~7h of
-        # the week's Saturday off in PDT — send local-tz RFC3339 boundaries.
-        from urllib.parse import quote
-        tz = _dt.datetime.now().astimezone().tzinfo
-        start = _dt.datetime.combine(dates[0], _dt.time.min, tzinfo=tz)
-        end = _dt.datetime.combine(dates[-1] + _dt.timedelta(days=1),
-                                   _dt.time.min, tzinfo=tz)
-        url = ("https://api.track.toggl.com/api/v9/me/time_entries"
-               f"?start_date={quote(start.isoformat())}"
-               f"&end_date={quote(end.isoformat())}")
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", "Basic " + base64.b64encode(
-            f"{key}:api_token".encode()).decode())
-        with urllib.request.urlopen(req, timeout=20) as r:
-            entries = json.loads(r.read())
+        # Shared client, Reports-backed (workspace quota, local DATES) instead
+        # of a raw GET /me/time_entries (30/hr user bucket, 2026-10-20). The
+        # per-day loop below already buckets by local start date.
+        import os
+        os.environ.setdefault("TOGGL_API_KEY", key)
+        root = str(Path.home() / "i446-monorepo")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from mcp.toggl_server import toggl_api  # noqa: E402
+        entries = toggl_api.get_entries(
+            dates[0].isoformat(), (dates[-1] + _dt.timedelta(days=1)).isoformat(),
+            include_running=False) or []
     except Exception:
         return {}
     mins: dict[_dt.date, int] = {d: 0 for d in dates}

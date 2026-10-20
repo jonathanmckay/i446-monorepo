@@ -159,19 +159,36 @@ def _maybe_agent_triage(desc):
         pass
 
 
-def cmd_stop(_args):
+def _stop_running():
+    """Stop whatever is running, trusting the shared current cache first
+    (/me/current is a 30/hr user-bucket read, 2026-10-20). A cached "idle"
+    or a stop that fails because the cached id is stale (timer changed from
+    the phone) costs ONE live read, then retries once."""
+    current = toggl_api.get_current_cached()
+    if current:
+        try:
+            return toggl_api.stop_timer(current["id"])
+        except RuntimeError as e:
+            if "402" in str(e):
+                raise
     current = toggl_api.get_current()
     if not current:
+        return None
+    return toggl_api.stop_timer(current["id"])
+
+
+def cmd_stop(_args):
+    entry = _stop_running()
+    if not entry:
         print("No timer running.")
         return
-    entry = toggl_api.stop_timer(current["id"])
     print(f"Stopped: {_fmt(entry)}")
     for line in entry.get("_tag_credits") or []:
         print(f"Credited: {line}")
 
 
 def cmd_current(args):
-    current = toggl_api.get_current()
+    current = toggl_api.get_current_cached()
     if "--json" in args:
         # Raw entry (real ISO "start", not a reconstructed HH:MM) for
         # callers that need to compute elapsed time correctly across a
