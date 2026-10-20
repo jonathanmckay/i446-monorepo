@@ -234,3 +234,10 @@ def test_credits_sums_literal_and_reference_credits(db):
     cr = ledger.credits("2026-10-19", "0分", db)
     assert cr["R"] == {"credit": 25.0, "credit_ref": 0, "ref_unknown": 0}
     assert cr["T"] == {"credit": 0, "credit_ref": 15.0, "ref_unknown": 1}
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("10/18/26", "2026-10-18"), ("1/5/27", "2027-01-05"), ("10/18/2026", "2026-10-18"), ("2/30/26", None),
+])
+def test_resolve_date_with_explicit_year(raw, expected):
+    assert ledger.resolve_date(raw, T) == expected

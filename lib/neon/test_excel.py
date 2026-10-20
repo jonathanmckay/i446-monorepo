@@ -169,3 +169,12 @@ def test_live_calls_are_refused_under_pytest(monkeypatch):
         excel.read("0n", "H", row=156)
     with pytest.raises(RuntimeError):
         excel._ssh_fallback("write", "0n", "H", None, 156, 1)
+
+
+def test_batch_write_fallback_false_reports_unreachable_without_ssh(monkeypatch):
+    monkeypatch.setattr(excel, "_curl", lambda *a, **k: None)
+    monkeypatch.setattr(excel, "_ssh_fallback", lambda *a, **k: pytest.fail("no per-cell ssh fallback"))
+    out = excel.batch_write("0s897", [{"col": "E", "value": "x", "mode": "text"}], date="10/18/26",
+                            fallback=False)
+    assert out == {"ok": False, "error": "daemon_unreachable", "fallback": True}
+    assert excel._DATE_COL["0s897"] == "B" and excel._DATE_COL["1分+1s"] == "A"

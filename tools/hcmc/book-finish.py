@@ -25,6 +25,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib"))
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
+
 REVIEWS = os.path.expanduser("~/vault/hcmc/reviews")
 IX_OSA = os.path.expanduser("~/.claude/skills/_lib/ix-osa.sh")
 SHEET = "1分+1s"
@@ -109,6 +112,19 @@ def run_ix_osa(script):
 
 def bump_books_read(today: datetime.date):
     label = week_row_label(current_week_sunday(today))
+    # Daemon first: mode "add" is the same read-modify-write inside ONE
+    # osascript, journaled (Neon-off-Excel step 2c, 2026-10-19). The week
+    # label resolves through the daemon's 1分+1s col-A lookup.
+    try:
+        r = neon_excel.batch_write(SHEET, [{"col": COL, "value": 1, "mode": "add"}],
+                                   date=label, src="book finished", fallback=False)
+        if r.get("ok"):
+            res = (r.get("results") or [{}])[0]
+            return True, f"OK: {COL}{r.get('row')}={res.get('value')}"
+        if not r.get("fallback"):
+            return False, f"daemon: {r.get('error') or r}"
+    except Exception as e:  # noqa: BLE001
+        print(f"book-finish daemon path failed ({e}); using ix-osa", file=sys.stderr)
     script = f'''
 tell application "Microsoft Excel"
     set wb to workbook "{WORKBOOK}"

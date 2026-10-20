@@ -139,7 +139,7 @@ class TestLookupRowDateMatching:
     for the M/D-text sheets (0分, hcbi, 1n+)."""
 
     def test_lookup_row_handles_real_date_cells(self):
-        src = _load_func_source("lookup_row")
+        src = (_load_func_source("lookup_row") + "\n" + _load_func_source("_date_match_as"))
         assert '((class of cv) as text) is "date"' in src, (
             "lookup_row must detect real Excel date cells, not only M/D text"
         )
@@ -158,19 +158,19 @@ class TestLookupRowDateMatching:
         # this test only checked for the string, never executed it — that's
         # how the bug shipped and stayed invisible). Comparing the class as
         # text sidesteps the collision.
-        src = _load_func_source("lookup_row")
+        src = (_load_func_source("lookup_row") + "\n" + _load_func_source("_date_match_as"))
         assert "(class of cv) is date" not in src, (
             "raw 'is date' comparison doesn't parse inside the Excel tell block"
         )
 
     def test_lookup_row_keeps_text_match_path(self):
-        src = _load_func_source("lookup_row")
+        src = (_load_func_source("lookup_row") + "\n" + _load_func_source("_date_match_as"))
         assert "cv as text" in src, (
             "lookup_row must still match M/D-text date columns (0分, hcbi)"
         )
 
     def test_lookup_row_skips_empty_cells(self):
-        src = _load_func_source("lookup_row")
+        src = (_load_func_source("lookup_row") + "\n" + _load_func_source("_date_match_as"))
         assert "missing value" in src, (
             "lookup_row must skip empty date cells (cv is missing value)"
         )
@@ -459,3 +459,74 @@ class TestBatchWriteAppendMode:
         req = {"sheet": "0n", "date": "10/19", "writes": [{"col": "AE", "value": 1}]}
         resp, _ = self._run(srv, monkeypatch, req, "\t\t1\t1\x1e")
         assert ("0n", "AE", "10/19") in srv.CHAIN_INDEX
+
+
+class TestReviewSheetSupport:
+    """Step 2c: year-aware date lookup, review-sheet DATE_COL, prose literals,
+    text mode, US-separated /read, label-sheet journaling."""
+
+    @pytest.fixture()
+    def srv(self, tmp_path, monkeypatch):
+        import importlib.util, os, sys
+        monkeypatch.setenv("NEON_DB", str(tmp_path / "neon.db"))
+        for m in [k for k in sys.modules if k == "neon" or k.startswith("neon.")]:
+            del sys.modules[m]
+        spec = importlib.util.spec_from_file_location(
+            "excel_http_server_rs", os.path.join(os.path.dirname(__file__), "server.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.LEDGER_DIR = str(tmp_path / "jsonl")
+        m.CHAIN_INDEX.clear()
+        return m
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("10/19", ("10/19", None)), ("1/5/27", ("1/5", 2027)), ("01/05/2027", ("1/5", 2027)),
+        ("2026-10-19", ("10/19", 2026)), ("10.3", ("10.3", None)), (10.3, ("10.3", None)),
+    ])
+    def test_date_target(self, srv, raw, expected):
+        assert srv.date_target(raw) == expected
+
+    def test_lookup_script_checks_year_only_when_given(self, srv, monkeypatch):
+        scripts = []
+        monkeypatch.setattr(srv, "osascript", lambda s: (scripts.append(s), (0, "5", ""))[1])
+        assert srv.lookup_row("0s897", "1/5/27") == 5
+        assert "((year of cv) as integer) = 2027" in scripts[-1] and 'md = "1/5"' in scripts[-1]
+        srv.lookup_row("0n", "10/19")
+        assert "year of cv" not in scripts[-1]
+        srv.lookup_row("1分+1s", "10.3")
+        assert '(cv as text) = "10.3"' in scripts[-1]
+        assert srv.DATE_COL["0s897"] == "B" and srv.DATE_COL["1分+1s"] == "A" and srv.DATE_COL["i9+m5x2"] == "A"
+        # the cache verifier uses the same predicate
+        srv._row_still_matches("0s897", 5, "1/5/27")
+        assert "((year of cv) as integer) = 2027" in scripts[-1]
+
+    def test_as_literal_and_text_mode(self, srv):
+        lit = srv.as_literal('line "one"\r\nline two\n= not a formula')
+        assert lit == 'line \\"one\\"" & linefeed & "line two" & linefeed & "= not a formula'
+        assert srv._as_text_setter("=SUM(A1)") == 'set value of theCell to "=SUM(A1)"'
+        assert srv._as_setter("=SUM(A1)").startswith("set formula")
+        assert srv._as_setter("a\nb") == 'set value of theCell to "a" & linefeed & "b"'
+
+    def test_read_uses_unit_separator(self, srv, monkeypatch):
+        monkeypatch.setattr(srv, "osascript", lambda s: (0, "a | b\x1f=X", ""))
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 7)
+        r = srv.do_read({"sheet": "0s897", "col": "E", "date": "10/18/26"})
+        assert r["value"] == "a | b" and r["formula"] == "=X"
+
+    def test_label_sheets_journal_row_anchored_with_week(self, srv, monkeypatch):
+        monkeypatch.setattr(srv, "osascript", lambda s: (0, "\t\t1\t1\x1e", ""))
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 44)
+        srv.do_batch_write({"sheet": "1分+1s", "date": "10.3", "writes": [{"col": "AM", "value": 1, "mode": "add"}]})
+        import glob, json
+        e = [json.loads(l) for p in glob.glob(srv.LEDGER_DIR + "/*.jsonl") for l in open(p)][0]
+        assert e["date"] is None and e["week"] == "10.3" and e["row"] == 44
+        assert ("1分+1s", "AM", "r44") in srv.CHAIN_INDEX
+
+    def test_text_mode_never_appends(self, srv, monkeypatch):
+        scripts = []
+        monkeypatch.setattr(srv, "osascript", lambda s: (scripts.append(s), (0, "\t\t- item\t- item\x1e", ""))[1])
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 9)
+        srv.do_batch_write({"sheet": "0s897", "date": "10/18/26",
+                            "writes": [{"col": "E", "value": "- item\nmore", "mode": "text"}]})
+        assert 'set value of theCell to "- item" & linefeed & "more"' in scripts[-1]
+        assert 'set formula of theCell to oldFormula &' not in scripts[-1]   # never the append branch

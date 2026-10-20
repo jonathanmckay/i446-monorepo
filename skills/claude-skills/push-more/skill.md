@@ -21,35 +21,26 @@ The 0分 write is appended to the existing formula (`=<old>+N`), not an overwrit
 
 Two writes, split by destination sheet. Read the weight and bump the counter in the SAME AppleScript call (both touch the 0n sheet), then use that weight in the daemon call.
 
-### 0n: read weight + bump counter (AppleScript)
+### 0n: read weight + bump counter (daemon)
 
-Pipe through `~/.claude/skills/_lib/ix-osa.sh` so the write lands on Ix's Excel instance and never on a local copy that would later merge-conflict via OneDrive.
+Both through the excel-http daemon (journaled; Neon-off-Excel step 2c,
+2026-10-19). Read the canonical weight from `0n!X2`, then append `+1` to the
+`0n!X370` counter (row-addressed, formula append).
 
 ```bash
-~/.claude/skills/_lib/ix-osa.sh <<'OSA'
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set s0n to sheet "0n" of wb
-
-    -- Canonical point value: row-2 scoring weight under the "push" header.
-    set weight to (value of cell "X2" of s0n) as integer
-
-    -- Append +1 to 0n!X370 (push counter)
-    set xCell to cell "X370" of s0n
-    set oldX to formula of xCell
-    if oldX = "" or oldX = "0" then
-        set formula of xCell to "=0+1"
-    else
-        set formula of xCell to oldX & "+1"
-    end if
-    set newX to value of xCell
-
-    return "OK: weight=" & weight & " 0n.X370=" & newX
-end tell
-OSA
+python3 - <<'PY'
+import sys
+sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+from neon import excel
+w = excel.read("0n", "X", row=2)
+if not w.get("ok"): raise SystemExit("ERROR: could not read 0n!X2: %s" % (w.get("error") or w))
+weight = int(float(w["value"]))
+c = excel.append("0n", "X", row=370, value="+1", src="push-more counter")
+print("OK: weight=%d 0n.X370=%s" % (weight, c.get("value")) if c.get("ok") else "ERROR: counter: %s" % (c.get("error") or c))
+PY
 ```
 
-Parse `weight=<N>` from the output — that's the N to use below. If parsing fails or the helper exits non-zero, stop and surface the error; do not fall back to a hardcoded number.
+Parse `weight=<N>` from the output — that's the N to use below. If the read fails, stop and surface the error; do not fall back to a hardcoded number.
 
 ### 0分 write (daemon)
 

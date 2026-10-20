@@ -47,6 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import run_bounded  # noqa: E402
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 DID_RUN = Path.home() / "i446-monorepo/tools/did/run.py"
@@ -399,6 +400,20 @@ def build_write_script(row: int, text: str) -> str:
 
 
 def write_answer(row: int, text: str) -> str:
+    # Daemon first (journaled, prose as text mode); raw ix-osa is the
+    # daemon-down fallback (Neon-off-Excel step 2c, 2026-10-19). The row is
+    # the Thursday row the fetch already resolved, so no second lookup.
+    try:
+        r = neon_excel.batch_write(SHEET, [{"col": HCME_COL, "value": text, "mode": "text"}],
+                                   row=row, src="1hcme", fallback=False)
+        if r.get("ok"):
+            return "OK: %s!%s%d" % (SHEET, HCME_COL, row)
+        if not r.get("fallback"):
+            raise RuntimeError("%s write failed: %s" % (SHEET, r.get("error") or r))
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        print("1hcme daemon path failed (%s); using ix-osa" % e, file=sys.stderr)
     proc = run_bounded([str(IX_OSA)], input=build_write_script(row, text), timeout=90)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or out.startswith("ERROR"):

@@ -10,36 +10,22 @@ Mark the moment all habit colors are completed for the day. Writes the current t
 
 ## Execution
 
-Pipe the AppleScript below into `~/.claude/skills/_lib/ix-osa.sh` so the write lands on Ix (never local — would cause OneDrive merge conflicts).
+Write through the excel-http daemon on Ix (journaled, numbers stay numbers;
+Neon-off-Excel step 2c, 2026-10-19). The client falls back to ssh+osascript
+on its own if the daemon is down; never pipe raw AppleScript here.
 
 ```bash
-~/.claude/skills/_lib/ix-osa.sh <<'OSA'
-tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set targetMonth to (month of (current date)) as integer
-    set targetDay to day of (current date)
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of theSheet
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = targetMonth and d = targetDay then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then return "ERROR: today's date not found in 0n col C"
-    set h to hours of (current date)
-    set mn to minutes of (current date)
-    set timeStr to (h * 100 + mn)
-    set value of range ("AG" & todayRow) of theSheet to timeStr
-    return "OK: wrote " & timeStr & " to AG" & todayRow
-end tell
-OSA
+python3 - <<'PY'
+import sys, datetime as dt
+sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+from neon import excel
+import daytime
+now = daytime.local_now()
+r = excel.batch_write("0n", [{"col": "AG", "value": now.hour * 100 + now.minute}],
+                      date=f"{now.month}/{now.day}", src="allcolors")
+res = (r.get("results") or [{}])[0]
+print("OK: wrote %s to AG%s" % (res.get("value"), r.get("row")) if r.get("ok") else "ERROR: %s" % (r.get("error") or r))
+PY
 ```
 
 ## Response

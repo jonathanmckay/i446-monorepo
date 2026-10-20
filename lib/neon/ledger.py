@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS row_dates (
 """
 
 _LITERAL_RE = re.compile(r"^\s*[+-]?\s*\d+(?:\.\d+)?\s*$")
-_MD_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})\s*$")
+_MD_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?\s*$")
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _LOCK_SRC = "block-turnover lock"
 _OBSERVE_KINDS = {"reconcile", "baseline", "excel-edit", "snapshot"}
@@ -131,6 +131,13 @@ def resolve_date(raw: Optional[str], ts: _dt.datetime) -> Optional[str]:
     if not m:
         return None
     mo, d = int(m.group(1)), int(m.group(2))
+    if m.group(3):                                  # explicit year: M/D/YY or M/D/YYYY
+        y = int(m.group(3))
+        y = 2000 + y if y < 100 else y
+        try:
+            return _dt.date(y, mo, d).isoformat()
+        except ValueError:
+            return None
     best = None
     for y in (ts.year - 1, ts.year, ts.year + 1):
         try:
