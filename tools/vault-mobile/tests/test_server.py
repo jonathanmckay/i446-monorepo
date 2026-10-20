@@ -176,3 +176,30 @@ def test_drop_with_target_appends_to_new_notes(client, vault):
     # anything else stays read-only
     r = client.post("/drop", json=dict(a, id="aaaa1111-0000-0000-0000-000000000003", target="g245/a.md"))
     assert r.status_code == 400 and (v / "g245/a.md").read_text() == "alpha"
+
+
+def test_drop_put_replaces_new_notes_and_keeps_conflict_copy(client, vault):
+    """2026-10-20: the phone edits new-notes in full. Same base sha → plain
+    replace; moved-on base → server copy archived first, phone text wins."""
+    import hashlib
+    v, _ = vault
+    p = v / "z_ibx/new-notes.md"
+    p.write_text("header\n\nold\n")
+    base = hashlib.sha256(p.read_bytes()).hexdigest()
+    a = {"id": "bbbb1111-0000-0000-0000-000000000001", "created_at": "2026-10-20T10:00:00",
+         "body": "header\n\nold\n\nnew line\n", "target": "z_ibx/new-notes.md", "mode": "put", "base_sha": base}
+    r = client.post("/drop", json=a)
+    assert r.status_code == 201, r.data
+    assert r.get_json()["put"] is True and "conflict" not in r.get_json()
+    assert p.read_text() == "header\n\nold\n\nnew line\n"
+    assert client.post("/drop", json=a).status_code == 200          # idempotent
+    # desktop edited meanwhile → the phone's stale base: archive, then replace
+    p.write_text("header\n\ndesktop edit\n")
+    b = dict(a, id="bbbb1111-0000-0000-0000-000000000002", body="phone text\n")
+    r = client.post("/drop", json=b)
+    assert r.status_code == 201
+    conflict = r.get_json()["conflict"]
+    assert conflict.startswith("z_ibx/archive/2026-10/new-notes.conflict-20261020-100000-imago-c")
+    assert (v / conflict).read_text() == "header\n\ndesktop edit\n"
+    assert p.read_text() == "phone text\n"
+    assert client.post("/drop", json=dict(b, id="bbbb1111-0000-0000-0000-000000000003", target="g245/a.md")).status_code == 400

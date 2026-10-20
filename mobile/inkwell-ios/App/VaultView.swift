@@ -17,14 +17,13 @@ struct VaultView: View {
     @State private var query = ""
     @State private var showCapture = false
     @State private var path = NavigationPath()
-    @State private var draft = ""
-    @FocusState private var draftFocused: Bool
     static let landing = "z_ibx/new-notes.md"
 
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                HeaderView(title: store.title, status: store.status, onLongPress: onSettings)
+                HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
+                           actionIcon: "square.and.pencil", onAction: { showCapture = true })
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -35,17 +34,6 @@ struct VaultView: View {
             .navigationDestination(for: String.self) { p in NoteView(store: store, path: p) }
             .navigationDestination(for: DirEntry.self) { d in FolderView(store: store, dir: d.path) }
         }
-        .safeAreaInset(edge: .bottom) {
-            // Append to new-notes from the bottom right (2026-10-20: "editable,
-            // just keep appending"). Queued offline, shown at once, synced to
-            // z_ibx/new-notes.md on Ix. + on an empty field = a separate capture.
-            EntryBar(placeholder: "append to new-notes…", text: $draft, focus: $draftFocused,
-                     multiline: true,
-                     onSubmit: { t in
-                         if store.capture(t, target: VaultView.landing) { Platform.haptic(.success) } else { Platform.haptic(.failure) }
-                     },
-                     onPlus: { showCapture = true })
-        }
         .sheet(isPresented: $showCapture) { CaptureSheet(store: store) }
         .task { store.fetchLanding(VaultView.landing); store.syncIfStale() }
     }
@@ -54,7 +42,7 @@ struct VaultView: View {
         switch mode {
         case .inbox:
             if store.read(VaultView.landing) != nil {
-                NoteView(store: store, path: VaultView.landing).id(store.landingVersion)
+                NoteEditor(store: store, path: VaultView.landing)
             } else {
                 VStack(spacing: 10) {
                     Text(store.syncing ? "syncing the vault…" : "new-notes is not on the phone yet")
@@ -254,6 +242,53 @@ struct CaptureSheet: View {
                     }
                 }
             }
+        }
+    }
+}
+
+
+/// new-notes, editable like a regular note (2026-10-20). Edits save locally
+/// as you type (debounced) and reach ix as one full-text put; the server
+/// keeps a conflict copy if the file moved on meanwhile. Server changes are
+/// pulled in only while the editor is not dirty.
+struct NoteEditor: View {
+    @ObservedObject var store: VaultTabStore
+    let path: String
+    @State private var text = ""
+    @State private var saved = ""
+    @State private var loaded = false
+    @State private var debounce: Task<Void, Never>? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextEditor(text: $text)
+                .font(Theme.mono).foregroundStyle(Theme.fg)
+                .scrollContentBackground(.hidden)
+                .background(Theme.bg)
+                .padding(.horizontal, 8)
+                .onChange(of: text) { _, new in
+                    guard loaded, new != saved else { return }
+                    debounce?.cancel()
+                    debounce = Task {
+                        try? await Task.sleep(for: .milliseconds(900))
+                        guard !Task.isCancelled else { return }
+                        saved = new
+                        store.saveNote(path, text: new)
+                    }
+                }
+            HStack {
+                Text(path).font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                Spacer()
+                Text(text == saved ? (store.pendingCount > 0 ? "saved · sending…" : "saved") : "editing…")
+                    .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 6)
+        }
+        .onAppear { if !loaded { text = store.read(path) ?? ""; saved = text; loaded = true } }
+        .onChange(of: store.landingVersion) { _, _ in
+            // Server copy changed (fetchLanding / sync): take it only if we have
+            // nothing unsent, so a local edit is never clobbered.
+            if text == saved, let t = store.read(path), t != text { text = t; saved = t }
         }
     }
 }

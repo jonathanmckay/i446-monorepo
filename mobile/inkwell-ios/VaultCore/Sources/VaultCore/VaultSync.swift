@@ -57,8 +57,12 @@ public final class VaultSync {
         case .ok(let m, let newEtag):
             r.manifestChanged = true
             r.generatedAt = m.generated_at
-            guard let plan = try? store.plan(m.files) else { r.error = "local db error"; return r }
+            guard var plan = try? store.plan(m.files) else { r.error = "local db error"; return r }
             r.unchanged = plan.unchanged
+            // An unsent full-text edit must not be overwritten by the server's
+            // older copy; it reconciles on the pass after the put lands.
+            let held = store.pendingTargets()
+            if !held.isEmpty { plan.toFetch.removeAll { held.contains($0.path) } }
             await fetchAll(plan.toFetch, &r)
             if (try? store.delete(plan.toDelete)) != nil { r.deleted = plan.toDelete.count }
             // Only remember the etag when every file landed; otherwise the next

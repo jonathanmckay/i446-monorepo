@@ -42,8 +42,9 @@ final class VaultTabStore: ObservableObject {
 
     var status: String {
         if !VaultConfig.hasToken { return "⚠ no token (long-press)" }
-        if syncing, let p = progress, p.1 > 0 { return "syncing \(p.0)/\(p.1)" }
-        if syncing { return "syncing…" }
+        // Quiet: only a real bulk fetch (first sync / subset change) gets a
+        // progress line; routine passes stay invisible.
+        if syncing, let p = progress, p.1 > 20 { return "syncing \(p.0)/\(p.1)" }
         if let r = lastReport, let e = r.error { return "⚠ \(e)" }
         var bits: [String] = []
         if let g = lastReport?.generatedAt ?? store.meta(VaultSync.kGenerated) { bits.append("ix " + VaultTabStore.clock(g)) }
@@ -63,7 +64,7 @@ final class VaultTabStore: ObservableObject {
     /// hundreds. Stored through the same upsert the sync uses; the next
     /// manifest pass reconciles mtime/sha. Re-fetched at most once a minute.
     func fetchLanding(_ path: String) {
-        guard VaultConfig.hasToken else { return }
+        guard VaultConfig.hasToken, !store.pendingTargets().contains(path) else { return }
         let now = ProcessInfo.processInfo.systemUptime
         guard now - landingFetchedAt > 60 else { return }
         landingFetchedAt = now
@@ -79,10 +80,33 @@ final class VaultTabStore: ObservableObject {
     }
 
     /// Foreground hook: cheap when nothing changed (one 304).
+    /// Persisted staleness (2026-10-20: "indexing on every startup"): the
+    /// last sync time lives in the db, so a relaunch inside the window does
+    /// no network at all.
     func syncIfStale(maxAge: TimeInterval = 900) {
+        if let l = store.meta(VaultSync.kLastSync), let d = Capture.stamp.date(from: l),
+           Date().timeIntervalSince(d) < maxAge { return }
         guard ProcessInfo.processInfo.systemUptime - lastSyncMonotonic > maxAge else { return }
         runSync(force: false)
     }
+
+    /// Full-text edit of an allow-listed note (new-notes): local copy first
+    /// (instant, offline), one coalesced put in the outbox, sync shortly after.
+    func saveNote(_ path: String, text: String) {
+        let base = store.sha(path)
+        let e = ManifestEntry(p: path, m: Int(Date().timeIntervalSince1970), s: text.utf8.count,
+                              h: base ?? "")   // keep the base sha until the server confirms
+        try? store.upsert(e, body: text, sha: base ?? "")
+        try? store.enqueue(Capture(title: "put", body: text, target: path, mode: "put", baseSha: base))
+        refreshCounts()
+        saveDebounce?.cancel()
+        saveDebounce = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.runSync(force: false)
+        }
+    }
+    private var saveDebounce: Task<Void, Never>? = nil
 
     func runSync(force: Bool) {
         guard !syncing, VaultConfig.hasToken else { return }

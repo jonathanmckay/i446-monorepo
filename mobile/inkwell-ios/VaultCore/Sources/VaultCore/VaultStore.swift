@@ -33,6 +33,8 @@ public final class VaultStore {
         // 2026-10-20: append-in-place captures carry a target path. Older DBs
         // lack the column; ALTER fails harmlessly once it exists.
         try? db.exec("ALTER TABLE outbox ADD COLUMN target TEXT")
+        try? db.exec("ALTER TABLE outbox ADD COLUMN mode TEXT")
+        try? db.exec("ALTER TABLE outbox ADD COLUMN base_sha TEXT")
     }
 
     public static func defaultPath() -> String {
@@ -171,16 +173,33 @@ public final class VaultStore {
 
     public func enqueue(_ c: Capture) throws {
         try queue.sync {
-            try db.run("INSERT INTO outbox(id,created_at,title,body,attempts,last_error,sent_path,target) VALUES(?,?,?,?,?,?,?,?)",
-                       [c.id, c.createdAt.timeIntervalSince1970, c.title, c.body, c.attempts, c.lastError, c.sentPath, c.target])
+            // A full-text put supersedes any unsent put for the same file:
+            // only the newest text needs to reach the server.
+            if c.mode == "put", let t = c.target {
+                try db.run("DELETE FROM outbox WHERE sent_path IS NULL AND mode='put' AND target=?", [t])
+            }
+            try db.run("INSERT INTO outbox(id,created_at,title,body,attempts,last_error,sent_path,target,mode,base_sha) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                       [c.id, c.createdAt.timeIntervalSince1970, c.title, c.body, c.attempts, c.lastError, c.sentPath, c.target, c.mode, c.baseSha])
         }
+    }
+
+    /// Files with an unsent full-text edit: the sync must not overwrite them
+    /// with the server's older copy, and fetchLanding must leave them alone.
+    public func pendingTargets() -> Set<String> {
+        queue.sync {
+            Set((try? db.query("SELECT target FROM outbox WHERE sent_path IS NULL AND mode='put' AND target IS NOT NULL") { $0.string(0) ?? "" }) ?? [])
+        }
+    }
+
+    public func sha(_ path: String) -> String? {
+        queue.sync { try? db.scalarString("SELECT sha FROM files WHERE path=?", [path]) ?? nil }
     }
 
     public func pending() -> [Capture] {
         queue.sync {
-            (try? db.query("SELECT id,created_at,title,body,attempts,last_error,target FROM outbox WHERE sent_path IS NULL ORDER BY created_at") {
+            (try? db.query("SELECT id,created_at,title,body,attempts,last_error,target,mode,base_sha FROM outbox WHERE sent_path IS NULL ORDER BY created_at") {
                 Capture(id: $0.string(0)!, createdAt: Date(timeIntervalSince1970: $0.double(1)), title: $0.string(2) ?? "", body: $0.string(3) ?? "",
-                        attempts: $0.int(4), lastError: $0.string(5), sentPath: nil, target: $0.string(6))
+                        attempts: $0.int(4), lastError: $0.string(5), sentPath: nil, target: $0.string(6), mode: $0.string(7), baseSha: $0.string(8))
             }) ?? []
         }
     }
