@@ -27,8 +27,11 @@ def _generated_script(monkeypatch, *, existing_formula, value):
         stderr = ""
 
     def fake_run(cmd, **kwargs):
-        # cmd is ["ssh", host, "osascript", "-e", script]
-        captured["script"] = cmd[-1]
+        # The fallback now makes TWO ssh calls: the osascript write (wrapped
+        # in neon-osa-quiet.sh + shlex-quoted) and then the printf that
+        # journals it to the JSONL ledger. Capture the AppleScript one.
+        if "tell application" in cmd[-1]:
+            captured["script"] = cmd[-1]
         return FakeResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)

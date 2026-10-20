@@ -269,3 +269,45 @@ class TestIdemDedupe:
         assert srv.IDEM_INDEX["0fen:T9@10/12:U"] == "=5+25"
         srv.seed_chain_index()
         assert srv.IDEM_INDEX["0fen:T9@10/12:U"] == "=5+25"
+
+
+class TestSemanticDoubleWrite:
+    """Neon-off-Excel step 1: journal() mirrors every entry into the SQLite
+    ledger, after the JSONL append, and a ledger failure can only log."""
+
+    @pytest.fixture()
+    def srv(self, tmp_path, monkeypatch):
+        import importlib.util
+        monkeypatch.setenv("NEON_DB", str(tmp_path / "neon.db"))
+        import os, sys
+        for m in [k for k in sys.modules if k == "neon" or k.startswith("neon.")]:
+            del sys.modules[m]
+        spec = importlib.util.spec_from_file_location(
+            "excel_http_server_dw", os.path.join(os.path.dirname(__file__), "server.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.LEDGER_DIR = str(tmp_path / "jsonl")
+        return m
+
+    def test_journal_lands_in_jsonl_and_sqlite(self, srv):
+        assert srv.neon_ledger is not None and srv.LEDGER_DB_STATE["ok"]
+        srv.journal({"ts": "2026-10-19T08:30:00", "kind": "append", "sheet": "0分", "col": "R",
+                     "row": 290, "date": "10/19", "value": "+15", "before": "=1",
+                     "after": "=1+15", "after_value": "16.0", "before_value": "1.0",
+                     "src": "test", "chain": "ok"})
+        import glob, json
+        lines = [l for p in glob.glob(srv.LEDGER_DIR + "/*.jsonl") for l in open(p)]
+        assert len(lines) == 1 and json.loads(lines[0])["value"] == "+15"
+        rows = srv.neon_ledger.recent(5)
+        assert len(rows) == 1 and rows[0][5] == "credit" and rows[0][6] == 15.0
+
+    def test_ledger_failure_only_logs(self, srv, monkeypatch, capsys):
+        def boom(entry):
+            raise RuntimeError("db locked")
+        monkeypatch.setattr(srv.neon_ledger, "record", boom)
+        srv.journal({"ts": "2026-10-19T08:30:00", "kind": "append", "sheet": "0分", "col": "R",
+                     "row": 290, "date": "10/19", "value": "+15", "before": "=1",
+                     "after": "=1+15", "after_value": "16.0", "src": "t", "chain": "ok"})
+        assert srv.LEDGER_DB_STATE["errors"] == 1
+        assert "db locked" in srv.LEDGER_DB_STATE["last_error"]
+        assert "semantic ledger write failed" in capsys.readouterr().err
