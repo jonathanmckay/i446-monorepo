@@ -8028,5 +8028,105 @@
     "unit": "C202",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "606",
+    "prop": "rl16",
+    "unit": "D21",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-12-18",
+    "kind": "ntv",
+    "unit_id": "1303",
+    "prop": "c702",
+    "unit": "C101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-10-23",
+    "kind": "leased",
+    "unit_id": "364",
+    "prop": "ps25",
+    "unit": "A6",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-12-31",
+    "kind": "ntv",
+    "unit_id": "794",
+    "prop": "v202",
+    "unit": "8",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-12-31",
+    "kind": "ntv",
+    "unit_id": "554",
+    "prop": "rl16",
+    "unit": "B17",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-10-20",
+    "kind": "movein",
+    "unit_id": "265",
+    "prop": "m405",
+    "unit": "20",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-10-20",
+    "kind": "movein",
+    "unit_id": "1209",
+    "prop": "tc68",
+    "unit": "B60",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-11-19",
+    "kind": "leased",
+    "unit_id": "1287",
+    "prop": "c702",
+    "unit": "B101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-10-19",
+    "kind": "moveout",
+    "unit_id": "1033",
+    "prop": "kn47 K2",
+    "unit": "C202",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-20",
+    "effective": "2026-12-31",
+    "kind": "ntv",
+    "unit_id": "435",
+    "prop": "w226",
+    "unit": "2",
+    "tenant": null,
+    "baseline": false
   }
 ]

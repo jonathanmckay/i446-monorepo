@@ -580,24 +580,12 @@
     "property_name": "c702",
     "unit": "J201",
     "tenant_name": "Abdalla, Hassan",
-    "status": "Pending",
+    "status": "Eligible",
     "lease_sign_date": null,
     "move_in": "2024-12-04",
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1699.00"
-  },
-  {
-    "unit_id": 863,
-    "property_name": "kn47 K1",
-    "unit": "D101",
-    "tenant_name": "Brito, Hope  C.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-22",
-    "move_in": "2025-07-28",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "931.00"
   },
   {
     "unit_id": 369,
@@ -621,18 +609,6 @@
     "move_in": "2025-12-01",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "1415.00"
-  },
-  {
-    "unit_id": 606,
-    "property_name": "rl16",
-    "unit": "D21",
-    "tenant_name": "Brooks, Rhyanna",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-11-20",
-    "move_in": "2025-11-20",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-11-20",
     "rent": "1415.00"
   },
   {
@@ -732,18 +708,6 @@
     "rent": "931.00"
   },
   {
-    "unit_id": 887,
-    "property_name": "kn47 K1",
-    "unit": "E201",
-    "tenant_name": "Barnes, Lawrence H.",
-    "status": "Pending",
-    "lease_sign_date": "2025-11-17",
-    "move_in": "2025-11-18",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 843,
     "property_name": "kn47 K1",
     "unit": "C101",
@@ -778,18 +742,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2025-12-01",
     "rent": "1089.00"
-  },
-  {
-    "unit_id": 976,
-    "property_name": "kn47 K1",
-    "unit": "M101",
-    "tenant_name": "Vitonas, Lucia  N.",
-    "status": "Pending",
-    "lease_sign_date": "2025-10-07",
-    "move_in": "2025-10-30",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "931.00"
   },
   {
     "unit_id": 1028,
@@ -942,7 +894,7 @@
     "tenant_name": "Barakzai, Hekmatullah",
     "status": "Pending",
     "lease_sign_date": null,
-    "move_in": "2025-06-01",
+    "move_in": "2025-12-08",
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1308.00"
@@ -958,18 +910,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1399.00"
-  },
-  {
-    "unit_id": 1303,
-    "property_name": "c702",
-    "unit": "C101",
-    "tenant_name": "Musabyimana, Divine",
-    "status": "Notice Given",
-    "lease_sign_date": null,
-    "move_in": "2024-03-07",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1908.00"
   },
   {
     "unit_id": 1369,
@@ -1200,18 +1140,6 @@
     "rent": "910.00"
   },
   {
-    "unit_id": 554,
-    "property_name": "rl16",
-    "unit": "B17",
-    "tenant_name": "Cervantes, Annaly V.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-12-16",
-    "move_in": "2026-01-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1345.00"
-  },
-  {
     "unit_id": 580,
     "property_name": "rl16",
     "unit": "C19",
@@ -1258,30 +1186,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-01-01",
     "rent": "1725.00"
-  },
-  {
-    "unit_id": 794,
-    "property_name": "v202",
-    "unit": "8",
-    "tenant_name": "Webb, Sidnee  W.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-12-22",
-    "move_in": "2026-01-20",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1425.00"
-  },
-  {
-    "unit_id": 435,
-    "property_name": "w226",
-    "unit": "2",
-    "tenant_name": "Caley, Morgan J.",
-    "status": "Pending",
-    "lease_sign_date": "2025-12-22",
-    "move_in": "2026-01-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "955.00"
   },
   {
     "unit_id": 721,
@@ -1342,18 +1246,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-02-01",
     "rent": "1425.00"
-  },
-  {
-    "unit_id": 736,
-    "property_name": "c313",
-    "unit": "28",
-    "tenant_name": "Lamay, Ely  G.",
-    "status": "Pending",
-    "lease_sign_date": "2026-02-20",
-    "move_in": "2026-02-21",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1495.00"
   },
   {
     "unit_id": 743,
@@ -1608,18 +1500,6 @@
     "rent": "1125.00"
   },
   {
-    "unit_id": 1118,
-    "property_name": "o155-Oak",
-    "unit": "C6",
-    "tenant_name": "Hanson, Edward A.",
-    "status": "Pending",
-    "lease_sign_date": "2025-12-05",
-    "move_in": "2025-12-31",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1025.00"
-  },
-  {
     "unit_id": 229,
     "property_name": "p705",
     "unit": "13",
@@ -1740,18 +1620,6 @@
     "rent": "1450.00"
   },
   {
-    "unit_id": 1217,
-    "property_name": "tc68",
-    "unit": "C68",
-    "tenant_name": "Phith, Narean",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2026-01-20",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1695.00"
-  },
-  {
     "unit_id": 1157,
     "property_name": "tc68",
     "unit": "A08",
@@ -1773,18 +1641,6 @@
     "move_in": "2024-08-28",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "1625.00"
-  },
-  {
-    "unit_id": 1191,
-    "property_name": "tc68",
-    "unit": "B42",
-    "tenant_name": "Eisel, Brittany",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-11-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
     "rent": "1625.00"
   },
   {
@@ -2710,6 +2566,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1089.00"
+  },
+  {
+    "unit_id": 976,
+    "property_name": "kn47 K1",
+    "unit": "M101",
+    "tenant_name": "Vitonas, Lucia  N.",
+    "status": "Renewed",
+    "lease_sign_date": "2025-10-07",
+    "move_in": "2025-10-30",
+    "renewal_start_date": "2026-12-01",
+    "last_lease_renewal": "2026-12-01",
+    "rent": "931.00"
   },
   {
     "unit_id": 979,
