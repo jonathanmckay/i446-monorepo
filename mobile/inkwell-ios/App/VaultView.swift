@@ -9,14 +9,14 @@ struct VaultView: View {
     @ObservedObject var store: VaultTabStore
     var onSettings: () -> Void
 
-    enum Mode: String, CaseIterable { case recent, browse, search }
-    @State private var mode: Mode = .recent
+    /// new-notes IS the root screen (2026-10-20: "open to new-notes by
+    /// default, not behind a button"); recent / browse / search are the
+    /// other segments.
+    enum Mode: String, CaseIterable { case inbox = "new-notes", recent, browse, search }
+    @State private var mode: Mode = .inbox
     @State private var query = ""
     @State private var showCapture = false
     @State private var path = NavigationPath()
-    @State private var openedInbox = false
-    /// Where the app lands (2026-10-19): the notes inbox, the one file worth
-    /// reading on a phone first. Falls back to the list until it has synced.
     static let landing = "z_ibx/new-notes.md"
 
     var body: some View {
@@ -43,20 +43,29 @@ struct VaultView: View {
             .buttonStyle(.plain).padding(.trailing, 18).padding(.bottom, 10)
         }
         .sheet(isPresented: $showCapture) { CaptureSheet(store: store) }
-        .task { store.syncIfStale(); openInboxOnce() }
-        .onChange(of: store.fileCount) { _, _ in openInboxOnce() }
-    }
-
-    /// Land on new-notes the moment it is readable; before the first sync
-    /// there is nothing to show, so onChange(fileCount) retries after it.
-    private func openInboxOnce() {
-        guard !openedInbox, path.isEmpty, store.read(VaultView.landing) != nil else { return }
-        openedInbox = true
-        path.append(VaultView.landing)
+        .task { store.syncIfStale() }
     }
 
     @ViewBuilder private var content: some View {
         switch mode {
+        case .inbox:
+            if store.read(VaultView.landing) != nil {
+                NoteView(store: store, path: VaultView.landing)
+            } else {
+                VStack(spacing: 10) {
+                    Text(store.syncing ? "syncing the vault…" : "new-notes is not on the phone yet")
+                        .font(Theme.mono).foregroundStyle(Theme.dim)
+                    if !store.syncing {
+                        Button("sync now") { store.runSync(force: true) }
+                            .font(Theme.mono).buttonStyle(.bordered).tint(Theme.accent)
+                        if store.fileCount == 0 {
+                            Text("needs the vault base + token · long-press the header")
+                                .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.bg)
+            }
         case .recent:
             let items = store.recent()
             entryList(items, empty: store.fileCount == 0 ? "nothing synced yet · pull to sync" : "empty")
