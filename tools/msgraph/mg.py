@@ -28,6 +28,8 @@ AUTHORITY = os.environ.get("MG_AUTHORITY", "https://login.microsoftonline.com/or
 SCOPES = ["User.Read", "Mail.ReadWrite", "Calendars.Read"]
 CACHE = os.path.expanduser("~/.config/msgraph/token_cache.json")
 GRAPH = "https://graph.microsoft.com/v1.0/"
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+CHROME_PROFILE = os.environ.get("MG_CHROME_PROFILE", "Profile 1")  # MSFT, jomckay@microsoft.com
 
 
 def _app() -> tuple[msal.PublicClientApplication, msal.SerializableTokenCache]:
@@ -52,11 +54,27 @@ def token(interactive: bool = False) -> str:
     accounts = app.get_accounts()
     result = app.acquire_token_silent(SCOPES, account=accounts[0]) if accounts else None
     if not result and interactive:
-        flow = app.initiate_device_flow(scopes=SCOPES)
-        if "user_code" not in flow:
-            sys.exit(f"device flow failed: {json.dumps(flow, indent=1)}")
-        print(flow["message"], flush=True)
-        result = app.acquire_token_by_device_flow(flow)
+        if os.environ.get("MG_DEVICE_CODE"):
+            # Blocked by the Microsoft tenant's Conditional Access (2026-10-21:
+            # "authentication flow that is restricted by your admin"); kept for
+            # other tenants.
+            flow = app.initiate_device_flow(scopes=SCOPES)
+            if "user_code" not in flow:
+                sys.exit(f"device flow failed: {json.dumps(flow, indent=1)}")
+            print(flow["message"], flush=True)
+            result = app.acquire_token_by_device_flow(flow)
+        else:
+            # Auth-code + PKCE with a localhost redirect, in the MSFT Chrome
+            # profile (plain `open` is hijacked by the cmux shim, and only that
+            # profile carries the Intune device identity CA requires).
+            import webbrowser
+            chrome = webbrowser.GenericBrowser(
+                [CHROME, f"--profile-directory={CHROME_PROFILE}", "%s"])
+            webbrowser.open = chrome.open  # MSAL calls webbrowser.open() on macOS
+            print("sign in via Chrome (MSFT profile) ...", flush=True)
+            result = app.acquire_token_interactive(
+                SCOPES, timeout=300,
+                success_template="<html><body>mg: signed in. You can close this tab.</body></html>")
     _save(cache)
     if not result or "access_token" not in result:
         err = (result or {}).get("error_description", "no cached token; run: mg.py login")

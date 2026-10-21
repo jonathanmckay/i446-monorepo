@@ -1440,15 +1440,15 @@ _out=\$(jq -r --slurpfile sn "\$SNOOZE" --args '
 n="\${_out%%\$'\t'*}"
 clean="\${_out#*\$'\t'}"
 [[ "\$_out" == *\$'\t'* ]] || { n=3; clean="\$1"; }   # jq failed: keep the picker usable
-# Reset any mouse-tracking mode a child enabled, and drain any bytes already
-# queued in the tty buffer from scroll/click events during the python call
-# above — leaked SGR motion sequences type themselves into fzf's query as
-# literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported here
-# from done.sh/defer.sh/edit.sh/split.sh). Runs before the early exit below
-# too, not just the end of the script.
+# Reset any mouse-tracking mode a child enabled (bug 2026-07-05). NO tty
+# drain here (2026-10-21, "ctrl-d doesn't feel instantaneous ... one
+# breath"): the drain's 'read -t 0.05' idled 50 ms on every ctrl-d (two
+# thirds of this script's run time) and, worse, DISCARDED any key typed in
+# that window, so "ctrl-d 2 enter" typed ahead lost its 2. This script has
+# no interactive prompt and its only child is a ~15 ms jq, so a scroll burst
+# has no window to leak into the query; keys typed ahead now queue in the tty
+# and land in fzf's query once the schedule screen is up.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
-stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
-while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 if [[ "\$n" == "0" ]]; then
   echo "no later block today — nothing to delay to" > "\$HDR"
   exit 0
@@ -3550,6 +3550,14 @@ TALLY_PID=$!
     _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
     (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && ac_reload=1
     [[ -s "$DTD_TIMER" ]] && ac_reload=1   # running timer: re-render so its spinner advances
+    # Schedule screen open (ctrl-d/v/k armed): hold every reload. The spinner/
+    # timer cadence above otherwise re-ran the list generator every 0.5-1 s
+    # UNDER the picker (2026-10-21: three regens between ctrl-d and Enter in
+    # the timing log), each one a python spawn plus an fzf list swap that can
+    # move the cursor off the row being chosen. last_m is left alone, so a
+    # cache change that lands meanwhile is picked up on the first cycle after
+    # the picker closes.
+    [[ -s "$DTD_BLOCKPICK" ]] && continue
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" ]] && continue
     [[ "$cur_m" == "$last_m" && -z "$ac_reload" ]] && continue
