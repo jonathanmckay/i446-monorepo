@@ -46,6 +46,12 @@ SKILL_PATH = Path.home() / ".claude/skills/d357/SKILL.md"
 CLAUDE = "/opt/homebrew/bin/claude"
 LOCK = Path("/tmp/d357-auto-file.lock")
 LOG = Path("/tmp/d357-auto-file.log")
+# Headless auth: cron sessions cannot read the Claude Code login keychain, so a
+# bare `claude --print` exits 1 with "Not logged in" (every hourly run since this
+# cron was added did exactly that — zero meetings filed). dream-launch.sh solved
+# the same problem with a long-lived token from `claude setup-token` kept in
+# ~/.claude/oauth-token (mode 600); reuse that credential here.
+OAUTH_TOKEN_FILE = Path.home() / ".claude" / "oauth-token"
 
 MAX_PER_RUN = 2
 BUDGET_USD = "0.50"
@@ -195,6 +201,11 @@ def file_meeting(txt_path: Path, dry_run: bool = False) -> bool:
         log(f"[DRY RUN] would file {txt_path.name}")
         return True
     log(f"filing {txt_path.name}...")
+    env = os.environ.copy()
+    if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and OAUTH_TOKEN_FILE.is_file():
+        tok = OAUTH_TOKEN_FILE.read_text().strip()
+        if tok:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = tok
     try:
         r = subprocess.run(
             [CLAUDE, "--print", "--model", "sonnet",
@@ -204,6 +215,7 @@ def file_meeting(txt_path: Path, dry_run: bool = False) -> bool:
              "--add-dir", str(Path.home() / "i446-monorepo")],
             input=prompt, capture_output=True, text=True,
             timeout=CLAUDE_TIMEOUT_SEC, cwd=str(Path.home() / "vault"),
+            env=env,
         )
     except subprocess.TimeoutExpired:
         log(f"TIMEOUT filing {txt_path.name}")
