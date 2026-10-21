@@ -281,6 +281,12 @@ struct NoteEditor: View {
                 Spacer()
                 Text(text == saved ? (store.pendingCount > 0 ? "saved · sending…" : "saved") : "editing…")
                     .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                Button { store.refreshLanding(path) } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(Theme.monoSmall).foregroundStyle(Theme.accent)
+                }
+                .disabled(store.syncing)
+                .padding(.leading, 10)
             }
             .padding(.horizontal, 14).padding(.vertical, 6)
         }

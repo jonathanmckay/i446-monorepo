@@ -63,10 +63,10 @@ final class VaultTabStore: ObservableObject {
     /// fresh install paints new-notes in one round trip instead of after
     /// hundreds. Stored through the same upsert the sync uses; the next
     /// manifest pass reconciles mtime/sha. Re-fetched at most once a minute.
-    func fetchLanding(_ path: String) {
+    func fetchLanding(_ path: String, force: Bool = false) {
         guard VaultConfig.hasToken, !store.pendingTargets().contains(path) else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        guard now - landingFetchedAt > 60 else { return }
+        guard force || now - landingFetchedAt > 60 else { return }
         landingFetchedAt = now
         Task {
             if case .ok(let f) = await api.file(path) {
@@ -77,6 +77,14 @@ final class VaultTabStore: ObservableObject {
                 landingVersion += 1
             }
         }
+    }
+
+    /// Manual refresh of the one note the inbox shows. Unsent local edits take
+    /// the full sync instead, since the outbox has to drain before the server
+    /// copy can be trusted.
+    func refreshLanding(_ path: String) {
+        if store.pendingTargets().contains(path) { runSync(force: true); return }
+        fetchLanding(path, force: true)
     }
 
     /// Foreground hook: cheap when nothing changed (one 304).
