@@ -130,3 +130,48 @@ def test_style_finding_counts_and_is_a_review_item(tmp_path, monkeypatch):
     assert f.detail[0].startswith("filename: 1 — a 1") and f.detail[1].strip() == "a/Bad Name.md"
     (tmp_path / "a/Bad Name.md").rename(tmp_path / "a/good-name.md")
     assert vh.check_style().status == "ok"
+
+
+def _toggl_store(tmp_path, days, synced_hours_ago=2.0, incomplete=0, now=None):
+    import sqlite3, time as _t
+    db = tmp_path / "toggl.sqlite"
+    c = sqlite3.connect(db)
+    c.executescript("CREATE TABLE entries (id INTEGER PRIMARY KEY, day TEXT, seconds INTEGER);"
+                    "CREATE TABLE sync_log (window_start TEXT, window_end TEXT, fetched_at INTEGER, pages INTEGER, rows INTEGER, deleted INTEGER, complete INTEGER);")
+    for i, d in enumerate(days):
+        c.execute("INSERT INTO entries VALUES (?,?,?)", (i, d, 60))
+    ts = int((now or dt.datetime.now(dt.timezone.utc)).timestamp() - synced_hours_ago * 3600)
+    c.execute("INSERT INTO sync_log VALUES ('x','x',?,1,1,0,1)", (ts,))
+    for _ in range(incomplete):
+        c.execute("INSERT INTO sync_log VALUES (?,?,?,1,0,0,0)", (days[-1], days[-1], ts))
+    c.commit(); c.close()
+    return db
+
+
+def test_toggl_store_healthy_when_last_week_present_and_sync_fresh(tmp_path):
+    vh = _load()
+    now = dt.datetime(2026, 10, 21, 12, tzinfo=vh.TZ)
+    days = [(now.date() - dt.timedelta(days=i)).isoformat() for i in range(0, 9)]
+    db = _toggl_store(tmp_path, days, now=now)
+    exp = tmp_path / "cache.json"; exp.write_text(json.dumps({d: {} for d in days}))
+    r = vh.scan_toggl_store(now, db, exp)
+    assert r["ok"] and "all of the last 7 days have entries" in r["facts"]
+
+
+def test_toggl_store_flags_missing_days_stale_sync_incomplete_windows_and_stale_export(tmp_path):
+    vh = _load()
+    now = dt.datetime(2026, 10, 21, 12, tzinfo=vh.TZ)
+    days = [(now.date() - dt.timedelta(days=i)).isoformat() for i in (0, 1, 2, 4, 5, 6, 7, 8)]   # day -3 missing
+    db = _toggl_store(tmp_path, days, synced_hours_ago=50, incomplete=1, now=now)
+    exp = tmp_path / "cache.json"; exp.write_text(json.dumps({"2026-10-01": {}}))
+    r = vh.scan_toggl_store(now, db, exp)
+    assert not r["ok"]
+    joined = " | ".join(r["problems"])
+    assert "no entries on 2026-10-18" in joined and "50 h old" in joined and "1 incomplete" in joined and "export ends 2026-10-01" in joined
+
+
+def test_toggl_store_missing_file_is_a_review_item(tmp_path, monkeypatch):
+    vh = _load()
+    monkeypatch.setattr(vh, "TOGGL_STORE", tmp_path / "none.sqlite")
+    f = vh.check_toggl_store(dt.datetime(2026, 10, 21, 12, tzinfo=vh.TZ))
+    assert f.status == "fail" and f.review and "missing" in f.summary

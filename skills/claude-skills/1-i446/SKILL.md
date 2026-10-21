@@ -1,6 +1,6 @@
 ---
 name: "1-i446"
-description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, vault-wide style: ASCII kebab filenames and short one-language titles, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, skills not yet linked to a dtd card, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
+description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, vault-wide style: ASCII kebab filenames and short one-language titles, Toggl entries store freshness and last-7-days coverage, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, skills not yet linked to a dtd card, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
 user-invocable: true
 ---
 
@@ -47,5 +47,12 @@ hand does the same thing interactively, from whichever machine you are on
 - Auto-fix stays limited to what the script already does (a Syncthing rescan).
   A stuck git rebase, a missing Time Machine destination, a broken OneDrive
   mirror are decisions, not fixes.
+- Toggl store (`check_toggl_store`, 2026-10-21): fails when `~/vault/i156/toggl.sqlite`
+  is missing, its last completed sync is over 36 h old, any of the last 7
+  full days has no entries, a sync window in the last 14 days was marked
+  incomplete, or the dashboard export lags the store. Fix on Ix: `python3
+  ~/i446-monorepo/tools/toggl-db/toggl_db.py sync --days 14 --export`, then
+  `status` / `verify --days 7`; a stale copy here with a fresh store on Ix is
+  a Syncthing problem, not a Toggl one.
 - New rules go into `vault_health.py` as a `check_*` returning a `Finding`;
   set `review=True` only when JM has to decide something.

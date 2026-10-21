@@ -267,6 +267,73 @@ def check_style() -> Finding:
                    detail, review=True)
 
 
+# ---------------------------------------------------------------------------
+# Toggl entries store (2026-10-21, JM: "make sure it has dates from the last
+# week"). ~/vault/i156/toggl.sqlite is written nightly on Ix and copied here
+# by Syncthing; every weekly review reads it instead of the API, so a stale
+# or gappy store silently understates the reviews. Checks: the file exists,
+# the last completed sync is recent, every one of the last 7 full days has
+# entries, no window in the last 14 days was marked incomplete, and the
+# dashboard export is as fresh as the store.
+# ---------------------------------------------------------------------------
+TOGGL_STORE = VAULT / "i156" / "toggl.sqlite"
+TOGGL_EXPORT = MONO / "tools" / "personal-dashboard" / ".toggl-daily-cache.json"
+TOGGL_STORE_MAX_AGE_H = 36       # the 05:10 sync, plus a day of slack for Syncthing
+
+
+def scan_toggl_store(now: dt.datetime, store: Path = TOGGL_STORE, export: Path = TOGGL_EXPORT) -> dict:
+    """Facts about the store for check_toggl_store: {ok: bool, problems: [..], facts: [..]}."""
+    import sqlite3
+    out = {"ok": True, "problems": [], "facts": []}
+    if not store.exists():
+        out["ok"] = False; out["problems"].append(f"missing: {store} (run toggl_db.py backfill on Ix)")
+        return out
+    try:
+        conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        n, lo, hi = conn.execute("SELECT COUNT(*), MIN(day), MAX(day) FROM entries").fetchone()
+        last = conn.execute("SELECT MAX(fetched_at) FROM sync_log WHERE complete = 1").fetchone()[0]
+        today = now.astimezone(TZ).date()
+        week = [(today - dt.timedelta(days=i)).isoformat() for i in range(1, 8)]
+        have = {r[0] for r in conn.execute("SELECT DISTINCT day FROM entries WHERE day BETWEEN ? AND ?", (week[-1], week[0]))}
+        bad_windows = conn.execute("SELECT COUNT(*) FROM sync_log WHERE complete = 0 AND window_end >= ?",
+                                   ((today - dt.timedelta(days=14)).isoformat(),)).fetchone()[0]
+        conn.close()
+    except sqlite3.Error as e:
+        out["ok"] = False; out["problems"].append(f"unreadable: {e}")
+        return out
+    out["facts"].append(f"{n} entries, {lo}..{hi}")
+    if not last:
+        out["ok"] = False; out["problems"].append("no completed sync recorded")
+    else:
+        age_h = (now.timestamp() - last) / 3600
+        when = dt.datetime.fromtimestamp(last, TZ).strftime("%Y-%m-%d %H:%M")
+        out["facts"].append(f"last completed sync {when} ({age_h:.0f} h ago)")
+        if age_h > TOGGL_STORE_MAX_AGE_H:
+            out["ok"] = False; out["problems"].append(f"last sync is {age_h:.0f} h old (cron on Ix / Syncthing?)")
+    missing = [d for d in week if d not in have]
+    if missing:
+        out["ok"] = False; out["problems"].append("no entries on " + ", ".join(sorted(missing)))
+    else:
+        out["facts"].append("all of the last 7 days have entries")
+    if bad_windows:
+        out["ok"] = False; out["problems"].append(f"{bad_windows} incomplete sync window(s) in the last 14 days (short API responses)")
+    try:
+        exp_hi = max(json.loads(export.read_text()))
+        if exp_hi < (hi or ""):
+            out["ok"] = False; out["problems"].append(f"dashboard export ends {exp_hi}, store ends {hi} (export-cache not run)")
+    except (OSError, ValueError):
+        out["problems"].append(f"dashboard export unreadable: {export}")
+        out["ok"] = False
+    return out
+
+
+def check_toggl_store(now: dt.datetime) -> Finding:
+    r = scan_toggl_store(now, TOGGL_STORE, TOGGL_EXPORT)   # looked up at call time (tests repoint them)
+    if r["ok"]:
+        return Finding("toggl-store", "ok", "; ".join(r["facts"]))
+    return Finding("toggl-store", "fail", "; ".join(r["problems"]), r["facts"] + r["problems"], review=True)
+
+
 def _st_get(path: str, key: str):
     req = urllib.request.Request(f"{ST_URL}{path}", headers={"X-API-Key": key})
     with urllib.request.urlopen(req, timeout=5) as r:
@@ -645,7 +712,7 @@ def check_neon_rules(now: dt.datetime) -> Finding:
 # ---------------------------------------------------------------------------
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
-    for fn in (check_singletons, check_duplicate_notes, check_style, lambda: check_syncthing(now), lambda: check_git_autopush(now),
+    for fn in (check_singletons, check_duplicate_notes, check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
                check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now)):
         try:
@@ -662,7 +729,7 @@ ICON = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
 def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
-             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Syncthing, git autopush, "
+             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, "
              "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed |", "|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
