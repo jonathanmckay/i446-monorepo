@@ -689,13 +689,18 @@ def start_timer(raw: str) -> dict:
 # Delay (day) / delay (block): swipe-left menu actions #2 and #3, mirroring
 # terminal dtd's ctrl-d (defer) and ctrl-v (block-snooze) bindings.
 # ---------------------------------------------------------------------------
-def defer_task(task_id: str) -> dict:
+def defer_task(task_id: str, days=None) -> dict:
     """ctrl-d equivalent: shell out to defer-fast.py, which owns all the
     recurring-vs-non-recurring branching, dated-copy creation, etc. — with no
     extra args it defers to today+1 day at 2 claimed points, its own
-    documented default (same as a terminal ctrl-d with a blank prompt)."""
+    documented default (same as a terminal ctrl-d with a blank prompt).
+    `days` mirrors the CLI schedule screen: 0 = next occurrence (recurring) /
+    one day (one-off), N = N days out."""
+    cmd = ["/usr/bin/python3", str(DEFER_FAST), "--id", task_id]
+    if days is not None:
+        cmd.append(str(days))
     try:
-        proc = subprocess.run(["/usr/bin/python3", str(DEFER_FAST), "--id", task_id],
+        proc = subprocess.run(cmd,
                               capture_output=True, text=True, timeout=20)
         if proc.returncode != 0:
             return {"ok": False, "error": (proc.stderr or proc.stdout).strip()[-300:]}
@@ -1099,7 +1104,12 @@ def api_delay_day():
     task_id = str(body.get("id") or "").strip()
     if not task_id:
         return jsonify({"ok": False, "error": "no id"}), 400
-    return jsonify(defer_task(task_id))
+    days = body.get("days")
+    if days is not None:
+        # 0 = next occurrence / one day, 1..366 = N days out (CLI schedule screen).
+        if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 366:
+            return jsonify({"ok": False, "error": "days must be 0-366"}), 400
+    return jsonify(defer_task(task_id) if days is None else defer_task(task_id, days))
 
 @app.route("/api/delay-block", methods=["POST"])
 def api_delay_block():

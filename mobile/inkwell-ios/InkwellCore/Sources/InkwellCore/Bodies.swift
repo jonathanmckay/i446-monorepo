@@ -12,6 +12,8 @@ public enum Bodies {
     public static func start(_ t: DtdTask) -> [String: Any] { ["content": t.raw] }
     public static func byId(_ t: DtdTask) -> [String: Any] { ["id": t.id] }
     public static func delayHour(_ t: DtdTask, hour: Int) -> [String: Any] { ["id": t.id, "hour": hour] }
+    /// days 0 = next occurrence (recurring) / one day (one-off), N = N days out.
+    public static func delayDays(_ t: DtdTask, days: Int) -> [String: Any] { ["id": t.id, "days": days] }
     public static func delayMinutes(_ t: DtdTask, minutes: Int) -> [String: Any] { ["id": t.id, "minutes": minutes] }
     public static func add(_ content: String) -> [String: Any] { ["content": content] }
 

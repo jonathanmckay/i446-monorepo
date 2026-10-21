@@ -344,6 +344,25 @@ class TestBatchWrite:
         monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 293)
         return srv.do_batch_write(req), captured["script"]
 
+    def test_blank_cell_echo_keeps_leading_empty_fields(self, srv, monkeypatch):
+        """A blank cell echoes "\\t\\t<new value>\\t<formula>". osascript() must
+        not strip those leading tabs: with a full strip() every field shifted
+        left, the ledger logged before=<new value> / after="", and did-fast's
+        verify read "" for the value it had just written, so every first 0n
+        mark of the day failed and only the retry passed (2026-10-21)."""
+        import contextlib
+        import subprocess as sp
+        monkeypatch.setattr(srv, "quiet_excel", lambda: contextlib.nullcontext())
+        monkeypatch.setattr(srv.subprocess, "run",
+                            lambda *a, **k: sp.CompletedProcess(a, 0, "\t\t1.0\t1\x1e\n", ""))
+        monkeypatch.setattr(srv, "lookup_row_cached", lambda sheet, d: 293)
+        resp = srv.do_batch_write({"sheet": "0n", "date": "10/21",
+                                   "writes": [{"col": "Q", "value": 1}]})
+        assert resp["ok"], resp
+        r = resp["results"][0]
+        assert (r["before"], r["before_value"], r["value"], r["formula"]) == ("", "", "1.0", "1")
+        assert "chain_broken_cols" not in resp
+
     def test_numbers_land_unquoted_and_add_mode_accumulates(self, srv, monkeypatch):
         req = {"sheet": "0n", "date": "10/19", "src": "did hiit, xk20",
                "writes": [{"col": "AE", "value": 1}, {"col": "AJ", "value": 15, "mode": "add"}]}

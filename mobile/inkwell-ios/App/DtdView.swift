@@ -118,6 +118,9 @@ private struct DelayDialog: ViewModifier {
     @Binding var task: DtdTask?
     let options: DelayOptions
     let store: DtdStore
+    /// "N days…" opens a number alert for this task (the CLI's typed-N row).
+    @State private var customTask: DtdTask? = nil
+    @State private var customText = ""
 
     func body(content: Content) -> some View {
         content.confirmationDialog("⏰ delay", isPresented: isPresented($task), titleVisibility: .visible,
@@ -128,10 +131,32 @@ private struct DelayDialog: ViewModifier {
             ForEach(options.minutes, id: \.self) { m in
                 Button(m % 60 == 0 ? "+\(m / 60)h" : "+\(m)m") { store.delayMinutes(t, minutes: m) }
             }
-            if options.isEmpty { Button("nothing later today") {} }
+            // Day rows, same set as the CLI schedule screen (↻ 0 / 📅 1天 / 2天 / 7天 / typed N).
+            Button("↻ next occurrence / one day") { store.delayDays(t, days: 0) }
+            Button("📅 +1 day") { store.delayDays(t, days: 1) }
+            Button("📅 +2 days") { store.delayDays(t, days: 2) }
+            Button("📅 +7 days") { store.delayDays(t, days: 7) }
+            Button("✎ N days…") {
+                // Let the dialog finish dismissing before the alert presents.
+                Task { try? await Task.sleep(for: .milliseconds(400)); customText = ""; customTask = t }
+            }
             Button("cancel", role: .cancel) {}
         } message: { t in
             Text(t.title)
+        }
+        .alert("delay N days", isPresented: isPresented($customTask), presenting: customTask) { t in
+            TextField("days", text: $customText)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+            Button("delay") {
+                if let n = Int(customText.trimmingCharacters(in: .whitespaces)), (0...366).contains(n) {
+                    store.delayDays(t, days: n)
+                }
+            }
+            Button("cancel", role: .cancel) {}
+        } message: { t in
+            Text(t.title + " · 0 = next occurrence")
         }
     }
 }

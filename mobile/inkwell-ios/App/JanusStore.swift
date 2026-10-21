@@ -41,7 +41,7 @@ final class JanusStore: ObservableObject {
     var status: String {
         if let e = lastError { return "⚠ " + e }
         if !loadedOnce, let at = cachedAt { return "cached \(PayloadCache.clock(at)) · refreshing…" }
-        return base
+        return ""
     }
 
     func reload() { Task { await load() } }

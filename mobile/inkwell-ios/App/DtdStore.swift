@@ -117,6 +117,10 @@ final class DtdStore: ObservableObject {
     func delayDay(_ t: DtdTask) {
         delay(t, path: "/api/delay-day", body: Bodies.byId(t)) { "🗓 → " + $0.string("target_date", "tomorrow") }
     }
+    /// The CLI schedule screen's day rows: 0 = next occurrence, else N days out.
+    func delayDays(_ t: DtdTask, days n: Int) {
+        delay(t, path: "/api/delay-day", body: Bodies.delayDays(t, days: n)) { "🗓 → " + $0.string("target_date", "tomorrow") }
+    }
     func delayHour(_ t: DtdTask, hour: Int) {
         delay(t, path: "/api/delay-hour", body: Bodies.delayHour(t, hour: hour)) { _ in
             "⏰ → " + String(format: "%02d:00", hour) }

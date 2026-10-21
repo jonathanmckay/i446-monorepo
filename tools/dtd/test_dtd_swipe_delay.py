@@ -378,3 +378,31 @@ def test_clock_button_opens_menu_not_instant_next_block():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_api_delay_day_passes_days_through(monkeypatch):
+    seen = []
+    monkeypatch.setattr(dtd, "defer_task", lambda tid, days=None: seen.append((tid, days)) or {"ok": True})
+    dtd.app.config["TESTING"] = True
+    client = dtd.app.test_client()
+    assert client.post("/api/delay-day", json={"id": "xyz", "days": 7}).status_code == 200
+    assert client.post("/api/delay-day", json={"id": "xyz", "days": 0}).status_code == 200
+    assert seen == [("xyz", 7), ("xyz", 0)]
+
+
+def test_api_delay_day_rejects_bad_days(monkeypatch):
+    monkeypatch.setattr(dtd, "defer_task", lambda tid, days=None: {"ok": True})
+    dtd.app.config["TESTING"] = True
+    client = dtd.app.test_client()
+    for bad in (-1, 400, "7", True):
+        assert client.post("/api/delay-day", json={"id": "xyz", "days": bad}).status_code == 400
+
+
+def test_defer_task_appends_days_arg(monkeypatch):
+    calls = []
+    class P: returncode = 0; stdout = '{"target_date": "2026-10-28"}'; stderr = ""
+    monkeypatch.setattr(dtd.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or P())
+    assert dtd.defer_task("abc", 7)["target_date"] == "2026-10-28"
+    assert calls[-1][-3:] == ["--id", "abc", "7"]
+    dtd.defer_task("abc")
+    assert calls[-1][-1] == "abc"

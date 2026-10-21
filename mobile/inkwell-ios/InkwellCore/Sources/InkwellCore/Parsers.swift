@@ -34,7 +34,9 @@ public enum Parsers {
     public static func timeline(_ json: JSON) -> Timeline {
         let rows = json.objects("rows").map { r -> TimelineRow in
             var row = TimelineRow(type: r.string("type"))
-            row.label = r.string("label")
+            // Dividers read as the CLI's "卯:00" (the server sends the block name).
+            let block = r.string("block")
+            row.label = block.isEmpty ? r.string("label") : block + ":00"
             row.start = r.string("start")
             row.end = r.string("end")
             row.minutes = r.int("minutes")
