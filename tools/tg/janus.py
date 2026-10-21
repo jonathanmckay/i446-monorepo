@@ -1457,6 +1457,25 @@ def _parse_edit_text(text: str) -> tuple[str | None, str | None,
     return (body or None), code, time_range, tags
 
 
+_EDIT_POINTS_RE = re.compile(r"(?<!\S)\[(\d+)\](?=\s|$)")
+
+
+def _split_edit_points(text: str) -> tuple[str, int | None]:
+    """Pull a "[N]" 分 annotation out of retyped edit text, returning
+    (text_without_it, N) — N is None when there is none. Runs BEFORE
+    _parse_edit_text: left in, "[17]" after the @code made the code
+    mid-string, so it was swallowed into the description along with the
+    bracket (bug 2026-10-21: editing the running "lx chat @xk88 0947-" to
+    "lx chat @xk88 0947-1002 [17]" renamed the entry to "lx chat @xk88
+    [17]" and credited nothing). The edit handler turns N into a /done
+    (closed range) or a pending inline value (still running)."""
+    m = _EDIT_POINTS_RE.search(text)
+    if not m:
+        return text, None
+    rest = text[:m.start()] + " " + text[m.end():]
+    return " ".join(rest.split()), int(m.group(1))
+
+
 # ── Value-tag media-minute credits (user request 2026-07-28) ────────────────
 # Media-tier Toggl tags (-1/-2/-3) each have their OWN minutes column in the
 # 0n sheet (AV/AW/AX as of 2026-07-28) whose formulas apply the ratio
@@ -6343,6 +6362,7 @@ def _on_enter(event):
         if not text:
             flash("edit cancelled")
             return
+        text, points = _split_edit_points(text)
         desc, code, time_range, tags = _parse_edit_text(text)
         pid = PROJECT_MAP.get(code) if code else None
         # Every rejection below has already cleared STATE.edit_target and
@@ -6423,6 +6443,31 @@ def _on_enter(event):
                 fields["start"] = start_dt.isoformat()
                 fields["stop"] = end_dt.isoformat()
                 fields["duration"] = int((end_dt - start_dt).total_seconds())
+        # "[N]" on an edit (2026-10-21). With a CLOSED range this is the
+        # /done gesture typed out — "lx chat @xk88 0947-1002 [17]" on the
+        # running timer means "it ended at 10:02, worth 17" — so after the
+        # retime below lands, the same did-fast command the ⌥↵ /done path
+        # builds ("desc HHMM-HHMM @code [N]") grants the 分: its own trim
+        # deletes the just-retimed entry (exact overlap, no fragments) and
+        # recreates it with the points recorded. Without a closed range the
+        # activity isn't over, so no credit yet (opportunity, not impact):
+        # the value is parked inline in the description, which is exactly
+        # where _resolvable_points looks when ⌥↵ /done fires later.
+        done_cmd = None
+        if points is not None:
+            ent = _find_entry(ids) or {}
+            base_desc = re.sub(r"\s*\[\d+\]", "", desc or ent.get("desc") or "").strip()
+            if time_range and time_range[1] is not None and base_desc:
+                done_code = code or proj_code(ent.get("project_id"))
+                done_cmd = f"{base_desc} {time_range[0]}-{time_range[1]}"
+                if done_code:
+                    done_cmd += f" @{done_code}"
+                done_cmd += f" [{points}]"
+                done_cmd += "".join(f" #{t}" for t in (fields.get("tags") or ent.get("tags") or []))
+                if edit_date != dt.datetime.now(_tz()).date():
+                    done_cmd += f" {edit_date.month}/{edit_date.day}"
+            else:
+                fields["description"] = f"{base_desc} [{points}]".strip()
         if not fields:
             flash("nothing to update", 4.0)
             return
@@ -6432,6 +6477,8 @@ def _on_enter(event):
         if time_range:
             parts.append(f"{time_range[0]}-{time_range[1] or 'now'}")
         parts += [f"#{t}" for t in tags]
+        if points is not None:
+            parts.append(f"[{points}]" + ("" if done_cmd else " (pending — ⌥↵ /done logs it)"))
         flash("$ edit " + " ".join(parts))
 
         async def _apply_edit_and_refresh():
@@ -6497,6 +6544,13 @@ def _on_enter(event):
                     _tag_credit_save(st)
                 else:
                     flash("updated", 4.0)
+                if done_cmd:
+                    flash(f"$ did {done_cmd}  (points)")
+                    event.app.invalidate()
+                    t0 = time.monotonic()
+                    res = await asyncio.to_thread(run_did_fast, done_cmd)
+                    JE.emit("outcome", "done", ids, f"{time.monotonic() - t0:.1f}s {done_cmd} -> {res}")
+                    flash(res, 8.0)
             except Exception as e:  # noqa: BLE001 — a stale/deleted id (e.g. trimmed
                 # by did-fast's overlap handling since this row rendered) must flash,
                 # not crash the app
@@ -6504,6 +6558,8 @@ def _on_enter(event):
             event.app.invalidate()
             await asyncio.to_thread(fetch_current)
             await asyncio.to_thread(fetch_today, True)
+            if done_cmd:
+                await asyncio.to_thread(fetch_points)
             event.app.invalidate()
 
         event.app.create_background_task(_apply_edit_and_refresh())

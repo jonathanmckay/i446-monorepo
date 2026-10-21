@@ -49,7 +49,8 @@ def test_self_mtime_captured_at_launch():
 def test_hdrgen_checks_live_mtime_before_anything_else():
     body = _hdrgen_body()
     assert body.startswith("#!/bin/zsh")
-    lines = [l for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
+    lines = [l for l in body.splitlines() if l.strip() and not l.strip().startswith("#")
+             and "DTD_WARM" not in l]   # the pre-exec warm guard (2026-10-21) sits on line 2 by design
     # First non-comment statement must be the live-mtime stat -- the check
     # has to run before any of the normal header composition.
     # 2026-10-03: builtin zstat (zmodload line first) instead of an exec'd stat

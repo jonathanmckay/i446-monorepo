@@ -702,6 +702,7 @@ touch "$DTD_SKIPPED"
 DTD_START="/tmp/dtd-$DTD_ID.start.sh"
 cat > "$DTD_START" << STARTEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}start\${_T}\$1\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 TOGGL_CLI="\$HOME/i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST="\$HOME/i446-monorepo/tools/tg/tg-fast.py"
@@ -789,6 +790,7 @@ chmod +x "$DTD_START"
 DTD_ENTER="/tmp/dtd-$DTD_ID.enter.sh"
 cat > "$DTD_ENTER" << ENTEREOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 START="$DTD_START"
 task="\$1"
 # Picker mode: enter on a block row applies the snooze (2026-07-27)
@@ -818,6 +820,7 @@ chmod +x "$DTD_ENTER"
 DTD_FORM="/tmp/dtd-$DTD_ID.form.sh"
 cat > "$DTD_FORM" << FORMEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}form\${_T}\$1\${_T}\${2:t}" >> "$DTD_EVENTS" 2>/dev/null
 id="\$1"; form="\$2"; shift 2
 HDR="$DTD_HDR"
@@ -904,6 +907,7 @@ VARPY
 DTD_DONE="/tmp/dtd-$DTD_ID.done.sh"
 cat > "$DTD_DONE" << DONEEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 HDR="$DTD_HDR"
 FIFO="$DTD_FIFO"
 SESSION="$DTD_SESSION"
@@ -1082,6 +1086,7 @@ chmod +x "$DTD_DONE"
 DTD_DONE_HIDE="/tmp/dtd-$DTD_ID.done-hide.sh"
 cat > "$DTD_DONE_HIDE" << HIDEEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 REMOVED="$DTD_REMOVED"
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\thide\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
@@ -1146,6 +1151,7 @@ chmod +x "$DTD_DONE_HIDE"
 DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}done\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 _id="\$1"
 zmodload zsh/datetime 2>/dev/null
@@ -1208,6 +1214,7 @@ chmod +x "$DTD_DONE_ROUTER"
 DTD_DEFER="/tmp/dtd-$DTD_ID.defer.sh"
 cat > "$DTD_DEFER" << DEFEREOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}defer\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
 HDR="$DTD_HDR"
@@ -1405,6 +1412,7 @@ chmod +x "$DTD_DEFER"
 DTD_BLOCKARM="/tmp/dtd-$DTD_ID.blockarm.sh"
 cat > "$DTD_BLOCKARM" << ARMEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}arm:\${DTD_PICK_MODE:-delay}\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 BLOCKPICK="$DTD_BLOCKPICK"
@@ -1469,6 +1477,7 @@ chmod +x "$DTD_BLOCKARM"
 # Applies the picked block (enter/⌃⏎ on a BLOCK:* row) to the armed ids.
 cat > "$DTD_BLOCKAPPLY" << APPLYEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}apply\${_T}\${(j:,:)\${(f)\$(<"$DTD_BLOCKPICK" 2>/dev/null)}}\${_T}\${1#BLOCK:}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 BLOCKPICK="$DTD_BLOCKPICK"
@@ -1576,6 +1585,7 @@ chmod +x "$DTD_BLOCKAPPLY"
 # stdout as fzf actions.
 cat > "$DTD_PICKENTER" << PICKENTEREOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}enter\${_T}\$1\${_T}\${2//\$_T/ }" >> "$DTD_EVENTS" 2>/dev/null
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tpickenter\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
@@ -1649,6 +1659,7 @@ chmod +x "$DTD_PICKENTER"
 # bare list, exit. So pressing either twice from the schedule screen exits.
 cat > "$DTD_BACK" << BACKEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}back\${_T}\${_T}\${1//\$_T/ }" >> "$DTD_EVENTS" 2>/dev/null
 # Prints the WHOLE action list (esc/ctrl-c bind is just transform(this)).
 acts=""
@@ -1676,6 +1687,7 @@ chmod +x "$DTD_BACK"
 DTD_EDIT="/tmp/dtd-$DTD_ID.edit.sh"
 cat > "$DTD_EDIT" << EDITEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}edit\${_T}\$1\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 # ctrl-c on this screen = cancel the edit and go back to the list, NOT quit
 # dtd (2026-10-17: "ctrl-c from the details dialog ... goes to the main
@@ -1787,6 +1799,7 @@ chmod +x "$DTD_EDIT"
 DTD_LIST="/tmp/dtd-$DTD_ID.list.sh"
 cat > "$DTD_LIST" << 'LISTEOF'
 #!/bin/zsh
+[[ -n "${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 zmodload zsh/datetime 2>/dev/null; _tl="${1%.cache.json}.timing.log"
 print -- "$EPOCHREALTIME\tlist-start\t" >> "$_tl" 2>/dev/null
 # Args: $1=cache_file $2=done_file_path $3=removed_file $4=today $5=columns $6=skipped_file $7=timer_file $8=view $9=blockpick_file $10=domain_filter (optional, exact domain code -> scope the list)
@@ -2626,6 +2639,7 @@ fi
 # name in the list generator. The subsequent reload re-runs the generator.
 cat > "$DTD_VIEWTOGGLE" << 'VTEOF'
 #!/bin/zsh
+[[ -n "${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 VIEW="PLACEHOLDER_VIEW"
 HDR="PLACEHOLDER_HDR"
 views=(default project time)     # cycle order; append new views here
@@ -2674,6 +2688,7 @@ echo default > "$DTD_VIEW"   # start in default view each session
 DTD_DOMAINSEARCH="/tmp/dtd-$DTD_ID.domainsearch.sh"
 cat > "$DTD_DOMAINSEARCH" << EOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 q="\$1"
 print -rn -- "\$q" > "$DTD_QUERY" 2>/dev/null   # live query for the done/defer routers' pick records
 # On the delay screen a typed number means "delay N days" (Enter applies it,
@@ -2749,6 +2764,7 @@ chmod +x "$DTD_DOMAINSEARCH"
 DTD_BUMP="/tmp/dtd-$DTD_ID.bump.sh"
 cat > "$DTD_BUMP" << BUMPEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}bump\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tbump-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
@@ -2768,6 +2784,7 @@ chmod +x "$DTD_BUMP"
 DTD_SKIP="/tmp/dtd-$DTD_ID.skip.sh"
 cat > "$DTD_SKIP" << SKIPEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 SKIPPED="$DTD_SKIPPED"
 HDR="$DTD_HDR"
 [[ "\$1" == BLOCK:* ]] && exit 0   # picker rows are not tasks
@@ -2789,6 +2806,7 @@ chmod +x "$DTD_SKIP"
 DTD_DELETE="/tmp/dtd-$DTD_ID.delete.sh"
 cat > "$DTD_DELETE" << DELETEEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; (( \$# == 1 )) && print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}delete\${_T}\$1\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 CACHE_FILE="$DTD_CACHE_FILE"
@@ -2900,6 +2918,7 @@ chmod +x "$DTD_DELETE"
 DTD_SPLIT="/tmp/dtd-$DTD_ID.split.sh"
 cat > "$DTD_SPLIT" << 'SPLITEOF'
 #!/bin/zsh
+[[ -n "${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHREALTIME${_T}PLACEHOLDER_SID${_T}action${_T}split${_T}$1${_T}" >> "PLACEHOLDER_EVENTS" 2>/dev/null
 # Split a task: claim partial points today, defer the rest to tomorrow.
 # Args: $1 task id, $2 points done today, $3 done record name (blank = the
@@ -3119,6 +3138,7 @@ chmod +x "$DTD_SPLIT"
 DTD_AGENT="/tmp/dtd-$DTD_ID.agent.sh"
 cat > "$DTD_AGENT" << 'AGENTEOF'
 #!/bin/zsh
+[[ -n "${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHREALTIME${_T}PLACEHOLDER_SID${_T}action${_T}agent${_T}$1${_T}" >> "PLACEHOLDER_EVENTS" 2>/dev/null
 # Spawn a Claude agent in a new cmux tab to work on the selected task.
 # Starts a Toggl timer, fetches task context, launches claude interactively.
@@ -3268,6 +3288,7 @@ chmod +x "$DTD_AGENT"
 DTD_UNDO="/tmp/dtd-$DTD_ID.undo.sh"
 cat > "$DTD_UNDO" << UNDOEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}undo\${_T}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 HDR="$DTD_HDR"
 # Don't drop a ctrl-z that lands mid-completion. If a task is still in flight
@@ -3324,6 +3345,7 @@ chmod +x "$DTD_UNDO"
 DTD_REFRESH="/tmp/dtd-$DTD_ID.refresh.sh"
 cat > "$DTD_REFRESH" << REFRESHEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}refresh\${_T}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 python3 "$DID_FAST" --refresh-cache
 cp "$CACHE" "$DTD_CACHE_FILE"
@@ -3356,6 +3378,7 @@ export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9: form) | ⌥⏎: don
 # load/result binds and after every action so worker confirmations persist.
 cat > "$DTD_HDRGEN" <<HDRGENEOF
 #!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 # Stale-code check first, same as janus.py's render_header: if it wins, it
 # replaces the WHOLE header line (in red) so a fix that shipped after this
 # session launched can't be missed or mistaken for the normal status line.
@@ -3602,6 +3625,31 @@ TALLY_PID=$!
 ) &>/dev/null &
 WATCHER_PID=$!
 
+# Pre-warm every generated action script (2026-10-21, "ctrl+d is still
+# feeling a little bit delayed"). Microsoft Defender (wdavdaemon) scans a
+# freshly written file on its FIRST direct exec: measured 150-300 ms for a
+# two-line script and 450-600 ms for these (the 457 ms pickenter -> defer
+# gap on the first Enter of a session; 614 ms in an earlier log; later
+# presses 27 ms). Every script here is new per session, so the first use of
+# each key paid it. `zsh file` reads the file without exec and skips the
+# scan, but fzf bindings and the scripts' calls to each other all exec
+# directly. So exec each one once now, in the background, with DTD_WARM=1
+# (line 2 of every script exits on it before any side effect), hot path
+# first. Two lanes so it finishes in ~2-3 s; $DTD_WARM_DONE marks the end
+# (the launch smoke test waits for it before timing the scripts).
+# fd 3 (the FIFO write end) is closed first, same as the watcher/ticker.
+DTD_WARM_DONE="/tmp/dtd-$DTD_ID.warm"
+rm -f "$DTD_WARM_DONE"
+_dtd_warm() { local _s; for _s in "$@"; do [[ -x "$_s" ]] && DTD_WARM=1 "$_s" </dev/null >/dev/null 2>&1; done; }
+( exec 3>&-
+  _dtd_warm "$DTD_LIST" "$DTD_HDRGEN" "$DTD_BLOCKARM" "$DTD_PICKENTER" "$DTD_BLOCKAPPLY" \
+            "$DTD_DEFER" "$DTD_DONE_ROUTER" "$DTD_DONE_HIDE" "$DTD_DONE" "$DTD_START" "$DTD_ENTER" "$DTD_BACK" &
+  _dtd_warm "$DTD_DOMAINSEARCH" "$DTD_EDIT" "$DTD_SPLIT" "$DTD_UNDO" "$DTD_BUMP" "$DTD_SKIP" \
+            "$DTD_DELETE" "$DTD_REFRESH" "$DTD_VIEWTOGGLE" "$DTD_AGENT" "$DTD_FORM" &
+  wait
+  : > "$DTD_WARM_DONE"
+) &>/dev/null &!
+
 # --- UI loop (reads from CACHE_SNAPSHOT variable, never the file) ---
 # Usage event: session start (host + terminal size) / end (see DTD_EVENTS).
 print -r -- "$EPOCHREALTIME"$'\t'"$DTD_ID"$'\t'session$'\t'start$'\t'$'\t'"${HOST%%.*} ${COLUMNS:-?}x${LINES:-?}" >> "$DTD_EVENTS" 2>/dev/null
@@ -3691,7 +3739,8 @@ while true; do
       --header="$DTD_KEYS" \
       --bind "start:execute-silent(echo \$FZF_PORT > $DTD_PORT)" \
       --bind "load:transform-header($DTD_HDRGEN)+transform-footer($DTD_HDRGEN footer)" \
-      --bind "result:transform-header($DTD_HDRGEN)+transform-footer($DTD_HDRGEN footer)" \
+      $( : "result: header only (2026-10-21). The footer reads FZF_TOTAL_COUNT, which only changes on load; running it on every query change was one more synchronous spawn per keystroke and per reload" ) \
+      --bind "result:transform-header($DTD_HDRGEN)" \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first+execute-silent($DTD_DOMAINSEARCH {q})" \
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
@@ -3855,4 +3904,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"

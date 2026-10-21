@@ -15,6 +15,7 @@ Integration test: needs zsh + fzf on PATH and dtd's cache to exist. Skips
 cleanly when they do not, never silently passes.
 """
 import glob
+import re
 import os
 import pty
 import select
@@ -128,6 +129,26 @@ def test_dtd_launches_and_generates_every_action_script():
             if r.returncode != 0:
                 bad.append(f"{n}: {r.stderr.strip()}")
         assert not bad, "generated scripts fail zsh -n:\n" + "\n".join(bad)
+        # DTD_WARM=1 must make every script exit 0 at line 2, before any side
+        # effect: dtd execs each one that way at launch so Defender's
+        # first-exec scan happens in the background, not on the first keypress.
+        slow = []
+        for _ in range(60):   # the two warm lanes finish in ~2-3 s; marker = done
+            if os.path.exists(stem + ".warm"):
+                break
+            _drain(fd, 0.25)
+        else:
+            pytest.fail("dtd's warm-up never wrote its done marker (.warm)")
+        for n, p in found.items():
+            t0 = time.time()
+            r = subprocess.run([p], env=dict(os.environ, DTD_WARM="1"), capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=10)
+            if r.returncode != 0 or r.stdout or r.stderr:
+                bad.append(f"{n}: rc={r.returncode} out={r.stdout[:60]!r} err={r.stderr[:60]!r}")
+            if time.time() - t0 > 0.1:
+                slow.append(n)   # the launch-time warm loop should already have paid the scan
+        assert not bad, "DTD_WARM=1 did not short-circuit:\n" + "\n".join(bad)
+        assert not slow, f"scripts still slow to exec after dtd's own warm-up (scan not pre-paid?): {slow}"
         _check_usage_event_hooks(found, stem)
     finally:
         # Exit the way a user does (ESC aborts fzf, dtd's loop breaks and it
@@ -207,3 +228,12 @@ def _check_usage_event_hooks(found, stem):
             problems.append(f"{name}: got {got}, want {want}")
     assert not problems, "usage-event hooks:\n" + "\n".join(problems)
     assert os.path.exists(stem + ".lastrender"), "list generator never wrote a render event"
+
+
+def test_every_generated_script_has_the_warm_guard_on_line_two():
+    src = DTD.read_text()
+    starts = re.findall(r'^cat > "\$DTD_[A-Z_]*" <<\s*\'?[A-Z]*EOF\'?\n#!/bin/zsh\n(.*)$', src, re.M)
+    assert len(starts) == 23, len(starts)
+    for line in starts:
+        assert line.startswith('[[ -n "') and 'DTD_WARM:-}" ]] && exit 0' in line, line
+    assert 'DTD_WARM=1 "$_s" </dev/null' in src
