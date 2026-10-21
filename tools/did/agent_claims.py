@@ -22,7 +22,7 @@ Usage:
   agent_claims.py claim <query>   fuzzy-match a task in the dtd cache, claim it
   agent_claims.py hook            UserPromptSubmit fast path for `/d <task>: ...`
   agent_claims.py new <task>      create a today task and claim it
-  agent_claims.py release         drop this session's claim
+  agent_claims.py release         hand this session's task back (stays at the top of dtd, 🕐)
   agent_claims.py list            JSON of claims (+ derived working flag)
 """
 from __future__ import annotations
@@ -38,6 +38,11 @@ from pathlib import Path
 CLAIMS_DIR = Path.home() / "vault" / "z_ibx" / "agent-claims"
 # A turn with no Stop for this long is a crashed/killed session, not work.
 STALE_SECS = 3600
+# A released claim keeps the task at the TOP of dtd (2026-10-21, "when an
+# agent releases a task, it should remain at the top"): the record stays with
+# state 'released' so the list generator still sorts it into the claimed tier
+# (🕐, waiting on JM) until JM completes or defers it. Pruned after this long.
+RELEASED_TTL = 86400
 
 
 # --- store ---------------------------------------------------------------
@@ -53,18 +58,34 @@ def set_state(task_id: str, state: str, now: float | None = None,
     _write(root / f"{task_id}.state", f"{state} {int(now or time.time())}\n")
 
 
-def release(session: str, root: Path = CLAIMS_DIR) -> str | None:
+def release(session: str, root: Path = CLAIMS_DIR, now: float | None = None) -> str | None:
+    """Hand the task back to JM: the session index goes, the claim record
+    stays as 'released' so dtd keeps the row at the top (see RELEASED_TTL)."""
     idx = root / "by-session" / session
     try:
         tid = idx.read_text().strip()
     except OSError:
         return None
-    for p in (root / f"{tid}.json", root / f"{tid}.state", idx):
+    if (root / f"{tid}.json").exists():
+        set_state(tid, "released", now, root)
+    else:
+        try:
+            (root / f"{tid}.state").unlink()
+        except OSError:
+            pass
+    try:
+        idx.unlink()
+    except OSError:
+        pass
+    return tid
+
+
+def _forget(tid: str, root: Path) -> None:
+    for p in (root / f"{tid}.json", root / f"{tid}.state"):
         try:
             p.unlink()
         except OSError:
             pass
-    return tid
 
 
 def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
@@ -112,9 +133,13 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
             state, ts = s, int(t)
         except (OSError, ValueError):
             pass
+        if state == "released" and now - ts > RELEASED_TTL:
+            _forget(tid, root)   # kept its top slot for a day; JM never closed it
+            continue
         rec["state"] = state
         rec["working"] = state == "working" and now - ts < STALE_SECS
-        rec["pane"] = panes.get(str(rec.get("session", "")))
+        # A released claim's session is gone or elsewhere: no pane number.
+        rec["pane"] = None if state == "released" else panes.get(str(rec.get("session", "")))
         out[tid] = rec
     return out
 

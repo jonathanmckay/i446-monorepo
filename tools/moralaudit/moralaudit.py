@@ -15,7 +15,7 @@ Rows (two groups):
                    in for "should have run it at all"):
     capital        Money — deployed productively, or sitting idle?
     org            People/culture you have AUTHORITY over
-    property       Physical space/property you control
+    (property      removed 2026-10-21: covered by Capital x m5x2)
     relationships  People you have NO authority over (reciprocity, not control)
     time           Your own hours — allocation across what's possible
     zi             自 — attention/energy quality (NOT time allocation itself)
@@ -45,13 +45,14 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-VAULT_DIR = Path.home() / "vault" / "hcmp" / "moral-audit"
+VAULT_DIR = Path.home() / "vault" / "hcmp" / "moral-audits"
 RECOVERY_DIR = Path.home() / ".cache" / "moralaudit-recovery"
 
 ROWS = [
     ("capital", "Capital", "stewardship"),
     ("org", "Org / People", "stewardship"),
-    ("property", "Property", "stewardship"),
+    # ("property", ...) removed 2026-10-21 (JM): left blank two quarters running;
+    # physical property is judged inside the m5x2 column of Capital.
     ("relationships", "Relationships", "stewardship"),
     ("time", "Time", "stewardship"),
     ("zi", "自 (Self)", "stewardship"),
@@ -143,12 +144,12 @@ def build_html(answers: dict, target: _dt.date) -> str:
             body = text.replace("\n", "<br>") if text else ""
             cells.append(
                 f'<td style="padding:10px 12px;background:{bg};color:{fg};'
-                f'border:1px solid #333;vertical-align:top;min-width:180px;">{body}</td>'
+                f'border:1px solid #333;vertical-align:top;">{body}</td>'
             )
         rows_html.append(f"<tr>{''.join(cells)}</tr>")
 
     table = (
-        '<table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:14px;">'
+        '<table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;">'
         + "".join(rows_html)
         + "</table>"
     )
@@ -164,6 +165,7 @@ def build_note(answers: dict, target: _dt.date) -> str:
         "type: moral-audit",
         "tags: [hcmp]",
         "source: moralaudit",
+        "cssclasses: [wide]",   # full-width body (.obsidian/snippets/wide.css): the grid was clipped at readable line width
         "---",
         "",
     ])

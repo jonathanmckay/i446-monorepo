@@ -48,7 +48,7 @@ EXCLUDE_PREFIXES = (
     # Confirmed exceptions (JM, 2026-09-27): two-doc folders accepted as-is.
     "g245/Zenstoic path", "g245/n156/rob",
     "h335/m5x2/fund-iii/condo-conversion-masterdoc",   # masterdoc + sub-docs, keep
-    "hcmp/moral-audit",                                # /moralaudit adds a dated file each quarter
+    "hcmp/moral-audits",                                # /moralaudit adds a dated file each quarter
     "h335/i9/xbox/decks",                              # deck build scripts + templates, not docs
     "h335/i8/社-people/jm-feedback-career/perf-boss-feedback",   # two-doc folder, keep (2026-09-27)
 )

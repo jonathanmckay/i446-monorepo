@@ -22,8 +22,10 @@ struct VaultView: View {
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
-                           actionIcon: "square.and.pencil", onAction: { showCapture = true })
+                // No capture button for now (2026-10-21): Inkwell on iOS is a
+                // mobile entry screen for new-notes; the editor IS the input.
+                // CaptureSheet stays reachable from the App Intent.
+                HeaderView(title: store.title, status: store.status, onLongPress: onSettings)
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
