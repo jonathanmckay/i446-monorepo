@@ -228,7 +228,13 @@ def osascript(script: str) -> tuple[int, str, str]:
             ["osascript", "-e", script],
             capture_output=True, text=True, timeout=TIMEOUT,
         )
-    return r.returncode, r.stdout.strip(), r.stderr.strip()
+    # Only the trailing newline comes off. A full strip() ate the leading
+    # "\t\t" that /write and /batch_write echo for a blank cell (old formula
+    # and old value both ""), shifting every field left: the ledger recorded
+    # before=<new value>, after="", and did-fast's verify saw "" for the value
+    # it had just written. Every first mark of the day failed and only the
+    # retry passed (2026-10-21, every 0n habit column that morning).
+    return r.returncode, r.stdout.rstrip("\r\n"), r.stderr.strip()
 
 
 # Neon audit macro liveness, reported on /health. last_ping comes from the
