@@ -21,8 +21,6 @@ struct JanusView: View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        onRetry: { store.reload() })
-            CurrentTimerCard(row: store.running, busy: store.busy,
-                             onDone: { r in store.onRight(r) }, onEdit: { r in editTarget = r })
             List {
                 ForEach(Array(store.rows.enumerated()), id: \.offset) { _, r in
                     if r.isDivider {
@@ -64,11 +62,19 @@ struct JanusView: View {
         }
         .background(Theme.bg)
         .safeAreaInset(edge: .bottom) {
-            // Command bar + "start now" at the bottom right (2026-10-20).
-            EntryBar(placeholder: "coffee 1400-1415 @epcn · same as the CLI", text: $cmd,
-                     focus: $cmdFocused, disabled: store.busy,
-                     onSubmit: { store.run($0) },
-                     onPlus: { fillTarget = FillTarget(gap: nil) })
+            // Live timer card sits just above the command bar (2026-10-21: moved
+            // down from the header). Shown only while something is running.
+            VStack(spacing: 0) {
+                if let r = store.running {
+                    CurrentTimerCard(row: r, busy: store.busy,
+                                     onDone: { t in store.onRight(t) }, onEdit: { t in editTarget = t })
+                }
+                // Command bar + "start now" at the bottom right (2026-10-20).
+                EntryBar(placeholder: "coffee 1400-1415 @epcn · same as the CLI", text: $cmd,
+                         focus: $cmdFocused, disabled: store.busy,
+                         onSubmit: { store.run($0) },
+                         onPlus: { fillTarget = FillTarget(gap: nil) })
+            }
         }
         .task {
             if !store.loadedOnce { await store.load() }
@@ -169,10 +175,11 @@ struct TimelineRowView: View {
     var body: some View {
         let color: Color = row.isGap ? Theme.dim : Color(hex: row.color)
         HStack(spacing: 10) {
+            Text(row.displayMeta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                .fixedSize(horizontal: true, vertical: false)
             Text(row.displayTitle).font(Theme.mono).foregroundStyle(color).lineLimit(2)
                 .opacity(row.logged && !row.running ? 0.55 : 1)
             Spacer(minLength: 8)
-            Text(row.displayMeta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
         }
         .padding(.vertical, 4)
     }
