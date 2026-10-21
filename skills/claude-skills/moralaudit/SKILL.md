@@ -1,6 +1,6 @@
 ---
 name: "moralaudit"
-description: "Quarterly moral audit: a full-screen form covering Stewardship (Capital, Org/People, Property, Relationships, Time, 自) x Externalities (Individual, Group) against i9/m5x2/个, each cell a free-text reflection plus a 1-7/n/a rating. Writes a dated vault note with a colored HTML grid (color from rating) and opens it. Usage: /moralaudit [YYYY-MM-DD]"
+description: "Quarterly moral audit: a full-screen form covering Stewardship (Capital, Org/People, Relationships, Time, 自) x Externalities (Individual, Group) against i9/m5x2/个, each cell a free-text reflection plus a 1-7/n/a rating. Writes a dated vault note with a colored HTML grid (color from rating) and opens it. Usage: /moralaudit [YYYY-MM-DD]"
 user-invocable: true
 ---
 
@@ -10,7 +10,7 @@ A full-screen prompt_toolkit form for the quarterly moral audit — same
 skeleton as `/0s`/`/1s`/`/xk887`. Every (row, column) cell gets a free-text
 reflection plus a 1-7 rating (or `n/a`); the rating sets that cell's fill
 color in the rendered grid. On submit, writes a dated note to
-`~/vault/hcmp/moral-audit/YYYY-MM-DD-moral-audit.md` with an inline-styled
+`~/vault/hcmp/moral-audits/YYYY-MM-DD-moral-audit.md` with an inline-styled
 HTML table (renders natively in Obsidian) and opens it.
 
 ## Design (settled 2026-08-13, do not re-litigate without JM)
@@ -24,7 +24,8 @@ HTML table (renders natively in Obsidian) and opens it.
 - **Stewardship rows** (resource types JM controls):
   - `capital` — Money: deployed productively, or sitting idle?
   - `org` — Org/People: people he has AUTHORITY over (employees, culture)
-  - `property` — Physical space/property he controls
+  - ~~`property`~~ — removed 2026-10-21 at JM's request (blank for two
+    quarters; physical property is judged in Capital × m5x2)
   - `relationships` — People he has NO authority over (reciprocity, not
     control — distinct from `org`)
   - `time` — His own hours: allocation across what's possible
@@ -81,9 +82,9 @@ naming the offending cells.
 
 ## Output
 
-- Path: `~/vault/hcmp/moral-audit/YYYY-MM-DD-moral-audit.md` (hcmp — this
+- Path: `~/vault/hcmp/moral-audits/YYYY-MM-DD-moral-audit.md` (hcmp — this
   ritual's actual journal home; JM has been writing "moral audit" entries
-  under `hcmp/o314/` since 2011, and a standalone `hcmp/morals.md` (audit history in `hcmp/moral-audit.md`)
+  under `hcmp/o314/` since 2011, and a standalone `hcmp/morals.md` (audit history in `hcmp/moral-audits/moral-audits.md`, the folder note)
   predates this skill. Moved 2026-08-13 from an initial `g245/5e4/` guess.)
 - Frontmatter: `title: "Moral Audit YYYY-Qn"`, `date`, `type: moral-audit`,
   `tags: [hcmp]`
