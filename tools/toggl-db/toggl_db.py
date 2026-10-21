@@ -26,7 +26,7 @@ days that the API no longer returns (entries deleted in Toggl).
 
 Usage:
   toggl_db.py sync   [--days N] [--window 7] [--export]   # last N days (default 14)
-  toggl_db.py backfill --since YYYY-MM-DD [--export]       # history, same path
+  toggl_db.py backfill --since YYYY-MM-DD [--until YYYY-MM-DD] [--window N] [--export]   # history, same path
   toggl_db.py export-cache [--path FILE]                   # rewrite the dashboard json from the db
   toggl_db.py status                                       # coverage + gaps
   toggl_db.py verify [--days 7]                            # per-day seconds vs the live v9 API
@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import fcntl
 import importlib.util
 import json
 import os
@@ -71,6 +72,16 @@ MAX_PAGES = 400           # runaway guard, not a cap: windows normally fit in ON
 # (99 entries for 2 days, no x-next-id), so that is the primary path; the
 # cursor (all three fields) is only followed if the API still hands one out.
 PAGE_SIZE = 1000
+# A window's request is padded by a day on each side, then filtered to the
+# local day: the Reports API windows by the Toggl profile's zone (LA today,
+# matching HOME_TZ), and the pad keeps an evening entry from falling between
+# two windows if that ever differs. Still one page.
+WINDOW_PAD = timedelta(days=1)
+# Deletion guard: a window that comes back with far fewer entries than the db
+# already holds for those days is a bad response, not a purge (the API was
+# seen returning an empty 200 mid-pagination on 2026-10-21). Upsert what came
+# back, delete nothing, mark the window incomplete.
+DELETE_GUARD = 0.5
 NO_PROJECT = "no project"
 
 
@@ -197,13 +208,26 @@ def fetch_window(auth: str, start: date, end: date, codes: dict[int, str], tags:
     """All entries whose local day is in [start, end], as row dicts for the
     entries table, plus the page count. Raises FetchError on any HTTP/parse
     error: a partial window must never look like a complete one."""
-    body = {"start_date": start.isoformat(), "end_date": end.isoformat(), "page_size": PAGE_SIZE}
+    body = {"start_date": (start - WINDOW_PAD).isoformat(), "end_date": (end + WINDOW_PAD).isoformat(),
+            "page_size": PAGE_SIZE}
     out: list[dict] = []
     now = int(time.time())
     for page in range(1, MAX_PAGES + 1):
         try:
             hdrs, rows = post(REPORTS_URL, body, auth)
-        except (urllib.error.URLError, urllib.error.HTTPError, ValueError, OSError) as e:
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise FetchError(f"{start}..{end} page {page}: {e!r}") from e
+            # Quota already spent when the run started: wait for the reset once, then retry this page.
+            h = {k.lower(): v for k, v in (e.headers.items() if e.headers else [])}
+            wait = int(h.get("retry-after") or h.get("x-toggl-quota-resets-in") or 60) + 2
+            log(f"    429: sleeping {wait}s for the quota reset")
+            sleep(wait)
+            try:
+                hdrs, rows = post(REPORTS_URL, body, auth)
+            except (urllib.error.URLError, ValueError, OSError) as e2:
+                raise FetchError(f"{start}..{end} page {page} (after 429 wait): {e2!r}") from e2
+        except (urllib.error.URLError, ValueError, OSError) as e:
             raise FetchError(f"{start}..{end} page {page}: {e!r}") from e
         for row in rows:
             pid = row.get("project_id")
@@ -264,15 +288,22 @@ def apply_window(conn: sqlite3.Connection, w_start: date, w_end: date, rows: lis
     """Upsert the fetched rows and delete this window's rows the API no longer
     returns (only called for windows that fetched completely)."""
     now = now or int(time.time())
+    have = conn.execute("SELECT COUNT(*) FROM entries WHERE day BETWEEN ? AND ?",
+                        (w_start.isoformat(), w_end.isoformat())).fetchone()[0]
     conn.executemany(UPSERT, rows)
-    ids = [r["id"] for r in rows]
-    cur = conn.execute("SELECT id FROM entries WHERE day BETWEEN ? AND ?", (w_start.isoformat(), w_end.isoformat()))
-    gone = [r[0] for r in cur if r[0] not in set(ids)]
-    if gone:
-        conn.executemany("DELETE FROM entries WHERE id = ?", [(g,) for g in gone])
-    conn.execute("INSERT INTO sync_log VALUES (?,?,?,?,?,?,1)",
-                 (w_start.isoformat(), w_end.isoformat(), now, pages, len(rows), len(gone)))
-    return len(rows), len(gone)
+    ids = {r["id"] for r in rows}
+    complete = 1
+    gone: list[int] = []
+    if have and len(rows) < have * DELETE_GUARD:
+        complete = 0   # suspicious shortfall: keep every stored row (see DELETE_GUARD)
+    else:
+        cur = conn.execute("SELECT id FROM entries WHERE day BETWEEN ? AND ?", (w_start.isoformat(), w_end.isoformat()))
+        gone = [r[0] for r in cur if r[0] not in ids]
+        if gone:
+            conn.executemany("DELETE FROM entries WHERE id = ?", [(g,) for g in gone])
+    conn.execute("INSERT INTO sync_log VALUES (?,?,?,?,?,?,?)",
+                 (w_start.isoformat(), w_end.isoformat(), now, pages, len(rows), len(gone), complete))
+    return len(rows), len(gone), complete
 
 
 def sync_range(start: date, end: date, window: int = 7, path: Path = DB_PATH, fetch=None, log=print) -> int:
@@ -280,13 +311,20 @@ def sync_range(start: date, end: date, window: int = 7, path: Path = DB_PATH, fe
     separate atomic write, so a crash mid-run keeps every completed window."""
     fetch = fetch or (lambda s, e, _a=creds(), _c=project_codes(), _t=tag_names(): fetch_window(_a, s, e, _c, _t, log=log))
     total = 0
-    for w_start, w_end in windows(start, end, window):
-        t0 = time.time()
-        rows, pages = fetch(w_start, w_end)
-        with writer(path) as conn:
-            n, gone = apply_window(conn, w_start, w_end, rows, pages)
-        total += n
-        log(f"{w_start}..{w_end}: {n} entries, {pages} page(s), -{gone} gone, {time.time() - t0:.1f}s")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # One writer at a time: the daily and Sunday crons are 5 minutes apart and
+    # a quota wait can stretch a run past that; a second copy-then-rename
+    # would silently discard the first run's windows.
+    with open(path.with_name(path.name + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for w_start, w_end in windows(start, end, window):
+            t0 = time.time()
+            rows, pages = fetch(w_start, w_end)
+            with writer(path) as conn:
+                n, gone, complete = apply_window(conn, w_start, w_end, rows, pages)
+            total += n
+            flag = "" if complete else "  ⚠ short response: kept stored rows, window marked incomplete"
+            log(f"{w_start}..{w_end}: {n} entries, {pages} page(s), -{gone} gone, {time.time() - t0:.1f}s{flag}")
     return total
 
 
@@ -342,9 +380,10 @@ def status(conn: sqlite3.Connection) -> str:
 
 
 def verify(conn: sqlite3.Connection, auth: str, days: int, get=_get, log=print) -> list[str]:
-    """Per-day seconds in the db vs the live v9 endpoint for the last N days."""
-    end = date.today()
-    start = end - timedelta(days=days)
+    """Per-day seconds in the db vs the live v9 endpoint for the N days before
+    today (today itself is still being tracked, so it always drifts)."""
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=days - 1) if days > 0 else end
     # v9 end_date is exclusive and UTC-based: a local evening entry sits on the
     # next UTC day, so ask two days past `end` and bucket by local day below.
     live = get(f"{LIVE_URL}?start_date={start.isoformat()}&end_date={(end + timedelta(days=2)).isoformat()}", auth)
@@ -355,7 +394,7 @@ def verify(conn: sqlite3.Connection, auth: str, days: int, get=_get, log=print) 
     db_secs = {d: s for d, s in conn.execute("SELECT day, SUM(seconds) FROM entries WHERE day BETWEEN ? AND ? GROUP BY day",
                                                (start.isoformat(), end.isoformat()))}
     bad = []
-    for i in range(days + 1):
+    for i in range((end - start).days + 1):
         d = (start + timedelta(i)).isoformat()
         if abs(live_secs.get(d, 0) - db_secs.get(d, 0)) >= 60:   # the two endpoints round seconds differently
             bad.append(f"{d}: db {db_secs.get(d, 0) // 60}m vs live {live_secs.get(d, 0) // 60}m")
@@ -369,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("sync"); s.add_argument("--days", type=int, default=14); s.add_argument("--window", type=int, default=7)
     s.add_argument("--export", action="store_true")
     b = sub.add_parser("backfill"); b.add_argument("--since", required=True); b.add_argument("--window", type=int, default=7)
+    b.add_argument("--until", help="last day to pull (default today); sparse years can use a wider --window")
     b.add_argument("--export", action="store_true")
     e = sub.add_parser("export-cache"); e.add_argument("--path", default=str(CACHE_PATH))
     sub.add_parser("status")
@@ -379,8 +419,9 @@ def main(argv: list[str] | None = None) -> int:
     today = date.today()
     if a.cmd in ("sync", "backfill"):
         start = today - timedelta(days=a.days) if a.cmd == "sync" else date.fromisoformat(a.since)
-        n = sync_range(start, today, a.window)
-        print(f"synced {n} entries {start}..{today} into {DB_PATH}")
+        end = date.fromisoformat(a.until) if a.cmd == "backfill" and a.until else today
+        n = sync_range(start, end, a.window)
+        print(f"synced {n} entries {start}..{end} into {DB_PATH}")
         if a.export:
             with connect_ro() as conn:
                 print(f"exported {export_cache(conn)} days to {CACHE_PATH}")
@@ -395,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
             print("\n".join(bad) if bad else f"db matches live for the last {a.days} days")
             return 1 if bad else 0
         elif a.cmd == "query":
+            if a.project and a.project not in set(project_codes().values()) | {NO_PROJECT}:
+                sys.exit(f"unknown project code {a.project!r}")
             for d, v in daily_totals(conn, a.start, a.end).items():
                 mins = v["minutes"] if not a.project else {a.project: v["minutes"].get(a.project, 0)}
                 print(d, json.dumps(mins, ensure_ascii=False))

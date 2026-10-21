@@ -100,3 +100,6 @@ $REMOVED.ids
 # managed by Claude Code, not source. Vendored copies tripped GitGuardian (qpdf --password doc example).
 skills/claude-skills/synced/
 skills/claude-skills/.trash/
+
+# derived nightly from ~/vault/i156/toggl.sqlite by tools/toggl-db (export-cache); not a source
+tools/personal-dashboard/.toggl-daily-cache.json

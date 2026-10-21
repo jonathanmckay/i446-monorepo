@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""One-time/periodic backfill for the dashboard's weekly/monthly Time/Entries
+"""SUPERSEDED 2026-10-21 by tools/toggl-db/toggl_db.py (`sync --export`
+rewrites .toggl-daily-cache.json from the SQLite entries store; the Ix cron
+lines now call that). Kept for its PROJECT_ID_TO_CODE map and credential
+loader, which toggl_db imports. Do not run this: its 10-page window cap lost
+~25% of days and it would overwrite the complete export.
+
+One-time/periodic backfill for the dashboard's weekly/monthly Time/Entries
 charts.
 
 The live v9 /me/time_entries endpoint (used for the daily view and the ~90-day

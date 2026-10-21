@@ -34,11 +34,11 @@ def test_ctrl_o_and_ctrl_g_open_the_same_edit_screen():
     assert "--preview " not in DTD
     edit = DTD[DTD.index('cat > "$DTD_EDIT" << EDITEOF'):]
     edit = edit[:edit.index("\nEDITEOF\n")]
-    assert 'python3 "$DTD_DETAIL" "\\$1"' in edit           # full context on top
-    # 2026-10-13: one prefilled line, not one prompt per field.
-    assert edit.count("vared ") == 1
-    assert "title @domain [N] // description" in edit
-    assert '--fields --id "\\$1" "$DTD_CACHE_FILE" --line' in edit
+    # 2026-10-21: one curses form (edit-form.py) renders the detail block on
+    # top itself (task-detail's cached bundle, in-process) and the fields below.
+    assert 'python3 "\\$EDIT_FORM" --id "\\$1" "$DTD_CACHE_FILE" --out' in edit
+    assert "vared " not in edit and '"$DTD_DETAIL"' not in edit
+    assert '--fields --id "\\$1" "$DTD_CACHE_FILE" --json' in edit
     assert "ctrl-o/g: details+edit" in DTD
 
 

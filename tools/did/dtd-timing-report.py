@@ -99,6 +99,8 @@ def main():
                         ("defer-start", "defer-prompt", "ctrl-d → prompt shown"),
                         ("defer-prompt", "defer-end", "defer prompt → done"),
                         ("arm-start", "arm-end", "ctrl-v arm script"),
+                        ("edit-start", "edit-form-paint", "ctrl-o/ctrl-p → edit form painted (budget 0.200, aim 0.080-0.100)"),
+                        ("edit-form-exit", "edit-end", "edit save → back to the list (edit-fast; split runs in the background)"),
                         ("list-start", "list-end", "list regen (all reloads)")):
         ds = []
         last = None

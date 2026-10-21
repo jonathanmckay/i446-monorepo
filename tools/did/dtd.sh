@@ -1703,37 +1703,16 @@ _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}
 # screen, not exit all the way"). fzf's Pause() hands us the tty in cooked
 # mode with ISIG on, and the tty raises SIGINT for the WHOLE foreground
 # process group -- fzf included -- so a ^C anywhere in this script killed
-# dtd outright. Undefine the intr (and quit) chars FIRST, before the resolve
-# step below, so ^C/^\ arrive as plain bytes: the ZLE widget further down
-# turns ^C into "empty line + accept", which is the existing blank-line
-# cancel path. A ^C typed while the detail is still fetching is echoed as a
-# literal ^C (cooked mode), waits for the fetch, then cancels at once.
-# The stty sane below would reset intr, so it repeats the undef. Restored
-# explicitly after the drain (ZLE does not snapshot/restore termios).
+# dtd outright. Undefine the intr (and quit) chars FIRST, so ^C/^\ arrive as
+# plain bytes; the curses form (raw mode) then sees ^C as a key and cancels
+# (exit 2). The stty sane below would reset intr, so it repeats the undef.
+# Restored explicitly after the drain.
 stty intr undef quit undef < /dev/tty 2>/dev/null
-zmodload zsh/zle 2>/dev/null
-_dtd_cancel() { BUFFER=""; zle accept-line; }
-zle -N _dtd_cancel
-bindkey -M emacs '^C' _dtd_cancel
-bindkey -M viins '^C' _dtd_cancel
-bindkey -M vicmd '^C' _dtd_cancel
-# ctrl-p INSIDE the line = append the split marker (2026-10-21: the split
-# form folded into this screen; see the legend below). Same widget trick as
-# ^C above.
-_dtd_split_seed() { BUFFER="\$BUFFER ✓ "; zle end-of-line; }
-zle -N _dtd_split_seed
-bindkey -M emacs '^P' _dtd_split_seed
-bindkey -M viins '^P' _dtd_split_seed
 EDIT_FAST="\$HOME/i446-monorepo/tools/did/edit-fast.py"
+EDIT_FORM="\$HOME/i446-monorepo/tools/did/edit-form.py"
 HDR="$DTD_HDR"
-task="\$1"
-task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
-query="\$task"
-if [[ "\$clean" == *"…"* ]]; then
-  clean="\${clean%%…*}"
-  query="\$clean"
-fi
+TIMING="$DTD_TIMING"
+print -- "\$EPOCHREALTIME\tedit-start\t\$1" >> "\$TIMING" 2>/dev/null
 # fzf leaves the alternate screen for execute(), but what the terminal shows
 # then is not guaranteed: cmux keeps the stale fzf frame on screen, so the
 # prompt is invisible and arrow keys land in a blind 'read' that doesn't
@@ -1744,62 +1723,59 @@ fi
 # terminates the read.
 stty sane < /dev/tty 2>/dev/null
 stty intr undef quit undef < /dev/tty 2>/dev/null  # sane reset intr; keep ^C a byte (see top)
-printf "\033[2J\033[H" > /dev/tty
-# ctrl-o and ctrl-g both open this screen (2026-10-11: "ideally ctrl+g and
-# ctrl+o go to the same place, and show the different fields that I could add
-# along with all the context"). The full detail (title, project/labels/due,
-# description, comments, links) sits on top; below it a single prefilled
-# edit line (see below).
-python3 "$DTD_DETAIL" "\$1" > /dev/tty 2>/dev/null
-# One line, not one prompt per field (2026-10-13: "it shouldn't ask for
-# things in multiple questions when I edit description ... parse what I put
-# in"). Prefilled as  title @domain [N] // description ; edit-fast --line
-# parses it back and applies only what changed.
-cur_line=""
-eval "\$(python3 "\$EDIT_FAST" --current --id "\$1" "$DTD_CACHE_FILE" 2>/dev/null)"
-printf "\n\033[2m──────── edit · title @domain [N] // description ✓ pts-done what-you-did · blank line cancels ────────\033[0m\n" > /dev/tty
-printf "\033[2m(time) and {bonus} tags are kept · ctrl-v ctrl-j for a new line · a bare // clears the description\033[0m\n" > /dev/tty
-printf "\033[2m✓ N splits: N pts logged today, [N] stays the total, the rest moves to tomorrow · ctrl-p inserts ✓\033[0m\n" > /dev/tty
-f_line="\${cur_line:-\$clean}"
-# ctrl-p from the list opens this same screen with the split marker already
-# appended (DTD_SPLIT_SEED=1), so "ctrl-p, 15, enter" is still a 3-key split.
-[[ -n "\${DTD_SPLIT_SEED:-}" ]] && f_line="\$f_line ✓ "
-vared -p "> " f_line < /dev/tty > /dev/tty
-edits="\$f_line"
+printf "\033[2J\033[H⏳" > /dev/tty
+# ctrl-o and ctrl-p both open this screen (2026-10-11: "ideally ctrl+g and
+# ctrl+o go to the same place"; 2026-10-21: "I don't like the new ctrl+o /
+# ctrl+p page" → a curses FORM, edit-form.py: [N] pts · (N) min, haiku name,
+# full name, notes, project, then the breakoff "done so far" block (pts done
+# · min done · done as). One interpreter, cache read in-process, ~50 ms to
+# paint (budget: < 200, aim 80–100). ctrl-p from the list lands on "pts
+# done" (DTD_SPLIT_SEED=1); ctrl-o on the task fields; ^O/^P jump inside.
+_out="/tmp/dtd-$DTD_ID.edit.\$1.json"
+rm -f "\$_out"
+python3 "\$EDIT_FORM" --id "\$1" "$DTD_CACHE_FILE" --out "\$_out" --timing "\$TIMING" \\
+  \${DTD_SPLIT_SEED:+--focus split} < /dev/tty > /dev/tty 2>/tmp/dtd-$DTD_ID.edit.err
+_rc=\$?
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the prompt above
 # — leaked SGR motion sequences type themselves into fzf's query as literal
 # ^[[<0;16;15M text on resume otherwise (bug 2026-07-05; drain half of the
 # fix was 2026-07-27 on done.sh/split.sh but never ported here). Runs
 # unconditionally, BEFORE the cancel check below, so a cancelled edit
-# (blank input) still cleans up instead of exiting past it.
+# still cleans up instead of exiting past it.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 # Give the tty its interrupt chars back (both exit paths pass here). fzf's
 # Resume() re-applies raw mode anyway; this just leaves no surprise behind.
 stty intr '^C' quit '^\\' < /dev/tty 2>/dev/null
-if [[ -z "\${edits// /}" ]]; then
-  echo "edit cancelled" > "\$HDR"
+if [[ ! -s "\$_out" ]]; then
+  if (( _rc == 2 )); then echo "edit cancelled" > "\$HDR"
+  else echo "✗ edit form exited \$_rc: \$(tail -c 120 /tmp/dtd-$DTD_ID.edit.err 2>/dev/null | tr '\\n' ' ')" > "\$HDR"; fi
+  print -- "\$EPOCHREALTIME\tedit-end\t\$1 rc=\$_rc" >> "\$TIMING" 2>/dev/null
   exit 0
 fi
-out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --line "\$f_line" 2>/dev/null)
+echo "⏳ saving…" > "\$HDR"
+out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --json "\$_out" 2>/dev/null)
+rm -f "\$_out"
 # Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
 rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
-# Split (2026-10-21): when the line carried  ✓ <pts> [what I did] , edit-fast
+# Split (2026-10-21): when the form carried a "done so far" block, edit-fast
 # has already applied every other change and prints ONE line of shell
-# assignments prefixed SPLIT (pts=, done_name=; newlines sanitised, so a
-# prefix scan is safe even with a multi-line description). The split
-# script re-reads name/[N] from the patched cache, so [N] on the line is the
-# task TOTAL and the remainder gets total - pts. It owns the header from here.
+# assignments prefixed SPLIT (pts=, done_name=, done_min=; newlines
+# sanitised, so a prefix scan is safe even with a multi-line description).
+# The split script re-reads name/[N]/(N) from the patched cache, so the
+# form's [N]/(N) are the task TOTALS and the remainder gets total - done.
+# It owns the header from here.
 _split_line=\$(print -r -- "\$out" | grep '^SPLIT ' | tail -n 1)
 if [[ -n "\$_split_line" ]]; then
-  pts=""; done_name=""
+  pts=""; done_name=""; done_min=""
   eval "\${_split_line#SPLIT }"
-  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name"
+  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "" "\$done_min"
 else
   echo "\${out:-✗ edit failed}" > "\$HDR"
 fi
+print -- "\$EPOCHREALTIME\tedit-end\t\$1" >> "\$TIMING" 2>/dev/null
 
 EDITEOF
 chmod +x "$DTD_EDIT"
@@ -3052,7 +3028,7 @@ duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 
 # Was three GUI dialogs (2026-06), three sequential prompts, then one curses
 # form (split-form.py, 2026-10-04); now the answers arrive as arguments.
-pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"
+pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"; minutes_done="${6:-}"
 [[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "split cancelled" > "$HDR"; exit 0; }
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
@@ -3100,6 +3076,15 @@ remaining_pts = max(0, total - pts_today) if total > 0 else 0
 # Points remaining typed in the form (12th arg) wins over total - done.
 if len(sys.argv) > 12 and sys.argv[12].strip().isdigit():
     remaining_pts = int(sys.argv[12].strip())
+# Minutes done (13th arg, edit form 2026-10-21): the done record takes them
+# and the remainder keeps duration - done; blank = the old behaviour (the
+# done record shows the whole duration, the remainder keeps it too).
+minutes_done = sys.argv[13].strip() if len(sys.argv) > 13 else ''
+done_dur = duration
+remaining_dur = duration
+if minutes_done.isdigit():
+    done_dur = minutes_done
+    remaining_dur = str(max(0, int(duration) - int(minutes_done))) if duration.isdigit() else ''
 
 def api(method, path, body=None):
     data = json.dumps(body).encode() if body else None
@@ -3130,7 +3115,7 @@ prev_due = (task.get('due') or {}).get('date', '')
 
 # 1. Create completed posthoc for today's portion
 today_label = done_desc if done_desc else clean
-posthoc_content = f'{today_label} ({duration or pts_today}) {open_b}{pts_today}{close_b}'
+posthoc_content = f'{today_label} ({done_dur or pts_today}) {open_b}{pts_today}{close_b}'
 from datetime import date
 today_iso = date.today().isoformat()
 posthoc = api('POST', '/tasks', {
@@ -3145,7 +3130,14 @@ if posthoc:
 # 2. Update original task: new content with remaining description + reschedule
 from datetime import timedelta
 tomorrow = (date.today() + timedelta(days=1)).isoformat()
-new_content = f'{remaining_desc or clean} ({duration}) {open_b}{remaining_pts}{close_b}' if remaining_pts > 0 else f'{remaining_desc or clean}'
+# Tags are emitted independently: time may run out while points remain and
+# vice versa; an empty duration never writes a bare '()'.
+_tags = []
+if remaining_dur and remaining_dur != '0':
+    _tags.append(f'({remaining_dur})')
+if remaining_pts > 0:
+    _tags.append(f'{open_b}{remaining_pts}{close_b}')
+new_content = ' '.join([remaining_desc or clean] + _tags)
 api('POST', f'/tasks/{tid}', {
     'content': new_content,
     'due_date': tomorrow,
@@ -3210,7 +3202,7 @@ msg = f'✂ +{pts_today} today / {open_b}{remaining_pts}{close_b} deferred to {t
 if not (didfast_out or {}).get('results'):
     msg = f'⚠ split: {open_b}{pts_today}{close_b} NOT logged (did-fast: no domain) / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
-" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}"
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}" "${minutes_done:-}"
 print -- "$EPOCHREALTIME\tsplit-bg-end\t$task_id rc=$?" >> "$TIMING" 2>/dev/null
 } </dev/null >> "/tmp/dtd-split.log" 2>&1 &!
 print -- "$EPOCHREALTIME\tsplit-end\t$task_id" >> "$TIMING" 2>/dev/null
@@ -3465,7 +3457,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✓split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
