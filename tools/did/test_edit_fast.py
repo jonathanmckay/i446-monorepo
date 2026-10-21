@@ -401,14 +401,14 @@ def test_split_applies_edits_first_then_hands_off_one_shell_line(tmp_path, monke
     assert mod.main() == 0
     assert calls == [{"content": "write memo (see doc) (30) [40] {5}"}]   # [N] = new TOTAL, applied before the split
     out = capsys.readouterr().out.splitlines()
-    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done' done_min= rem_pts= rem_min="   # one line, newline sanitised
+    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done' done_min= rem_pts= rem_min= done_short='' rem_short=''"   # one line, newline sanitised
     assert json.loads(cache.read_text())["tasks"][0]["content"].endswith("[40] {5}")
 
 
 def test_split_with_no_other_change_skips_the_api(tmp_path, monkeypatch, capsys):
     mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // old notes ✓ 5")
     assert mod.main() == 0 and calls == []
-    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name='' done_min= rem_pts= rem_min="
+    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name='' done_min= rem_pts= rem_min= done_short='' rem_short=''"
 
 
 def test_seeded_check_left_alone_is_a_cancelled_split(tmp_path, monkeypatch, capsys):
@@ -439,7 +439,7 @@ def test_set_time_replaces_or_inserts_ahead_of_the_points_tail():
     assert mod.set_time("call (3) tenants [20]", 45) == "call (45) tenants [20]"  # first (N) wins, as set_points does
 
 
-def test_json_form_result_applies_time_and_split_minutes(tmp_path, monkeypatch, capsys):
+def test_json_form_result_edit_applies_time(tmp_path, monkeypatch, capsys):
     mod = _load()
     cache = {"today": [{"id": "t1", "content": "write memo (30) [40]", "labels": ["i9"]}]}
     cf = tmp_path / "c.json"; cf.write_text(json.dumps(cache))
@@ -449,12 +449,32 @@ def test_json_form_result_applies_time_and_split_minutes(tmp_path, monkeypatch, 
     monkeypatch.setattr(mod, "_resync_short", lambda *a: True)
     res = tmp_path / "r.json"
     res.write_text(json.dumps({"name": "write memo", "points": "40", "time": "60", "short": "",
-                               "short_enabled": False, "domain": "i9", "desc": "notes",
-                               "split": {"pts": 15, "minutes": 20, "name": "half", "rem_pts": 30, "rem_min": None}}))
+                               "short_enabled": False, "domain": "i9", "desc": "notes", "split": None}))
     monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cf), "--json", str(res)])
     assert mod.main() == 0
     assert calls == [{"content": "write memo (60) [40]"}]
-    assert capsys.readouterr().out.strip().splitlines()[-1] == "SPLIT pts=15 done_name=half done_min=20 rem_pts=30 rem_min="
+
+
+def test_json_form_split_leaves_tags_to_the_split_script(tmp_path, monkeypatch, capsys):
+    """The remainder card's [N]/(N) are what the task keeps AFTER the split:
+    they ride the SPLIT line as overrides, the edit itself never touches the
+    tags (it would subtract done twice). Name/haiku/notes still apply."""
+    mod = _load()
+    cache = {"today": [{"id": "t1", "content": "write memo (30) [40]", "labels": ["i9"]}]}
+    cf = tmp_path / "c.json"; cf.write_text(json.dumps(cache))
+    calls = []
+    monkeypatch.setattr(mod._df, "_api", lambda m, p, body=None: calls.append(body) or {})
+    monkeypatch.setattr(mod, "_description", lambda tid: "notes")
+    monkeypatch.setattr(mod, "_resync_short", lambda *a: True)
+    res = tmp_path / "r.json"
+    res.write_text(json.dumps({"name": "write memo v2", "points": "25", "time": "10", "short": "Memo v2",
+                               "short_enabled": True, "domain": "i9", "desc": "notes",
+                               "split": {"pts": 15, "minutes": 20, "name": "half", "short": "Half"}}))
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cf), "--json", str(res)])
+    assert mod.main() == 0
+    assert calls == [{"content": "write memo v2 (30) [40]"}]       # renamed, tags untouched
+    assert capsys.readouterr().out.strip().splitlines()[-1] == \
+        "SPLIT pts=15 done_name=half done_min=20 rem_pts=25 rem_min=10 done_short=Half rem_short='Memo v2'"
 
 
 def test_json_form_result_null_desc_means_never_loaded_keep(tmp_path, monkeypatch, capsys):

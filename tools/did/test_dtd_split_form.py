@@ -50,7 +50,13 @@ def test_edit_screen_runs_one_form_then_edit_fast_json_then_the_split_script():
     assert "vared" not in body and "_dtd_split_seed" not in body
     assert '--fields --id "\\$1" "$DTD_CACHE_FILE" --json "\\$_out"' in body
     assert "grep '^SPLIT ' | tail -n 1" in body
-    assert '"/tmp/dtd-$DTD_ID.split.sh" "\\$1" "\\$pts" "\\$done_name" "" "\\$rem_pts" "\\$done_min" "\\$rem_min"' in body
+    assert ('"/tmp/dtd-$DTD_ID.split.sh" "\\$1" "\\$pts" "\\$done_name" "" "\\$rem_pts" "\\$done_min" '
+            '"\\$rem_min" "\\$done_short" "\\$rem_short"') in body
+    # the save is backgrounded (haiku regeneration must not block the list) and
+    # pokes fzf's port to reload once the cache is patched
+    assert "} </dev/null >> \"/tmp/dtd-edit.log\" 2>&1 &!" in body
+    assert body.index('echo "⏳ saving…"') < body.index("trap '' HUP") < body.index('python3 "\\$EDIT_FAST"')
+    assert '--data "reload(\\$_reload)+transform-header($DTD_HDRGEN)"' in body
     # cancel = rc 2 and no result file; the header says so and nothing is written
     assert 'if (( _rc == 2 )); then echo "edit cancelled" > "\\$HDR"' in body
     assert body.index('[[ ! -s "\\$_out" ]]') < body.index('python3 "\\$EDIT_FAST"')
@@ -65,11 +71,13 @@ def test_edit_screen_runs_one_form_then_edit_fast_json_then_the_split_script():
 def test_split_script_takes_minutes_done_and_emits_tags_independently():
     body = _split()
     assert ('pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; '
-            'remaining_override="${5:-}"; minutes_done="${6:-}"; remaining_min_override="${7:-}"') in body
+            'remaining_override="${5:-}"; minutes_done="${6:-}"; remaining_min_override="${7:-}"; '
+            'done_short="${8:-}"; rem_short="${9:-}"') in body
+    assert "'--set-short', '--id', tid" in body and "dtd-short:{_h}:{done_short}" in body
     assert "if len(sys.argv) > 14 and sys.argv[14].strip().isdigit():" in body
     assert "split-form" not in body.replace("# form (split-form.py, 2026-10-04)", "")
     assert "vared" not in body and "read -r pts_today" not in body
-    assert '"${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}"' in body
+    assert '"${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}" "${done_short:-}" "${rem_short:-}"' in body
     assert "minutes_done = sys.argv[13].strip() if len(sys.argv) > 13 else ''" in body
     assert "remaining_dur = str(max(0, int(duration) - int(minutes_done)))" in body
     assert "posthoc_content = f'{today_label} ({done_dur or pts_today}) {open_b}{pts_today}{close_b}'" in body

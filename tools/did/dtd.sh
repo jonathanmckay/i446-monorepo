@@ -1756,26 +1756,45 @@ if [[ ! -s "\$_out" ]]; then
   exit 0
 fi
 echo "⏳ saving…" > "\$HDR"
-out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --json "\$_out" 2>/dev/null)
+print -- "\$EPOCHREALTIME\tedit-end\t\$1" >> "\$TIMING" 2>/dev/null
+# The save runs in the BACKGROUND (2026-10-21: "call haiku for the short name
+# after exit and async with UI"): edit-fast's Todoist calls and the Haiku
+# short-name regeneration took 1-3 s with fzf blocked. Same shape as the
+# split/alt-enter writers: hand the tty back now, let the writer flip the
+# header, and poke fzf's listen port to reload the list once the cache is
+# patched so the row shows the new name without a keypress.
+{
+trap '' HUP
+out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --json "\$_out" 2>&1)
 rm -f "\$_out"
 # Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
 rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
-# Split (2026-10-21): when the form carried a "done so far" block, edit-fast
-# has already applied every other change and prints ONE line of shell
-# assignments prefixed SPLIT (pts=, done_name=, done_min=; newlines
-# sanitised, so a prefix scan is safe even with a multi-line description).
-# The split script re-reads name/[N]/(N) from the patched cache, so the
-# form's [N]/(N) are the task TOTALS and the remainder gets total - done.
-# It owns the header from here.
+# Split: when the form's done card held pts done, edit-fast has applied the
+# remainder card's name/haiku/notes/project and prints ONE line of shell
+# assignments prefixed SPLIT (pts=, done_name=, done_min=, rem_pts=,
+# rem_min=, done_short=, rem_short=; newlines sanitised). The remainder's
+# [N]/(N) travel as overrides: the split script writes them. It owns the
+# header from here.
 _split_line=\$(print -r -- "\$out" | grep '^SPLIT ' | tail -n 1)
 if [[ -n "\$_split_line" ]]; then
-  pts=""; done_name=""; done_min=""; rem_pts=""; rem_min=""
+  pts=""; done_name=""; done_min=""; rem_pts=""; rem_min=""; done_short=""; rem_short=""
   eval "\${_split_line#SPLIT }"
-  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "\$rem_pts" "\$done_min" "\$rem_min"
+  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "\$rem_pts" "\$done_min" "\$rem_min" "\$done_short" "\$rem_short"
 else
   echo "\${out:-✗ edit failed}" > "\$HDR"
+  _port="\$(cat "$DTD_PORT" 2>/dev/null)"
+  if [[ -n "\$_port" ]]; then
+    _today="\$(date +%Y-%m-%d)"
+    _reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
+    if [[ -n "\$FZF_API_KEY" ]]; then
+      curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+    else
+      curl -s -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+    fi
+  fi
 fi
-print -- "\$EPOCHREALTIME\tedit-end\t\$1" >> "\$TIMING" 2>/dev/null
+print -- "\$EPOCHREALTIME\tedit-saved\t\$1" >> "\$TIMING" 2>/dev/null
+} </dev/null >> "/tmp/dtd-edit.log" 2>&1 &!
 
 EDITEOF
 chmod +x "$DTD_EDIT"
@@ -3028,7 +3047,7 @@ duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 
 # Was three GUI dialogs (2026-06), three sequential prompts, then one curses
 # form (split-form.py, 2026-10-04); now the answers arrive as arguments.
-pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"; minutes_done="${6:-}"; remaining_min_override="${7:-}"
+pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"; minutes_done="${6:-}"; remaining_min_override="${7:-}"; done_short="${8:-}"; rem_short="${9:-}"
 [[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "split cancelled" > "$HDR"; exit 0; }
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
@@ -3088,6 +3107,9 @@ if minutes_done.isdigit():
 # Minutes remaining typed on the form (14th arg) wins, like the 12th for points.
 if len(sys.argv) > 14 and sys.argv[14].strip().isdigit():
     remaining_dur = sys.argv[14].strip()
+# Haiku names typed on the form (15th: done record, 16th: remainder).
+done_short = sys.argv[15].strip() if len(sys.argv) > 15 else ''
+rem_short = sys.argv[16].strip() if len(sys.argv) > 16 else ''
 
 def api(method, path, body=None):
     data = json.dumps(body).encode() if body else None
@@ -3129,6 +3151,14 @@ posthoc = api('POST', '/tasks', {
 })
 if posthoc:
     api('POST', f'/tasks/{posthoc[\"id\"]}/close')
+    if done_short:
+        # the done record's own short name, where shorten.py would look
+        try:
+            import hashlib as _hl
+            _h = _hl.sha1(f'37:{posthoc_content}'.encode('utf-8')).hexdigest()[:8]
+            api('POST', '/comments', {'task_id': posthoc['id'], 'content': f'dtd-short:{_h}:{done_short}'})
+        except Exception:
+            pass
 
 # 2. Update original task: new content with remaining description + reschedule
 from datetime import timedelta
@@ -3145,6 +3175,12 @@ api('POST', f'/tasks/{tid}', {
     'content': new_content,
     'due_date': tomorrow,
 })
+if rem_short:
+    # stored against the FINAL content (tags just changed), sidecar + comment
+    import subprocess as _sp
+    _sp.run(['python3', '$HOME/i446-monorepo/tools/did/edit-fast.py', '--set-short', '--id', tid,
+             '$CACHE_FILE', '--content', new_content, '--short', rem_short],
+            capture_output=True, text=True, timeout=30)
 
 # 3. Log points to 0分 via did-fast. {N} (0g bonus) routes to column Q from
 #    the curly marker alone, regardless of label -- did-fast.py: 'SQUARE
@@ -3205,7 +3241,7 @@ msg = f'✂ +{pts_today} today / {open_b}{remaining_pts}{close_b} deferred to {t
 if not (didfast_out or {}).get('results'):
     msg = f'⚠ split: {open_b}{pts_today}{close_b} NOT logged (did-fast: no domain) / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
-" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}"
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}" "${done_short:-}" "${rem_short:-}"
 print -- "$EPOCHREALTIME\tsplit-bg-end\t$task_id rc=$?" >> "$TIMING" 2>/dev/null
 } </dev/null >> "/tmp/dtd-split.log" 2>&1 &!
 print -- "$EPOCHREALTIME\tsplit-end\t$task_id" >> "$TIMING" 2>/dev/null

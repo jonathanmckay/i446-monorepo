@@ -62,24 +62,23 @@ def test_remainder_values_are_independent_and_prefill_with_the_totals(ef):
 
 
 def test_validate_numbers_and_bounds(ef):
-    base = {"points": "20", "time": "30", "points_curly": False}
+    base = {"points": "5", "time": "20", "total_pts": "20", "total_min": "30", "points_curly": False}
     assert ef.validate({**base, "done_pts": "15", "done_min": "10"}) is None
     assert "number" in ef.validate({**base, "done_pts": "ten"})
-    assert "> total" in ef.validate({**base, "done_pts": "25"})
-    assert "> time" in ef.validate({**base, "done_pts": "5", "done_min": "45"})
+    assert "> current" in ef.validate({**base, "done_pts": "25"})
+    assert "> current" in ef.validate({**base, "done_pts": "5", "done_min": "45"})
     assert "needs pts done" in ef.validate({**base, "done_min": "5"})
     assert ef.validate({**base, "points": "{15}", "points_curly": True}) is None
 
 
 def test_result_shapes_the_edit_fast_payload(ef):
-    vals = {"name": " memo ", "points": "20", "time": "30", "short": "Q memo", "short_enabled": True,
+    vals = {"name": " memo ", "points": "5", "time": "30", "short": "Q memo", "short_enabled": True,
             "domain": "@i9", "desc": "a\nb\n", "desc_loaded": True,
-            "done_pts": "15", "done_min": "", "done_name": "drafted  it"}
+            "done_pts": "15", "done_min": "", "done_name": "drafted  it", "done_short": "did it"}
     r = ef.result(vals)
     assert r["name"] == "memo" and r["domain"] == "i9" and r["desc"] == "a\nb"
-    assert r["split"] == {"pts": 15, "minutes": None, "name": "drafted it", "rem_pts": None, "rem_min": None}
-    vals.update(rem_pts="5", rem_min="12")
-    assert ef.result(vals)["split"]["rem_pts"] == 5 and ef.result(vals)["split"]["rem_min"] == 12
+    assert r["points"] == "5" and r["time"] == "30"        # the remainder card = what the task keeps
+    assert r["split"] == {"pts": 15, "minutes": None, "name": "drafted it", "short": "did it"}
     vals.update(short_enabled=False, desc_loaded=False, done_pts="", points_curly=True)
     r = ef.result(vals)
     assert r["short"] == "" and r["desc"] is None and r["split"] is None and r["points"] == ""
@@ -137,11 +136,11 @@ def _run(tmp_path, keys: str, focus="mother", env_extra=None):
 def test_pty_paints_fast_and_esc_cancels(tmp_path):
     rc, out, stamps, t0, screen = _run(tmp_path, "\x1b")
     assert rc == 2 and not out.exists()
-    for label in ("[N] pts", "(N) min", "haiku", "name", "notes", "project", "done so far", "pts done", "min done",
-                  "done as", "rem pts", "rem min"):
+    for label in ("done so far", "pts done", "min done", "remainder", "[N] pts", "(N) min", "haiku", "name", "notes", "project"):
         assert label in screen, label
-    assert screen.index("[N] pts") < screen.index("haiku") < screen.index("name ") < screen.index("notes") \
-        < screen.index("project") < screen.index("done so far")
+    # done card on top, then the remainder card
+    assert screen.index("done so far") < screen.index("pts done") < screen.index("remainder") \
+        < screen.index("[N] pts") < screen.index("notes") < screen.index("project")
     paint = (stamps["edit-form-paint"] - t0) * 1000
     assert paint < 200, f"form took {paint:.0f} ms from exec to first paint"
 
@@ -151,36 +150,38 @@ def test_pty_ctrl_c_cancels_with_rc_2(tmp_path):
     assert rc == 2 and not out.exists()
 
 
-def test_pty_ctrl_p_focus_split_remainder_autofills_and_enter_on_last_saves(tmp_path):
-    # pts done 15 / min done 20 → rem pts 5 / rem min 10 fill themselves; Enter
-    # walks through done as, rem pts, rem min (the last field) and saves
-    rc, out, _, _, screen = _run(tmp_path, "15\t20\tdrafted it\r\r\r", focus="split")
+def test_pty_ctrl_p_done_card_drives_the_remainder_and_ctrl_s_saves(tmp_path):
+    # pts done 15 / min done 20 → the remainder's [N] pts 5 / (N) min 10 fill
+    # themselves; both names and haikus are prefilled from the task
+    rc, out, _, _, screen = _run(tmp_path, "15\t20\x13", focus="split")
     assert rc == 0
     j = json.loads(out.read_text())
-    assert j["split"] == {"pts": 15, "minutes": 20, "name": "drafted it", "rem_pts": 5, "rem_min": 10}
-    assert j["points"] == "20" and j["time"] == "30" and j["short"] == "Quarterly memo" and j["desc"] == "old notes"
-    assert "rem pts" in screen and "rem min" in screen
+    assert j["split"] == {"pts": 15, "minutes": 20, "name": "write the quarterly planning memo for the whole org",
+                          "short": "Quarterly memo"}
+    assert j["points"] == "5" and j["time"] == "10"
+    assert j["name"] == "write the quarterly planning memo for the whole org"
+    assert j["short"] == "Quarterly memo" and j["desc"] == "old notes"
 
 
-def test_pty_short_pane_still_shows_the_remainder_row(tmp_path):
-    env_rows = {"LINES": "18"}
-    rc, out, _, _, screen = _run(tmp_path, "15\x13", focus="split", env_extra=env_rows)
+def test_pty_short_pane_still_shows_the_remainder_card(tmp_path):
+    rc, out, _, _, screen = _run(tmp_path, "15\x13", focus="split", env_extra={"LINES": "18"})
     assert rc == 0
-    assert "rem pts" in screen and "rem min" in screen and "done as" in screen
+    assert "remainder" in screen and "[N] pts" in screen and "project" in screen
     j = json.loads(out.read_text())
-    assert j["split"]["rem_pts"] == 5 and j["split"]["rem_min"] == 30   # min done blank → whole time
+    assert j["points"] == "5" and j["time"] == "30"       # min done blank → whole time kept
 
 
 def test_pty_typed_remainder_overrides_the_autofill(tmp_path):
-    # pts done 15 → rem pts auto 5; the user overrides rem pts to 8, leaves rem min
-    rc, out, _, _, _ = _run(tmp_path, "15\t20\t\t\x15" "8\x13", focus="split")
+    # pts done 15 → [N] pts auto 5; ^O jumps to the remainder's [N] pts, override to 8
+    rc, out, _, _, _ = _run(tmp_path, "15\t20\x0f\x15" "8\x13", focus="split")
     assert rc == 0
     j = json.loads(out.read_text())
-    assert j["split"]["rem_pts"] == 8 and j["split"]["rem_min"] == 10
+    assert j["points"] == "8" and j["time"] == "10"
 
 
 def test_pty_mother_edit_ctrl_s_saves_from_anywhere(tmp_path):
-    # focus starts on [N] pts: replace 20 → 25, Tab to (N) min, type 45, ^S
+    # ctrl-o: focus starts on the remainder's [N] pts (= current, nothing done):
+    # replace 20 → 25, Tab to (N) min, type 45, ^S
     rc, out, _, _, _ = _run(tmp_path, "\x15" "25\t\x15" "45\x13")
     assert rc == 0
     j = json.loads(out.read_text())
@@ -190,7 +191,7 @@ def test_pty_mother_edit_ctrl_s_saves_from_anywhere(tmp_path):
 def test_pty_rejects_done_over_total_and_stays_open(tmp_path):
     rc, out, _, _, screen = _run(tmp_path, "99\x13" "\x1b", focus="split")
     assert rc == 2 and not out.exists()
-    assert "pts done 99 > total 20" in screen
+    assert "pts done 99 > current 20" in screen
 
 
 if __name__ == "__main__":

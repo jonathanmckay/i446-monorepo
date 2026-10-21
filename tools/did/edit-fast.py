@@ -286,6 +286,26 @@ def main() -> int:
         return _main_current(argv[1:])
     if argv[:1] == ["--fields"]:
         return _main_fields(argv[1:])
+    if argv[:1] == ["--set-short"]:
+        # edit-fast.py --set-short --id <id> <cache_file> --content <final content> --short <prose>
+        # (the split script, after it rewrote the remainder's tags)
+        a = argv[1:]
+        try:
+            tid, cf = a[a.index("--id") + 1], a[a.index("--id") + 2]
+            content, short = a[a.index("--content") + 1], a[a.index("--short") + 1]
+        except (ValueError, IndexError):
+            print("✗ usage: --set-short --id <id> <cache_file> --content C --short S")
+            return 2
+        cache, _task = _load_task(tid, cf)
+        if cache is None:
+            return 1
+        disp = set_manual_short(cache, tid, content, short)
+        try:
+            Path(cf).write_text(json.dumps(cache))
+        except OSError:
+            pass
+        print(f"haiku→{disp!r}" if disp else "haiku name skipped (title fits the row)")
+        return 0
     # Forms:  edit-fast.py --id <id> <edits> <cache_file>   ← dtd
     #         edit-fast.py <query>   <edits> <cache_file>   ← fallback
     task_id = None
@@ -373,9 +393,17 @@ def _main_fields(argv: list[str]) -> int:
             if not j.get("short_enabled"):
                 new.pop("short", None)
             if j.get("split"):
+                # The remainder card's [N]/(N) are what the task keeps AFTER
+                # the split: the split script writes them (as overrides),
+                # never this edit (it would subtract done twice).
+                def _int(v):
+                    v = (v or "").strip() if isinstance(v, str) else v
+                    return int(v) if isinstance(v, int) or (isinstance(v, str) and v.isdigit()) else None
                 new["split"] = {"pts": int(j["split"]["pts"]), "name": j["split"].get("name") or "",
                                 "minutes": j["split"].get("minutes"),
-                                "rem_pts": j["split"].get("rem_pts"), "rem_min": j["split"].get("rem_min")}
+                                "done_short": (j["split"].get("short") or "") if j.get("short_enabled") else "",
+                                "rem_pts": _int(new.pop("points", None)), "rem_min": _int(new.pop("time", None)),
+                                "rem_short": new.pop("short", None) or ""}
         elif rest[i] in flags:
             new[flags[rest[i]]] = rest[i + 1]
         i += 2
@@ -428,8 +456,14 @@ def _main_fields(argv: list[str]) -> int:
     def _i(k):
         v = split.get(k)
         return v if isinstance(v, int) else ""
-    print(f"SPLIT pts={split['pts']} done_name={shlex.quote(split['name'].replace(chr(10), ' '))}"
-          f" done_min={_i('minutes')} rem_pts={_i('rem_pts')} rem_min={_i('rem_min')}")
+
+    def _q(k):
+        return shlex.quote((split.get(k) or "").replace(chr(10), " "))
+    # A short for the remainder is stored by the split script against the
+    # FINAL content (its tags change there), not here.
+    print(f"SPLIT pts={split['pts']} done_name={_q('name')}"
+          f" done_min={_i('minutes')} rem_pts={_i('rem_pts')} rem_min={_i('rem_min')}"
+          f" done_short={_q('done_short')} rem_short={_q('rem_short')}")
     return 0
 
 
