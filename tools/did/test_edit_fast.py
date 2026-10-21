@@ -401,14 +401,14 @@ def test_split_applies_edits_first_then_hands_off_one_shell_line(tmp_path, monke
     assert mod.main() == 0
     assert calls == [{"content": "write memo (see doc) (30) [40] {5}"}]   # [N] = new TOTAL, applied before the split
     out = capsys.readouterr().out.splitlines()
-    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done' done_min="   # one line, newline sanitised
+    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done' done_min= rem_pts= rem_min="   # one line, newline sanitised
     assert json.loads(cache.read_text())["tasks"][0]["content"].endswith("[40] {5}")
 
 
 def test_split_with_no_other_change_skips_the_api(tmp_path, monkeypatch, capsys):
     mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // old notes ✓ 5")
     assert mod.main() == 0 and calls == []
-    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name='' done_min="
+    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name='' done_min= rem_pts= rem_min="
 
 
 def test_seeded_check_left_alone_is_a_cancelled_split(tmp_path, monkeypatch, capsys):
@@ -450,11 +450,11 @@ def test_json_form_result_applies_time_and_split_minutes(tmp_path, monkeypatch, 
     res = tmp_path / "r.json"
     res.write_text(json.dumps({"name": "write memo", "points": "40", "time": "60", "short": "",
                                "short_enabled": False, "domain": "i9", "desc": "notes",
-                               "split": {"pts": 15, "minutes": 20, "name": "half"}}))
+                               "split": {"pts": 15, "minutes": 20, "name": "half", "rem_pts": 30, "rem_min": None}}))
     monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cf), "--json", str(res)])
     assert mod.main() == 0
     assert calls == [{"content": "write memo (60) [40]"}]
-    assert capsys.readouterr().out.strip().splitlines()[-1] == "SPLIT pts=15 done_name=half done_min=20"
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "SPLIT pts=15 done_name=half done_min=20 rem_pts=30 rem_min="
 
 
 def test_json_form_result_null_desc_means_never_loaded_keep(tmp_path, monkeypatch, capsys):
