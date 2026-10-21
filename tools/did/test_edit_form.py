@@ -53,11 +53,12 @@ def test_prefill_short_title_disables_haiku_and_curly_points_are_read_only(ef):
     assert not p["desc_loaded"] and p["desc"] == ""
 
 
-def test_remainder_values_are_independent(ef):
+def test_remainder_values_are_independent_and_prefill_with_the_totals(ef):
     assert ef.remainder("20", "30", "15", "10") == ("5", "20")
     assert ef.remainder("20", "", "15", "") == ("5", "")
     assert ef.remainder("", "30", "15", "40") == ("", "0")
-    assert ef.remainder("20", "30", "", "") == ("", "")
+    assert ef.remainder("20", "30", "", "") == ("20", "30")     # nothing done yet = whole total
+    assert ef.remainder("", "", "", "") == ("", "")
 
 
 def test_validate_numbers_and_bounds(ef):
@@ -98,8 +99,9 @@ def _env(tmp_path):
                 LC_ALL="en_US.UTF-8", LINES="40", COLUMNS="100")
 
 
-def _run(tmp_path, keys: str, focus="mother"):
+def _run(tmp_path, keys: str, focus="mother", env_extra=None):
     env = _env(tmp_path)
+    env.update(env_extra or {})
     out, timing = tmp_path / "out.json", tmp_path / "timing.log"
     t0 = time.time()
     pid, fd = pty.fork()
@@ -158,6 +160,15 @@ def test_pty_ctrl_p_focus_split_remainder_autofills_and_enter_on_last_saves(tmp_
     assert j["split"] == {"pts": 15, "minutes": 20, "name": "drafted it", "rem_pts": 5, "rem_min": 10}
     assert j["points"] == "20" and j["time"] == "30" and j["short"] == "Quarterly memo" and j["desc"] == "old notes"
     assert "rem pts" in screen and "rem min" in screen
+
+
+def test_pty_short_pane_still_shows_the_remainder_row(tmp_path):
+    env_rows = {"LINES": "18"}
+    rc, out, _, _, screen = _run(tmp_path, "15\x13", focus="split", env_extra=env_rows)
+    assert rc == 0
+    assert "rem pts" in screen and "rem min" in screen and "done as" in screen
+    j = json.loads(out.read_text())
+    assert j["split"]["rem_pts"] == 5 and j["split"]["rem_min"] == 30   # min done blank → whole time
 
 
 def test_pty_typed_remainder_overrides_the_autofill(tmp_path):
