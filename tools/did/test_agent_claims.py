@@ -28,14 +28,24 @@ def test_claim_load_release(tmp_path):
     assert got["T1"]["working"] and got["T1"]["session"] == "S1"
     ac.set_state("T1", "idle", now=1020, root=tmp_path)
     assert ac.working_ids(tmp_path, now=1030) == set()
-    assert ac.release("S1", tmp_path) == "T1"
-    assert ac.load(tmp_path) == {}
+    assert ac.release("S1", tmp_path, now=1040) == "T1"
+    # Released (2026-10-21): the record stays so dtd keeps the row at the top,
+    # not working, no pane; pruned a day later.
+    got = ac.load(tmp_path, now=1050)
+    assert got["T1"]["state"] == "released" and not got["T1"]["working"] and got["T1"]["pane"] is None
+    assert not (tmp_path / "by-session/S1").exists()
+    assert ac.load(tmp_path, now=1040 + ac.RELEASED_TTL + 1) == {}
+    assert not (tmp_path / "T1.json").exists() and not (tmp_path / "T1.state").exists()
 
 
 def test_one_task_per_session(tmp_path):
     ac.claim(TASK, "S1", root=tmp_path, now=1000)
     ac.claim({"id": "T2", "content": "other"}, "S1", root=tmp_path, now=1001)
-    assert set(ac.load(tmp_path, now=1002)) == {"T2"}
+    got = ac.load(tmp_path, now=1002)
+    # The session holds T2; T1 was handed back and stays listed as released
+    # (dtd keeps it at the top until JM closes it, 2026-10-21).
+    assert got["T2"]["working"] and got["T1"]["state"] == "released" and not got["T1"]["working"]
+    assert (tmp_path / "by-session/S1").read_text().strip() == "T2"
 
 
 def test_pane_number_attached_from_panes_json(tmp_path):
@@ -84,7 +94,8 @@ def test_hook_states_and_release(tmp_path):
     _hook(tmp_path, "working", "OTHER")          # unclaimed session: no-op
     assert set(p.name for p in root.iterdir()) == {"T1.json", "T1.state", "by-session"}
     _hook(tmp_path, "release", "S1")
-    assert not (root / "T1.json").exists() and not (root / "by-session/S1").exists()
+    assert (root / "T1.json").exists() and (root / "T1.state").read_text().startswith("released ")
+    assert not (root / "by-session/S1").exists()
 
 
 def test_hook_noop_without_claims_dir(tmp_path):

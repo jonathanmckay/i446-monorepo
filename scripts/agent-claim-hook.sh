@@ -79,7 +79,12 @@ case "$1" in
     print -r -- "$state $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
       && mv -f "$D/$tid.state.tmp" "$D/$tid.state" 2>/dev/null ;;
   release)
-    rm -f "$D/$tid.json" "$D/$tid.state" "$D/by-session/$sid" "$A" 2>/dev/null ;;
+    # SessionEnd: hand the task back but keep it at the TOP of dtd (2026-10-21):
+    # the record stays, state 'released' (agent_claims.release does the same;
+    # load() prunes it after RELEASED_TTL). Only the session index goes.
+    print -r -- "released $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
+      && mv -f "$D/$tid.state.tmp" "$D/$tid.state" 2>/dev/null
+    rm -f "$D/by-session/$sid" "$A" 2>/dev/null ;;
 esac
 # Mirror to Ix right away (Syncthing is ~1 min); detached so the hook returns now.
 "$HOME/i446-monorepo/scripts/agent-claims-push.sh" &!
