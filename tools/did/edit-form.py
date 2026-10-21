@@ -2,24 +2,24 @@
 """edit-form.py — dtd's ctrl-o / ctrl-p screen: one curses form for a task.
 
 2026-10-21 ("I don't like the new ctrl+o / ctrl+p page"): the one-line
-`title @domain [N] // description ✓ pts` prompt is gone. The screen is two
-cards:
+`title @domain [N] // description ✓ pts` prompt is gone. The screen is three
+sections, a blank line between them; inside a section the order is name
+(two lines), haiku, minutes, points:
 
-    done so far   pts done · min done — carve a done record off the task
-                  name · haiku — of the done record, prefilled from the task
-    remainder     [N] pts · (N) min — what the task keeps: current − done,
-                  following the done card as you type until you type here
-                  haiku — the short row name (shorten.py; only when the
-                           title is longer than the row fits)
-                  name · notes · project — the task's own fields
+    done so far   name · haiku · (N) min · [N] pts — carve a done record
+                  off the task; the name is prefilled from the task
+    remainder     name · haiku · (N) min · [N] pts — what the task keeps:
+                  min/pts are current − done, following the done section
+                  as you type until you type here
+    common        notes · project — the task's own description and @domain
 
-With nothing in "pts done" the remainder card is simply the task (ctrl-o:
-a plain edit, [N]/(N) show the current totals). ctrl-p opens on "pts done";
-ctrl-o on the remainder's [N] pts; ^O / ^P jump between the cards. Enter /
-Tab move on (Enter in notes = newline), Enter on the last field or ^S
-saves, Esc / ^C / ^Q cancel. A changed name gets its haiku short name
-regenerated AFTER the form exits (dtd backgrounds the save); a typed haiku
-is kept as is.
+The haiku (short row name, shorten.py) is NOT typed: it shows the current
+one and regenerates itself after the form exits when the name changed (dtd
+backgrounds the save). With nothing in the done section the remainder is
+simply the task (ctrl-o / ctrl-g: a plain edit). ctrl-p opens on the done
+section, ctrl-o on the remainder; ^P / ^O jump between them. Enter / Tab
+move on (Enter in notes = newline), Enter on the last field or ^S saves,
+Esc / ^C / ^Q cancel.
 
 Budget (user, 2026-10-21): the form must paint in well under 200 ms, ideally
 80–100. So: curses (stdlib, ~10 ms), ONE interpreter (the cache is read here,
@@ -137,11 +137,11 @@ def validate(vals: dict) -> str | None:
 def result(vals: dict) -> dict:
     """What edit-fast receives. Blank = keep (notes: blank = clear, as before)."""
     out = {
-        "name": (vals.get("name") or "").strip(),
+        "name": " ".join((vals.get("name") or "").split()),
         "points": "" if vals.get("points_curly") else (vals.get("points") or "").strip(),
         "time": (vals.get("time") or "").strip(),
-        "short": (vals.get("short") or "").strip() if vals.get("short_enabled") else "",
-        "short_enabled": bool(vals.get("short_enabled")),
+        "short": "",                # haiku names are generated, never typed (2026-10-21)
+        "short_enabled": False,
         "domain": (vals.get("domain") or "").strip().lstrip("@"),
         "desc": (vals.get("desc") or "").rstrip() if vals.get("desc_loaded") else None,
         "split": None,
@@ -150,8 +150,7 @@ def result(vals: dict) -> dict:
     if dp:
         dm = (vals.get("done_min") or "").strip()
         out["split"] = {"pts": int(dp), "minutes": int(dm) if _INT.match(dm) else None,
-                        "name": " ".join((vals.get("done_name") or "").split()),
-                        "short": (vals.get("done_short") or "").strip() if vals.get("short_enabled") else ""}
+                        "name": " ".join((vals.get("done_name") or "").split()), "short": ""}
     return out
 
 
@@ -250,9 +249,10 @@ def dwidth(s: str) -> int:
 
 class Field:
     def __init__(self, key: str, label: str, text: str = "", *, multiline=False,
-                 width: int | None = None, enabled=True, hint=""):
+                 width: int | None = None, enabled=True, hint="", rows: int = 1):
         self.key, self.label, self.text = key, label, text
         self.multiline, self.width, self.enabled, self.hint = multiline, width, enabled, hint
+        self.rows = rows            # > 1: a single value soft-wrapped over several rows
         self.cur = len(text)
         self.touched = False
         self.scroll = 0   # multiline: first visible line
@@ -337,26 +337,23 @@ class Form:
         self.bundle = load_bundle(task_id)
         self.project = project_name(task)
         self.msg = ""
-        no_short = "— title fits the row; no haiku name needed"
         self.fields = [
-            # done so far (top card)
-            Field("done_pts", "pts done", "", width=6),
+            # done so far
+            Field("done_name", "name", pre["name"], rows=2),
             Field("done_min", "min done", "", width=6),
-            Field("done_name", "name", pre["name"]),
-            Field("done_short", "haiku", pre["short"], enabled=pre["short_enabled"], hint=no_short),
+            Field("done_pts", "pts done", "", width=6),
             # remainder (the task itself)
-            Field("points", "[N] pts", pre["points"], width=6, enabled=not pre["points_curly"]),
+            Field("name", "name", pre["name"], rows=2),
             Field("time", "(N) min", pre["time"], width=6),
-            Field("short", "haiku", pre["short"], enabled=pre["short_enabled"], hint=no_short),
-            Field("name", "name", pre["name"]),
+            Field("points", "[N] pts", pre["points"], width=6, enabled=not pre["points_curly"]),
+            # common
             Field("desc", "notes", pre["desc"], multiline=True, enabled=pre["desc_loaded"],
                   hint="loading notes…"),
             Field("domain", "project", pre["domain"], width=10),
         ]
         self.by = {f.key: f for f in self.fields}
-        # ctrl-p lands on the done card; ctrl-o on the remainder's first field
-        self.focus = self.by["done_pts"] if focus == "split" else next(
-            f for f in self.fields if f.enabled and f.key in ("points", "time", "short", "name"))
+        # ctrl-p lands on the done section; ctrl-o / ctrl-g on the remainder
+        self.focus = self.by["done_name"] if focus == "split" else self.by["name"]
         self._thread: threading.Thread | None = None
         self._fetched: dict | None = None
         if self.bundle is None:
@@ -432,32 +429,44 @@ class Form:
                 pass
 
         # Budget the height from the bottom up (2026-10-21: in a short pane the
-        # remainder row fell off the screen): the field rows always fit; the
+        # remainder fell off the screen): the field rows always fit; the
         # detail block and the notes box take what is left.
-        FIXED = 1 + 1 + 3 + 1 + 4 + 1   # title, done header, done rows, rem header, rem rows (pts/time, haiku, name, project), legend
+        FIXED = 1 + 5 + 1 + 5 + 1 + 1 + 1 + 1   # title, done (hdr+name2+haiku+nums), blank, remainder, blank, common hdr, project, legend
         spare = max(0, h - FIXED)
         notes_rows = max(1, min(6, spare - 1)) if spare > 1 else 1
-        detail_cap = max(0, min(8, spare - notes_rows))
+        detail_cap = max(0, min(6, spare - notes_rows))
         put(y, 0, self.task.get("content", ""), curses.A_BOLD); y += 1
         for style, text in detail_lines(self.bundle, self.project)[:detail_cap]:
             put(y, 0, text, curses.A_DIM if style == "dim" else curses.A_UNDERLINE); y += 1
         cursor = (y, 0)
         self.autofill()
-        put(y, 0, "── done so far " + "─" * max(0, w - 16), curses.A_DIM); y += 1
-        c = self._draw_row(scr, y, [self.by["done_pts"], self.by["done_min"]], w); cursor = c or cursor; y += 1
-        for key in ("done_name", "done_short"):
-            c = self._draw_row(scr, y, [self.by[key]], w); cursor = c or cursor; y += 1
-        put(y, 0, "── remainder " + "─" * max(0, w - 14), curses.A_DIM)
-        if w > 60:
-            put(y, 14, " [N]/(N) = current − done, type to override ", curses.A_DIM)
+
+        def header(label):
+            nonlocal y
+            put(y, 0, f"── {label} " + "─" * max(0, w - len(label) - 5), curses.A_DIM); y += 1
+
+        def haiku(text):
+            nonlocal y
+            put(y, 0, f"{'haiku':<{self.LABEL_W}}", curses.A_DIM)
+            put(y, self.LABEL_W, text, curses.A_DIM); y += 1
+
+        header("done so far")
+        c, used = self._draw_wrapped(scr, y, self.by["done_name"], w); cursor = c or cursor; y += used
+        haiku("auto")
+        c = self._draw_row(scr, y, [self.by["done_min"], self.by["done_pts"]], w); cursor = c or cursor; y += 1
         y += 1
-        c = self._draw_row(scr, y, [self.by["points"], self.by["time"]], w); cursor = c or cursor; y += 1
-        for key in ("short", "name"):
-            c = self._draw_row(scr, y, [self.by[key]], w); cursor = c or cursor; y += 1
+        header("remainder")
+        c, used = self._draw_wrapped(scr, y, self.by["name"], w); cursor = c or cursor; y += used
+        changed = " ".join(self.by["name"].text.split()) != self.pre["name"]
+        haiku(("auto after save" if changed else (self.pre["short"] or "auto"))
+              if self.pre["short_enabled"] or changed else "— title fits the row")
+        c = self._draw_row(scr, y, [self.by["time"], self.by["points"]], w); cursor = c or cursor; y += 1
+        y += 1
+        header("common")
         c, used = self._draw_multiline(scr, y, self.by["desc"], w, notes_rows)
         cursor = c or cursor; y += used
         c = self._draw_row(scr, y, [self.by["domain"]], w); cursor = c or cursor; y += 1
-        legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^P done card · ^O remainder"
+        legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^P done · ^O remainder"
         put(h - 1, 0, legend, curses.A_REVERSE if self.msg else curses.A_DIM)
         try:
             scr.move(*cursor)
@@ -503,6 +512,42 @@ class Form:
                 cursor = (y, x + dwidth(f.text[start:f.cur]))
             x += avail + 3
         return cursor
+
+    def _draw_wrapped(self, scr, y, f: Field, w):
+        """One value soft-wrapped over f.rows rows (the name, 2026-10-21:
+        "two lines for the name"). Returns (cursor, rows used)."""
+        rows = f.rows
+        try:
+            scr.addstr(y, 0, f"{f.label:<{self.LABEL_W}}", curses.A_DIM)
+        except curses.error:
+            pass
+        avail = w - self.LABEL_W - 2
+        chunks: list[tuple[int, str]] = []        # (start index, text)
+        i = 0
+        while True:
+            seg = fit(f.text[i:], avail)
+            chunks.append((i, seg))
+            i += len(seg)
+            if i >= len(f.text) or not seg:
+                break
+        # which chunk holds the cursor
+        ci = 0
+        for k, (st, seg) in enumerate(chunks):
+            if st <= f.cur <= st + len(seg):
+                ci = k
+        first = max(0, ci - rows + 1)
+        attr = curses.A_UNDERLINE | (curses.A_BOLD if f is self.focus else 0)
+        cursor = None
+        for r in range(rows):
+            k = first + r
+            seg = chunks[k][1] if k < len(chunks) else ""
+            try:
+                scr.addstr(y + r, self.LABEL_W, seg + " " * max(0, avail - dwidth(seg)), attr)
+            except curses.error:
+                pass
+            if f is self.focus and k == ci:
+                cursor = (y + r, self.LABEL_W + dwidth(f.text[chunks[k][0]:f.cur]))
+        return cursor, rows
 
     def _draw_multiline(self, scr, y, f: Field, w, rows: int):
         label = f"{f.label:<{self.LABEL_W}}"
@@ -596,9 +641,9 @@ class Form:
         elif key in ("\x03", "\x11"):
             return "cancel"
         elif key == "\x0f":
-            self.focus = self.by["points"] if self.by["points"].enabled else self.by["name"]
+            self.focus = self.by["name"]
         elif key == "\x10":
-            self.focus = self.by["done_pts"]
+            self.focus = self.by["done_name"]
         elif key == "\x1b":
             return "esc"
         elif key >= " ":
