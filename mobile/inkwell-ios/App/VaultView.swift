@@ -260,6 +260,7 @@ struct NoteEditor: View {
     @State private var saved = ""
     @State private var baseSha = ""
     @State private var loaded = false
+    @State private var refreshing = false
     @State private var debounce: Task<Void, Never>? = nil
 
     var body: some View {
@@ -278,14 +279,18 @@ struct NoteEditor: View {
             HStack {
                 Text(path).font(Theme.monoSmall).foregroundStyle(Theme.dim)
                 Spacer()
-                Text(text == saved ? (store.pendingCount > 0 ? "saved · sending…" : "saved") : "editing…")
-                    .font(Theme.monoSmall).foregroundStyle(Theme.dim)
-                Button { Task { await refresh() } } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(Theme.monoSmall).foregroundStyle(Theme.accent)
+                Text(refreshing ? "refreshing…" : text == saved ? (store.pendingCount > 0 ? "saved · sending…" : "saved") : "editing…")
+                    .font(Theme.monoSmall).foregroundStyle(refreshing ? Theme.accent : Theme.dim)
+                if refreshing {
+                    ProgressView().controlSize(.small).tint(Theme.accent).padding(.leading, 10)
+                } else {
+                    Button { Task { await refresh() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(Theme.monoSmall).foregroundStyle(Theme.accent)
+                    }
+                    .disabled(store.syncing)
+                    .padding(.leading, 10)
                 }
-                .disabled(store.syncing)
-                .padding(.leading, 10)
             }
             .padding(.horizontal, 14).padding(.vertical, 6)
         }
@@ -308,9 +313,17 @@ struct NoteEditor: View {
         store.saveNote(path, text: new, baseSha: baseSha)
     }
 
+    /// Pull or tap: the spinner stays up for at least 0.7 s so a 200 ms round
+    /// trip still reads as "it refreshed" (2026-10-21).
     private func refresh() async {
+        guard !refreshing else { return }
+        refreshing = true
         debounce?.cancel()
         if text != saved { save(text) }
+        let started = Date()
         await store.refresh(path)
+        let remaining = 0.7 - Date().timeIntervalSince(started)
+        if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
+        refreshing = false
     }
 }

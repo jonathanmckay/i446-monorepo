@@ -21,10 +21,13 @@ struct RefreshableTextEditor: UIViewRepresentable {
         tv.textColor = UIColor(Theme.fg)
         tv.tintColor = UIColor(Theme.accent)
         tv.alwaysBounceVertical = true          // the pull works even on a short note
+        tv.contentInsetAdjustmentBehavior = .never
         tv.keyboardDismissMode = .interactive
         tv.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
         let rc = UIRefreshControl()
         rc.tintColor = UIColor(Theme.accent)
+        rc.attributedTitle = NSAttributedString(string: "refreshing new-notes",
+            attributes: [.foregroundColor: UIColor(Theme.accent), .font: UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)])
         rc.addTarget(context.coordinator, action: #selector(Coordinator.pulled(_:)), for: .valueChanged)
         tv.refreshControl = rc
         tv.text = text
@@ -44,7 +47,10 @@ struct RefreshableTextEditor: UIViewRepresentable {
         func textViewDidChange(_ tv: UITextView) { parent.text = tv.text }
         @objc func pulled(_ rc: UIRefreshControl) {
             Task { @MainActor in
+                let started = Date()
                 await parent.onRefresh()
+                let remaining = 0.7 - Date().timeIntervalSince(started)
+                if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
                 rc.endRefreshing()
             }
         }

@@ -23,6 +23,7 @@ offline, capture new notes offline, never edit existing files.
 |------|------|
 | `manifest.py` | Subset config parser, gitignore-style globbing (`**` spans dirs, `*` does not), mtime+size hash cache (`~/.cache/vault-mobile/hash-cache.json`), hard caps. CLI: `python3 manifest.py ~/vault` prints counts and timing. |
 | `server.py` | Flask app. Bearer tokens per device in `~/.config/vault-mobile/tokens.json` (`python3 server.py token <device>` mints; delete the entry to revoke). Routes: `/healthz`, `/manifest` (ETag/304), `/file?p=` (manifest-listed paths only), `/drop` (idempotent on capture id, 60/min), `/captures`. |
+| `merge3.py` | Line-based three-way merge for a `put` whose base moved on: one-sided changes apply, lines one side only added survive the other side's clear/edit, true overlaps keep both texts between markers. Bases come from `~/.cache/vault-mobile/versions/<target>/<sha>.md`, a snapshot of every version of an append target served or written (plus the live file at startup; pruned after 180 days). |
 | `com.jm.vault-mobile.plist` | launchd agent on ix (`~/Library/LaunchAgents/`). Logs `/tmp/vault-mobile.{log,err}`. |
 | `tests/` | `python3 -m pytest -q tests` (passes on 3.9 on ix and 3.13 on Straylight). |
 | `vault/z_meta/phone-subset.md` | What ships. Edit the frontmatter; the manifest regenerates within 30 s. |
@@ -31,6 +32,20 @@ offline, capture new notes offline, never edit existing files.
 
 9,133 files, 23.9 MB in the default subset. Cold manifest 15 s (hashing),
 warm 0.27 s. Whole vault for comparison: 16.8k md files, 7.8 GB.
+
+## Edit contract (new-notes, 2026-10-21)
+
+`POST /drop` with `target`, `mode: put`, `base_sha`: same sha as the live
+file, or the sha of this device's own last put → plain replace. Otherwise
+the server copy is archived to `z_ibx/archive/YYYY-MM/new-notes.conflict-*`
+and the phone's text is merged against the snapshot of `base_sha`
+(`merged: true`, `conflicted: true` when markers were written); a base the
+server never saw falls back to the phone's text winning. Responses carry
+`sha` and `body` (the file as written) so the phone adopts the merged text
+without waiting for the next manifest. The ledger
+`~/.config/vault-mobile/appends.json` is `{"ids": [...], "last": {"<device>
+<target>": sha}}`. All in-place writes take one lock and invalidate the
+manifest cache.
 
 ## Capture contract
 

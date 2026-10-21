@@ -101,6 +101,21 @@ for `/notes` to route. Setup: long-press the header → paste the device token
 v1 renders notes as plain monospaced text; wikilinks are listed under the body
 and resolve locally ("not on phone" for anything outside the subset).
 
+## new-notes editing (2026-10-20/21)
+
+new-notes is the root screen and a real editor. Edits save locally as you
+type and reach ix as one full-text `put` carrying the sha of the server
+version the buffer derives from (the editor owns that base; the store row
+under it is rewritten by syncs). If the file moved on meanwhile (desktop
+edit, `/notes` clear) the server three-way merges against its snapshot of
+that base (`tools/vault-mobile/merge3.py`), archives its pre-merge copy, and
+returns the result; the phone adopts it as soon as the editor is clean. A
+put whose base is the device's own last write is a plain successor (typing
+across a round trip never conflicts with itself). Pull down on the editor to
+refresh: a dirty buffer is flushed first, then the note is reconciled. A
+sync requested while one runs queues one follow-up pass instead of being
+dropped (the 2026-10-21 bug: a put sat unsent for hours).
+
 ## Server-side contract notes (2026-10-19)
 
 - `/api/done` returns `{ok, already:true}` for an id already in
