@@ -68,6 +68,42 @@ def set_name(content: str, new_name: str) -> str:
     return (base + (" " + tail if tail else "")).strip()
 
 
+def set_time(content: str, minutes: int) -> str:
+    """Replace the first (N) in content, or add one ahead of the [N]/{N} tail
+    (edit form, 2026-10-21: time is a field of its own)."""
+    if re.search(r"\(\d+\)", content):
+        return re.sub(r"\(\d+\)", f"({minutes})", content, count=1)
+    m = _TRAIL_ANNOT.search(content)
+    if m:
+        return f"{content[:m.start()].rstrip()} ({minutes}) {content[m.start():].strip()}".strip()
+    return f"{content.rstrip()} ({minutes})"
+
+
+def set_manual_short(cache: dict, task_id: str, content: str, short_prose: str) -> str | None:
+    """A haiku name the user typed on the edit form. Stored exactly where the
+    generated one lives (sidecar + a `dtd-short:` comment for the FINAL
+    content's hash, newest comment wins) so it survives every refresh on
+    every machine. Only for titles longer than the row fits; shorter ones
+    never get a short (shorten.py skips them before any lookup). Returns the
+    display stored, or None when skipped."""
+    prose, est = _short.split_estimates(content)
+    if len(prose) <= _short.PROSE_CAP or not short_prose.strip():
+        return None
+    display = f"{short_prose.strip()} {est}".strip() if est else short_prose.strip()
+    display = _short.keep_auto_mark(prose, display)
+    h = _short._hash(content)
+    sidecar = _short._load_sidecar()
+    sidecar[task_id] = {"h": h, "short": display}
+    _short._save_sidecar(sidecar)
+    _short._comment_store(task_id, h, display)
+    for v in cache.values():
+        if isinstance(v, list):
+            for t in v:
+                if isinstance(t, dict) and t.get("id") == task_id:
+                    t["short"] = display
+    return display
+
+
 def _resync_short(cache: dict, task_id: str, new_content: str) -> bool:
     """Drop the cached Haiku `short` name for the OLD content, then
     regenerate one for the NEW content immediately (via the same
@@ -131,14 +167,19 @@ _NUM_ANNOT = re.compile(r"\s*(?:\(\d*\)|\[\d*\]|\[[\d.+]*/m\]|\{\d*\})")
 
 
 def current_fields(task: dict, description: str) -> dict:
-    """The form's prefill: clean name, domain label, [N] points, description."""
+    """The form's prefill: clean name, domain label, [N] points, (N) time,
+    haiku short (prose only), description."""
     content = task.get("content") or ""
     m = re.search(r"\[(\d+)\]", content)
+    t = re.search(r"\((\d+)\)", content)
     dom = [l for l in task.get("labels", []) if l in DOMAINS]
+    short = task.get("short") or ""
     return {
         "name": re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip(),
         "domain": dom[0] if dom else "",
         "points": m.group(1) if m else "",
+        "time": t.group(1) if t else "",
+        "short": _short.split_estimates(short)[0] if short else "",
         "desc": description or "",
     }
 
@@ -229,11 +270,12 @@ def changed_fields(cur: dict, new: dict) -> dict:
     or points means "leave it" (there's no removing a title); an emptied
     description clears it."""
     out = {}
-    for k in ("name", "domain", "points"):
+    for k in ("name", "domain", "points", "time", "short"):
         v = (new.get(k) or "").strip()
         if v and v != (cur.get(k) or "").strip():
             out[k] = v.lstrip("@") if k == "domain" else v
-    if "desc" in new and (new["desc"] or "").rstrip() != (cur.get("desc") or "").rstrip():
+    if "desc" in new and new["desc"] is not None \
+            and (new["desc"] or "").rstrip() != (cur.get("desc") or "").rstrip():
         out["desc"] = (new["desc"] or "").rstrip()
     return out
 
@@ -311,11 +353,28 @@ def _main_fields(argv: list[str]) -> int:
         return 2
     task_id, cache_file, rest = argv[1], argv[2], argv[3:]
     new: dict = {}
-    flags = {"--name": "name", "--domain": "domain", "--points": "points", "--desc": "desc"}
+    flags = {"--name": "name", "--domain": "domain", "--points": "points", "--desc": "desc",
+             "--time": "time", "--short": "short"}
     i = 0
     while i + 1 < len(rest):
         if rest[i] == "--line":
             new.update(parse_line(rest[i + 1]))
+        elif rest[i] == "--json":
+            # edit-form.py's result (2026-10-21): every field, blank = keep,
+            # desc null = never loaded (keep), split = the breakoff block.
+            try:
+                j = json.loads(Path(rest[i + 1]).read_text())
+            except (OSError, ValueError) as e:
+                print(f"✗ form result unreadable: {e}")
+                return 1
+            for k in ("name", "domain", "points", "time", "short", "desc"):
+                if k in j:
+                    new[k] = j[k]
+            if not j.get("short_enabled"):
+                new.pop("short", None)
+            if j.get("split"):
+                new["split"] = {"pts": int(j["split"]["pts"]), "name": j["split"].get("name") or "",
+                                "minutes": j["split"].get("minutes")}
         elif rest[i] in flags:
             new[flags[rest[i]]] = rest[i + 1]
         i += 2
@@ -350,8 +409,14 @@ def _main_fields(argv: list[str]) -> int:
                 print(f"✗ points must be a number: {ch['points']}")
                 return 1
             pts = int(ch["points"].strip("[]"))
+        minutes = None
+        if "time" in ch:
+            if not re.fullmatch(r"\d+", ch["time"].strip("()")):
+                print(f"✗ time must be a number: {ch['time']}")
+                return 1
+            minutes = int(ch["time"].strip("()"))
         rc = apply(task, cache, cache_file, ch.get("name"), ch.get("domain"), pts,
-                   description=ch.get("desc"))
+                   description=ch.get("desc"), minutes=minutes, short=ch.get("short"))
         if rc != 0 or split is None:
             return rc
     # Split: the edits above already landed in Todoist and the snapshot cache,
@@ -359,7 +424,9 @@ def _main_fields(argv: list[str]) -> int:
     # done record off the UPDATED task. Hand it the answers as shell
     # assignments on one line; dtd's edit script evals them.
     import shlex
-    print(f"SPLIT pts={split['pts']} done_name={shlex.quote(split['name'].replace(chr(10), ' '))}")
+    mins = split.get("minutes")
+    print(f"SPLIT pts={split['pts']} done_name={shlex.quote(split['name'].replace(chr(10), ' '))}"
+          f" done_min={mins if isinstance(mins, int) else ''}")
     return 0
 
 
@@ -369,17 +436,20 @@ _STANDALONE_CHECK = re.compile(r"(?:^|\s)✓(?=\s|$)")
 def _standalone_checks(text: str) -> int:
     return len(_STANDALONE_CHECK.findall(text))
 def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
-          description: str | None = None) -> int:
+          description: str | None = None, minutes: int | None = None,
+          short: str | None = None) -> int:
     orig_content = task["content"]
     orig_clean = _pf._ANNOT.sub("", orig_content).strip()
     summary: list[str] = []
 
-    # 1. content (name and/or points) — one Todoist call
+    # 1. content (name / points / time) — one Todoist call
     new_content = orig_content
     if new_name is not None:
         new_content = set_name(new_content, new_name)
     if points is not None:
         new_content = _pf.set_points(new_content, points)
+    if minutes is not None:
+        new_content = set_time(new_content, minutes)
     body = {}
     if new_content != orig_content:
         body["content"] = new_content
@@ -399,13 +469,21 @@ def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
         # that skipped this kept displaying the OLD [N] until the next full
         # refresh (bug 2026-07-31: "[30]→[10] didn't reflect in render").
         _pf.patch_cache(cache, task["id"], new_content)
-        short_ok = _resync_short(cache, task["id"], new_content)  # regenerate for the NEW content, don't just drop
+        # A typed haiku name beats regeneration (no Haiku round trip either)
+        short_ok = True if short else _resync_short(cache, task["id"], new_content)
         if new_name is not None:
             summary.append(f'name→"{new_name}"')
         if points is not None:
             summary.append(f"[{points}]")
+        if minutes is not None:
+            summary.append(f"({minutes})")
         if short_ok is False:
             summary.append("⚠ no short name (Haiku call failed; check ANTHROPIC_API_KEY)")
+    if short:
+        if set_manual_short(cache, task["id"], new_content, short):
+            summary.append(f'haiku→"{short}"')
+        else:
+            summary.append("haiku name skipped (title fits the row)")
 
     # 2. domain (labels) — separate Todoist call
     if domain is not None:

@@ -250,7 +250,8 @@ def _form_task():
 def test_form_prefill_splits_title_domain_points_description():
     mod = _load()
     cur = mod.current_fields(_form_task(), "notes here")
-    assert cur == {"name": "write memo (see doc)", "domain": "i9", "points": "20", "desc": "notes here"}
+    assert cur == {"name": "write memo (see doc)", "domain": "i9", "points": "20", "time": "30",
+                   "short": "", "desc": "notes here"}
 
 
 def test_form_untouched_fields_change_nothing():
@@ -400,14 +401,14 @@ def test_split_applies_edits_first_then_hands_off_one_shell_line(tmp_path, monke
     assert mod.main() == 0
     assert calls == [{"content": "write memo (see doc) (30) [40] {5}"}]   # [N] = new TOTAL, applied before the split
     out = capsys.readouterr().out.splitlines()
-    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done'"       # one line, newline sanitised
+    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done' done_min="   # one line, newline sanitised
     assert json.loads(cache.read_text())["tasks"][0]["content"].endswith("[40] {5}")
 
 
 def test_split_with_no_other_change_skips_the_api(tmp_path, monkeypatch, capsys):
     mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // old notes ✓ 5")
     assert mod.main() == 0 and calls == []
-    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name=''"
+    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name='' done_min="
 
 
 def test_seeded_check_left_alone_is_a_cancelled_split(tmp_path, monkeypatch, capsys):
@@ -426,3 +427,60 @@ def test_existing_check_in_description_still_round_trips(tmp_path, monkeypatch, 
     mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // done ✓ yes", desc="done ✓ yes")
     assert mod.main() == 0 and calls == []
     assert "no change" in capsys.readouterr().out
+
+
+# ── edit-form.py result (2026-10-21: the ctrl-o/ctrl-p form) ────────────────
+
+def test_set_time_replaces_or_inserts_ahead_of_the_points_tail():
+    mod = _load()
+    assert mod.set_time("write memo (15) [20]", 30) == "write memo (30) [20]"
+    assert mod.set_time("write memo [20]", 30) == "write memo (30) [20]"
+    assert mod.set_time("write memo", 30) == "write memo (30)"
+    assert mod.set_time("call (3) tenants [20]", 45) == "call (45) tenants [20]"  # first (N) wins, as set_points does
+
+
+def test_json_form_result_applies_time_and_split_minutes(tmp_path, monkeypatch, capsys):
+    mod = _load()
+    cache = {"today": [{"id": "t1", "content": "write memo (30) [40]", "labels": ["i9"]}]}
+    cf = tmp_path / "c.json"; cf.write_text(json.dumps(cache))
+    calls = []
+    monkeypatch.setattr(mod._df, "_api", lambda m, p, body=None: calls.append(body) or {})
+    monkeypatch.setattr(mod, "_description", lambda tid: "notes")
+    monkeypatch.setattr(mod, "_resync_short", lambda *a: True)
+    res = tmp_path / "r.json"
+    res.write_text(json.dumps({"name": "write memo", "points": "40", "time": "60", "short": "",
+                               "short_enabled": False, "domain": "i9", "desc": "notes",
+                               "split": {"pts": 15, "minutes": 20, "name": "half"}}))
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cf), "--json", str(res)])
+    assert mod.main() == 0
+    assert calls == [{"content": "write memo (60) [40]"}]
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "SPLIT pts=15 done_name=half done_min=20"
+
+
+def test_json_form_result_null_desc_means_never_loaded_keep(tmp_path, monkeypatch, capsys):
+    mod = _load()
+    cache = {"today": [{"id": "t1", "content": "write memo [40]", "labels": ["i9"]}]}
+    cf = tmp_path / "c.json"; cf.write_text(json.dumps(cache))
+    calls = []
+    monkeypatch.setattr(mod._df, "_api", lambda m, p, body=None: calls.append(body) or {})
+    monkeypatch.setattr(mod, "_description", lambda tid: "keep me")
+    res = tmp_path / "r.json"
+    res.write_text(json.dumps({"name": "write memo", "points": "40", "time": "", "short": "",
+                               "short_enabled": False, "domain": "i9", "desc": None, "split": None}))
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cf), "--json", str(res)])
+    assert mod.main() == 0 and calls == []
+    assert "no change" in capsys.readouterr().out
+
+
+def test_manual_short_is_stored_for_long_titles_only(tmp_path, monkeypatch):
+    mod = _load()
+    stored = {}
+    monkeypatch.setattr(mod._short, "_load_sidecar", lambda: {})
+    monkeypatch.setattr(mod._short, "_save_sidecar", lambda d: stored.update(d))
+    monkeypatch.setattr(mod._short, "_comment_store", lambda tid, h, short: stored.setdefault("comment", (tid, short)))
+    long_title = "write the quarterly planning memo for the whole org (30) [20]"
+    cache = {"today": [{"id": "t1", "content": long_title}]}
+    assert mod.set_manual_short(cache, "t1", long_title, "Quarterly memo") == "Quarterly memo (30) [20]"
+    assert cache["today"][0]["short"] == "Quarterly memo (30) [20]"
+    assert stored["comment"] == ("t1", "Quarterly memo (30) [20]")
+    assert mod.set_manual_short({}, "t2", "short title [5]", "x") is None

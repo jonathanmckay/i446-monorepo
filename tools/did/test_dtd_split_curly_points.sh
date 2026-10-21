@@ -28,9 +28,9 @@ echo "$split" | grep -q '"\$bracket" "\$close"' || fail "bracket/close not passe
 
 # 3. Today's posthoc credit and the remainder's new content both use the
 #    preserved bracket style, not a hardcoded [N].
-echo "$split" | grep -q "posthoc_content = f'{today_label} ({duration or pts_today}) {open_b}{pts_today}{close_b}'" \
+echo "$split" | grep -q "posthoc_content = f'{today_label} ({done_dur or pts_today}) {open_b}{pts_today}{close_b}'" \
   || fail "posthoc content hardcodes square brackets"
-echo "$split" | grep -q "{open_b}{remaining_pts}{close_b}. if remaining_pts > 0" \
+echo "$split" | grep -q "_tags.append(f'{open_b}{remaining_pts}{close_b}')" \
   || fail "remainder content hardcodes square brackets"
 
 # 4. The old hardcoded '[' / ']' forms must be gone from the parts we fixed

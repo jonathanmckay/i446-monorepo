@@ -52,9 +52,12 @@ defer_exit_line=$(echo "$defer_body" | grep -n 'invalid defer target.*exit 0' | 
 (( defer_drain_line < defer_exit_line )) || fail "defer.sh drain must come before the invalid-input exit 0"
 echo "PASS: defer.sh drains before its invalid-input exit path"
 
-edit_read_line=$(echo "$edit_body" | grep -n 'vared -p .* < /dev/tty' | head -1 | cut -d: -f1)
+# 2026-10-21: the prompt is the curses form (edit-form.py) reading the tty
+edit_read_line=$(echo "$edit_body" | grep -n 'focus split} < /dev/tty > /dev/tty' | head -1 | cut -d: -f1)
 edit_drain_line=$(echo "$edit_body" | grep -nF "$DRAIN" | head -1 | cut -d: -f1)
-edit_exit_line=$(echo "$edit_body" | grep -n 'exit 0' | head -1 | cut -d: -f1)
+# the cancel exit is the first `exit 0` AFTER the prompt (the DTD_WARM pre-exec
+# guard at the top of every action script also exits 0)
+edit_exit_line=$(echo "$edit_body" | grep -n 'exit 0' | awk -F: -v r="$edit_read_line" '$1 > r' | head -1 | cut -d: -f1)
 [[ -n "$edit_read_line" ]] || fail "edit.sh prompt read not found"
 [[ -n "$edit_exit_line" ]] || fail "edit.sh cancel exit 0 not found"
 (( edit_drain_line > edit_read_line )) || fail "edit.sh drain must come after the prompt read"

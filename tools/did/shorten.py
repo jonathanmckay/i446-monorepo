@@ -159,6 +159,7 @@ def _haiku_shorten(prose: str) -> str | None:
 def _comment_lookup(task_id: str, want_hash: str):
     """Return a cached short name from the task's Todoist comments if one exists
     for this content hash. Best-effort."""
+    found = None
     try:
         sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
         import todoist  # noqa
@@ -168,10 +169,11 @@ def _comment_lookup(task_id: str, want_hash: str):
                 rest = body[len(COMMENT_PREFIX):]
                 h, _, short = rest.partition(":")
                 if h == want_hash and short:
-                    return short
+                    found = short   # LAST match wins: a typed haiku name (edit form,
+                                    # 2026-10-21) is stored after the generated one
     except Exception:
         return None
-    return None
+    return found
 
 
 def _comment_store(task_id: str, content_hash: str, short: str) -> None:
