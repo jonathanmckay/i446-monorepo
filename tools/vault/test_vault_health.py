@@ -100,3 +100,33 @@ def test_time_machine_exempts_work_managed_straylight(monkeypatch):
     f = vh.check_time_machine()
     assert f.status in ("ok", "warn") and not any("no Time Machine destination" in d for d in f.detail)
     assert f.detail[0].startswith("Straylight-Refit.local: exempt")
+
+
+def test_style_scan_flags_filenames_and_titles_and_skips_people_and_dated(tmp_path):
+    vh = _load()
+    def w(rel, title):
+        p = tmp_path / rel; p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f'---\ntitle: "{title}"\n---\nx\n')
+    w("hcmp/hcms.md", "hcms")                                   # clean
+    w("hcmp/Untitled 2.md", "Untitled 2")                       # filename
+    w("hcmp/x-祷.md", "祷 prayer صلاة")                            # filename + arabic
+    w("h335/h335.md", "h335 - 循环 (Career & Business)")          # translated (code h335 is not a word)
+    w("g245/goals.md", "A title that is far too long to be a good title at all, really")  # long
+    w("d359/Jane Doe.md", "Jane Doe")                           # people notes skipped
+    w("hcmp/o314/2015/Some Entry.md", "عنوان")                   # dated journal folder skipped
+    found = vh.scan_style(tmp_path)
+    assert [r for r, _ in found["filename"]] == ["hcmp/Untitled 2.md", "hcmp/x-祷.md"]
+    assert [r for r, _ in found["arabic"]] == ["hcmp/x-祷.md"]
+    assert [r for r, _ in found["translated"]] == ["h335/h335.md"]
+    assert [r for r, _ in found["long"]] == ["g245/goals.md"]
+
+
+def test_style_finding_counts_and_is_a_review_item(tmp_path, monkeypatch):
+    vh = _load()
+    monkeypatch.setattr(vh, "VAULT", tmp_path)
+    (tmp_path / "a").mkdir(); (tmp_path / "a/Bad Name.md").write_text("---\ntitle: ok\n---\n")
+    f = vh.check_style()
+    assert f.status == "warn" and f.review and "1 filename" in f.summary
+    assert f.detail[0].startswith("filename: 1 — a 1") and f.detail[1].strip() == "a/Bad Name.md"
+    (tmp_path / "a/Bad Name.md").rename(tmp_path / "a/good-name.md")
+    assert vh.check_style().status == "ok"
