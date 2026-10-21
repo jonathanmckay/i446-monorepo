@@ -2,26 +2,24 @@
 """edit-form.py — dtd's ctrl-o / ctrl-p screen: one curses form for a task.
 
 2026-10-21 ("I don't like the new ctrl+o / ctrl+p page"): the one-line
-`title @domain [N] // description ✓ pts` prompt is gone. The screen is a form,
-top to bottom:
+`title @domain [N] // description ✓ pts` prompt is gone. The screen is two
+cards:
 
-    task (the mother)      [N] points · (N) minutes
-                           haiku  — the short row name (shorten.py; only when
-                                    the title is longer than the row fits)
-                           name   — the full title
-                           notes  — the Todoist description, multi-line
-                           project — the @domain label
-    done so far            pts done · min done — carve a done record off the
-                                    task
-                           done as — name of the done record (blank = title)
-                           rem pts · rem min — what the remainder keeps:
-                                    fill themselves (total - done) as you
-                                    type, and stay editable (an override)
+    done so far   pts done · min done — carve a done record off the task
+                  name · haiku — of the done record, prefilled from the task
+    remainder     [N] pts · (N) min — what the task keeps: current − done,
+                  following the done card as you type until you type here
+                  haiku — the short row name (shorten.py; only when the
+                           title is longer than the row fits)
+                  name · notes · project — the task's own fields
 
-ctrl-o opens with the cursor on the task; ctrl-p opens on "pts done" (the
-breakoff is the default edit for ctrl-p). Inside the form ^O / ^P jump
-between the two sections. Enter / Tab move on (Enter in notes = newline),
-Enter on the last field or ^S saves, Esc / ^C / ^Q cancel.
+With nothing in "pts done" the remainder card is simply the task (ctrl-o:
+a plain edit, [N]/(N) show the current totals). ctrl-p opens on "pts done";
+ctrl-o on the remainder's [N] pts; ^O / ^P jump between the cards. Enter /
+Tab move on (Enter in notes = newline), Enter on the last field or ^S
+saves, Esc / ^C / ^Q cancel. A changed name gets its haiku short name
+regenerated AFTER the form exits (dtd backgrounds the save); a typed haiku
+is kept as is.
 
 Budget (user, 2026-10-21): the form must paint in well under 200 ms, ideally
 80–100. So: curses (stdlib, ~10 ms), ONE interpreter (the cache is read here,
@@ -108,9 +106,8 @@ def prefill(task: dict, description: str | None, domains=DOMAINS) -> dict:
 
 def remainder(total: str, time_: str, done_pts: str, done_min: str) -> tuple[str, str]:
     """What the remainder keeps, computed independently: (pts, min) as
-    strings. Nothing done yet = the whole total (the old split form's
-    prefill, so the field visibly tracks from the first keystroke); "" only
-    when the task has no such tag."""
+    strings: current total − done. Nothing done yet = the whole total; ""
+    only when the task has no such tag."""
     pts = mins = ""
     if _INT.match(total or ""):
         pts = str(max(0, int(total) - int(done_pts))) if _INT.match(done_pts or "") else total
@@ -121,19 +118,19 @@ def remainder(total: str, time_: str, done_pts: str, done_min: str) -> tuple[str
 
 def validate(vals: dict) -> str | None:
     """None when the form may be saved, else the reason."""
-    for k, label in (("points", "[N] points"), ("time", "(N) minutes"),
-                     ("done_pts", "pts done"), ("done_min", "min done"),
-                     ("rem_pts", "rem pts"), ("rem_min", "rem min")):
+    for k, label in (("points", "[N] pts"), ("time", "(N) min"),
+                     ("done_pts", "pts done"), ("done_min", "min done")):
         v = (vals.get(k) or "").strip()
         if v and not _INT.match(v) and not (k == "points" and vals.get("points_curly")):
             return f"{label} must be a number"
     dp, dm = (vals.get("done_pts") or "").strip(), (vals.get("done_min") or "").strip()
     if dm and not dp:
         return "min done needs pts done too"
-    if dp and _INT.match(vals.get("points") or "") and int(dp) > int(vals["points"]):
-        return f"pts done {dp} > total {vals['points']}"
-    if dm and _INT.match(vals.get("time") or "") and int(dm) > int(vals["time"]):
-        return f"min done {dm} > time {vals['time']}"
+    tp, tt = (vals.get("total_pts") or "").strip(), (vals.get("total_min") or "").strip()
+    if dp and _INT.match(tp) and int(dp) > int(tp):
+        return f"pts done {dp} > current {tp}"
+    if dm and _INT.match(tt) and int(dm) > int(tt):
+        return f"min done {dm} > current {tt}"
     return None
 
 
@@ -151,12 +148,10 @@ def result(vals: dict) -> dict:
     }
     dp = (vals.get("done_pts") or "").strip()
     if dp:
-        def _opt(k):
-            v = (vals.get(k) or "").strip()
-            return int(v) if _INT.match(v) else None
-        out["split"] = {"pts": int(dp), "minutes": _opt("done_min"),
+        dm = (vals.get("done_min") or "").strip()
+        out["split"] = {"pts": int(dp), "minutes": int(dm) if _INT.match(dm) else None,
                         "name": " ".join((vals.get("done_name") or "").split()),
-                        "rem_pts": _opt("rem_pts"), "rem_min": _opt("rem_min")}
+                        "short": (vals.get("done_short") or "").strip() if vals.get("short_enabled") else ""}
     return out
 
 
@@ -342,24 +337,26 @@ class Form:
         self.bundle = load_bundle(task_id)
         self.project = project_name(task)
         self.msg = ""
+        no_short = "— title fits the row; no haiku name needed"
         self.fields = [
+            # done so far (top card)
+            Field("done_pts", "pts done", "", width=6),
+            Field("done_min", "min done", "", width=6),
+            Field("done_name", "name", pre["name"]),
+            Field("done_short", "haiku", pre["short"], enabled=pre["short_enabled"], hint=no_short),
+            # remainder (the task itself)
             Field("points", "[N] pts", pre["points"], width=6, enabled=not pre["points_curly"]),
             Field("time", "(N) min", pre["time"], width=6),
-            Field("short", "haiku", pre["short"], enabled=pre["short_enabled"],
-                  hint="— title fits the row; no haiku name needed"),
+            Field("short", "haiku", pre["short"], enabled=pre["short_enabled"], hint=no_short),
             Field("name", "name", pre["name"]),
             Field("desc", "notes", pre["desc"], multiline=True, enabled=pre["desc_loaded"],
                   hint="loading notes…"),
             Field("domain", "project", pre["domain"], width=10),
-            Field("done_pts", "pts done", "", width=6),
-            Field("done_min", "min done", "", width=6),
-            Field("done_name", "done as", ""),
-            Field("rem_pts", "rem pts", "", width=6),
-            Field("rem_min", "rem min", "", width=6),
         ]
         self.by = {f.key: f for f in self.fields}
-        # ctrl-p lands on the breakoff; ctrl-o on the first task field
-        self.focus = self.by["done_pts"] if focus == "split" else self._enabled()[0]
+        # ctrl-p lands on the done card; ctrl-o on the remainder's first field
+        self.focus = self.by["done_pts"] if focus == "split" else next(
+            f for f in self.fields if f.enabled and f.key in ("points", "time", "short", "name"))
         self._thread: threading.Thread | None = None
         self._fetched: dict | None = None
         if self.bundle is None:
@@ -396,11 +393,11 @@ class Form:
         return self.focus is self._enabled()[-1]
 
     def autofill(self) -> None:
-        """rem pts / rem min follow total - done until the user types into
-        them; an emptied field goes back to following."""
-        pts, mins = remainder(self.by["points"].text, self.by["time"].text,
+        """The remainder's [N] pts / (N) min follow current − done until the
+        user types into them; an emptied field goes back to following."""
+        pts, mins = remainder(self.pre["points"], self.pre["time"],
                               self.by["done_pts"].text, self.by["done_min"].text)
-        for key, val in (("rem_pts", pts), ("rem_min", mins)):
+        for key, val in (("points", pts), ("time", mins)):
             f = self.by[key]
             # an emptied field resumes following once the cursor has left it
             # (while it is focused, "" is the user mid-edit, not "auto")
@@ -412,6 +409,7 @@ class Form:
 
     def values(self) -> dict:
         v = {f.key: f.text for f in self.fields}
+        v["total_pts"], v["total_min"] = self.pre["points"], self.pre["time"]
         v["points_curly"] = self.pre["points_curly"]
         v["short_enabled"] = self.pre["short_enabled"]
         v["desc_loaded"] = self.pre["desc_loaded"] and self.by["desc"].enabled
@@ -434,33 +432,32 @@ class Form:
                 pass
 
         # Budget the height from the bottom up (2026-10-21: in a short pane the
-        # rem pts / rem min row fell off the screen): the field rows always
-        # fit; the detail block and the notes box take what is left.
-        FIXED = 1 + 1 + 1 + 2 + 1 + 1 + 3 + 1   # title, sep, pts/time, haiku+name, project, header, done rows, legend
+        # remainder row fell off the screen): the field rows always fit; the
+        # detail block and the notes box take what is left.
+        FIXED = 1 + 1 + 3 + 1 + 4 + 1   # title, done header, done rows, rem header, rem rows (pts/time, haiku, name, project), legend
         spare = max(0, h - FIXED)
         notes_rows = max(1, min(6, spare - 1)) if spare > 1 else 1
         detail_cap = max(0, min(8, spare - notes_rows))
         put(y, 0, self.task.get("content", ""), curses.A_BOLD); y += 1
         for style, text in detail_lines(self.bundle, self.project)[:detail_cap]:
             put(y, 0, text, curses.A_DIM if style == "dim" else curses.A_UNDERLINE); y += 1
-        put(y, 0, "─" * (w - 1), curses.A_DIM); y += 1
         cursor = (y, 0)
-        # row 1: points + time side by side
-        cursor = self._draw_row(scr, y, [self.by["points"], self.by["time"]], w) or cursor; y += 1
+        self.autofill()
+        put(y, 0, "── done so far " + "─" * max(0, w - 16), curses.A_DIM); y += 1
+        c = self._draw_row(scr, y, [self.by["done_pts"], self.by["done_min"]], w); cursor = c or cursor; y += 1
+        for key in ("done_name", "done_short"):
+            c = self._draw_row(scr, y, [self.by[key]], w); cursor = c or cursor; y += 1
+        put(y, 0, "── remainder " + "─" * max(0, w - 14), curses.A_DIM)
+        if w > 60:
+            put(y, 14, " [N]/(N) = current − done, type to override ", curses.A_DIM)
+        y += 1
+        c = self._draw_row(scr, y, [self.by["points"], self.by["time"]], w); cursor = c or cursor; y += 1
         for key in ("short", "name"):
             c = self._draw_row(scr, y, [self.by[key]], w); cursor = c or cursor; y += 1
         c, used = self._draw_multiline(scr, y, self.by["desc"], w, notes_rows)
         cursor = c or cursor; y += used
         c = self._draw_row(scr, y, [self.by["domain"]], w); cursor = c or cursor; y += 1
-        put(y, 0, "── done so far " + "─" * max(0, w - 16), curses.A_DIM); y += 1
-        self.autofill()
-        c = self._draw_row(scr, y, [self.by["done_pts"], self.by["done_min"]], w); cursor = c or cursor; y += 1
-        c = self._draw_row(scr, y, [self.by["done_name"]], w); cursor = c or cursor; y += 1
-        c = self._draw_row(scr, y, [self.by["rem_pts"], self.by["rem_min"]], w); cursor = c or cursor
-        if w > 60:
-            put(y, 40, "← the task keeps (auto; type to override)", curses.A_DIM)
-        y += 1
-        legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^O task · ^P done so far"
+        legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^P done card · ^O remainder"
         put(h - 1, 0, legend, curses.A_REVERSE if self.msg else curses.A_DIM)
         try:
             scr.move(*cursor)
@@ -599,7 +596,7 @@ class Form:
         elif key in ("\x03", "\x11"):
             return "cancel"
         elif key == "\x0f":
-            self.focus = self.by["name"]
+            self.focus = self.by["points"] if self.by["points"].enabled else self.by["name"]
         elif key == "\x10":
             self.focus = self.by["done_pts"]
         elif key == "\x1b":
