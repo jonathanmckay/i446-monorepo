@@ -1,6 +1,6 @@
 ---
 name: "1-i446"
-description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, skills not yet linked to a dtd card, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
+description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, vault-wide style: ASCII kebab filenames and short one-language titles, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, skills not yet linked to a dtd card, 7-day alert sink), auto-fixes what is safe, writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
 user-invocable: true
 ---
 
@@ -31,7 +31,13 @@ hand does the same thing interactively, from whichever machine you are on
    `singleton-audit.py`'s `EXCLUDE_PREFIXES` as a confirmed exception. For
    duplicate note names: merge into one canonical note (carry over any
    unique lines, then repoint the bare `[[name]]` links listed), rename one,
-   or add the name to `vault_health.py`'s `DUP_NAMES_OK`. For
+   or add the name to `vault_health.py`'s `DUP_NAMES_OK`. For the style
+   check (filenames not ASCII kebab, Arabic / bilingual / long titles; rules
+   in z_meta.md › Style Guide): it is one decision per rule, not per file:
+   fix a batch now (rename + rewrite links, shorten titles, move scripts to
+   `aliases:`), leave the rest for next week, or record a path in
+   `vault_health.py`'s `STYLE_OK`. Never rename across the vault without
+   rewriting the links in the same change. For
    sync/backup findings: fix what he approves; if a fix is not something a
    script should own, file a Todoist task instead.
 4. Re-run the script. Zero review items writes "all clear" to the card; complete it in dtd.

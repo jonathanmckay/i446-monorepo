@@ -186,6 +186,87 @@ def check_duplicate_notes() -> Finding:
                    detail, review=True)
 
 
+# ---------------------------------------------------------------------------
+# Vault-wide style (2026-10-21, JM: "add a vault-wide style check to 1-i446").
+# Rules from z_meta.md › Style Guide › Filenames / Titles:
+#   filename   ASCII kebab-case (code first; scripts live in title/aliases)
+#   arabic     no Arabic in titles (RTL breaks sorting, links and the TUIs)
+#   translated no bilingual titles: English OR Chinese, not both
+#   long       titles in as few characters as possible (> STYLE_TITLE_MAX)
+# Excluded: archives/mirrors (_skip_dir), dated journal folders, and d359
+# (people notes are Title Case names by design). Grow STYLE_OK from /1-i446
+# answers the way DUP_NAMES_OK does.
+# ---------------------------------------------------------------------------
+STYLE_TITLE_MAX = 40
+STYLE_SKIP_TOP = {"d359"}
+STYLE_OK: set[str] = set()          # relative paths confirmed as exceptions
+STYLE_FILENAME_OK = {"CLAUDE.md", "CONTEXT.md"}   # instruction files are uppercase by design
+_KEBAB_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]*$")
+_ARABIC_RE = re.compile(r"[؀-ۿ]")
+_CJK_RE = re.compile(r"[一-鿿]")
+_CODE_RE = re.compile(r"^[a-z]+\d+[a-z0-9+]*$|^\d+[a-z]+$")   # h335, m5x2, 0g: codes, not words
+_TITLE_RE = re.compile("^title:\\s*[\"']?(.*?)[\"']?\\s*$", re.M)
+STYLE_RULES = ("filename", "arabic", "translated", "long")
+
+
+def _latin_words(title: str) -> list[str]:
+    return [w for w in re.findall(r"[A-Za-z][A-Za-z'&-]*", title) if not _CODE_RE.match(w.lower())]
+
+
+def scan_style(vault: Path = VAULT) -> dict[str, list[tuple[str, str]]]:
+    """{rule: [(rel_path, title), ...]} for every live note off the style guide."""
+    out: dict[str, list[tuple[str, str]]] = {r: [] for r in STYLE_RULES}
+    for root, dirs, files in os.walk(vault):
+        rel = os.path.relpath(root, vault)
+        rel = "" if rel == "." else rel
+        if rel and (_skip_dir(rel) or rel.split("/")[0] in STYLE_SKIP_TOP or _dated(rel + "/x")):
+            dirs[:] = []
+            continue
+        for f in sorted(files):
+            if not f.endswith(".md"):
+                continue
+            r = f"{rel}/{f}" if rel else f
+            if r in STYLE_OK:
+                continue
+            try:
+                head = (Path(root) / f).read_text(errors="ignore")[:800]
+            except OSError:
+                continue
+            m = _TITLE_RE.search(head)
+            title = m.group(1).strip() if m else ""
+            if not _KEBAB_RE.match(f[:-3]) and f not in STYLE_FILENAME_OK:
+                out["filename"].append((r, title))
+            if _ARABIC_RE.search(title):
+                out["arabic"].append((r, title))
+            elif _CJK_RE.search(title) and len(_latin_words(title)) >= 2:
+                out["translated"].append((r, title))
+            if len(title) > STYLE_TITLE_MAX:
+                out["long"].append((r, title))
+    return out
+
+
+def check_style() -> Finding:
+    found = scan_style(VAULT)   # looked up at call time, so tests can repoint VAULT
+    total = sum(len(v) for v in found.values())
+    if not total:
+        return Finding("style", "ok", "every live note is on the style guide (filename, title)")
+    counts = ", ".join(f"{len(found[r])} {r}" for r in STYLE_RULES if found[r])
+    detail = []
+    for r in STYLE_RULES:
+        rows = found[r]
+        if not rows:
+            continue
+        by_top: dict[str, int] = {}
+        for rel, _t in rows:
+            by_top[rel.split("/")[0]] = by_top.get(rel.split("/")[0], 0) + 1
+        folders = ", ".join(f"{k} {v}" for k, v in sorted(by_top.items(), key=lambda kv: -kv[1])[:6])
+        detail.append(f"{r}: {len(rows)} — {folders}")
+        sample = sorted(rows, key=lambda x: -len(x[1]))[:5] if r == "long" else rows[:5]
+        detail += [f"  {rel}" + (f" — {t[:60]}" if t and r != "filename" else "") for rel, t in sample]
+    return Finding("style", "warn", f"{total} note(s) off the style guide ({counts}); fix in batches or add to STYLE_OK",
+                   detail, review=True)
+
+
 def _st_get(path: str, key: str):
     req = urllib.request.Request(f"{ST_URL}{path}", headers={"X-API-Key": key})
     with urllib.request.urlopen(req, timeout=5) as r:
@@ -564,7 +645,7 @@ def check_neon_rules(now: dt.datetime) -> Finding:
 # ---------------------------------------------------------------------------
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
-    for fn in (check_singletons, check_duplicate_notes, lambda: check_syncthing(now), lambda: check_git_autopush(now),
+    for fn in (check_singletons, check_duplicate_notes, check_style, lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
                check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now)):
         try:
@@ -581,7 +662,7 @@ ICON = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
 def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
-             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, Syncthing, git autopush, "
+             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Syncthing, git autopush, "
              "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed |", "|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
