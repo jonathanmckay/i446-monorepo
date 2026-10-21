@@ -60,7 +60,9 @@ OLD_DRAIN = (
 def test_every_drain_loop_is_preceded_by_stty_noecho():
     lines = DTD.split("\n")
     sites = [i for i, ln in enumerate(lines) if ln.strip() == DRAIN]
-    assert len(sites) >= 14, f"expected the 14 known drain sites, found {len(sites)}"
+    # 15 sites originally; ARMEOF's and LISTEOF's were removed on 2026-10-21
+    # (hot-path scripts, see test_dtd_no_mouse_leak.NO_DRAIN), leaving 13.
+    assert len(sites) >= 13, f"expected the 13 known drain sites, found {len(sites)}"
     missing = [i + 1 for i in sites if STTY_NOECHO not in lines[i - 1]]
     assert not missing, f"drain loops without a preceding `{STTY_NOECHO}` at dtd.sh lines {missing}"
 

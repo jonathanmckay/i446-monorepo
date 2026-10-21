@@ -93,8 +93,29 @@ def test_prompt_window_scripts_drain_buffered_tty_input():
     # drain the burst types itself into fzf's query on resume. Not limited to
     # scripts with an interactive prompt — see the module docstring.
     for eof in BLOCKING_SCRIPTS:
+        if eof in NO_DRAIN:
+            continue
         assert DRAIN in _heredoc(eof), \
             f"{eof} must drain buffered tty input before fzf resumes"
+
+
+# 2026-10-21 ("ctrl-d doesn't feel instantaneous ... one breath"): the drain
+# is a trade. Its `read -t 0.05` idles 50 ms when nothing is queued and
+# DISCARDS any key typed during the script, so it belongs only to scripts
+# with a real blocking window (a prompt, a curl, a sleep-poll). ARMEOF is a
+# ~15 ms jq with no prompt; LISTEOF runs in fzf's background process group
+# (reload/reload-sync) where fzf keeps reading the tty itself, so its drain
+# was gated off by a tcgetpgrp check that always said no -- dead code costing
+# a python spawn per reload. Both keep RESET_SEQ (a plain write).
+NO_DRAIN = ("ARMEOF", "LISTEOF")
+
+
+def test_hot_path_scripts_never_drain_typed_ahead_keys():
+    for eof in NO_DRAIN:
+        body = "\n".join(l for l in _heredoc(eof).splitlines() if not l.lstrip().startswith("#"))
+        assert DRAIN not in body and "read -k 1" not in body, \
+            f"{eof} is on the keypress hot path: a tty drain here eats typed-ahead keys"
+        assert "tcgetpgrp" not in body, "the always-false pgrp gate (a python spawn per reload) is gone"
 
 
 def test_list_reload_script_resets_mouse_modes_after_python_not_in_stdout():
@@ -108,10 +129,10 @@ def test_list_reload_script_resets_mouse_modes_after_python_not_in_stdout():
     body = _heredoc("LISTEOF")
     py_end = body.rindex('" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"')
     after_py = body[py_end:]
-    assert RESET_SEQ in after_py and DRAIN in after_py, (
-        "LISTEOF must reset mouse modes and drain tty input after the "
-        "python list-generation call, before fzf resumes")
+    assert RESET_SEQ in after_py and DRAIN not in after_py, (
+        "LISTEOF must reset mouse modes after the python list-generation call "
+        "(no drain: see NO_DRAIN above)")
     # The reset/drain must target /dev/tty explicitly, not stdout — stdout
     # here is the row data fzf reads back as the reload payload; writing the
     # reset sequence there would corrupt the list instead of the query.
-    assert "> /dev/tty" in after_py and "< /dev/tty" in after_py
+    assert "> /dev/tty" in after_py

@@ -11,8 +11,13 @@ appeared only when a later reload killed the frozen one, 1-2s later or not
 at all (each re-press re-armed on a task row). Measured on Ix: picker
 1.0-2.2s before, 0.24-0.63s after.
 
-Fix: the stty + drain only run when the script owns the terminal
-(tcgetpgrp == getpgrp); the mouse-mode printf stays unconditional.
+Fix (2026-10-04): the stty + drain only ran when the script owned the
+terminal (tcgetpgrp == getpgrp); the mouse-mode printf stayed unconditional.
+2026-10-21: that gate always said no (fzf 0.72 runs reload AND reload-sync
+in a background group), so the stty/drain were dead code costing a python
+spawn per reload. Both are gone; the tail is now a plain printf. The
+structural test checks nothing tty-mode-changing is left, and the pty test
+still proves a background run exits instead of freezing.
 Also checks the day-row labels requested the same day.
 """
 import os
@@ -36,12 +41,11 @@ def _list_tail() -> str:
     return body[body.rindex('" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"'):]
 
 
-def test_list_tail_gates_tty_mode_changes_on_foreground():
-    tail = _list_tail()
-    g = tail.index(GUARD)
-    assert g < tail.index("stty -echo < /dev/tty") and g < tail.index(DRAIN), (
-        "stty/drain must sit inside the foreground check, or a background "
-        "reload freezes on SIGTTOU/SIGTTIN")
+def test_list_tail_has_no_tty_mode_changes_at_all():
+    code = "\n".join(l for l in _list_tail().splitlines() if not l.lstrip().startswith("#"))
+    assert "stty" not in code and DRAIN not in code and "read -k" not in code and GUARD not in code, (
+        "the list tail runs in fzf's background group: any stty/read on /dev/tty "
+        "freezes on SIGTTOU/SIGTTIN, and a pgrp gate is a wasted python spawn per reload")
 
 
 def test_background_list_tail_exits_instead_of_freezing():
