@@ -1696,6 +1696,13 @@ zle -N _dtd_cancel
 bindkey -M emacs '^C' _dtd_cancel
 bindkey -M viins '^C' _dtd_cancel
 bindkey -M vicmd '^C' _dtd_cancel
+# ctrl-p INSIDE the line = append the split marker (2026-10-21: the split
+# form folded into this screen; see the legend below). Same widget trick as
+# ^C above.
+_dtd_split_seed() { BUFFER="\${BUFFER%%[[:space:]]#} ✓ "; zle end-of-line; }
+zle -N _dtd_split_seed
+bindkey -M emacs '^P' _dtd_split_seed
+bindkey -M viins '^P' _dtd_split_seed
 EDIT_FAST="\$HOME/i446-monorepo/tools/did/edit-fast.py"
 HDR="$DTD_HDR"
 task="\$1"
@@ -1729,9 +1736,13 @@ python3 "$DTD_DETAIL" "\$1" > /dev/tty 2>/dev/null
 # parses it back and applies only what changed.
 cur_line=""
 eval "\$(python3 "\$EDIT_FAST" --current --id "\$1" "$DTD_CACHE_FILE" 2>/dev/null)"
-printf "\n\033[2m──────── edit · title @domain [N] // description · blank line cancels ────────\033[0m\n" > /dev/tty
+printf "\n\033[2m──────── edit · title @domain [N] // description ✓ pts-done what-you-did · blank line cancels ────────\033[0m\n" > /dev/tty
 printf "\033[2m(time) and {bonus} tags are kept · ctrl-v ctrl-j for a new line · a bare // clears the description\033[0m\n" > /dev/tty
+printf "\033[2m✓ N splits: N pts logged today, [N] stays the total, the rest moves to tomorrow · ctrl-p inserts ✓\033[0m\n" > /dev/tty
 f_line="\${cur_line:-\$clean}"
+# ctrl-p from the list opens this same screen with the split marker already
+# appended (DTD_SPLIT_SEED=1), so "ctrl-p, 15, enter" is still a 3-key split.
+[[ -n "\${DTD_SPLIT_SEED:-}" ]] && f_line="\${f_line%%[[:space:]]#} ✓ "
 vared -p "> " f_line < /dev/tty > /dev/tty
 edits="\$f_line"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
@@ -1752,9 +1763,22 @@ if [[ -z "\${edits// /}" ]]; then
   exit 0
 fi
 out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --line "\$f_line" 2>/dev/null)
-echo "\${out:-✗ edit failed}" > "\$HDR"
 # Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
 rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
+# Split (2026-10-21): when the line carried  ✓ <pts> [what I did] , edit-fast
+# has already applied every other change and prints ONE line of shell
+# assignments prefixed SPLIT (pts=, done_name=; newlines sanitised, so a
+# prefix scan is safe even with a multi-line description). The split
+# script re-reads name/[N] from the patched cache, so [N] on the line is the
+# task TOTAL and the remainder gets total - pts. It owns the header from here.
+_split_line=\$(print -r -- "\$out" | grep '^SPLIT ' | tail -n 1)
+if [[ -n "\$_split_line" ]]; then
+  pts=""; done_name=""
+  eval "\${_split_line#SPLIT }"
+  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name"
+else
+  echo "\${out:-✗ edit failed}" > "\$HDR"
+fi
 
 EDITEOF
 chmod +x "$DTD_EDIT"
@@ -2870,7 +2894,11 @@ cat > "$DTD_SPLIT" << 'SPLITEOF'
 #!/bin/zsh
 _T=$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHREALTIME${_T}PLACEHOLDER_SID${_T}action${_T}split${_T}$1${_T}" >> "PLACEHOLDER_EVENTS" 2>/dev/null
 # Split a task: claim partial points today, defer the rest to tomorrow.
-# Three dialogs: points, what you did, what remains.
+# Args: $1 task id, $2 points done today, $3 done record name (blank = the
+# task's own name), $4 remainder name (blank = keep), $5 points remaining
+# (blank = total - done). Since 2026-10-21 the questions are asked on the
+# ctrl-o/ctrl-g edit screen (" ✓ <pts> [what I did]" on the edit line) and
+# dtd's edit script calls this with the answers; there is no prompt here.
 # All Todoist/Neon writes done inline via Python.
 
 HDR="PLACEHOLDER_HDR"
@@ -2900,26 +2928,10 @@ fi
 duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 [[ -z "$total" ]] && total="?"
 
-# One terminal FORM with all four questions (2026-10-04): points done today,
-# what you did, what remains, points remaining (prefilled total - done, and it
-# follows "done" until you type in it). Tab / arrows move, Enter splits, Esc
-# cancels. Was three GUI dialogs, then three sequential prompts. ctrl-p is
-# bound with execute (not execute-silent) so this owns the tty. Gated on
-# DTD_SPLIT_PROMPT, which only dtd's fzf session exports; without it (tests,
-# scripted callers) nothing is asked and the split is cancelled.
-pts_today=""; done_desc=""; remaining_desc=""; remaining_override=""
-if [[ -n "${DTD_SPLIT_PROMPT:-}" && -r /dev/tty ]]; then
-  _form_out=$(mktemp -t dtdsplit.XXXXXX)
-  stty sane < /dev/tty 2>/dev/null
-  print -- "$EPOCHREALTIME\tsplit-form-open\t$task_id" >> "$TIMING" 2>/dev/null
-  if python3 "$HOME/i446-monorepo/tools/did/split-form.py" --title "$task" --total "$total" \
-       --open "$bracket" --close "$close" --out "$_form_out" < /dev/tty > /dev/tty 2>/dev/null; then
-    { IFS= read -r pts_today; IFS= read -r done_desc; IFS= read -r remaining_desc; IFS= read -r remaining_override; } < "$_form_out"
-  fi
-  print -- "$EPOCHREALTIME\tsplit-form-close\t$task_id" >> "$TIMING" 2>/dev/null
-  rm -f "$_form_out"
-fi
-[[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "cancelled" > "$HDR"; exit 0; }
+# Was three GUI dialogs (2026-06), three sequential prompts, then one curses
+# form (split-form.py, 2026-10-04); now the answers arrive as arguments.
+pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"
+[[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "split cancelled" > "$HDR"; exit 0; }
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 # Strip truncation: if fzf middle-truncated the name with …, search by the
@@ -3081,8 +3093,8 @@ print -- "$EPOCHREALTIME\tsplit-bg-end\t$task_id rc=$?" >> "$TIMING" 2>/dev/null
 } </dev/null >> "/tmp/dtd-split.log" 2>&1 &!
 print -- "$EPOCHREALTIME\tsplit-end\t$task_id" >> "$TIMING" 2>/dev/null
 
-# Flush tty input buffered while the osascript GUI dialogs held focus. With the
-# terminal idle behind the dialogs, two-finger touchpad scroll emits ESC[A/ESC[B
+# Flush tty input buffered while the edit screen held the tty. With the
+# terminal idle behind the prompt, two-finger touchpad scroll emits ESC[A/ESC[B
 # arrow bursts that queue in the tty input buffer; left unread, fzf dumps the
 # whole burst into its query as literal ^[[A^[[B text on return (bug 2026-07-14).
 # Draining here consumes them before fzf reads. Also reset mouse modes, matching
@@ -3328,7 +3340,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✓split | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -3369,7 +3381,6 @@ chmod +x "$DTD_HDRGEN"
 # ctrl-d prompts for the defer target (N days / date) on the tty. Only set
 # here so the extracted script stays non-interactive for tests and scripts.
 export DTD_DEFER_PROMPT=1
-export DTD_SPLIT_PROMPT=1   # ctrl-p asks its questions in the terminal (see DTD_SPLIT)
 
 # Toggl 429 fast-fail for everything dtd launches (the execute-silent action
 # scripts AND the ticker, which inherit this env). The action scripts call Toggl
@@ -3678,7 +3689,7 @@ while true; do
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-x:select+execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-p:execute($DTD_SPLIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-p:execute(DTD_SPLIT_SEED=1 $DTD_EDIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "alt-up:select+execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
