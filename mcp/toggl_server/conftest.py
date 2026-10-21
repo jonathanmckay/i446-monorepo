@@ -31,4 +31,9 @@ def _isolate_toggl_caches(monkeypatch, tmp_path):
     monkeypatch.setattr(toggl_api, "CURRENT_CACHE", tmp_path / "toggl-current.json")
     monkeypatch.setattr(toggl_api, "JANUS_PID", tmp_path / "janus.pid")
     monkeypatch.setattr(toggl_api, "PROJECTS_CACHE", tmp_path / "toggl-projects.json")
+    # No entries store unless a test provides one (2026-10-21): with the
+    # developer's real ~/vault/i156/toggl.sqlite in reach, a get_entries call
+    # for a past range would be answered locally and the fake _request the
+    # test is asserting on would never run.
+    monkeypatch.setattr(toggl_api, "STORE_PATH", tmp_path / "no-store.sqlite")
     yield
