@@ -77,29 +77,30 @@ def test_result_shapes_the_edit_fast_payload(ef):
             "done_pts": "15", "done_min": "", "done_name": "drafted  it", "done_short": "did it"}
     r = ef.result(vals)
     assert r["name"] == "memo" and r["domain"] == "i9" and r["desc"] == "a\nb"
-    assert r["points"] == "5" and r["time"] == "30"        # the remainder card = what the task keeps
-    assert r["split"] == {"pts": 15, "minutes": None, "name": "drafted it", "short": "did it"}
-    vals.update(short_enabled=False, desc_loaded=False, done_pts="", points_curly=True)
+    assert r["points"] == "5" and r["time"] == "30"        # the remainder section = what the task keeps
+    assert r["split"] == {"pts": 15, "minutes": None, "name": "drafted it", "short": ""}
+    assert r["short"] == "" and r["short_enabled"] is False   # haiku is generated, never typed
+    vals.update(desc_loaded=False, done_pts="", points_curly=True)
     r = ef.result(vals)
-    assert r["short"] == "" and r["desc"] is None and r["split"] is None and r["points"] == ""
+    assert r["desc"] is None and r["split"] is None and r["points"] == ""
 
 
 # ── pty: the real form ──────────────────────────────────────────────────────
 
-def _env(tmp_path):
+def _env(tmp_path, content=LONG):
     state = tmp_path / "state"
     (state / "jm" / "task-detail").mkdir(parents=True)
     (state / "jm" / "task-detail" / "t1.json").write_text(json.dumps({
-        "task": {"id": "t1", "content": LONG, "description": "old notes", "labels": ["i9"]},
+        "task": {"id": "t1", "content": content, "description": "old notes", "labels": ["i9"]},
         "comments": []}))
-    cache = {"today": [{"id": "t1", "content": LONG, "labels": ["i9"], "short": "Quarterly memo (30) [20]"}]}
+    cache = {"today": [{"id": "t1", "content": content, "labels": ["i9"], "short": "Quarterly memo (30) [20]"}]}
     (tmp_path / "cache.json").write_text(json.dumps(cache))
     return dict(os.environ, TERM="xterm-256color", XDG_STATE_HOME=str(state), LANG="en_US.UTF-8",
                 LC_ALL="en_US.UTF-8", LINES="40", COLUMNS="100")
 
 
-def _run(tmp_path, keys: str, focus="mother", env_extra=None):
-    env = _env(tmp_path)
+def _run(tmp_path, keys: str, focus="mother", env_extra=None, content=LONG):
+    env = _env(tmp_path, content)
     env.update(env_extra or {})
     out, timing = tmp_path / "out.json", tmp_path / "timing.log"
     t0 = time.time()
@@ -136,13 +137,28 @@ def _run(tmp_path, keys: str, focus="mother", env_extra=None):
 def test_pty_paints_fast_and_esc_cancels(tmp_path):
     rc, out, stamps, t0, screen = _run(tmp_path, "\x1b")
     assert rc == 2 and not out.exists()
-    for label in ("done so far", "pts done", "min done", "remainder", "[N] pts", "(N) min", "haiku", "name", "notes", "project"):
+    for label in ("DONE SO FAR", "min done", "pts done", "REMAINDER", "(N) min", "[N] pts", "haiku", "name", "COMMON",
+                  "notes", "project"):
         assert label in screen, label
-    # done card on top, then the remainder card
-    assert screen.index("done so far") < screen.index("pts done") < screen.index("remainder") \
-        < screen.index("[N] pts") < screen.index("notes") < screen.index("project")
+    # three sections: DONE SO FAR, REMAINDER, COMMON; name → haiku → min → pts inside
+    assert screen.index("DONE SO FAR") < screen.index("name") < screen.index("haiku") < screen.index("min done") \
+        < screen.index("pts done") < screen.index("REMAINDER") < screen.index("(N) min") < screen.index("[N] pts") \
+        < screen.index("COMMON") < screen.index("notes") < screen.index("project")
     paint = (stamps["edit-form-paint"] - t0) * 1000
     assert paint < 200, f"form took {paint:.0f} ms from exec to first paint"
+
+
+def test_pty_sections_are_separated_by_a_blank_line_and_the_name_wraps(tmp_path):
+    long = "write the quarterly planning memo for the whole org and the regional leads (30) [20]"
+    rc, out, _, _, screen = _run(tmp_path, "\x1b", content=long)
+    assert rc == 2
+    lines = screen.splitlines()
+    # rendered via cursor addressing: find the rows by their labels
+    import re as _re
+    rows = {}
+    for m in _re.finditer(r"(DONE SO FAR|REMAINDER|COMMON|min done|\(N\) min|project)", screen):
+        rows.setdefault(m.group(1), m.start())
+    assert rows["DONE SO FAR"] < rows["min done"] < rows["REMAINDER"] < rows["(N) min"] < rows["COMMON"] < rows["project"]
 
 
 def test_pty_ctrl_c_cancels_with_rc_2(tmp_path):
@@ -150,46 +166,47 @@ def test_pty_ctrl_c_cancels_with_rc_2(tmp_path):
     assert rc == 2 and not out.exists()
 
 
-def test_pty_ctrl_p_done_card_drives_the_remainder_and_ctrl_s_saves(tmp_path):
-    # pts done 15 / min done 20 → the remainder's [N] pts 5 / (N) min 10 fill
-    # themselves; both names and haikus are prefilled from the task
-    rc, out, _, _, screen = _run(tmp_path, "15\t20\x13", focus="split")
+def test_pty_ctrl_p_done_section_drives_the_remainder_and_ctrl_s_saves(tmp_path):
+    # ctrl-p lands on the done name (prefilled); Tab → min done 20, Tab → pts
+    # done 15 → the remainder's (N) min 10 / [N] pts 5 fill themselves
+    rc, out, _, _, screen = _run(tmp_path, "\t20\t15\x13", focus="split")
     assert rc == 0
     j = json.loads(out.read_text())
     assert j["split"] == {"pts": 15, "minutes": 20, "name": "write the quarterly planning memo for the whole org",
-                          "short": "Quarterly memo"}
+                          "short": ""}
     assert j["points"] == "5" and j["time"] == "10"
     assert j["name"] == "write the quarterly planning memo for the whole org"
-    assert j["short"] == "Quarterly memo" and j["desc"] == "old notes"
+    assert j["desc"] == "old notes"
 
 
-def test_pty_short_pane_still_shows_the_remainder_card(tmp_path):
-    rc, out, _, _, screen = _run(tmp_path, "15\x13", focus="split", env_extra={"LINES": "18"})
+def test_pty_short_pane_still_shows_every_section(tmp_path):
+    rc, out, _, _, screen = _run(tmp_path, "\t\t15\x13", focus="split", env_extra={"LINES": "22"})
     assert rc == 0
-    assert "remainder" in screen and "[N] pts" in screen and "project" in screen
+    assert "REMAINDER" in screen and "[N] pts" in screen and "project" in screen
     j = json.loads(out.read_text())
     assert j["points"] == "5" and j["time"] == "30"       # min done blank → whole time kept
 
 
 def test_pty_typed_remainder_overrides_the_autofill(tmp_path):
-    # pts done 15 → [N] pts auto 5; ^O jumps to the remainder's [N] pts, override to 8
-    rc, out, _, _, _ = _run(tmp_path, "15\t20\x0f\x15" "8\x13", focus="split")
+    # min done 20 / pts done 15 → remainder auto (10, 5); ^O jumps to the
+    # remainder name, Tab Tab → [N] pts, override to 8
+    rc, out, _, _, _ = _run(tmp_path, "\t20\t15\x0f\t\t\x15" "8\x13", focus="split")
     assert rc == 0
     j = json.loads(out.read_text())
     assert j["points"] == "8" and j["time"] == "10"
 
 
 def test_pty_mother_edit_ctrl_s_saves_from_anywhere(tmp_path):
-    # ctrl-o: focus starts on the remainder's [N] pts (= current, nothing done):
-    # replace 20 → 25, Tab to (N) min, type 45, ^S
-    rc, out, _, _, _ = _run(tmp_path, "\x15" "25\t\x15" "45\x13")
+    # ctrl-o: focus starts on the remainder's name; Tab → (N) min 45, Tab →
+    # [N] pts 25 (= current values, nothing done), ^S
+    rc, out, _, _, _ = _run(tmp_path, "\t\x15" "45\t\x15" "25\x13")
     assert rc == 0
     j = json.loads(out.read_text())
     assert j["points"] == "25" and j["time"] == "45" and j["split"] is None
 
 
 def test_pty_rejects_done_over_total_and_stays_open(tmp_path):
-    rc, out, _, _, screen = _run(tmp_path, "99\x13" "\x1b", focus="split")
+    rc, out, _, _, screen = _run(tmp_path, "\t\t99\x13" "\x1b", focus="split")
     assert rc == 2 and not out.exists()
     assert "pts done 99 > current 20" in screen
 
