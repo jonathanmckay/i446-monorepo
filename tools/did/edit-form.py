@@ -442,8 +442,15 @@ class Form:
         self.autofill()
 
         def header(label):
+            # a full rule with the CAPS label centred (2026-10-21: "more
+            # visual distinction between the sections")
             nonlocal y
-            put(y, 0, f"── {label} " + "─" * max(0, w - len(label) - 5), curses.A_DIM); y += 1
+            lab = f" {label.upper()} "
+            left = max(0, (w - 1 - dwidth(lab)) // 2)
+            put(y, 0, "─" * left, curses.A_DIM)
+            put(y, left, lab, curses.A_BOLD)
+            put(y, left + dwidth(lab), "─" * max(0, w - 1 - left - dwidth(lab)), curses.A_DIM)
+            y += 1
 
         def haiku(text):
             nonlocal y

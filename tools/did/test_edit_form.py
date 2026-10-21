@@ -137,13 +137,13 @@ def _run(tmp_path, keys: str, focus="mother", env_extra=None, content=LONG):
 def test_pty_paints_fast_and_esc_cancels(tmp_path):
     rc, out, stamps, t0, screen = _run(tmp_path, "\x1b")
     assert rc == 2 and not out.exists()
-    for label in ("done so far", "min done", "pts done", "remainder", "(N) min", "[N] pts", "haiku", "name", "common",
+    for label in ("DONE SO FAR", "min done", "pts done", "REMAINDER", "(N) min", "[N] pts", "haiku", "name", "COMMON",
                   "notes", "project"):
         assert label in screen, label
-    # three sections: done so far, remainder, common; name → haiku → min → pts inside
-    assert screen.index("done so far") < screen.index("name") < screen.index("haiku") < screen.index("min done") \
-        < screen.index("pts done") < screen.index("remainder") < screen.index("(N) min") < screen.index("[N] pts") \
-        < screen.index("common") < screen.index("notes") < screen.index("project")
+    # three sections: DONE SO FAR, REMAINDER, COMMON; name → haiku → min → pts inside
+    assert screen.index("DONE SO FAR") < screen.index("name") < screen.index("haiku") < screen.index("min done") \
+        < screen.index("pts done") < screen.index("REMAINDER") < screen.index("(N) min") < screen.index("[N] pts") \
+        < screen.index("COMMON") < screen.index("notes") < screen.index("project")
     paint = (stamps["edit-form-paint"] - t0) * 1000
     assert paint < 200, f"form took {paint:.0f} ms from exec to first paint"
 
@@ -156,9 +156,9 @@ def test_pty_sections_are_separated_by_a_blank_line_and_the_name_wraps(tmp_path)
     # rendered via cursor addressing: find the rows by their labels
     import re as _re
     rows = {}
-    for m in _re.finditer(r"(done so far|remainder|common|min done|\(N\) min|project)", screen):
+    for m in _re.finditer(r"(DONE SO FAR|REMAINDER|COMMON|min done|\(N\) min|project)", screen):
         rows.setdefault(m.group(1), m.start())
-    assert rows["done so far"] < rows["min done"] < rows["remainder"] < rows["(N) min"] < rows["common"] < rows["project"]
+    assert rows["DONE SO FAR"] < rows["min done"] < rows["REMAINDER"] < rows["(N) min"] < rows["COMMON"] < rows["project"]
 
 
 def test_pty_ctrl_c_cancels_with_rc_2(tmp_path):
@@ -182,7 +182,7 @@ def test_pty_ctrl_p_done_section_drives_the_remainder_and_ctrl_s_saves(tmp_path)
 def test_pty_short_pane_still_shows_every_section(tmp_path):
     rc, out, _, _, screen = _run(tmp_path, "\t\t15\x13", focus="split", env_extra={"LINES": "22"})
     assert rc == 0
-    assert "remainder" in screen and "[N] pts" in screen and "project" in screen
+    assert "REMAINDER" in screen and "[N] pts" in screen and "project" in screen
     j = json.loads(out.read_text())
     assert j["points"] == "5" and j["time"] == "30"       # min done blank → whole time kept
 
