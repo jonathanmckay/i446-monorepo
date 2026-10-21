@@ -260,6 +260,7 @@ ONENEON_TO_0FEN: dict[str, str] = {
     "relax {60}": "T", "业写": "R",
     "长冥想": "V", "长o314": "V",
     "groceries": "W",  # hcb (user choice 2026-10-05, first /1n backfill)
+    "1 cal": "T",      # g245 (Todoist label; 2026-10-21 "1 cal didn't give points")
 }
 
 
@@ -1526,10 +1527,16 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                 fen_col = LABEL_TO_0FEN.get(resolved_1n.split()[-1])
             is_cumul = resolved_1n in CUMULATIVE_1N
             is_var = resolved_1n in VARIABLE_1N
-            # 2026-07-27 redesign: the WEEK CELL records MINUTES (explicit
-            # value/range > today's matching Toggl entries > 1); the habit's
-            # POINTS go to today's 0分 domain column instead (row-5 expected
-            # points for standard habits, base+rate×minutes for variable).
+            # 2026-07-27 redesign: the WEEK CELL records MINUTES for
+            # VARIABLE (per-minute) habits (explicit value/range > today's
+            # matching Toggl entries > 1); a STANDARD habit is not time-
+            # dependent, so its cell is a 1 (2026-10-21: "1 cal" with a 12 m
+            # timer had written 12). The habit's POINTS go to today's 0分
+            # domain column instead (row-5 expected points for standard
+            # habits, base+rate×minutes for variable).
+            if fen_col is None:
+                print(f"⚠ {item.name}: 1n+ header matched but no 0分 column is mapped "
+                      f"(ONENEON_TO_0FEN) — its points will NOT be credited", file=sys.stderr)
             threshold = THRESHOLD_1N.get(resolved_1n)
             minutes = None
             if item.time_range:
@@ -1613,7 +1620,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                             fen_col=fen_col,
                             # threshold habits append POINTS to the week cell,
                             # not minutes (the one exception to the redesign)
-                            write_value=(var_val or 1) if threshold else cell_minutes,
+                            write_value=(var_val or 1) if threshold else (cell_minutes if is_var else 1),
                             is_cumulative_1n=is_cumul,
                             cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0),
                             is_variable_1n=is_var,
