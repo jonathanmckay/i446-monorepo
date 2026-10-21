@@ -1421,7 +1421,7 @@ zmodload zsh/datetime 2>/dev/null
 print -- "\$EPOCHREALTIME\tarm-start\t\$#" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 # ctrl-v on a picker row (already armed) = close the picker
 if [[ "\$1" == BLOCK:* ]]; then
-  rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode" "\$BLOCKPICK.days"
+  rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode" "\$BLOCKPICK.days" "\$BLOCKPICK.hint" "\$BLOCKPICK.snoozed"
   echo "↩ back to list" > "\$HDR"
   exit 0
 fi
@@ -1435,19 +1435,28 @@ fi
 [[ -f "\$SNOOZE" ]] || printf '{}' > "\$SNOOZE"
 _out=\$(jq -r --slurpfile sn "\$SNOOZE" --args '
   (now | localtime) as \$lt
-  | (([4,6,8,10,12,14,16,18,20] | map(select(. > \$lt[3])) | length) + 3
-     + (if ((\$sn[0] // {}) | (.date == (\$lt | strftime("%Y-%m-%d")))
+  | (if ((\$sn[0] // {}) | (.date >= (\$lt | strftime("%Y-%m-%d")))
             and ((.snoozes // {}) | keys | any(. as \$k | \$ARGS.positional | index(\$k) != null)))
-        then 1 else 0 end)) as \$n
+        then 1 else 0 end) as \$snz
+  | (([4,6,8,10,12,14,16,18,20] | map(select(. > \$lt[3])) | length) + 3 + \$snz) as \$n
   | \$ARGS.positional[0] as \$id
   | (([.[] | select(type=="array")[] | select(type=="object" and .id == \$id) | .content] | first) // \$id)
   | gsub(" *[(][0-9]*[)]"; "") | gsub(" *[[][0-9]*[]]"; "")
   | gsub(" *[[][0-9.+]*/m[]]"; "") | gsub(" *[{][0-9]*[}]"; "")
   | gsub("  +"; " ") | sub(" *\$"; "") | sub("….*\$"; "")
-  | [\$n, .] | @tsv' "\$@" < "$DTD_CACHE_FILE" 2>/dev/null)
+  | [\$n, ., \$snz] | @tsv' "\$@" < "$DTD_CACHE_FILE" 2>/dev/null)
+# Three fields: n, clean name, snoozed-today (0/1). The date gate is
+# forward-only (>=), matching the list generator's _sn_all; it was == here.
 n="\${_out%%\$'\t'*}"
-clean="\${_out#*\$'\t'}"
-[[ "\$_out" == *\$'\t'* ]] || { n=3; clean="\$1"; }   # jq failed: keep the picker usable
+_rest="\${_out#*\$'\t'}"
+clean="\${_rest%\$'\t'*}"
+_snz="\${_rest##*\$'\t'}"
+[[ "\$_out" == *\$'\t'*\$'\t'* ]] || { n=3; clean="\$1"; _snz=0; }   # jq failed: keep the picker usable
+# $BLOCKPICK.snoozed: read by the list generator's zsh fast path for the
+# "↩ un-delay" row (2026-10-21). Local snooze file only; python's branch
+# also unions the z_ibx cross-host mirrors, so a delay made on another
+# host shows that row only via the python path (never taken while armed).
+if [[ "\$_snz" == 1 ]]; then : > "\$BLOCKPICK.snoozed"; else rm -f "\$BLOCKPICK.snoozed"; fi
 # Reset any mouse-tracking mode a child enabled (bug 2026-07-05). NO tty
 # drain here (2026-10-21, "ctrl-d doesn't feel instantaneous ... one
 # breath"): the drain's 'read -t 0.05' idled 50 ms on every ctrl-d (two
@@ -1488,7 +1497,7 @@ if [[ "\$glyph" == custom ]]; then
   exit 0
 fi
 ids=(\$(cat "\$BLOCKPICK" 2>/dev/null))
-rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode" "\$BLOCKPICK.days"
+rm -f "\$BLOCKPICK" "\$BLOCKPICK.mode" "\$BLOCKPICK.days" "\$BLOCKPICK.hint" "\$BLOCKPICK.snoozed"
 if [[ "\$glyph" == "cancel" || \${#ids[@]} -eq 0 ]]; then
   echo "↩ back to list" > "\$HDR"
   exit 0
@@ -1665,7 +1674,7 @@ _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}
 acts=""
 if [[ -e "$DTD_BLOCKPICK" ]]; then
   [[ -e "$DTD_BLOCKPICK.custom" ]] && acts="change-prompt(> )+"
-  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days"
+  rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed"
   echo "↩ back to list" > "$DTD_HDR"
 elif [[ -z "\$1" ]]; then
   zmodload zsh/datetime 2>/dev/null
@@ -1809,6 +1818,58 @@ print -- "$EPOCHREALTIME\tlist-start\t" >> "$_tl" 2>/dev/null
 # expanded window kept launch-width "…" truncation forever). $5 stays as the
 # cold-start fallback for the first pipe into fzf and scripted callers.
 [[ -n "$FZF_COLUMNS" ]] && argv[5]="$FZF_COLUMNS"
+# ── Schedule screen (ctrl-d/v/k armed): zsh builtins only (2026-10-21) ──
+# The picker rows are a pure function of the arm files + the clock, and the
+# python below spends ~34 ms starting up and ~28 ms loading the cache before
+# reaching its BLOCK-PICKER branch -- the single largest slice of the ~210 ms
+# from ctrl-d to the screen painting. So render them here, byte-identical
+# to python's branch (which stays as the reference; test_dtd_picker_fastpath
+# diffs the two across a 24-TZ hour sweep), and exit before python.
+# Inputs: $9 (armed ids, non-empty), $9.mode ('days' = day rows first),
+# $9.days (typed digit query: that one day row only), $9.snoozed (touched by
+# the arm script when an armed id is already delayed today: un-delay row).
+if [[ -n "$9" && -s "$9" ]]; then
+  _bp="$9"
+  unset LC_ALL; LC_TIME=C   # python's strftime is C-locale; zsh's honours LC_*
+  _G=$'\x1b[38;2;152;195;121m'; _O=$'\x1b[38;2;255;138;61m'; _C=$'\x1b[38;2;97;175;239m'
+  _Y=$'\x1b[38;2;139;150;163m'; _R=$'\x1b[0m'; _T=$'\t'
+  _mode=""; [[ -r "$_bp.mode" ]] && _mode="$(<"$_bp.mode")"; _mode="${_mode//[[:space:]]/}"
+  _dq="";   [[ -r "$_bp.days" ]] && _dq="$(<"$_bp.days")";   _dq="${_dq//[[:space:]]/}"
+  if [[ "$_dq" == <-> ]]; then
+    if (( _dq == 0 )); then
+      print -r -- "${_G}↻ 0 / next occurrence / one day${_R}${_T}BLOCK:d0"
+    else
+      # Calendar days, anchored at local noon, so a DST change inside the
+      # span can't shift the date (epoch + n*86400 can: Nov 1 00:30 + 1 day
+      # lands on Nov 1 23:30).
+      strftime -s _today '%Y-%m-%d' $EPOCHSECONDS
+      strftime -r -s _noon '%Y-%m-%d %H' "$_today 12"
+      strftime -s _when '%a %b %-d' $(( _noon + _dq * 86400 ))
+      print -r -- "${_G}📅 ${_dq}天 → ${_when}${_R}${_T}BLOCK:d${_dq}"
+    fi
+    print -- "$EPOCHREALTIME\tlist-end\t" >> "$_tl" 2>/dev/null
+    exit 0
+  fi
+  _days=("${_G}↻ 0 / next occurrence / one day${_R}${_T}BLOCK:dauto"
+         "${_G}📅 1天${_R}${_T}BLOCK:d1"
+         "${_G}📅 2天${_R}${_T}BLOCK:d2"
+         "${_G}📅 7天${_R}${_T}BLOCK:d7"
+         "${_G}✎ delay N days: type a number…${_R}${_T}BLOCK:custom")
+  [[ "$_mode" == days ]] && print -rl -- "${_days[@]}"
+  print -r -- "${_C}⏱ delay 10 minutes${_R}${_T}BLOCK:+10m"
+  print -r -- "${_C}⏱ delay 30 minutes${_R}${_T}BLOCK:+30m"
+  print -r -- "${_C}⏱ delay 1 hour${_R}${_T}BLOCK:+1h"
+  strftime -s _hr '%H' $EPOCHSECONDS; _hr=${_hr#0}
+  for _row in "卯 mao 4" "辰 chen 6" "巳 si 8" "午 wu 10" "未 wei 12" "申 shen 14" "酉 you 16" "戌 xu 18" "亥 hai 20"; do
+    _f=(${=_row})
+    (( _f[3] > _hr )) && printf '%s⏰ %s  %-5s %02d:00–%02d:59%s\tBLOCK:%s\n' "$_O" "$_f[1]" "$_f[2]" "$_f[3]" "$(( _f[3] + 1 ))" "$_R" "$_f[1]"
+  done
+  [[ "$_mode" != days ]] && print -rl -- "${_days[@]}"
+  [[ -e "$_bp.snoozed" ]] && print -r -- "${_Y}↩ un-delay — show again now${_R}${_T}BLOCK:now"
+  print -r -- "${_Y}✗ cancel${_R}${_T}BLOCK:cancel"
+  print -- "$EPOCHREALTIME\tlist-end\t" >> "$_tl" 2>/dev/null
+  exit 0
+fi
 python3 -c "
 import json, sys, re, time
 
@@ -2695,14 +2756,39 @@ print -rn -- "\$q" > "$DTD_QUERY" 2>/dev/null   # live query for the done/defer 
 # see the enter router): say so in the header as you type (2026-10-04).
 if [[ -s "$DTD_BLOCKPICK" ]]; then
   _n="\${q// /}"
+  # Header push (2026-10-21): there is no result: transform any more (it was
+  # a synchronous spawn on every keystroke), so this script, which already
+  # runs per keystroke, pushes the hint over the listen port itself in the
+  # same shape hdrgen prints (text, three spaces, the key legend). The arm
+  # script's '📅 schedule …' line is saved to .hint on the first digit and
+  # restored (one POST, not one per keystroke) when the query stops being
+  # digits. This block sits ABOVE the .days early exit below on purpose.
+  _hport="\$(cat "$DTD_PORT" 2>/dev/null)"
+  _push_hdr() {   # \$1 = header text (no newlines)
+    [[ -z "\$_hport" ]] && return 0
+    if [[ -n "\$FZF_API_KEY" ]]; then
+      curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$_hport" --data-binary "change-header:\$1   \$DTD_KEYS" >/dev/null 2>&1
+    else
+      curl -s -XPOST "localhost:\$_hport" --data-binary "change-header:\$1   \$DTD_KEYS" >/dev/null 2>&1
+    fi
+  }
   if [[ "\$_n" == <-> ]]; then
     zmodload zsh/datetime 2>/dev/null
+    [[ -e "$DTD_BLOCKPICK.hint" ]] || cp "$DTD_HDR" "$DTD_BLOCKPICK.hint" 2>/dev/null || : > "$DTD_BLOCKPICK.hint"
     if (( _n == 0 )); then
-      echo "↵ delay 0 days → next occurrence (recurring) / one day (one-off)" > "$DTD_HDR"
+      _hint="↵ delay 0 days → next occurrence (recurring) / one day (one-off)"
     else
-      strftime -s _d '%a %b %-d' \$(( EPOCHSECONDS + _n * 86400 ))
-      echo "↵ delay \$_n day\$( (( _n == 1 )) || print -n s) → \$_d" > "$DTD_HDR"
+      # Calendar days anchored at local noon (DST-safe; was EPOCHSECONDS + n*86400).
+      strftime -s _today '%Y-%m-%d' \$EPOCHSECONDS
+      strftime -r -s _noon '%Y-%m-%d %H' "\$_today 12"
+      LC_TIME=C strftime -s _d '%a %b %-d' \$(( _noon + _n * 86400 ))
+      _hint="↵ delay \$_n day\$( (( _n == 1 )) || print -n s) → \$_d"
     fi
+    print -r -- "\$_hint" > "$DTD_HDR"
+    _push_hdr "\$_hint"
+  elif [[ -e "$DTD_BLOCKPICK.hint" ]]; then
+    cat "$DTD_BLOCKPICK.hint" > "$DTD_HDR" 2>/dev/null; rm -f "$DTD_BLOCKPICK.hint"
+    _push_hdr "\$(<"$DTD_HDR")"
   fi
   # A bare number means DAYS, never a time (2026-10-05: "4" fuzzy-matched the
   # 14:00 申 row and Enter on it looked like the default). While the query is
@@ -3739,26 +3825,26 @@ while true; do
       --header="$DTD_KEYS" \
       --bind "start:execute-silent(echo \$FZF_PORT > $DTD_PORT)" \
       --bind "load:transform-header($DTD_HDRGEN)+transform-footer($DTD_HDRGEN footer)" \
-      $( : "result: header only (2026-10-21). The footer reads FZF_TOTAL_COUNT, which only changes on load; running it on every query change was one more synchronous spawn per keystroke and per reload" ) \
-      --bind "result:transform-header($DTD_HDRGEN)" \
+      $( : "no result: binding (2026-10-21). It re-ran the header script on every keystroke and after every reload, a synchronous spawn each time; the only header that depends on the query is the schedule screen's '↵ delay N days' hint, which domainsearch now pushes itself over the listen port. Header writes from action scripts still repaint via their binding's transform-header or the load event after a reload" ) \
       --delimiter=$'\t' --with-nth=1 \
       --bind "change:first+execute-silent($DTD_DOMAINSEARCH {q})" \
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
+      $( : "ctrl-d/v/k end at clear-query (2026-10-21): reload-sync is followed by the load event, whose transform-header already repaints the arm script's '📅 schedule' line; the explicit one was a second spawn for the same text" ) \
       --bind "ctrl-o:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "esc:transform($DTD_BACK {q})" \
       --bind "ctrl-c:transform($DTD_BACK {q})" \
       --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "ctrl-x:select+execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-p:execute(DTD_SPLIT_SEED=1 $DTD_EDIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "alt-up:select+execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-k:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-k:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-l:execute-silent(python3 $DTD_OPEN_LINK {2} $DTD_CACHE_FILE $DTD_HDR)+transform-header($DTD_HDRGEN)" \
@@ -3904,4 +3990,4 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"

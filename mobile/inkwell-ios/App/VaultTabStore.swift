@@ -24,6 +24,12 @@ final class VaultTabStore: ObservableObject {
     private var landingFetchedAt: TimeInterval = 0
 
     private var lastSyncMonotonic: TimeInterval = 0
+    /// A sync asked for while one was running (2026-10-21: the post-save
+    /// pass used to be dropped silently, so a put sat in the outbox for
+    /// hours until the next foreground). One follow-up pass, force OR'd.
+    private var rerunPending = false
+    private var rerunForce = false
+    private var syncTask: Task<Void, Never>? = nil
 
     init() {
         // A broken database must not take the whole app down: fall back to a
@@ -68,14 +74,16 @@ final class VaultTabStore: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         guard force || now - landingFetchedAt > 60 else { return }
         landingFetchedAt = now
-        Task {
-            if case .ok(let f) = await api.file(path) {
-                let e = ManifestEntry(p: path, m: Int(Date().timeIntervalSince1970), s: f.body.utf8.count,
-                                      h: f.manifestSha.isEmpty ? f.sha : f.manifestSha)
-                try? store.upsert(e, body: f.body, sha: f.sha)
-                refreshCounts()
-                landingVersion += 1
-            }
+        Task { await fetchLandingNow(path) }
+    }
+
+    private func fetchLandingNow(_ path: String) async {
+        if case .ok(let f) = await api.file(path) {
+            let e = ManifestEntry(p: path, m: Int(Date().timeIntervalSince1970), s: f.body.utf8.count,
+                                  h: f.manifestSha.isEmpty ? f.sha : f.manifestSha)
+            try? store.upsert(e, body: f.body, sha: f.sha)
+            refreshCounts()
+            landingVersion += 1
         }
     }
 
@@ -85,6 +93,27 @@ final class VaultTabStore: ObservableObject {
     func refreshLanding(_ path: String) {
         if store.pendingTargets().contains(path) { runSync(force: true); return }
         fetchLanding(path, force: true)
+    }
+
+    /// Pull-to-refresh (2026-10-21): same as refreshLanding, but awaitable so
+    /// the spinner ends when the text has actually been reconciled.
+    func refresh(_ path: String) async {
+        guard VaultConfig.hasToken else { return }
+        if store.pendingTargets().contains(path) {
+            runSync(force: true)
+            await awaitSync()
+        } else {
+            landingFetchedAt = ProcessInfo.processInfo.systemUptime
+            await fetchLandingNow(path)
+        }
+    }
+
+    /// Waits for the running pass and any follow-up it queued.
+    func awaitSync() async {
+        while let t = syncTask {
+            await t.value
+            if syncTask == t { break }
+        }
     }
 
     /// Foreground hook: cheap when nothing changed (one 304).
@@ -100,8 +129,12 @@ final class VaultTabStore: ObservableObject {
 
     /// Full-text edit of an allow-listed note (new-notes): local copy first
     /// (instant, offline), one coalesced put in the outbox, sync shortly after.
-    func saveNote(_ path: String, text: String) {
-        let base = store.sha(path)
+    /// `baseSha` is the server version the editor's buffer derives from: the
+    /// EDITOR owns it (2026-10-21), because the store row under it is
+    /// rewritten by syncs and a base read from there could name a version the
+    /// buffer never saw, which the server would then overwrite as a clean put.
+    func saveNote(_ path: String, text: String, baseSha: String?) {
+        let base = (baseSha?.isEmpty ?? true) ? nil : baseSha
         let e = ManifestEntry(p: path, m: Int(Date().timeIntervalSince1970), s: text.utf8.count,
                               h: base ?? "")   // keep the base sha until the server confirms
         try? store.upsert(e, body: text, sha: base ?? "")
@@ -117,14 +150,15 @@ final class VaultTabStore: ObservableObject {
     private var saveDebounce: Task<Void, Never>? = nil
 
     func runSync(force: Bool) {
-        guard !syncing, VaultConfig.hasToken else { return }
+        guard VaultConfig.hasToken else { return }
+        if syncing { rerunPending = true; rerunForce = rerunForce || force; return }
         syncing = true
         progress = nil
         sync.progress = { [weak self] d, t in Task { @MainActor in self?.progress = (d, t) } }
         // Background priority (2026-10-20: "indexing in the background"): the
         // manifest is one 304 when nothing changed, only changed files are
         // fetched (sha diff in VaultStore.plan), FTS is per-file on upsert.
-        Task(priority: .background) {
+        syncTask = Task(priority: .background) {
             let r = await sync.run(force: force)
             lastReport = r
             lastSyncMonotonic = ProcessInfo.processInfo.systemUptime
@@ -132,6 +166,15 @@ final class VaultTabStore: ObservableObject {
             syncing = false
             progress = nil
             refreshCounts()
+            landingVersion += 1   // a put may have come back merged
+            if rerunPending {
+                rerunPending = false
+                let f = rerunForce
+                rerunForce = false
+                runSync(force: f)
+            } else {
+                syncTask = nil
+            }
         }
     }
 
@@ -154,8 +197,11 @@ final class VaultTabStore: ObservableObject {
             var block = cur.isEmpty || cur.hasSuffix("\n\n") ? "" : (cur.hasSuffix("\n") ? "\n" : "\n\n")
             if !cur.split(separator: "\n").contains(where: { $0.trimmingCharacters(in: .whitespaces) == day }) { block += day + "\n" }
             block += body + "\n"
-            let e = ManifestEntry(p: t, m: Int(Date().timeIntervalSince1970), s: (cur + block).utf8.count, h: "local-" + UUID().uuidString)
-            try? store.upsert(e, body: cur + block, sha: e.h)
+            // Keep the server sha the text derives from (not a made-up one):
+            // it is the base a later full-text edit will be merged against.
+            let keep = store.sha(t) ?? ""
+            let e = ManifestEntry(p: t, m: Int(Date().timeIntervalSince1970), s: (cur + block).utf8.count, h: keep)
+            try? store.upsert(e, body: cur + block, sha: keep)
             landingVersion += 1
         }
         refreshCounts()
@@ -172,6 +218,8 @@ final class VaultTabStore: ObservableObject {
     func recent() -> [DirEntry] { store.recent(limit: 60) }
     func search(_ q: String) -> [SearchHit] { store.search(q) }
     func read(_ path: String) -> String? { store.read(path) }
+    /// Server sha the local copy derives from ("" after an unconfirmed edit).
+    func sha(_ path: String) -> String? { store.sha(path) }
     func resolve(_ target: String) -> String? { store.resolve(wikilink: target) }
     func captures() -> [Capture] { store.captures(limit: 50) }
 

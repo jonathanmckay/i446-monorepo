@@ -248,23 +248,23 @@ struct CaptureSheet: View {
 
 
 /// new-notes, editable like a regular note (2026-10-20). Edits save locally
-/// as you type (debounced) and reach ix as one full-text put; the server
-/// keeps a conflict copy if the file moved on meanwhile. Server changes are
-/// pulled in only while the editor is not dirty.
+/// as you type (debounced) and reach ix as one full-text put carrying the sha
+/// of the server version this buffer derives from; if the file moved on
+/// meanwhile the server three-way merges and sends the result back. Server
+/// changes are adopted only while the editor is not dirty. Pull down to
+/// refresh (2026-10-21): flushes a dirty buffer first, then reconciles.
 struct NoteEditor: View {
     @ObservedObject var store: VaultTabStore
     let path: String
     @State private var text = ""
     @State private var saved = ""
+    @State private var baseSha = ""
     @State private var loaded = false
     @State private var debounce: Task<Void, Never>? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            TextEditor(text: $text)
-                .font(Theme.mono).foregroundStyle(Theme.fg)
-                .scrollContentBackground(.hidden)
-                .background(Theme.bg)
+            RefreshableTextEditor(text: $text, onRefresh: { await refresh() })
                 .padding(.horizontal, 8)
                 .onChange(of: text) { _, new in
                     guard loaded, new != saved else { return }
@@ -272,8 +272,7 @@ struct NoteEditor: View {
                     debounce = Task {
                         try? await Task.sleep(for: .milliseconds(900))
                         guard !Task.isCancelled else { return }
-                        saved = new
-                        store.saveNote(path, text: new)
+                        save(new)
                     }
                 }
             HStack {
@@ -281,7 +280,7 @@ struct NoteEditor: View {
                 Spacer()
                 Text(text == saved ? (store.pendingCount > 0 ? "saved · sending…" : "saved") : "editing…")
                     .font(Theme.monoSmall).foregroundStyle(Theme.dim)
-                Button { store.refreshLanding(path) } label: {
+                Button { Task { await refresh() } } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(Theme.monoSmall).foregroundStyle(Theme.accent)
                 }
@@ -290,11 +289,28 @@ struct NoteEditor: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 6)
         }
-        .onAppear { if !loaded { text = store.read(path) ?? ""; saved = text; loaded = true } }
+        .onAppear { if !loaded { adopt(); loaded = true } }
         .onChange(of: store.landingVersion) { _, _ in
-            // Server copy changed (fetchLanding / sync): take it only if we have
-            // nothing unsent, so a local edit is never clobbered.
-            if text == saved, let t = store.read(path), t != text { text = t; saved = t }
+            // Server copy changed (fetch / sync / a put came back merged): take
+            // it only if we have nothing unsent, so a local edit is never
+            // clobbered. The base moves with it.
+            if text == saved { adopt() }
         }
+    }
+
+    private func adopt() {
+        baseSha = store.sha(path) ?? baseSha
+        if let t = store.read(path), t != text { text = t; saved = t }
+    }
+
+    private func save(_ new: String) {
+        saved = new
+        store.saveNote(path, text: new, baseSha: baseSha)
+    }
+
+    private func refresh() async {
+        debounce?.cancel()
+        if text != saved { save(text) }
+        await store.refresh(path)
     }
 }

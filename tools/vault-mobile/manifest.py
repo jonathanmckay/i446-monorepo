@@ -296,6 +296,12 @@ class ManifestService:
         m, _ = self.get()
         return {f["p"]: f for f in m["files"]}
 
+    def invalidate(self) -> None:
+        """A write just changed the subset: rebuild on the next request
+        instead of advertising the old sha for up to `ttl` seconds."""
+        with self._lock:
+            self._built_at = 0.0
+
 
 if __name__ == "__main__":  # quick CLI: python3 manifest.py [vault]
     import sys

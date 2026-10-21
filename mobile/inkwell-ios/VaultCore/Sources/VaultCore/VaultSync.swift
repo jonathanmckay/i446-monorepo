@@ -85,9 +85,17 @@ public final class VaultSync {
     public func flushOutbox(_ r: inout SyncReport) async {
         for c in store.pending() {
             switch await api.drop(c) {
-            case .ok(let path, _):
+            case .ok(let path, _, let sha, let body):
                 store.markSent(c.id, path: path)
                 r.captures += 1
+                // An in-place edit comes back as the server left it (merged if
+                // the desktop had moved on): adopt it now rather than after the
+                // next manifest pass. Not while a NEWER put for the same file
+                // is still queued: that text supersedes this one.
+                if let t = c.target, let sha = sha, let body = body, !store.pendingTargets().contains(t) {
+                    let e = ManifestEntry(p: t, m: Int(Date().timeIntervalSince1970), s: body.utf8.count, h: sha)
+                    try? store.upsert(e, body: body, sha: sha)
+                }
             case .rejected(let why):
                 store.markFailed(c.id, error: "rejected: \(why)")
                 r.capturesFailed += 1
