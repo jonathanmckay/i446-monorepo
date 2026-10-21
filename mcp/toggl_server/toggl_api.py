@@ -12,6 +12,14 @@ from pathlib import Path
 from . import throttle
 from .config import TOGGL_API_KEY, TOGGL_WORKSPACE_ID
 
+# Settled history comes from JM's own store of entries (2026-10-21): any
+# get_entries range that ends before the store's settled day (yesterday, once
+# the nightly Ix sync has run) is answered from ~/vault/i156/toggl.sqlite via
+# lib/toggl_store, with no Toggl request at all. Ranges that touch today
+# stay live. TOGGL_LIVE=1 forces live; tests point STORE_PATH at nothing.
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+STORE_PATH = Path(os.environ.get("TOGGL_DB") or (Path.home() / "vault" / "i156" / "toggl.sqlite"))
+
 BASE_URL = "https://api.track.toggl.com/api/v9"
 # One line per HTTP call (ts, pid, program, method, path, status, quota
 # remaining / resets-in). The only way to answer "who spent the hourly
@@ -371,6 +379,9 @@ def get_entries(start_date=None, end_date=None, include_running=True):
     today = datetime.now(tz).date()
     start = _date_part(start_date, today)
     end_excl = _date_part(end_date, start + timedelta(days=1))
+    stored = _from_store(start, end_excl - timedelta(days=1))
+    if stored is not None:
+        return stored
     s_iso = datetime.combine(start, datetime.min.time(), tzinfo=tz).isoformat()
     e_iso = datetime.combine(end_excl, datetime.min.time(), tzinfo=tz).isoformat()
     from urllib.parse import quote
@@ -378,6 +389,23 @@ def get_entries(start_date=None, end_date=None, include_running=True):
     if not include_running:
         entries = [e for e in entries if (e.get("duration") or 0) >= 0 and e.get("stop")]
     return entries
+
+
+def _from_store(start, end_incl):
+    """Entries from the local store when it settles the whole range, else None
+    (the caller then goes live). Never raises: a missing or unreadable store
+    simply means live."""
+    try:
+        import toggl_store
+    except ImportError:
+        return None
+    try:
+        if not toggl_store.covers(start, end_incl, STORE_PATH):
+            return None
+        return toggl_store.entries(start, end_incl, STORE_PATH)
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN toggl store read failed, going live: {e}", file=sys.stderr)
+        return None
 
 
 PROJECTS_CACHE = Path.home() / ".cache" / "toggl-projects.json"

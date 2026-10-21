@@ -542,6 +542,12 @@ def load_points_all():
 
 
 _TOGGL_DAILY_CACHE_PATH = Path(__file__).parent / ".toggl-daily-cache.json"
+# Days re-read live on top of the daily cache for freshness. The cache is an
+# export of the entries store (tools/toggl-db, complete through yesterday
+# after the 05:10 Ix sync), so the live tail only has to cover today and a
+# safety day or two (2026-10-21; was the only reason a multi-week v9 fetch
+# ran on every dashboard load).
+TOGGL_CACHE_TAIL_DAYS = 3
 
 
 def load_toggl_daily_cache():
@@ -640,12 +646,11 @@ def _build_weekly_data(n_weeks=8, offset=0):
 
     points_all = load_points_all()
     days_span = (window_last_day - first_week_start).days + 2
+    toggl_all, _ = load_toggl_daily_cache()
     if offset == 0:
-        toggl_all = load_toggl_range(days_span)
-    else:
-        # Older windows: the v9 live endpoint can't reach back, so use the
-        # persistent daily cache (backfill_toggl_cache.py) instead.
-        toggl_all, _ = load_toggl_daily_cache()
+        # Current window: the daily cache plus a short live tail for today
+        # (2026-10-21; was one multi-week live v9 fetch per load).
+        toggl_all = {**toggl_all, **load_toggl_range(TOGGL_CACHE_TAIL_DAYS)}
 
     week_starts = [first_week_start + timedelta(weeks=i) for i in range(n_weeks)]
     week_labels = [ws.strftime("%-m/%-d") for ws in week_starts]
@@ -1064,7 +1069,6 @@ def _build_granular_chart_data(granularity, offset=0):
     # point-in-time snapshot, so the last few days are overlaid with a live v9
     # fetch (fast, and within v9's ~90-day floor) for freshness — same
     # refetch-tail pattern as load_tasks_data's _TASKS_REFETCH_TAIL.
-    TOGGL_CACHE_TAIL_DAYS = 3
     toggl_all, toggl_counts = load_toggl_daily_cache()
     if offset == 0:
         live_minutes, live_counts = load_toggl_range(TOGGL_CACHE_TAIL_DAYS, return_counts=True)
