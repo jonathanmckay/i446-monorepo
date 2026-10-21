@@ -374,7 +374,8 @@ def _main_fields(argv: list[str]) -> int:
                 new.pop("short", None)
             if j.get("split"):
                 new["split"] = {"pts": int(j["split"]["pts"]), "name": j["split"].get("name") or "",
-                                "minutes": j["split"].get("minutes")}
+                                "minutes": j["split"].get("minutes"),
+                                "rem_pts": j["split"].get("rem_pts"), "rem_min": j["split"].get("rem_min")}
         elif rest[i] in flags:
             new[flags[rest[i]]] = rest[i + 1]
         i += 2
@@ -424,9 +425,11 @@ def _main_fields(argv: list[str]) -> int:
     # done record off the UPDATED task. Hand it the answers as shell
     # assignments on one line; dtd's edit script evals them.
     import shlex
-    mins = split.get("minutes")
+    def _i(k):
+        v = split.get(k)
+        return v if isinstance(v, int) else ""
     print(f"SPLIT pts={split['pts']} done_name={shlex.quote(split['name'].replace(chr(10), ' '))}"
-          f" done_min={mins if isinstance(mins, int) else ''}")
+          f" done_min={_i('minutes')} rem_pts={_i('rem_pts')} rem_min={_i('rem_min')}")
     return 0
 
 

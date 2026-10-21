@@ -1769,9 +1769,9 @@ rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/n
 # It owns the header from here.
 _split_line=\$(print -r -- "\$out" | grep '^SPLIT ' | tail -n 1)
 if [[ -n "\$_split_line" ]]; then
-  pts=""; done_name=""; done_min=""
+  pts=""; done_name=""; done_min=""; rem_pts=""; rem_min=""
   eval "\${_split_line#SPLIT }"
-  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "" "\$done_min"
+  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "\$rem_pts" "\$done_min" "\$rem_min"
 else
   echo "\${out:-✗ edit failed}" > "\$HDR"
 fi
@@ -3028,7 +3028,7 @@ duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 
 # Was three GUI dialogs (2026-06), three sequential prompts, then one curses
 # form (split-form.py, 2026-10-04); now the answers arrive as arguments.
-pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"; minutes_done="${6:-}"
+pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"; minutes_done="${6:-}"; remaining_min_override="${7:-}"
 [[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "split cancelled" > "$HDR"; exit 0; }
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
@@ -3085,6 +3085,9 @@ remaining_dur = duration
 if minutes_done.isdigit():
     done_dur = minutes_done
     remaining_dur = str(max(0, int(duration) - int(minutes_done))) if duration.isdigit() else ''
+# Minutes remaining typed on the form (14th arg) wins, like the 12th for points.
+if len(sys.argv) > 14 and sys.argv[14].strip().isdigit():
+    remaining_dur = sys.argv[14].strip()
 
 def api(method, path, body=None):
     data = json.dumps(body).encode() if body else None
@@ -3202,7 +3205,7 @@ msg = f'✂ +{pts_today} today / {open_b}{remaining_pts}{close_b} deferred to {t
 if not (didfast_out or {}).get('results'):
     msg = f'⚠ split: {open_b}{pts_today}{close_b} NOT logged (did-fast: no domain) / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
 with open(hdr_file, 'w') as f: f.write(msg)
-" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}" "${minutes_done:-}"
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}"
 print -- "$EPOCHREALTIME\tsplit-bg-end\t$task_id rc=$?" >> "$TIMING" 2>/dev/null
 } </dev/null >> "/tmp/dtd-split.log" 2>&1 &!
 print -- "$EPOCHREALTIME\tsplit-end\t$task_id" >> "$TIMING" 2>/dev/null

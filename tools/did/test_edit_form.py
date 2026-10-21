@@ -53,11 +53,11 @@ def test_prefill_short_title_disables_haiku_and_curly_points_are_read_only(ef):
     assert not p["desc_loaded"] and p["desc"] == ""
 
 
-def test_remainder_tags_are_independent(ef):
-    assert ef.remainder("20", "30", "15", "10") == "[5] (20)"
-    assert ef.remainder("20", "", "15", "") == "[5]"
-    assert ef.remainder("", "30", "15", "40") == "[?] (0)"
-    assert ef.remainder("20", "30", "", "") == ""
+def test_remainder_values_are_independent(ef):
+    assert ef.remainder("20", "30", "15", "10") == ("5", "20")
+    assert ef.remainder("20", "", "15", "") == ("5", "")
+    assert ef.remainder("", "30", "15", "40") == ("", "0")
+    assert ef.remainder("20", "30", "", "") == ("", "")
 
 
 def test_validate_numbers_and_bounds(ef):
@@ -76,7 +76,9 @@ def test_result_shapes_the_edit_fast_payload(ef):
             "done_pts": "15", "done_min": "", "done_name": "drafted  it"}
     r = ef.result(vals)
     assert r["name"] == "memo" and r["domain"] == "i9" and r["desc"] == "a\nb"
-    assert r["split"] == {"pts": 15, "minutes": None, "name": "drafted it"}
+    assert r["split"] == {"pts": 15, "minutes": None, "name": "drafted it", "rem_pts": None, "rem_min": None}
+    vals.update(rem_pts="5", rem_min="12")
+    assert ef.result(vals)["split"]["rem_pts"] == 5 and ef.result(vals)["split"]["rem_min"] == 12
     vals.update(short_enabled=False, desc_loaded=False, done_pts="", points_curly=True)
     r = ef.result(vals)
     assert r["short"] == "" and r["desc"] is None and r["split"] is None and r["points"] == ""
@@ -133,7 +135,8 @@ def _run(tmp_path, keys: str, focus="mother"):
 def test_pty_paints_fast_and_esc_cancels(tmp_path):
     rc, out, stamps, t0, screen = _run(tmp_path, "\x1b")
     assert rc == 2 and not out.exists()
-    for label in ("[N] pts", "(N) min", "haiku", "name", "notes", "project", "done so far", "pts done", "min done", "done as"):
+    for label in ("[N] pts", "(N) min", "haiku", "name", "notes", "project", "done so far", "pts done", "min done",
+                  "done as", "rem pts", "rem min"):
         assert label in screen, label
     assert screen.index("[N] pts") < screen.index("haiku") < screen.index("name ") < screen.index("notes") \
         < screen.index("project") < screen.index("done so far")
@@ -146,12 +149,23 @@ def test_pty_ctrl_c_cancels_with_rc_2(tmp_path):
     assert rc == 2 and not out.exists()
 
 
-def test_pty_ctrl_p_focus_split_and_enter_on_last_saves(tmp_path):
-    rc, out, _, _, _ = _run(tmp_path, "15\t20\tdrafted it\r", focus="split")
+def test_pty_ctrl_p_focus_split_remainder_autofills_and_enter_on_last_saves(tmp_path):
+    # pts done 15 / min done 20 → rem pts 5 / rem min 10 fill themselves; Enter
+    # walks through done as, rem pts, rem min (the last field) and saves
+    rc, out, _, _, screen = _run(tmp_path, "15\t20\tdrafted it\r\r\r", focus="split")
     assert rc == 0
     j = json.loads(out.read_text())
-    assert j["split"] == {"pts": 15, "minutes": 20, "name": "drafted it"}
+    assert j["split"] == {"pts": 15, "minutes": 20, "name": "drafted it", "rem_pts": 5, "rem_min": 10}
     assert j["points"] == "20" and j["time"] == "30" and j["short"] == "Quarterly memo" and j["desc"] == "old notes"
+    assert "rem pts" in screen and "rem min" in screen
+
+
+def test_pty_typed_remainder_overrides_the_autofill(tmp_path):
+    # pts done 15 → rem pts auto 5; the user overrides rem pts to 8, leaves rem min
+    rc, out, _, _, _ = _run(tmp_path, "15\t20\t\t\x15" "8\x13", focus="split")
+    assert rc == 0
+    j = json.loads(out.read_text())
+    assert j["split"]["rem_pts"] == 8 and j["split"]["rem_min"] == 10
 
 
 def test_pty_mother_edit_ctrl_s_saves_from_anywhere(tmp_path):

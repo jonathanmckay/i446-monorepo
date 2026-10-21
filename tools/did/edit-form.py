@@ -12,9 +12,11 @@ top to bottom:
                            notes  — the Todoist description, multi-line
                            project — the @domain label
     done so far            pts done · min done — carve a done record off the
-                                    task: the remainder keeps total - done
-                                    points and time - done minutes
+                                    task
                            done as — name of the done record (blank = title)
+                           rem pts · rem min — what the remainder keeps:
+                                    fill themselves (total - done) as you
+                                    type, and stay editable (an override)
 
 ctrl-o opens with the cursor on the task; ctrl-p opens on "pts done" (the
 breakoff is the default edit for ctrl-p). Inside the form ^O / ^P jump
@@ -104,22 +106,22 @@ def prefill(task: dict, description: str | None, domains=DOMAINS) -> dict:
     }
 
 
-def remainder(total: str, time_: str, done_pts: str, done_min: str) -> str:
-    """The live '→ remainder' line: tags computed independently."""
-    parts = []
+def remainder(total: str, time_: str, done_pts: str, done_min: str) -> tuple[str, str]:
+    """What the remainder keeps, computed independently: (pts, min) as
+    strings, "" when either side of a subtraction is missing."""
+    pts = mins = ""
     if _INT.match(total or "") and _INT.match(done_pts or ""):
-        parts.append(f"[{max(0, int(total) - int(done_pts))}]")
-    elif done_pts:
-        parts.append("[?]")
+        pts = str(max(0, int(total) - int(done_pts)))
     if _INT.match(time_ or "") and _INT.match(done_min or ""):
-        parts.append(f"({max(0, int(time_) - int(done_min))})")
-    return " ".join(parts)
+        mins = str(max(0, int(time_) - int(done_min)))
+    return pts, mins
 
 
 def validate(vals: dict) -> str | None:
     """None when the form may be saved, else the reason."""
     for k, label in (("points", "[N] points"), ("time", "(N) minutes"),
-                     ("done_pts", "pts done"), ("done_min", "min done")):
+                     ("done_pts", "pts done"), ("done_min", "min done"),
+                     ("rem_pts", "rem pts"), ("rem_min", "rem min")):
         v = (vals.get(k) or "").strip()
         if v and not _INT.match(v) and not (k == "points" and vals.get("points_curly")):
             return f"{label} must be a number"
@@ -147,9 +149,12 @@ def result(vals: dict) -> dict:
     }
     dp = (vals.get("done_pts") or "").strip()
     if dp:
-        out["split"] = {"pts": int(dp),
-                        "minutes": int(vals["done_min"].strip()) if (vals.get("done_min") or "").strip() else None,
-                        "name": " ".join((vals.get("done_name") or "").split())}
+        def _opt(k):
+            v = (vals.get(k) or "").strip()
+            return int(v) if _INT.match(v) else None
+        out["split"] = {"pts": int(dp), "minutes": _opt("done_min"),
+                        "name": " ".join((vals.get("done_name") or "").split()),
+                        "rem_pts": _opt("rem_pts"), "rem_min": _opt("rem_min")}
     return out
 
 
@@ -347,6 +352,8 @@ class Form:
             Field("done_pts", "pts done", "", width=6),
             Field("done_min", "min done", "", width=6),
             Field("done_name", "done as", ""),
+            Field("rem_pts", "rem pts", "", width=6),
+            Field("rem_min", "rem min", "", width=6),
         ]
         self.by = {f.key: f for f in self.fields}
         # ctrl-p lands on the breakoff; ctrl-o on the first task field
@@ -386,6 +393,21 @@ class Form:
     def is_last(self) -> bool:
         return self.focus is self._enabled()[-1]
 
+    def autofill(self) -> None:
+        """rem pts / rem min follow total - done until the user types into
+        them; an emptied field goes back to following."""
+        pts, mins = remainder(self.by["points"].text, self.by["time"].text,
+                              self.by["done_pts"].text, self.by["done_min"].text)
+        for key, val in (("rem_pts", pts), ("rem_min", mins)):
+            f = self.by[key]
+            # an emptied field resumes following once the cursor has left it
+            # (while it is focused, "" is the user mid-edit, not "auto")
+            if f.touched and not f.text.strip() and f is not self.focus:
+                f.touched = False
+            if not f.touched and f.text != val:
+                f.text = val
+                f.cur = len(val)
+
     def values(self) -> dict:
         v = {f.key: f.text for f in self.fields}
         v["points_curly"] = self.pre["points_curly"]
@@ -420,17 +442,16 @@ class Form:
         cursor = self._draw_row(scr, y, [self.by["points"], self.by["time"]], w) or cursor; y += 1
         for key in ("short", "name"):
             c = self._draw_row(scr, y, [self.by[key]], w); cursor = c or cursor; y += 1
-        c, used = self._draw_multiline(scr, y, self.by["desc"], w, max(3, min(6, h - y - 8)))
+        c, used = self._draw_multiline(scr, y, self.by["desc"], w, max(3, min(6, h - y - 9)))
         cursor = c or cursor; y += used
         c = self._draw_row(scr, y, [self.by["domain"]], w); cursor = c or cursor; y += 1
         put(y, 0, "── done so far " + "─" * max(0, w - 16), curses.A_DIM); y += 1
-        c = self._draw_row(scr, y, [self.by["done_pts"], self.by["done_min"]], w)
-        cursor = c or cursor
-        rem = remainder(self.by["points"].text, self.by["time"].text, self.by["done_pts"].text, self.by["done_min"].text)
-        if rem:
-            put(y, 40, f"→ remainder {rem}", curses.A_DIM)
-        y += 1
+        self.autofill()
+        c = self._draw_row(scr, y, [self.by["done_pts"], self.by["done_min"]], w); cursor = c or cursor; y += 1
         c = self._draw_row(scr, y, [self.by["done_name"]], w); cursor = c or cursor; y += 1
+        c = self._draw_row(scr, y, [self.by["rem_pts"], self.by["rem_min"]], w); cursor = c or cursor
+        put(y, 40, "← what the task keeps (auto: total − done; type to override)", curses.A_DIM)
+        y += 1
         legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^O task · ^P done so far"
         put(h - 1, 0, legend, curses.A_REVERSE if self.msg else curses.A_DIM)
         try:
