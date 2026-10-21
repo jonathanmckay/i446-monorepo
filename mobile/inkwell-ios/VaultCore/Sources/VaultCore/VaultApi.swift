@@ -49,7 +49,9 @@ public enum FileResult {
 }
 
 public enum DropResult {
-    case ok(path: String, existing: Bool)
+    /// `sha`/`body`: the file as the server left it after an in-place edit
+    /// (put/append), merged if the base had moved on. nil for a new capture.
+    case ok(path: String, existing: Bool, sha: String? = nil, body: String? = nil)
     case rejected(String)   // 4xx: do not retry the same payload
     case error(String)      // transport / 5xx: retry later
 }
@@ -75,7 +77,12 @@ public final class VaultApi {
 
     private func request(_ path: String, query: [String: String] = [:], method: String = "GET", body: Data? = nil, headers: [String: String] = [:]) -> URLRequest? {
         var comps = URLComponents(string: base() + path)
-        if !query.isEmpty { comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        if !query.isEmpty {
+            comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+            // URLComponents leaves "+" bare in a query; Flask reads a bare "+"
+            // as a space, so every note with "+" in its name 404'd (2026-10-21).
+            if let q = comps?.percentEncodedQuery { comps?.percentEncodedQuery = q.replacingOccurrences(of: "+", with: "%2B") }
+        }
         guard let url = comps?.url else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = method
@@ -137,7 +144,8 @@ public final class VaultApi {
             let json = (try? JSONSerialization.jsonObject(with: rdata)) as? [String: Any] ?? [:]
             switch code {
             case 200, 201:
-                return .ok(path: json["path"] as? String ?? "", existing: json["existing"] as? Bool ?? false)
+                return .ok(path: json["path"] as? String ?? "", existing: json["existing"] as? Bool ?? false,
+                           sha: json["sha"] as? String, body: json["body"] as? String)
             case 400, 413:
                 return .rejected(json["error"] as? String ?? "HTTP \(code)")
             default:

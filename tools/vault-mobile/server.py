@@ -46,6 +46,7 @@ from flask import Flask, Response, abort, g, jsonify, request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from manifest import ManifestService, SubsetTooLarge  # noqa: E402
+from merge3 import merge3  # noqa: E402
 
 VAULT = Path(os.environ.get("VAULT_MOBILE_VAULT", Path.home() / "vault"))
 TOKENS_FILE = Path(os.environ.get("VAULT_MOBILE_TOKENS", Path.home() / ".config" / "vault-mobile" / "tokens.json"))
@@ -58,6 +59,15 @@ CAPTURE_DIR = "z_ibx/phone"
 APPEND_TARGETS = {"z_ibx/new-notes.md"}
 APPEND_LEDGER = Path(os.environ.get("VAULT_MOBILE_APPENDS",
                                     Path.home() / ".config" / "vault-mobile" / "appends.json"))
+# Every version of an APPEND_TARGET this server has served or written, by
+# sha256, so a put whose base has moved on can be three-way merged against
+# the text the phone actually edited (2026-10-21; see merge3.py).
+VERSIONS_DIR = Path(os.environ.get("VAULT_MOBILE_VERSIONS",
+                                   Path.home() / ".cache" / "vault-mobile" / "versions"))
+VERSIONS_KEEP_DAYS = 180
+# One writer at a time for the append targets: Flask is threaded, and a
+# read-modify-write racing another put or append would drop one of them.
+_edit_lock = threading.Lock()
 MAX_BODY = 256 * 1024  # a capture is text; anything bigger is a bug or abuse
 DROP_RATE_PER_MIN = 60
 
@@ -176,6 +186,8 @@ def file():
     import hashlib
 
     sha = hashlib.sha256(data).hexdigest()
+    if rel in APPEND_TARGETS:
+        _snapshot(rel, data, sha)
     resp = Response(data, mimetype="text/markdown; charset=utf-8")
     resp.headers["X-Sha256"] = sha
     resp.headers["X-Manifest-Sha256"] = entry["h"]  # differs if an agent wrote mid-sync; client re-pulls
@@ -254,11 +266,65 @@ def drop():
     return jsonify({"ok": True, "path": f"{CAPTURE_DIR}/{name}", "existing": False}), 201
 
 
-def _append_ledger() -> set:
+def _load_ledger() -> dict:
+    """{"ids": [capture ids applied], "last": {"<device> <target>": sha of
+    the last put that device made}}. Older files were a bare id list."""
     try:
-        return set(json.loads(APPEND_LEDGER.read_text()))
+        j = json.loads(APPEND_LEDGER.read_text())
     except (OSError, ValueError):
-        return set()
+        return {"ids": set(), "last": {}}
+    if isinstance(j, list):
+        return {"ids": set(j), "last": {}}
+    return {"ids": set(j.get("ids", [])), "last": dict(j.get("last", {}))}
+
+
+def _append_ledger() -> set:
+    return _load_ledger()["ids"]
+
+
+def _snapshot(target: str, data: bytes, sha: Optional[str] = None) -> None:
+    """Remember one version of an append target (idempotent, tiny files)."""
+    import hashlib
+    sha = sha or hashlib.sha256(data).hexdigest()
+    d = VERSIONS_DIR / target.replace("/", "__")
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{sha}.md"
+        if not f.exists():
+            f.write_bytes(data)
+    except OSError as e:
+        log.warning("snapshot failed for %s: %s", target, e)
+
+
+def _snapshot_read(target: str, sha: str) -> Optional[bytes]:
+    if not sha:
+        return None
+    f = VERSIONS_DIR / target.replace("/", "__") / f"{sha}.md"
+    try:
+        return f.read_bytes()
+    except OSError:
+        return None
+
+
+def _snapshot_prune(target: str, keep: set) -> None:
+    d = VERSIONS_DIR / target.replace("/", "__")
+    cutoff = time.time() - VERSIONS_KEEP_DAYS * 86400
+    try:
+        for f in d.glob("*.md"):
+            if f.stem not in keep and f.stat().st_mtime < cutoff:
+                f.unlink()
+    except OSError:
+        pass
+
+
+def _snapshot_current() -> None:
+    """At startup, remember the live text of every append target so the
+    phone's current base is known even before its next /file."""
+    for t in APPEND_TARGETS:
+        try:
+            _snapshot(t, (VAULT / t).read_bytes())
+        except OSError:
+            pass
 
 
 def _append(target: str, cid: str, body: str, created: datetime):
@@ -267,6 +333,11 @@ def _append(target: str, cid: str, body: str, created: datetime):
     the file has none for that day. Atomic replace; idempotent on id."""
     if target not in APPEND_TARGETS:
         return jsonify({"error": f"append not allowed: {target}"}), 400
+    with _edit_lock:
+        return _append_locked(target, cid, body, created)
+
+
+def _append_locked(target: str, cid: str, body: str, created: datetime):
     seen = _append_ledger()
     if cid in seen:
         return jsonify({"ok": True, "path": target, "existing": True, "appended": True})
@@ -281,64 +352,98 @@ def _append(target: str, cid: str, body: str, created: datetime):
     if not has_day:
         block += day + "\n"
     block += body.strip() + "\n"
+    import hashlib
+    new_bytes = (cur + block).encode("utf-8")
     tmp = path.with_name("." + path.name + ".tmp")
-    tmp.write_text(cur + block, encoding="utf-8")
+    tmp.write_bytes(new_bytes)
     os.replace(tmp, path)
+    sha = hashlib.sha256(new_bytes).hexdigest()
+    _snapshot(target, new_bytes, sha)
     seen.add(cid)
-    try:
-        APPEND_LEDGER.parent.mkdir(parents=True, exist_ok=True)
-        APPEND_LEDGER.write_text(json.dumps(sorted(seen)))
-    except OSError:
-        pass
-    manifests.invalidate() if hasattr(manifests, "invalidate") else None
+    _save_ledger(seen)
+    manifests.invalidate()
     log.info("append %s -> %s (%d bytes)", g.device, target, len(block))
-    return jsonify({"ok": True, "path": target, "existing": False, "appended": True}), 201
+    return jsonify({"ok": True, "path": target, "existing": False, "appended": True,
+                    "sha": sha, "body": new_bytes.decode("utf-8")}), 201
 
 
 def _put(target: str, cid: str, body: str, base_sha: str, created: datetime):
     """Replace an allow-listed file with the phone's full text (2026-10-20:
     new-notes "editable like regular notes"). The phone sends the sha it
-    started from; if the file moved on since (desktop edit, /notes sort),
-    the server's version is kept as a conflict copy in z_ibx/archive before
-    the phone's text wins -- nothing is ever lost. Idempotent on id."""
+    started from. Same sha, or the sha of this device's own last put (it kept
+    typing across a round trip): plain replace. Otherwise the file moved on
+    (desktop edit, /notes clear) and the server three-way merges base/ours/
+    theirs (2026-10-21, merge3.py), keeping the pre-merge server copy in
+    z_ibx/archive. A base this server never saw falls back to the phone's
+    text winning, again with the archive copy. Idempotent on id."""
     if target not in APPEND_TARGETS:
         return jsonify({"error": f"edit not allowed: {target}"}), 400
-    seen = _append_ledger()
+    with _edit_lock:
+        return _put_locked(target, cid, body, base_sha, created)
+
+
+def _put_locked(target: str, cid: str, body: str, base_sha: str, created: datetime):
+    import hashlib
+    ledger = _load_ledger()
+    seen = ledger["ids"]
     if cid in seen:
         return jsonify({"ok": True, "path": target, "existing": True, "put": True})
-    import hashlib
     path = VAULT / target
-    conflict = None
     try:
         cur = path.read_bytes() if path.exists() else b""
     except OSError as e:
         return jsonify({"error": f"read failed: {e}"}), 500
     cur_sha = hashlib.sha256(cur).hexdigest()
     new_bytes = body.encode("utf-8")
+    last_key = f"{g.device} {target}"
+    out = {"ok": True, "path": target, "existing": False, "put": True}
     if new_bytes == cur:
-        seen.add(cid); _save_ledger(seen)
-        return jsonify({"ok": True, "path": target, "existing": False, "put": True, "unchanged": True})
-    if base_sha and cur and base_sha != cur_sha:
+        seen.add(cid)
+        _save_ledger(seen, ledger["last"])
+        out.update(unchanged=True, sha=cur_sha)
+        return jsonify(out)
+    conflict = None
+    how = ""
+    if cur and base_sha and base_sha != cur_sha and ledger["last"].get(last_key) != cur_sha:
         arc = VAULT / "z_ibx" / "archive" / created.strftime("%Y-%m")
         arc.mkdir(parents=True, exist_ok=True)
         conflict = arc / f"{path.stem}.conflict-{created.strftime('%Y%m%d-%H%M%S')}-{g.device}{path.suffix}"
         conflict.write_bytes(cur)
+        _snapshot(target, cur, cur_sha)
+        base = _snapshot_read(target, base_sha)
+        if base is not None:
+            merged, conflicted = merge3(base.decode("utf-8", "replace"), cur.decode("utf-8", "replace"),
+                                        body, ours_label="ix", theirs_label=g.device)
+            new_bytes = merged.encode("utf-8")
+            out["merged"] = True
+            how = ", merged with conflict markers" if conflicted else ", merged"
+            if conflicted:
+                out["conflicted"] = True
+        else:
+            how = ", base unknown: phone text kept, server copy archived"
     tmp = path.with_name("." + path.name + ".tmp")
     tmp.write_bytes(new_bytes)
     os.replace(tmp, path)
-    seen.add(cid); _save_ledger(seen)
-    log.info("put %s -> %s (%d bytes%s)", g.device, target, len(new_bytes), ", conflict kept" if conflict else "")
-    out = {"ok": True, "path": target, "existing": False, "put": True,
-           "sha": hashlib.sha256(new_bytes).hexdigest()}
+    sha = hashlib.sha256(new_bytes).hexdigest()
+    _snapshot(target, new_bytes, sha)
+    seen.add(cid)
+    ledger["last"][last_key] = sha
+    _save_ledger(seen, ledger["last"])
+    _snapshot_prune(target, set(ledger["last"].values()) | {sha, cur_sha})
+    manifests.invalidate()
+    log.info("put %s -> %s (%d bytes%s)", g.device, target, len(new_bytes), how)
+    out.update(sha=sha, body=new_bytes.decode("utf-8", "replace"))
     if conflict:
         out["conflict"] = str(conflict.relative_to(VAULT))
     return jsonify(out), 201
 
 
-def _save_ledger(seen: set) -> None:
+def _save_ledger(seen: set, last: Optional[dict] = None) -> None:
+    if last is None:
+        last = _load_ledger()["last"]
     try:
         APPEND_LEDGER.parent.mkdir(parents=True, exist_ok=True)
-        APPEND_LEDGER.write_text(json.dumps(sorted(seen)))
+        APPEND_LEDGER.write_text(json.dumps({"ids": sorted(seen), "last": last}))
     except OSError:
         pass
 
@@ -368,6 +473,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "token":
         print(mint_token(sys.argv[2]))
         sys.exit(0)
+    _snapshot_current()
     if len(sys.argv) >= 2 and sys.argv[1] == "tokens":
         for d in load_tokens():
             print(d)

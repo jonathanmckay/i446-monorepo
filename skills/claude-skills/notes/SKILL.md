@@ -105,7 +105,10 @@ Read the frontmatter templates from `h335/d358-d359-meta.md`.
 
 ### Step 5: Clear the inbox
 
-Overwrite `~/vault/z_ibx/new-notes.md` with only the header line:
+Overwrite `~/vault/z_ibx/new-notes.md` with only its header line. Keep the
+file's existing first line verbatim (the user extends it with standing
+instructions, e.g. a `<> ...` note on how to categorize); fall back to the
+canonical line only if the file has no header:
 ```
 note: DO NOT delete this doc when you clean and categorize everything below this heading.
 

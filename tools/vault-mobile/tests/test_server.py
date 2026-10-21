@@ -53,6 +53,7 @@ def vault(tmp_path, monkeypatch):
     monkeypatch.setenv("VAULT_MOBILE_TOKENS", str(tmp_path / "tokens.json"))
     monkeypatch.setenv("VAULT_MOBILE_CACHE", str(tmp_path / "cache.json"))
     monkeypatch.setenv("VAULT_MOBILE_APPENDS", str(tmp_path / "appends.json"))
+    monkeypatch.setenv("VAULT_MOBILE_VERSIONS", str(tmp_path / "versions"))
     for m in ("server", "manifest"):
         sys.modules.pop(m, None)
     import server  # noqa
@@ -165,7 +166,9 @@ def test_drop_with_target_appends_to_new_notes(client, vault):
          "body": "call LR about w225", "target": "z_ibx/new-notes.md"}
     r = client.post("/drop", json=a)
     assert r.status_code == 201, r.data
-    assert r.get_json() == {"ok": True, "path": "z_ibx/new-notes.md", "existing": False, "appended": True}
+    j = r.get_json()
+    assert {k: j[k] for k in ("ok", "path", "existing", "appended")} == {"ok": True, "path": "z_ibx/new-notes.md", "existing": False, "appended": True}
+    assert j["body"] == "inbox header\n\nold block\n\n2026.10.20\ncall LR about w225\n" and len(j["sha"]) == 64
     assert p.read_text() == "inbox header\n\nold block\n\n2026.10.20\ncall LR about w225\n"
     # same day → no second date line; same id → no duplicate
     b = dict(a, id="aaaa1111-0000-0000-0000-000000000002", body="second thought")
@@ -178,28 +181,100 @@ def test_drop_with_target_appends_to_new_notes(client, vault):
     assert r.status_code == 400 and (v / "g245/a.md").read_text() == "alpha"
 
 
-def test_drop_put_replaces_new_notes_and_keeps_conflict_copy(client, vault):
+def test_drop_put_replaces_new_notes_and_merges_a_moved_on_base(client, vault):
     """2026-10-20: the phone edits new-notes in full. Same base sha → plain
-    replace; moved-on base → server copy archived first, phone text wins."""
+    replace. 2026-10-21: a moved-on base is three-way merged against the
+    snapshot of the version the phone edited; the pre-merge server copy is
+    archived; the response carries the final text so the phone adopts it."""
     import hashlib
-    v, _ = vault
+    v, server = vault
     p = v / "z_ibx/new-notes.md"
     p.write_text("header\n\nold\n")
     base = hashlib.sha256(p.read_bytes()).hexdigest()
+    # the phone saw this version through /file → the server remembers it
+    assert client.get("/file", query_string={"p": "z_ibx/new-notes.md"}).status_code == 200
     a = {"id": "bbbb1111-0000-0000-0000-000000000001", "created_at": "2026-10-20T10:00:00",
          "body": "header\n\nold\n\nnew line\n", "target": "z_ibx/new-notes.md", "mode": "put", "base_sha": base}
     r = client.post("/drop", json=a)
     assert r.status_code == 201, r.data
-    assert r.get_json()["put"] is True and "conflict" not in r.get_json()
+    j = r.get_json()
+    assert j["put"] is True and "conflict" not in j and "merged" not in j
+    assert j["sha"] == hashlib.sha256(b"header\n\nold\n\nnew line\n").hexdigest() and j["body"] == a["body"]
     assert p.read_text() == "header\n\nold\n\nnew line\n"
     assert client.post("/drop", json=a).status_code == 200          # idempotent
-    # desktop edited meanwhile → the phone's stale base: archive, then replace
-    p.write_text("header\n\ndesktop edit\n")
-    b = dict(a, id="bbbb1111-0000-0000-0000-000000000002", body="phone text\n")
+    # manifest advertises the new sha at once (no 30 s TTL lag)
+    m = client.get("/manifest").get_json()
+    assert next(f for f in m["files"] if f["p"] == "z_ibx/new-notes.md")["h"] == j["sha"]
+
+    # the desktop cleared the inbox (/notes) while the phone, still on `base`,
+    # appended one more line: the result is the cleared header + that line
+    p.write_text("header\n")
+    b = dict(a, id="bbbb1111-0000-0000-0000-000000000002", body="header\n\nold\n\nnew line\nlater line\n",
+             base_sha=j["sha"])   # the phone adopted its landed put as the new base
     r = client.post("/drop", json=b)
-    assert r.status_code == 201
-    conflict = r.get_json()["conflict"]
+    assert r.status_code == 201, r.data
+    j = r.get_json()
+    assert j["merged"] is True and "conflicted" not in j
+    assert p.read_text() == "header\nlater line\n"
+    assert j["body"] == "header\nlater line\n"
+    conflict = j["conflict"]
     assert conflict.startswith("z_ibx/archive/2026-10/new-notes.conflict-20261020-100000-imago-c")
-    assert (v / conflict).read_text() == "header\n\ndesktop edit\n"
-    assert p.read_text() == "phone text\n"
+    assert (v / conflict).read_text() == "header\n"
     assert client.post("/drop", json=dict(b, id="bbbb1111-0000-0000-0000-000000000003", target="g245/a.md")).status_code == 400
+
+
+def test_drop_put_own_successor_is_a_plain_replace(client, vault):
+    """Typing across a round trip: put N lands, put N+1 still carries the
+    base of put N-1. The file equals this device's last put, so the phone's
+    text is a strict successor: no merge, no archive copy."""
+    import hashlib
+    v, _ = vault
+    p = v / "z_ibx/new-notes.md"
+    p.write_text("h\n")
+    base = hashlib.sha256(b"h\n").hexdigest()
+    client.get("/file", query_string={"p": "z_ibx/new-notes.md"})
+    a = {"id": "cccc1111-0000-0000-0000-000000000001", "created_at": "2026-10-21T10:00:00",
+         "body": "h\nfirst\n", "target": "z_ibx/new-notes.md", "mode": "put", "base_sha": base}
+    assert client.post("/drop", json=a).status_code == 201
+    r = client.post("/drop", json=dict(a, id="cccc1111-0000-0000-0000-000000000002", body="h\nfirst wor\n"))
+    j = r.get_json()
+    assert r.status_code == 201 and "merged" not in j and "conflict" not in j
+    assert p.read_text() == "h\nfirst wor\n"
+    assert not list((v / "z_ibx/archive").rglob("*.conflict-*")) if (v / "z_ibx/archive").exists() else True
+
+
+def test_drop_put_unknown_base_keeps_phone_text_and_archives_server_copy(client, vault):
+    """A base this server never served or wrote cannot be merged: the phone's
+    text wins (as before 2026-10-21) and the server copy is archived."""
+    v, _ = vault
+    p = v / "z_ibx/new-notes.md"
+    p.write_text("desktop\n")
+    a = {"id": "dddd1111-0000-0000-0000-000000000001", "created_at": "2026-10-21T10:00:00",
+         "body": "phone\n", "target": "z_ibx/new-notes.md", "mode": "put", "base_sha": "0" * 64}
+    r = client.post("/drop", json=a)
+    j = r.get_json()
+    assert r.status_code == 201 and "merged" not in j and j["conflict"]
+    assert p.read_text() == "phone\n" and (v / j["conflict"]).read_text() == "desktop\n"
+
+
+def test_drop_put_real_conflict_keeps_both_with_markers(client, vault):
+    import hashlib
+    v, _ = vault
+    p = v / "z_ibx/new-notes.md"
+    p.write_text("h\nline\n")
+    base = hashlib.sha256(b"h\nline\n").hexdigest()
+    client.get("/file", query_string={"p": "z_ibx/new-notes.md"})
+    p.write_text("h\nline desktop\n")
+    a = {"id": "eeee1111-0000-0000-0000-000000000001", "created_at": "2026-10-21T10:00:00",
+         "body": "h\nline phone\n", "target": "z_ibx/new-notes.md", "mode": "put", "base_sha": base}
+    j = client.post("/drop", json=a).get_json()
+    assert j["merged"] and j["conflicted"]
+    assert p.read_text() == "h\n<<<<<<< ix\nline desktop\n=======\nline phone\n>>>>>>> imago-c\n"
+
+
+def test_old_list_ledger_still_read(client, vault):
+    v, server = vault
+    server.APPEND_LEDGER.write_text(json.dumps(["ffff1111-0000-0000-0000-000000000001"]))
+    a = {"id": "ffff1111-0000-0000-0000-000000000001", "created_at": "2026-10-21T10:00:00",
+         "body": "x", "target": "z_ibx/new-notes.md"}
+    assert client.post("/drop", json=a).status_code == 200   # already applied

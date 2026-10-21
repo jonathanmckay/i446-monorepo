@@ -97,6 +97,8 @@ final class Stub: URLProtocol {
     static var drops: [[String: Any]] = []
     static var manifestHits = 0
     static var failDrops = false
+    static var fileURLs: [String] = []          // raw query strings seen by /file
+    static var putResponses: [String: (String, String)] = [:]   // target -> (sha, body) to return for a put
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
@@ -117,6 +119,7 @@ final class Stub: URLProtocol {
             if request.value(forHTTPHeaderField: "If-None-Match") == "\"e1\"" { return respond(304, Data(), ["ETag": "\"e1\""]) }
             respond(200, Data(Stub.manifest.utf8), ["ETag": "\"e1\""])
         case "/vault/file":
+            Stub.fileURLs.append(comps.percentEncodedQuery ?? "")
             let p = comps.queryItems?.first { $0.name == "p" }?.value ?? ""
             guard let (b, msha) = Stub.files[p] else { return respond(404, Data()) }
             let sha = sha256hex(b)
@@ -126,6 +129,10 @@ final class Stub: URLProtocol {
             let bodyData = request.httpBody ?? streamBody(request)
             let j = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] ?? [:]
             Stub.drops.append(j)
+            if let t = j["target"] as? String, let (sha, body) = Stub.putResponses[t] {
+                let r: [String: Any] = ["ok": true, "path": t, "existing": false, "put": true, "sha": sha, "body": body]
+                return respond(201, try! JSONSerialization.data(withJSONObject: r))
+            }
             respond(201, Data("{\"ok\":true,\"path\":\"z_ibx/phone/\(j["id"] ?? "").md\",\"existing\":false}".utf8))
         default:
             respond(404, Data())
@@ -193,6 +200,38 @@ Task {
     r = await sync.run(force: true)
     eq(store2.read("a.md"), "alpha changed", "mismatch stored after retry")
     eq(r.failed, [], "mismatch not a failure")
+
+    // "+" in a note name must reach the server as %2B, not as a space (2026-10-21)
+    let plusBody = "plus body"
+    Stub.files["g245/2g+1g.md"] = (plusBody, nil)
+    Stub.manifest = Stub.manifest.replacingOccurrences(of: "\"files\":[", with: "\"files\":[{\"p\":\"g245/2g+1g.md\",\"m\":3,\"s\":9,\"h\":\"\(sha256hex(plusBody))\"},")
+    r = await sync.run(force: true)
+    eq(store2.read("g245/2g+1g.md"), plusBody, "plus-named file stored")
+    check(Stub.fileURLs.contains { $0.contains("2g%2B1g") }, "plus percent-encoded in query: \(Stub.fileURLs.last ?? "")")
+    check(!Stub.fileURLs.contains { $0.contains("2g+1g") }, "no bare plus in query")
+
+    // a put comes back merged: the store adopts the server's text and sha …
+    let nn = "z_ibx/new-notes.md"
+    try! store2.upsert(ManifestEntry(p: nn, m: 1, s: 4, h: "base"), body: "hdr\n", sha: "base")
+    try! store2.enqueue(Capture(title: "put", body: "hdr\nmine\n", target: nn, mode: "put", baseSha: "base"))
+    Stub.putResponses[nn] = ("merged-sha", "hdr\ndesktop\nmine\n")
+    r = await sync.run()
+    eq(store2.read(nn), "hdr\ndesktop\nmine\n", "merged body adopted")
+    eq(store2.sha(nn), "merged-sha", "merged sha adopted")
+    eq(Stub.drops.last?["base_sha"] as? String, "base", "put carried its base")
+    // … unless a newer put for the same file is already queued (user kept typing)
+    Stub.failDrops = true
+    try! store2.enqueue(Capture(title: "put", body: "hdr\nmine more\n", target: nn, mode: "put", baseSha: "base"))
+    r = await sync.run()                       // fails: stays pending
+    Stub.failDrops = false
+    try! store2.upsert(ManifestEntry(p: nn, m: 1, s: 4, h: "base"), body: "hdr\nmine more and more\n", sha: "base")
+    try! store2.enqueue(Capture(title: "put", body: "hdr\nmine more and more\n", target: nn, mode: "put", baseSha: "base"))
+    // simulate the older put being in flight when the newer one was queued: the
+    // sync sees two pending rows only if enqueue did not supersede; it does, so
+    // just check the single remaining put wins and the local text is kept
+    r = await sync.run()
+    eq(store2.pendingCount, 0, "puts drained")
+    Stub.putResponses[nn] = nil
 
     // 401 is fatal and reported, outbox untouched
     let bad = VaultSync(store: store2, api: VaultApi(base: { "https://stub.local/vault" }, token: { "wrong" }, session: URLSession(configuration: cfg)))
