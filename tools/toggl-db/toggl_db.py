@@ -63,14 +63,14 @@ WORKSPACE_ID = int(os.environ.get("TOGGL_WORKSPACE_ID", "2092616"))
 REPORTS_URL = f"https://api.track.toggl.com/reports/api/v3/workspace/{WORKSPACE_ID}/search/time_entries"
 LIVE_URL = "https://api.track.toggl.com/api/v9/me/time_entries"
 QUOTA_FLOOR = 20          # pause when x-toggl-quota-remaining drops under this
-MAX_PAGES = 400           # runaway guard, not a cap: windows normally fit in ONE page (see PAGE_SIZE)
-# Measured 2026-10-21: with the default page size (50) the cursor pagination
-# of search/time_entries is unreliable here — page 2 came back EMPTY when
-# the x-next-timestamp cursor was echoed and came back with the WRONG rows
-# when it was not, so the old backfill lost a third of two days' entries.
-# Asking for a large page returns the whole window in one response
-# (99 entries for 2 days, no x-next-id), so that is the primary path; the
-# cursor (all three fields) is only followed if the API still hands one out.
+# Measured 2026-10-21: the cursor pagination of search/time_entries is not
+# usable here. With the default page size (50) page 2 came back EMPTY when
+# the x-next-timestamp cursor was echoed and with the WRONG rows when it was
+# not (how the old backfill lost a third of two days' entries); with
+# page_size 1000 the cursor request answered HTTP 400 (2021-10-19..11-01,
+# a 14-day window over 1000 entries). So a window is fetched as ONE page,
+# and a window the API says is bigger than a page (x-next-id present) is
+# split in half and refetched, down to single days. No cursor, ever.
 PAGE_SIZE = 1000
 # A window's request is padded by a day on each side, then filtered to the
 # local day: the Reports API windows by the Toggl profile's zone (LA today,
@@ -206,29 +206,43 @@ def local_day(start_iso: str) -> str:
 def fetch_window(auth: str, start: date, end: date, codes: dict[int, str], tags: dict[str, str],
                  post=_post, sleep=time.sleep, log=print) -> tuple[list[dict], int]:
     """All entries whose local day is in [start, end], as row dicts for the
-    entries table, plus the page count. Raises FetchError on any HTTP/parse
-    error: a partial window must never look like a complete one."""
+    entries table, plus the number of requests it took. Raises FetchError on
+    any HTTP/parse error: a partial window must never look like a complete
+    one. A window bigger than one page is bisected (see PAGE_SIZE)."""
     body = {"start_date": (start - WINDOW_PAD).isoformat(), "end_date": (end + WINDOW_PAD).isoformat(),
             "page_size": PAGE_SIZE}
-    out: list[dict] = []
     now = int(time.time())
-    for page in range(1, MAX_PAGES + 1):
+    try:
+        hdrs, rows = post(REPORTS_URL, body, auth)
+    except urllib.error.HTTPError as e:
+        if e.code != 429:
+            raise FetchError(f"{start}..{end}: {e!r}") from e
+        # Quota already spent when the run started: wait for the reset once, then retry.
+        h = {k.lower(): v for k, v in (e.headers.items() if e.headers else [])}
+        wait = int(h.get("retry-after") or h.get("x-toggl-quota-resets-in") or 60) + 2
+        log(f"    429: sleeping {wait}s for the quota reset")
+        sleep(wait)
         try:
             hdrs, rows = post(REPORTS_URL, body, auth)
-        except urllib.error.HTTPError as e:
-            if e.code != 429:
-                raise FetchError(f"{start}..{end} page {page}: {e!r}") from e
-            # Quota already spent when the run started: wait for the reset once, then retry this page.
-            h = {k.lower(): v for k, v in (e.headers.items() if e.headers else [])}
-            wait = int(h.get("retry-after") or h.get("x-toggl-quota-resets-in") or 60) + 2
-            log(f"    429: sleeping {wait}s for the quota reset")
-            sleep(wait)
-            try:
-                hdrs, rows = post(REPORTS_URL, body, auth)
-            except (urllib.error.URLError, ValueError, OSError) as e2:
-                raise FetchError(f"{start}..{end} page {page} (after 429 wait): {e2!r}") from e2
-        except (urllib.error.URLError, ValueError, OSError) as e:
-            raise FetchError(f"{start}..{end} page {page}: {e!r}") from e
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError, OSError) as e2:
+            raise FetchError(f"{start}..{end} (after 429 wait): {e2!r}") from e2
+    except (urllib.error.URLError, ValueError, OSError) as e:
+        raise FetchError(f"{start}..{end}: {e!r}") from e
+    remaining = hdrs.get("x-toggl-quota-remaining")
+    if remaining is not None and int(remaining) < QUOTA_FLOOR:
+        wait = int(hdrs.get("x-toggl-quota-resets-in") or 60) + 2
+        log(f"    quota {remaining} left: sleeping {wait}s for the reset")
+        sleep(wait)
+    if hdrs.get("x-next-id") and rows:
+        if start >= end:
+            raise FetchError(f"{start}: a single day exceeds one page ({PAGE_SIZE})")
+        mid = start + (end - start) // 2
+        log(f"    {start}..{end} overflows one page: splitting at {mid}")
+        a, na = fetch_window(auth, start, mid, codes, tags, post=post, sleep=sleep, log=log)
+        b, nb = fetch_window(auth, mid + timedelta(days=1), end, codes, tags, post=post, sleep=sleep, log=log)
+        return a + b, 1 + na + nb
+    out: list[dict] = []
+    if True:
         for row in rows:
             pid = row.get("project_id")
             code = codes.get(pid, NO_PROJECT) if pid else NO_PROJECT
@@ -250,19 +264,7 @@ def fetch_window(auth: str, start: date, end: date, codes: dict[int, str], tags:
                     "tags": json.dumps([tags.get(t, t) for t in tids], ensure_ascii=False),
                     "at": te.get("at"), "fetched_at": now,
                 })
-        remaining = hdrs.get("x-toggl-quota-remaining")
-        if remaining is not None and int(remaining) < QUOTA_FLOOR:
-            wait = int(hdrs.get("x-toggl-quota-resets-in") or 60) + 2
-            log(f"    quota {remaining} left: sleeping {wait}s for the reset")
-            sleep(wait)
-        nid, nrow, nts = hdrs.get("x-next-id"), hdrs.get("x-next-row-number"), hdrs.get("x-next-timestamp")
-        if not nid or not nrow or not rows:
-            return out, page
-        body = {**body, "first_id": int(nid), "first_row_number": int(nrow)}
-        if nts:
-            body["first_timestamp"] = int(nts)
-        sleep(0.2)
-    raise FetchError(f"{start}..{end}: still paginating after {MAX_PAGES} pages")
+    return out, 1
 
 
 # ---------------------------------------------------------------------------
