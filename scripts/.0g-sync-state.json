@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "500分 i9": {
-      "todoist_id": "6hpXw9PJCx3pw9wR",
-      "minutes": 50
-    },
-    "75分 hcbp": {
-      "todoist_id": "6hpXw9r26rF6gfX2",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-10-21T03:55:00.979615-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-21T04:00:08.666054-07:00"
 }
