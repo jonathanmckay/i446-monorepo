@@ -2557,7 +2557,16 @@ for t in unique:
     if is_working:
         # Drop the tier-A/A2 lead glyph (spinner or abacus) so it isn't doubled.
         _lead = prefix.split(' ', 1)
-        prefix = _agent_frame + ' ' + _pane + '😈 ' + (_lead[1] if len(_lead) == 2 and _lead[0] in ('🧮', _agent_frame) else prefix)
+        _rest = _lead[1] if len(_lead) == 2 and _lead[0] in ('🧮', _agent_frame) else prefix
+        # A2 + working (2026-10-21: 'shouldn't dtd have the abacus for the
+        # project that I'm working on currently? Right now it's not there'):
+        # JM started it today and an agent is on it now, so the agent's
+        # spinner + N😈 lead and his 🧮 stays, right before the title. Only
+        # the running-timer case drops it (10-16: the timer's glyph becomes
+        # spinner + 😈).
+        if str(t.get('id', '')) in started_at and not is_running and not is_skipped:
+            _rest = '🧮 ' + _rest
+        prefix = _agent_frame + ' ' + _pane + '😈 ' + _rest
         color = AGENT_GREY
     elif is_claimed:
         prefix = '🧮 ' + _pane + '🕐 ' + prefix
