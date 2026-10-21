@@ -26,7 +26,7 @@ days that the API no longer returns (entries deleted in Toggl).
 
 Usage:
   toggl_db.py sync   [--days N] [--window 7] [--export]   # last N days (default 14)
-  toggl_db.py backfill --since YYYY-MM-DD [--export]       # history, same path
+  toggl_db.py backfill --since YYYY-MM-DD [--until YYYY-MM-DD] [--window N] [--export]   # history, same path
   toggl_db.py export-cache [--path FILE]                   # rewrite the dashboard json from the db
   toggl_db.py status                                       # coverage + gaps
   toggl_db.py verify [--days 7]                            # per-day seconds vs the live v9 API
@@ -408,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("sync"); s.add_argument("--days", type=int, default=14); s.add_argument("--window", type=int, default=7)
     s.add_argument("--export", action="store_true")
     b = sub.add_parser("backfill"); b.add_argument("--since", required=True); b.add_argument("--window", type=int, default=7)
+    b.add_argument("--until", help="last day to pull (default today); sparse years can use a wider --window")
     b.add_argument("--export", action="store_true")
     e = sub.add_parser("export-cache"); e.add_argument("--path", default=str(CACHE_PATH))
     sub.add_parser("status")
@@ -418,8 +419,9 @@ def main(argv: list[str] | None = None) -> int:
     today = date.today()
     if a.cmd in ("sync", "backfill"):
         start = today - timedelta(days=a.days) if a.cmd == "sync" else date.fromisoformat(a.since)
-        n = sync_range(start, today, a.window)
-        print(f"synced {n} entries {start}..{today} into {DB_PATH}")
+        end = date.fromisoformat(a.until) if a.cmd == "backfill" and a.until else today
+        n = sync_range(start, end, a.window)
+        print(f"synced {n} entries {start}..{end} into {DB_PATH}")
         if a.export:
             with connect_ro() as conn:
                 print(f"exported {export_cache(conn)} days to {CACHE_PATH}")

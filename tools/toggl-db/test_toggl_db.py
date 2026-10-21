@@ -159,3 +159,12 @@ def test_verify_tolerates_sub_minute_rounding(tmp_path):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_main_backfill_honours_until_and_window(tmp_path, monkeypatch):
+    t = _load()
+    seen = {}
+    monkeypatch.setattr(t, "sync_range", lambda start, end, window: seen.update(start=start, end=end, window=window) or 0)
+    monkeypatch.setattr(t, "DB_PATH", tmp_path / "t.sqlite")
+    assert t.main(["backfill", "--since", "2017-01-01", "--until", "2018-12-31", "--window", "30"]) == 0
+    assert seen == {"start": date(2017, 1, 1), "end": date(2018, 12, 31), "window": 30}
