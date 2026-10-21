@@ -1440,15 +1440,15 @@ _out=\$(jq -r --slurpfile sn "\$SNOOZE" --args '
 n="\${_out%%\$'\t'*}"
 clean="\${_out#*\$'\t'}"
 [[ "\$_out" == *\$'\t'* ]] || { n=3; clean="\$1"; }   # jq failed: keep the picker usable
-# Reset any mouse-tracking mode a child enabled, and drain any bytes already
-# queued in the tty buffer from scroll/click events during the python call
-# above — leaked SGR motion sequences type themselves into fzf's query as
-# literal ^[[<0;16;15M text on resume otherwise (bug 2026-07-05, ported here
-# from done.sh/defer.sh/edit.sh/split.sh). Runs before the early exit below
-# too, not just the end of the script.
+# Reset any mouse-tracking mode a child enabled (bug 2026-07-05). NO tty
+# drain here (2026-10-21, "ctrl-d doesn't feel instantaneous ... one
+# breath"): the drain's 'read -t 0.05' idled 50 ms on every ctrl-d (two
+# thirds of this script's run time) and, worse, DISCARDED any key typed in
+# that window, so "ctrl-d 2 enter" typed ahead lost its 2. This script has
+# no interactive prompt and its only child is a ~15 ms jq, so a scroll burst
+# has no window to leak into the query; keys typed ahead now queue in the tty
+# and land in fzf's query once the schedule screen is up.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
-stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
-while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 if [[ "\$n" == "0" ]]; then
   echo "no later block today — nothing to delay to" > "\$HDR"
   exit 0
@@ -2130,13 +2130,19 @@ def _float(tier):
 # Agent claims (/claim, 2026-10-05): tasks a Claude session is mid-turn on
 # render grey with a 😈 prefix, in place. Store + staleness rules live in
 # tools/did/agent_claims.py; the watcher reloads when the claims dir changes.
+# The claiming session's cmux number (cs numbering: dtd 1, janus 2, Claude
+# panes 3+) sits right before the glyph, '3😈' / '3🕐', so JM can see which
+# tab has the task (2026-10-21); blank when cs hasn't numbered the session.
 _agent_ids = set()
 _claim_ids = set()
+_claim_pane = {}
 try:
     _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
     import agent_claims as _ac
-    _agent_ids = _ac.working_ids()
-    _claim_ids = set(_ac.load().keys())
+    _claims = _ac.load()
+    _agent_ids = {i for i, r in _claims.items() if r['working']}
+    _claim_ids = set(_claims.keys())
+    _claim_pane = {i: str(r['pane']) for i, r in _claims.items() if r.get('pane') is not None}
 except Exception:
     pass
 AGENT_GREY = '\x1b[38;2;110;110;110m'
@@ -2473,13 +2479,14 @@ for t in unique:
         prefix = '🧮 ' + repeat + dom_tag
     else:
         prefix = repeat + dom_tag
+    _pane = _claim_pane.get(str(t.get('id', '')), '')
     if is_working:
         # Drop the tier-A/A2 lead glyph (spinner or abacus) so it isn't doubled.
         _lead = prefix.split(' ', 1)
-        prefix = _agent_frame + ' 😈 ' + (_lead[1] if len(_lead) == 2 and _lead[0] in ('🧮', _agent_frame) else prefix)
+        prefix = _agent_frame + ' ' + _pane + '😈 ' + (_lead[1] if len(_lead) == 2 and _lead[0] in ('🧮', _agent_frame) else prefix)
         color = AGENT_GREY
     elif is_claimed:
-        prefix = '🧮 🕐 ' + prefix
+        prefix = '🧮 ' + _pane + '🕐 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so
     # they align in a column regardless of the prefix. ANSI is added after.
     body = rjust_est(prefix + line, cols)
@@ -2583,17 +2590,18 @@ print -- "$EPOCHREALTIME\tlist-end\t" >> "$_tl" 2>/dev/null
 # never stdout, so it can't corrupt the row data reload() reads from this
 # script's stdout.
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
-# Only touch tty MODES when this script owns the terminal (2026-10-04). fzf
-# runs reload commands in a BACKGROUND process group, where stty and
-# `read -k` raise SIGTTOU/SIGTTIN and FREEZE the script (state T). Plain
-# reload() hid that (rows had already streamed); reload-sync() on ctrl-d,
-# ctrl-v and ctrl-k waited for the frozen process, so the picker only
-# appeared when some later reload killed it, 1-2s on. The mouse-mode
-# printf above is a plain write and is safe either way.
-if python3 -c 'import os,sys; fd=os.open("/dev/tty", os.O_RDONLY); sys.exit(0 if os.tcgetpgrp(fd) == os.getpgrp() else 1)' 2>/dev/null; then
-  stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
-  while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
-fi
+# No tty drain here any more (2026-10-21). fzf runs reload() AND reload-sync()
+# commands in a BACKGROUND process group (verified against fzf 0.72 with
+# tcgetpgrp: reload-sync -> bg, execute-silent -> fg), where stty / `read -k`
+# raise SIGTTOU/SIGTTIN and freeze the script (the 2026-10-04 picker hang).
+# The guard added then -- a python3 tcgetpgrp check -- therefore ALWAYS said
+# no, so the drain was dead code that still cost a ~30 ms python spawn on
+# every reload: every ctrl-d/v/k picker open and every watcher reload
+# (1-2 x/s while a timer runs). Measured list-end -> list-drained 30-39 ms
+# in the timing log with the drain itself never firing. And because fzf
+# keeps reading the tty itself during a reload, a drain here could only
+# ever have stolen keys typed ahead ("ctrl-d 2 enter" in one breath), never
+# helped. The mouse-mode printf above is a plain write and stays.
 print -- "$EPOCHREALTIME\tlist-drained\t" >> "$_tl" 2>/dev/null
 LISTEOF
 chmod +x "$DTD_LIST"
@@ -3550,6 +3558,14 @@ TALLY_PID=$!
     _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
     (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && ac_reload=1
     [[ -s "$DTD_TIMER" ]] && ac_reload=1   # running timer: re-render so its spinner advances
+    # Schedule screen open (ctrl-d/v/k armed): hold every reload. The spinner/
+    # timer cadence above otherwise re-ran the list generator every 0.5-1 s
+    # UNDER the picker (2026-10-21: three regens between ctrl-d and Enter in
+    # the timing log), each one a python spawn plus an fzf list swap that can
+    # move the cursor off the row being chosen. last_m is left alone, so a
+    # cache change that lands meanwhile is picked up on the first cycle after
+    # the picker closes.
+    [[ -s "$DTD_BLOCKPICK" ]] && continue
     cur_m=$(stat -f %m "$CACHE" 2>/dev/null)
     [[ -z "$cur_m" ]] && continue
     [[ "$cur_m" == "$last_m" && -z "$ac_reload" ]] && continue

@@ -38,6 +38,20 @@ def test_one_task_per_session(tmp_path):
     assert set(ac.load(tmp_path, now=1002)) == {"T2"}
 
 
+def test_pane_number_attached_from_panes_json(tmp_path):
+    """cs.py writes panes.json {session: n}; load() hands dtd the number as 'pane'
+    (2026-10-21: the cmux number before 😈). panes.json is never read as a claim."""
+    ac.claim(TASK, "S1", root=tmp_path, now=1000)
+    ac.claim({"id": "T2", "content": "other"}, "S2", root=tmp_path, now=1000)
+    assert ac.load(tmp_path, now=1001)["T1"]["pane"] is None
+    (tmp_path / "panes.json").write_text(json.dumps({"S1": 3}))
+    got = ac.load(tmp_path, now=1001)
+    assert set(got) == {"T1", "T2"}
+    assert got["T1"]["pane"] == 3 and got["T2"]["pane"] is None
+    (tmp_path / "panes.json").write_text("not json")
+    assert ac.load(tmp_path, now=1001)["T1"]["pane"] is None
+
+
 def test_stale_working_is_not_working(tmp_path):
     ac.claim(TASK, "S1", root=tmp_path, now=1000)
     assert ac.working_ids(tmp_path, now=1000 + ac.STALE_SECS + 1) == set()
@@ -129,6 +143,7 @@ def test_terminal_dtd_greys_claimed_task(tmp_path):
     (home / "i446-monorepo").symlink_to(Path.home() / "i446-monorepo")
     ac.claim({"id": "T1", "content": "alpha task (10) [5]"}, "S1",
              root=home / "vault/z_ibx/agent-claims")
+    (home / "vault/z_ibx/agent-claims/panes.json").write_text(json.dumps({"S1": 4}))
     tasks = [{"id": i, "content": f"{n} task (10) [5]", "labels": ["i9"], "priority": 1,
               "due": TODAY, "recurring": False} for i, n in (("T1", "alpha"), ("T2", "bravo"))]
     f = {}
@@ -146,6 +161,7 @@ def test_terminal_dtd_greys_claimed_task(tmp_path):
     alpha = next(l for l in r.stdout.splitlines() if "alpha" in l)
     bravo = next(l for l in r.stdout.splitlines() if "bravo" in l)
     assert "😈" in alpha and "\x1b[38;2;110;110;110m" in alpha
+    assert " 4😈 " in alpha   # the claiming session's cmux number sits before the glyph
     assert "😈" not in bravo
     # claimed rows sit at the top of the list (2026-10-13)
     assert r.stdout.index("alpha") < r.stdout.index("bravo")

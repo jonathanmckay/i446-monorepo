@@ -9,6 +9,10 @@ Store: ~/vault/z_ibx/agent-claims/ (Syncthing carries it to Ix, where dtd runs)
   <task_id>.json          {task_id, task, session, host, cwd, claimed_at}
   <task_id>.state         "working <epoch>" | "idle <epoch>"
   by-session/<session>    the task_id this session holds (one task per session)
+  panes.json              {session: n} the session's cmux number (dtd 1, janus 2,
+                          Claude panes 3+), written by cs.py's cmux_panes() on
+                          every prompt/stop via the session-title hook; load()
+                          attaches it as 'pane' so dtd can draw "3😈" (2026-10-21)
 
 Writers: this CLI (claim/release) and agent-claim-hook.sh (UserPromptSubmit →
 working, Stop → idle, SessionEnd → release). Every write is tmp + rename so the
@@ -77,14 +81,25 @@ def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
     return rec
 
 
+def pane_numbers(root: Path = CLAIMS_DIR) -> dict[str, int]:
+    """session -> cmux pane number, from panes.json (empty when cs never wrote it)."""
+    try:
+        d = json.loads((root / "panes.json").read_text())
+        return {str(k): int(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
-    """task_id -> claim record with 'state' and derived 'working'."""
+    """task_id -> claim record with 'state', derived 'working', and 'pane' (the
+    session's cmux number, or None when unknown)."""
     now = now or time.time()
     out: dict[str, dict] = {}
     try:
-        files = list(root.glob("*.json"))
+        files = [f for f in root.glob("*.json") if f.name != "panes.json"]
     except OSError:
         return out
+    panes = pane_numbers(root)
     for f in files:
         try:
             rec = json.loads(f.read_text())
@@ -99,6 +114,7 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
             pass
         rec["state"] = state
         rec["working"] = state == "working" and now - ts < STALE_SECS
+        rec["pane"] = panes.get(str(rec.get("session", "")))
         out[tid] = rec
     return out
 
