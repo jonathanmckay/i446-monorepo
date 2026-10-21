@@ -68,29 +68,35 @@ def test_local_day_buckets_by_home_tz():
     assert t.local_day("2026-10-19T00:00:00-07:00") == "2026-10-19"
 
 
-def test_fetch_window_sends_large_page_follows_full_cursor_and_fails_loud():
+def test_fetch_window_one_page_filters_and_bisects_on_overflow():
     t = _load()
     calls = []
     def post(url, body, auth):
-        calls.append(body)
-        if "first_id" not in body:
-            return ({"x-next-id": "9", "x-next-row-number": "2", "x-next-timestamp": "77"},
-                    [{"project_id": 1, "description": "a", "tag_ids": [5],
+        calls.append((body["start_date"], body["end_date"]))
+        s, e = body["start_date"], body["end_date"]
+        if (s, e) == ("2026-10-17", "2026-10-24"):   # the padded 18..23 request: "more than a page"
+            return ({"x-next-id": "9"}, [{"project_id": 1, "description": "a", "tag_ids": [], "time_entries": [{"id": 0, "seconds": 1, "start": "2026-10-18T09:00:00-07:00"}]}])
+        return ({}, [{"project_id": 1, "description": "a", "tag_ids": [5],
                       "time_entries": [{"id": 1, "seconds": 60, "start": "2026-10-19T09:00:00-07:00", "stop": None, "at": None},
                                        {"id": 2, "seconds": -1, "start": "2026-10-19T10:00:00-07:00"},      # running: skipped
-                                       {"id": 3, "seconds": 60, "start": "2026-10-25T09:00:00-07:00"}]}])  # outside window: skipped
-        return ({}, [{"project_id": None, "description": "b", "tag_ids": [],
-                      "time_entries": [{"id": 4, "seconds": 120, "start": "2026-10-18T09:00:00-07:00"}]}])
-    rows, pages = t.fetch_window("auth", date(2026, 10, 18), date(2026, 10, 19), {1: "i9"}, {"5": "-1"}, post=post, sleep=lambda s: None, log=lambda m: None)
-    assert pages == 2 and [r["id"] for r in rows] == [1, 4]
-    assert calls[0]["page_size"] == t.PAGE_SIZE
-    assert (calls[0]["start_date"], calls[0]["end_date"]) == ("2026-10-17", "2026-10-20"), "one-day pad each side"
-    assert calls[1]["first_id"] == 9 and calls[1]["first_row_number"] == 2 and calls[1]["first_timestamp"] == 77
+                                       {"id": 3, "seconds": 60, "start": "2026-10-25T09:00:00-07:00"}]},   # outside window: skipped
+                     {"project_id": None, "description": "b", "tag_ids": [],
+                      "time_entries": [{"id": 4, "seconds": 120, "start": "2026-10-22T09:00:00-07:00"}]}])
+    rows, n = t.fetch_window("auth", date(2026, 10, 18), date(2026, 10, 23), {1: "i9"}, {"5": "-1"}, post=post, sleep=lambda s: None, log=lambda m: None)
+    assert calls[0] == ("2026-10-17", "2026-10-24"), "one-day pad each side"
+    assert calls[1:] == [("2026-10-17", "2026-10-21"), ("2026-10-20", "2026-10-24")], "overflow splits 18..23 into 18..20 and 21..23"
+    assert n == 3 and sorted(r["id"] for r in rows) == [1, 4]        # each half keeps only its own local days
     assert rows[0]["project"] == "i9" and rows[0]["tags"] == '["-1"]' and rows[1]["project"] == t.NO_PROJECT
     import urllib.error
     def bad(url, body, auth): raise urllib.error.URLError("down")
     try:
         t.fetch_window("auth", date(2026, 10, 18), date(2026, 10, 19), {}, {}, post=bad, sleep=lambda s: None, log=lambda m: None)
+        assert False, "must raise"
+    except t.FetchError:
+        pass
+    def http400(url, body, auth): raise urllib.error.HTTPError(url, 400, "bad", None, None)
+    try:
+        t.fetch_window("auth", date(2026, 10, 18), date(2026, 10, 19), {}, {}, post=http400, sleep=lambda s: None, log=lambda m: None)
         assert False, "must raise"
     except t.FetchError:
         pass
@@ -122,7 +128,7 @@ def test_429_waits_for_the_reset_and_retries_once():
             h = email.message.Message(); h["Retry-After"] = "7"
             raise urllib.error.HTTPError(url, 429, "quota", h, None)
         return ({}, [{"project_id": 1, "description": "a", "tag_ids": [], "time_entries": [{"id": 1, "seconds": 60, "start": "2026-10-19T09:00:00-07:00"}]}])
-    rows, pages = t.fetch_window("auth", date(2026, 10, 19), date(2026, 10, 19), {1: "i9"}, {}, post=post, sleep=slept.append, log=lambda m: None)
+    rows, n = t.fetch_window("auth", date(2026, 10, 19), date(2026, 10, 19), {1: "i9"}, {}, post=post, sleep=slept.append, log=lambda m: None)
     assert [r["id"] for r in rows] == [1] and slept == [9] and len(calls) == 2
 
 
