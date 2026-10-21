@@ -108,12 +108,14 @@ def prefill(task: dict, description: str | None, domains=DOMAINS) -> dict:
 
 def remainder(total: str, time_: str, done_pts: str, done_min: str) -> tuple[str, str]:
     """What the remainder keeps, computed independently: (pts, min) as
-    strings, "" when either side of a subtraction is missing."""
+    strings. Nothing done yet = the whole total (the old split form's
+    prefill, so the field visibly tracks from the first keystroke); "" only
+    when the task has no such tag."""
     pts = mins = ""
-    if _INT.match(total or "") and _INT.match(done_pts or ""):
-        pts = str(max(0, int(total) - int(done_pts)))
-    if _INT.match(time_ or "") and _INT.match(done_min or ""):
-        mins = str(max(0, int(time_) - int(done_min)))
+    if _INT.match(total or ""):
+        pts = str(max(0, int(total) - int(done_pts))) if _INT.match(done_pts or "") else total
+    if _INT.match(time_ or ""):
+        mins = str(max(0, int(time_) - int(done_min))) if _INT.match(done_min or "") else time_
     return pts, mins
 
 
@@ -431,18 +433,23 @@ class Form:
             except curses.error:
                 pass
 
+        # Budget the height from the bottom up (2026-10-21: in a short pane the
+        # rem pts / rem min row fell off the screen): the field rows always
+        # fit; the detail block and the notes box take what is left.
+        FIXED = 1 + 1 + 1 + 2 + 1 + 1 + 3 + 1   # title, sep, pts/time, haiku+name, project, header, done rows, legend
+        spare = max(0, h - FIXED)
+        notes_rows = max(1, min(6, spare - 1)) if spare > 1 else 1
+        detail_cap = max(0, min(8, spare - notes_rows))
         put(y, 0, self.task.get("content", ""), curses.A_BOLD); y += 1
-        for style, text in detail_lines(self.bundle, self.project):
+        for style, text in detail_lines(self.bundle, self.project)[:detail_cap]:
             put(y, 0, text, curses.A_DIM if style == "dim" else curses.A_UNDERLINE); y += 1
-            if y > 7:
-                break
         put(y, 0, "─" * (w - 1), curses.A_DIM); y += 1
         cursor = (y, 0)
         # row 1: points + time side by side
         cursor = self._draw_row(scr, y, [self.by["points"], self.by["time"]], w) or cursor; y += 1
         for key in ("short", "name"):
             c = self._draw_row(scr, y, [self.by[key]], w); cursor = c or cursor; y += 1
-        c, used = self._draw_multiline(scr, y, self.by["desc"], w, max(3, min(6, h - y - 9)))
+        c, used = self._draw_multiline(scr, y, self.by["desc"], w, notes_rows)
         cursor = c or cursor; y += used
         c = self._draw_row(scr, y, [self.by["domain"]], w); cursor = c or cursor; y += 1
         put(y, 0, "── done so far " + "─" * max(0, w - 16), curses.A_DIM); y += 1
@@ -450,7 +457,8 @@ class Form:
         c = self._draw_row(scr, y, [self.by["done_pts"], self.by["done_min"]], w); cursor = c or cursor; y += 1
         c = self._draw_row(scr, y, [self.by["done_name"]], w); cursor = c or cursor; y += 1
         c = self._draw_row(scr, y, [self.by["rem_pts"], self.by["rem_min"]], w); cursor = c or cursor
-        put(y, 40, "← what the task keeps (auto: total − done; type to override)", curses.A_DIM)
+        if w > 60:
+            put(y, 40, "← the task keeps (auto; type to override)", curses.A_DIM)
         y += 1
         legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^O task · ^P done so far"
         put(h - 1, 0, legend, curses.A_REVERSE if self.msg else curses.A_DIM)
@@ -482,10 +490,12 @@ class Form:
                     pass
                 x += avail + 3
                 continue
-            # horizontal window so the cursor stays visible
+            # horizontal window so the cursor stays visible (focused field
+            # only; an unfocused long value shows its beginning)
             start = 0
-            while dwidth(f.text[start:f.cur]) >= avail:
-                start += 1
+            if f is self.focus:
+                while dwidth(f.text[start:f.cur]) >= avail:
+                    start += 1
             shown = fit(f.text[start:], avail)
             attr = curses.A_UNDERLINE | (curses.A_BOLD if f is self.focus else 0)
             try:
