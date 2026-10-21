@@ -1699,7 +1699,7 @@ bindkey -M vicmd '^C' _dtd_cancel
 # ctrl-p INSIDE the line = append the split marker (2026-10-21: the split
 # form folded into this screen; see the legend below). Same widget trick as
 # ^C above.
-_dtd_split_seed() { BUFFER="\${BUFFER%%[[:space:]]#} ✓ "; zle end-of-line; }
+_dtd_split_seed() { BUFFER="\$BUFFER ✓ "; zle end-of-line; }
 zle -N _dtd_split_seed
 bindkey -M emacs '^P' _dtd_split_seed
 bindkey -M viins '^P' _dtd_split_seed
@@ -1742,7 +1742,7 @@ printf "\033[2m✓ N splits: N pts logged today, [N] stays the total, the rest m
 f_line="\${cur_line:-\$clean}"
 # ctrl-p from the list opens this same screen with the split marker already
 # appended (DTD_SPLIT_SEED=1), so "ctrl-p, 15, enter" is still a 3-key split.
-[[ -n "\${DTD_SPLIT_SEED:-}" ]] && f_line="\${f_line%%[[:space:]]#} ✓ "
+[[ -n "\${DTD_SPLIT_SEED:-}" ]] && f_line="\$f_line ✓ "
 vared -p "> " f_line < /dev/tty > /dev/tty
 edits="\$f_line"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
