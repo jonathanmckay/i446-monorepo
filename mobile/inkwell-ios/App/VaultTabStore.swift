@@ -43,7 +43,7 @@ final class VaultTabStore: ObservableObject {
     }
 
     var title: String {
-        "vault · \(fileCount) notes" + (pendingCount > 0 ? " · \(pendingCount) pending" : "")
+        "vault - Inkwell" + (pendingCount > 0 ? " · \(pendingCount) pending" : "")
     }
 
     var status: String {
