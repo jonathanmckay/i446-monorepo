@@ -315,9 +315,22 @@ def cmux_panes():
     for _, _, sid, sfid in order:
         if sid not in seen:
             seen.add(sid); out.append((len(out) + CLAUDE_FIRST, sid, sfid, stitle.get(sfid, '')))
+    nums = {sid: n for n, sid, _, _ in out}
     try:
         PANES_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        PANES_CACHE.write_text(json.dumps({sid: n for n, sid, _, _ in out}))
+        PANES_CACHE.write_text(json.dumps(nums))
+    except Exception:
+        pass
+    # dtd shows the number before 😈 on a claimed card (2026-10-21: "which cmux session has the
+    # task"). The claim store is what dtd (here and on Ix) reads, so the map goes there too,
+    # written only when it changed: a write bumps the dir mtime, which is dtd's reload signal.
+    try:
+        if CLAIMS_PANES.parent.is_dir():
+            text = json.dumps(nums, sort_keys=True)
+            if not CLAIMS_PANES.exists() or CLAIMS_PANES.read_text() != text:
+                tmp = CLAIMS_PANES.with_name(CLAIMS_PANES.name + '.tmp')
+                tmp.write_text(text)
+                tmp.replace(CLAIMS_PANES)
     except Exception:
         pass
     return out
@@ -387,6 +400,7 @@ def cmd_order(idx, args):
 
 
 PANES_CACHE = STATE / 'pane-numbers.json'   # {session_id: n}, written by cmux_panes() whenever cmux answers
+CLAIMS_PANES = Path.home() / 'vault/z_ibx/agent-claims/panes.json'   # same map, for dtd (see did/agent_claims.py)
 _cmux_answered = False
 
 
