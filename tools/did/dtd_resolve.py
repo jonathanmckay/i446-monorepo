@@ -29,7 +29,9 @@ def main() -> int:
     # In-progress tiers (2026-10-11): lead glyph is 🧮 or a spinner frame (JM's
     # running timer moves since 2026-10-16; agent rows add 😈), then optional
     # 🕐 / 😈, then the optional 'Nm · ' elapsed.
-    plain = re.sub(r"^(?:🧮|[·✢✳✶✻✽]) (?:🕐 )?(?:😈 )?(?:[^·]* · )?", "", plain)
+    # 2026-10-21: the claim glyph may carry the session's cmux number ("3🕐", "7😈"),
+    # and a started-today task an agent works on keeps JM's 🧮 after it.
+    plain = re.sub(r"^(?:🧮|[·✢✳✶✻✽]) (?:\d{0,2}🕐 )?(?:\d{0,2}😈 )?(?:🧮 )?(?:[^·]* · )?", "", plain)
 
     # Todoist v1 ids are opaque alphanumeric strings (e.g. 6gqQ59G5HHVRQR3R),
     # never containing spaces. Try an exact id match first; if none, the arg was

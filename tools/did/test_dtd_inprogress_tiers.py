@@ -155,6 +155,20 @@ def test_working_claim_replaces_abacus_on_timed_task():
     assert "😈" in row and "🧮" not in row and "5m · " in row and row.startswith(GREY), row
 
 
+def test_working_claim_on_started_task_keeps_abacus():
+    """2026-10-21: "shouldn't dtd have the abacus for the project that I'm
+    working on currently? Right now it's not there." JM hit Enter on a task
+    today, his timer moved on, and an agent now works on it: the row leads
+    with the agent's spinner + 😈 and keeps his 🧮 right before the title.
+    (The running-timer case is unchanged: spinner + 😈, no 🧮, per 10-16.)"""
+    now = int(time.time())
+    out = _run("R1", started=[("2026-10-11", "W1", now - 600)])
+    row = _row_for_id(out, "W1")
+    assert _lead_glyph(row) in SPIN and "😈 🧮 agent working" in row and row.startswith(GREY), row
+    rc = _row_for_id(_run("RC", started=[("2026-10-11", "RC", now - 600)]), "RC")
+    assert "😈" in rc and "🧮" not in rc and "5m · " in rc, rc
+
+
 def test_idle_claim_loses_to_running_timer():
     """An idle claim on the task JM is timing still renders as his timer
     (spinner Nm), not 🧮 🕐: the agent is waiting on him, he is the one working."""
@@ -196,7 +210,8 @@ def test_watcher_reloads_every_second_while_timer_runs():
 def test_resolver_strips_tier_prefixes():
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     for vis in ("🧮 5m · plain one", "🧮 🕐 plain one", "🧮 🕐 ↻ plain one",
-                "✻ 5m · plain one", "· 5m · plain one", "✽ 😈 5m · plain one", "✢ 😈 plain one"):
+                "✻ 5m · plain one", "· 5m · plain one", "✽ 😈 5m · plain one", "✢ 😈 plain one",
+                "✶ 7😈 🧮 plain one", "🧮 3🕐 plain one", "✢ 12😈 plain one"):
         r = subprocess.run([sys.executable, str(Path(__file__).with_name("dtd_resolve.py")),
                             "/nonexistent", vis], capture_output=True, text=True)
         assert r.stdout.strip().endswith("plain one") and "🧮" not in r.stdout, (vis, r.stdout)
