@@ -131,13 +131,14 @@ def test_1n_fen_append_references_row5_expected_points(df):
 H1N = {"0n": {}, "1n": {"1 m5x2": "I", "1 -2g": "K"}}
 
 
-def test_1n_route_minutes_from_toggl_and_fen_fallback(df, monkeypatch):
-    """Cell minutes come from today's matching Toggl entries when untyped, and
-    '1 m5x2' (absent from the hand-kept fen map — bug 2026-07-27: its points
-    never reached today) resolves its 0分 column from the domain token."""
+def test_1n_route_standard_cell_is_1_and_fen_fallback(df, monkeypatch):
+    """A STANDARD weekly habit's cell is a 1 whatever Toggl says (2026-10-21:
+    not time-dependent; only VARIABLE habits record minutes), and '1 m5x2'
+    (absent from the hand-kept fen map — bug 2026-07-27: its points never
+    reached today) resolves its 0分 column from the domain token."""
     monkeypatch.setattr(df, "toggl_minutes_for", lambda name: 42)
     r = df.route_items([df.ParsedItem(raw="1 m5x2", name="1 m5x2")], H1N, TQ)[0]
-    assert r.step == "1n" and r.write_value == 42
+    assert r.step == "1n" and r.write_value == 1
     assert r.fen_col == "S"
 
 
