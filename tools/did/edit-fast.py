@@ -152,6 +152,16 @@ def current_fields(task: dict, description: str) -> dict:
 # must not become [3]). A part that's absent means keep; "//" with nothing
 # after it clears the description.
 _DESC_SEP = re.compile(r"(?:^|\s)//(?:\s|$)")
+# Split segment (2026-10-21, "combine the more-info/change-name view with the
+# split view"): a trailing  ✓ <pts> [what I did]  on the same line carves a
+# done record off the task. The LAST standalone ✓ that is followed by an
+# integer (or [N]) wins; everything after it is the done segment, everything
+# before it is the ordinary edit line ([N] there stays the task TOTAL, so the
+# remainder is total - done, exactly what the old four-field form prefilled).
+# A bare trailing ✓ (the ctrl-p seed, left untouched) is stripped. A ✓ with
+# no number after it is literal text: titles/descriptions may contain one.
+_SPLIT_MARK = re.compile(r"(?:^|\s)✓\s+\[?(\d+)\]?(?=\s|$)")
+_SPLIT_BARE = re.compile(r"(?:^|\s)✓\s*$")
 
 
 def format_line(cur: dict) -> str:
@@ -168,6 +178,17 @@ def format_line(cur: dict) -> str:
 
 def parse_line(line: str) -> dict:
     out: dict = {}
+    marks = list(_SPLIT_MARK.finditer(line))
+    if marks:
+        m = marks[-1]
+        out["split"] = {"pts": int(m.group(1)),
+                        "name": " ".join(line[m.end():].split())}
+        line = line[:m.start()]
+    else:
+        b = _SPLIT_BARE.search(line)
+        if b:
+            out["split_bare"] = True
+            line = line[:b.start()]
     m = _DESC_SEP.search(line)
     if m:
         out["desc"] = line[m.end():].strip()
@@ -301,23 +322,52 @@ def _main_fields(argv: list[str]) -> int:
     cache, task = _load_task(task_id, cache_file)
     if not task:
         return 1
-    ch = changed_fields(current_fields(task, _description(task_id)), new)
-    if not ch:
-        print(f"✎ {_pf._ANNOT.sub('', task['content']).strip()}: no change")
-        return 0
-    if "domain" in ch and ch["domain"] not in DOMAINS:
-        print(f"✗ unknown domain: {ch['domain']}")
-        return 1
-    pts = None
-    if "points" in ch:
-        if not re.fullmatch(r"\d+", ch["points"].strip("[]")):
-            print(f"✗ points must be a number: {ch['points']}")
+    split = new.pop("split", None)
+    split_bare = new.pop("split_bare", False)
+    cur = current_fields(task, _description(task_id))
+    line_arg = rest[rest.index("--line") + 1] if "--line" in rest else None
+    if line_arg is not None and split is None:
+        # A ✓ the user typed (not one the prefill already carried) with no
+        # points after it is a half-typed split, not a rename: refuse rather
+        # than silently writing "title ✓ drafted memo" into Todoist.
+        pre = format_line(cur)
+        if _standalone_checks(line_arg) > _standalone_checks(pre) + (1 if split_bare else 0):
+            print("✗ split needs points: ✓ <pts> [what you did]")
             return 1
-        pts = int(ch["points"].strip("[]"))
-    return apply(task, cache, cache_file, ch.get("name"), ch.get("domain"), pts,
-                 description=ch.get("desc"))
+    ch = changed_fields(cur, new)
+    if not ch:
+        clean = _pf._ANNOT.sub('', task['content']).strip()
+        if split is None:
+            print(f"✎ {clean}: " + ("split cancelled" if split_bare else "no change"))
+            return 0
+    else:
+        if "domain" in ch and ch["domain"] not in DOMAINS:
+            print(f"✗ unknown domain: {ch['domain']}")
+            return 1
+        pts = None
+        if "points" in ch:
+            if not re.fullmatch(r"\d+", ch["points"].strip("[]")):
+                print(f"✗ points must be a number: {ch['points']}")
+                return 1
+            pts = int(ch["points"].strip("[]"))
+        rc = apply(task, cache, cache_file, ch.get("name"), ch.get("domain"), pts,
+                   description=ch.get("desc"))
+        if rc != 0 or split is None:
+            return rc
+    # Split: the edits above already landed in Todoist and the snapshot cache,
+    # so the split script (which re-reads name/[N] from the cache) carves the
+    # done record off the UPDATED task. Hand it the answers as shell
+    # assignments on one line; dtd's edit script evals them.
+    import shlex
+    print(f"SPLIT pts={split['pts']} done_name={shlex.quote(split['name'].replace(chr(10), ' '))}")
+    return 0
 
 
+_STANDALONE_CHECK = re.compile(r"(?:^|\s)✓(?=\s|$)")
+
+
+def _standalone_checks(text: str) -> int:
+    return len(_STANDALONE_CHECK.findall(text))
 def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
           description: str | None = None) -> int:
     orig_content = task["content"]

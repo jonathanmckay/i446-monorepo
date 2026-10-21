@@ -2,8 +2,8 @@
 """Regression: after a task split (ctrl-p), touchpad-scroll arrows must not
 flood fzf's query.
 
-Bug (2026-07-14): the split action asks 3 questions via osascript GUI dialogs.
-While those dialogs hold focus the terminal is idle and buffers two-finger
+Bug (2026-07-14): the split action asked 3 questions via osascript GUI dialogs.
+While those dialogs held focus the terminal was idle and buffers two-finger
 touchpad scroll as ESC[A/ESC[B arrow bursts; on return fzf dumped the whole
 buffer into its query as literal ^[[A^[[B text. Fix: the split script drains the
 tty input buffer (and resets mouse modes) before handing control back to fzf.
@@ -45,8 +45,11 @@ def test_drain_runs_after_the_dialogs():
     # the drain must still come after the last one.
     assert "display dialog" not in body, "split must not open GUI dialogs (invisible when dtd runs on Ix)"
     drain = re.search(r"while read -t [0-9.]+ -k 1 .*; do .* done < /dev/tty", body)
-    # 2026-10-04: one form (split-form.py) asks everything; the drain still follows it.
-    assert body.index("split-form.py") < drain.start(), "the drain must run after the form"
+    # 2026-10-04: one form (split-form.py) asked everything; 2026-10-21: the
+    # answers come from the ctrl-o/ctrl-g edit line as arguments. The drain
+    # still comes last, after the background writer is handed off.
+    assert "split-form.py" not in body.replace("# form (split-form.py, 2026-10-04)", "")
+    assert body.index('pts_today="${2:-}"') < body.index("split-bg") < drain.start()
 
 
 if __name__ == "__main__":

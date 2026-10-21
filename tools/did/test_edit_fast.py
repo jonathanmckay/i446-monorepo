@@ -363,3 +363,66 @@ def test_rename_uses_haiku_short_name(tmp_path, monkeypatch, capsys):
     assert mod.main() == 0
     assert "⚠" not in capsys.readouterr().out
     assert json.loads(cache.read_text())["tasks"][0]["short"] == "PM: water heater unit 4 (30) [20]"
+
+
+# ── split on the edit line (2026-10-21): … ✓ <pts> [what I did] ──
+
+def test_line_split_segment_parses_and_keeps_total():
+    mod = _load()
+    new = mod.parse_line("write memo (see doc) @i9 [20] // notes ✓ 5 drafted memo")
+    assert new["split"] == {"pts": 5, "name": "drafted memo"}
+    assert (new["name"], new["points"], new["desc"]) == ("write memo (see doc)", "20", "notes")
+    assert mod.parse_line("t ✓ [7]")["split"] == {"pts": 7, "name": ""}
+
+
+def test_line_bare_check_is_stripped_and_literal_check_stays_text():
+    mod = _load()
+    assert mod.parse_line("write memo [20] ✓ ") == {"split_bare": True, "name": "write memo", "points": "20"}
+    assert mod.parse_line("write memo ✓ oops") == {"name": "write memo ✓ oops"}
+    assert mod.parse_line("call ✓ 3 tenants ✓ 2")["name"] == "call ✓ 3 tenants"
+
+
+def _split_run(tmp_path, monkeypatch, line, desc="old notes"):
+    mod = _load()
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps({"tasks": [_form_task()]}))
+    calls = []
+    monkeypatch.setattr(mod._df, "_api", lambda m, path, body: calls.append(body))
+    monkeypatch.setattr(mod, "_description", lambda tid: desc)
+    monkeypatch.setattr(mod, "_resync_short", lambda *a: None)
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cache), "--line", line])
+    return mod, calls, cache
+
+
+def test_split_applies_edits_first_then_hands_off_one_shell_line(tmp_path, monkeypatch, capsys):
+    mod, calls, cache = _split_run(tmp_path, monkeypatch,
+                                   "write memo (see doc) @i9 [40] // old notes ✓ 15 it's half\ndone")
+    assert mod.main() == 0
+    assert calls == [{"content": "write memo (see doc) (30) [40] {5}"}]   # [N] = new TOTAL, applied before the split
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done'"       # one line, newline sanitised
+    assert json.loads(cache.read_text())["tasks"][0]["content"].endswith("[40] {5}")
+
+
+def test_split_with_no_other_change_skips_the_api(tmp_path, monkeypatch, capsys):
+    mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // old notes ✓ 5")
+    assert mod.main() == 0 and calls == []
+    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name=''"
+
+
+def test_seeded_check_left_alone_is_a_cancelled_split(tmp_path, monkeypatch, capsys):
+    mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // old notes ✓ ")
+    assert mod.main() == 0 and calls == []
+    assert "split cancelled" in capsys.readouterr().out
+
+
+def test_new_check_without_points_is_refused_not_renamed(tmp_path, monkeypatch, capsys):
+    mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // old notes ✓ drafted")
+    assert mod.main() == 1 and calls == []
+    assert "split needs points" in capsys.readouterr().out
+
+
+def test_existing_check_in_description_still_round_trips(tmp_path, monkeypatch, capsys):
+    mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // done ✓ yes", desc="done ✓ yes")
+    assert mod.main() == 0 and calls == []
+    assert "no change" in capsys.readouterr().out

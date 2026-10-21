@@ -94,8 +94,7 @@ def main():
         print(f"  median {statistics.median(d for _, d in durs):.2f}")
 
     # --- other paths ----------------------------------------------------------
-    for a, b, label in (("split-start", "split-form-open", "ctrl-p → form shown"),
-                        ("split-form-close", "split-end", "split form → back to dtd"),
+    for a, b, label in (("split-start", "split-end", "split handoff (edit line → background)"),
                         ("split-bg", "split-bg-end", "split background writer (⏳ → ✂)"),
                         ("defer-start", "defer-prompt", "ctrl-d → prompt shown"),
                         ("defer-prompt", "defer-end", "defer prompt → done"),
