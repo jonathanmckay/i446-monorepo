@@ -576,18 +576,6 @@
     "rent": "1140.00"
   },
   {
-    "unit_id": 1423,
-    "property_name": "c702",
-    "unit": "J201",
-    "tenant_name": "Abdalla, Hassan",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2024-12-04",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1699.00"
-  },
-  {
     "unit_id": 369,
     "property_name": "ps25",
     "unit": "B11",
@@ -676,7 +664,7 @@
     "property_name": "j312",
     "unit": "3130",
     "tenant_name": "Pallett, Melody D.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-12-05",
     "move_in": "2025-12-10",
     "renewal_start_date": null,
