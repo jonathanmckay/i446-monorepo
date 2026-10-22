@@ -67,3 +67,16 @@ def test_tmux_session_of_walks_up_to_the_pane(cs, monkeypatch):
     monkeypatch.setattr(cs.subprocess, 'run', fake_run)
     assert cs.tmux_session_of(sid) == 'cc-062745'
     assert cs.tmux_session_of('e' * 8 + '-0000-0000-0000-000000000000') is None
+
+
+def test_not_live_skips_the_session_open_here(cs, monkeypatch, capsys):
+    """cc r (2026-10-22): the session JM is typing into is always the latest and already open on
+    this screen; --not-live takes the most recent one that is not."""
+    idx = {'a': {'id': 'A' * 36, 'mtime': 2000.0, 'last_user': 900.0, 'custom': 'open here', 'ai': '', 'prompt': ''},
+           'b': {'id': 'B' * 36, 'mtime': 1500.0, 'last_user': 500.0, 'custom': 'left on phone', 'ai': '', 'prompt': ''}}
+    monkeypatch.setattr(cs, 'load_index', lambda full=False: idx)
+    monkeypatch.setattr(cs, '_live_sids', lambda: {'A' * 36})
+    cs.main(['id', '--latest', '--not-live'])
+    assert capsys.readouterr().out.strip() == 'B' * 36
+    cs.main(['id', '--latest'])
+    assert capsys.readouterr().out.strip() == 'A' * 36

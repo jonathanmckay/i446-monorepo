@@ -872,6 +872,11 @@ class Form:
         curses.raw()
         curses.noecho()
         scr.keypad(True)
+        # Repaint cells, never shift them with insert/delete line or char ops:
+        # the link rows carry OSC 8 hyperlinks written behind curses' back
+        # (_hyperlink), and a shifted block would drag stale links along.
+        scr.idlok(False)
+        scr.idcok(False)
         try:
             curses.set_escdelay(40)
         except Exception:  # noqa: BLE001

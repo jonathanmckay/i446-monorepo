@@ -26,8 +26,8 @@ ROWS = [
 
 def _js_filter():
     page = dtd.PAGE
-    m = re.search(r"function matchesFilter\(t, q\)\{.*?\n\}\nfunction filterTasks\(tasks, q\)\{[^\n]*\}\n", page, re.S)
-    assert m, "matchesFilter/filterTasks must be defined in the page script"
+    m = re.search(r"function fuzzyWord\(w, hay\)\{.*?\nfunction filterTasks\(tasks, q\)\{[^\n]*\}\n", page, re.S)
+    assert m, "fuzzyWord/matchesFilter/filterTasks must be defined in the page script"
     return m.group(0)
 
 
@@ -61,3 +61,18 @@ def test_words_match_title_and_are_anded():
 def test_empty_query_keeps_everything():
     assert _run("") == ["1", "2", "3", "4"]
     assert _run("   ") == ["1", "2", "3", "4"]
+
+
+def test_fuzzy_subsequence_tolerates_a_dropped_letter():
+    # "biks" (bikes minus the e) still finds the bikes row via subsequence —
+    # the fuzzy upgrade (wave 2 #1). The old substring matcher returned [].
+    assert _run("biks") == ["1"]
+    assert _run("naturlands") == ["2"]   # nature + lands, run together
+
+
+def test_refill_wiring_present():
+    # Enter on a query that matches nothing opens the add sheet pre-filled with
+    # the typed text (wave 2 #1 "refill").
+    assert "openAdd(q)" in dtd.PAGE
+    assert "filterTasks(allTasks, q).length" in dtd.PAGE
+    assert "typeof prefill === 'string'" in dtd.PAGE

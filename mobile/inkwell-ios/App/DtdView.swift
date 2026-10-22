@@ -193,7 +193,10 @@ struct TaskRow: View {
                 .font(Theme.mono).foregroundStyle(color).lineLimit(2)
             Spacer(minLength: 8)
             if task.running { Abacus().foregroundStyle(Theme.accent) }
-            Text(task.meta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            // Time/value meta at the task-text size (wave 2 #2, 2026-10-22):
+            // the (time)[pts] column was monoSmall against a mono title and
+            // read as an afterthought; match it to the title.
+            Text(task.meta).font(Theme.mono).foregroundStyle(Theme.dim)
         }
         .padding(.vertical, 4)
     }

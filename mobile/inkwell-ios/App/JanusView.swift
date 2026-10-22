@@ -199,7 +199,7 @@ struct TimelineRowView: View {
     var body: some View {
         let color: Color = row.isGap ? Theme.dim : Color(hex: row.color)
         HStack(spacing: 10) {
-            Text(row.displayMeta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            Text(row.displayMeta).font(Theme.mono).foregroundStyle(Theme.dim)
                 .fixedSize(horizontal: true, vertical: false)
             Text(row.displayTitle).font(Theme.mono).foregroundStyle(color).lineLimit(2)
                 .opacity(row.logged && !row.running ? 0.55 : 1)

@@ -125,3 +125,61 @@ def test_exact_match_tmux_targets_are_quoted_for_zsh(ct, monkeypatch, capsys):
 def test_no_tag_outside_cmux(ct, monkeypatch):
     monkeypatch.delenv('CMUX_SURFACE_ID', raising=False)
     assert ct.surface_tag('x') == ''
+
+
+def _handoff(ct, monkeypatch, ix_out, local_ts=None, rc=0):
+    import os, subprocess as sp
+    monkeypatch.setenv('CC_DRY', '1')
+    monkeypatch.delenv('CC_HOST', raising=False)
+    monkeypatch.setattr(ct.sys, 'argv', ['cc'])
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[0] == 'ssh':
+            return sp.CompletedProcess(cmd, rc, stdout=ix_out, stderr='')
+        out = f'L\tlocal one\tidle\t{local_ts}\n' if local_ts is not None else ''
+        return sp.CompletedProcess(cmd, 0 if local_ts is not None else 1, stdout=out, stderr='')
+    monkeypatch.setattr(ct.subprocess, 'run', run)
+    return calls
+
+
+IX_LIVE = 'fbd23d23\tJanus and JM Reads\tlive\t2000\ncc-062745\n'
+
+
+def test_off_lan_cc_r_attaches_to_newer_live_ix_session(ct, monkeypatch, capsys):
+    """2026-10-22: away from home cc r only looked at this Mac and resumed a Straylight session
+    instead of the phone session live on ix."""
+    calls = _handoff(ct, monkeypatch, IX_LIVE, local_ts=1000)
+    assert ct.ix_handoff(['r']) is True
+    out = capsys.readouterr().out
+    assert "would run: ['ssh', '-t', 'ix', '--'" in out and 'exec tmux attach -d -t cc-062745' in out
+    assert any(c[0] == 'ssh' and '--latest' in c[-1] for c in calls)
+
+
+def test_off_lan_cc_r_stays_local_when_this_mac_is_newer(ct, monkeypatch):
+    _handoff(ct, monkeypatch, IX_LIVE, local_ts=3000)
+    assert ct.ix_handoff(['r']) is False
+
+
+def test_off_lan_falls_through_when_ix_has_no_live_tmux(ct, monkeypatch):
+    _handoff(ct, monkeypatch, 'fbd23d23\tJanus\tidle\t2000\n', local_ts=1000, rc=1)
+    assert ct.ix_handoff(['r']) is False
+
+
+def test_off_lan_title_attaches_without_time_check(ct, monkeypatch, capsys):
+    calls = _handoff(ct, monkeypatch, IX_LIVE)
+    assert ct.ix_handoff(['janus', 'jm']) is True
+    assert any(c[0] == 'ssh' and '--title --no-pick janus jm' in c[-1] for c in calls)
+
+
+def test_handoff_skipped_for_flags_and_forced_local(ct, monkeypatch):
+    _handoff(ct, monkeypatch, IX_LIVE, local_ts=0)
+    assert ct.ix_handoff(['--resume', 'x']) is False and ct.ix_handoff([]) is False
+    monkeypatch.setenv('CC_HOST', 'local')
+    assert ct.ix_handoff(['r']) is False
+
+
+def test_cc_r_never_resumes_a_session_open_here(ct):
+    import inspect
+    assert "'--latest', '--not-live'" in inspect.getsource(ct.resume_args)
