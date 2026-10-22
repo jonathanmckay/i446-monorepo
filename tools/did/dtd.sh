@@ -3742,10 +3742,17 @@ TALLY_PID=$!
     # Rebuild with the freshly-computed date so a post-midnight reload filters to
     # today, not the frozen startup $LOCAL_TODAY. Mirrors DTD_RELOAD in the UI loop.
     watch_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '$watch_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
+    # reload-sync, not reload (bug 2026-10-22, "I wasn't able to delay a
+    # currently running task"): a running timer reloads every ~1 s for its
+    # spinner, and an async reload empties fzf's match list while it
+    # re-streams, so a ctrl-d/ctrl-v pressed under a search query in that
+    # window had no current row and fzf silently dropped it (5/40 presses
+    # landed in a headless repro; reload-sync 40/40). reload-sync keeps the
+    # old rows live until the new list is complete.
     if [[ -n "$FZF_API_KEY" ]]; then
-      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
+      curl -s -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$port" --data "reload-sync($watch_reload)" >/dev/null 2>&1
     else
-      curl -s -XPOST "localhost:$port" --data "reload($watch_reload)" >/dev/null 2>&1
+      curl -s -XPOST "localhost:$port" --data "reload-sync($watch_reload)" >/dev/null 2>&1
     fi
   done
 ) &>/dev/null &

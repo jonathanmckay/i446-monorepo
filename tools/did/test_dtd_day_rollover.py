@@ -48,7 +48,7 @@ def test_watcher_recomputes_today_each_iteration():
 def test_watcher_reload_uses_fresh_date_not_startup():
     block = _watcher_block()
     # The reload posted to fzf must filter by the freshly-computed date.
-    assert "reload($watch_reload)" in block
+    assert "reload-sync($watch_reload)" in block  # -sync since 2026-10-22
     assert "'$watch_today'" in block, (
         "the rebuilt reload cmd must pass $watch_today to the list generator")
 
