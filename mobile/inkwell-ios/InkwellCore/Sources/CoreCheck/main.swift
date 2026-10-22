@@ -65,6 +65,35 @@ do {
     eq(ts[3].est, 12, "raw (N) recovers est for domains without a default")
 }
 
+// hides_tasks_deferred_to_later_today (bug 2026-10-22: later-today rows showed now)
+do {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = .current
+    f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    let now = f.date(from: "2026-10-22T12:00:00")!
+    let schedJson = """
+    {"ok": true, "tasks": [
+      {"id": "late", "raw": "call bob (15)", "title": "call bob", "domain": "i9", "scheduled": "2026-10-22T15:00:00"},
+      {"id": "early", "raw": "standup (10)", "title": "standup", "domain": "i9", "scheduled": "2026-10-22T09:00:00"},
+      {"id": "dateonly", "raw": "pay rent", "title": "pay rent", "domain": "qz12", "scheduled": "2026-10-22"},
+      {"id": "none", "raw": "inbox", "title": "inbox", "domain": "i447"},
+      {"id": "tomorrow", "raw": "flight (30)", "title": "flight", "domain": "家", "scheduled": "2026-10-23T08:00:00"}
+    ]}
+    """
+    let ts = Parsers.tasks(JSON.parse(schedJson)!)
+    eq(ts.count, 5, "parsed all rows")
+    check(ts[0].scheduledTime != nil, "later-today datetime parsed")
+    check(ts[2].scheduledTime == nil, "date-only scheduled → nil (no time-of-day)")
+    check(ts[3].scheduledTime == nil, "absent scheduled → nil")
+    check(ts[0].deferredToLaterToday(now), "15:00 is later today → deferred")
+    check(!ts[1].deferredToLaterToday(now), "09:00 already passed → visible")
+    check(!ts[2].deferredToLaterToday(now), "date-only → never later-today")
+    check(!ts[4].deferredToLaterToday(now), "tomorrow is a different day → not later-TODAY")
+    eq(DtdTask.visible(ts, now: now).map(\.id), ["early", "dateonly", "none", "tomorrow"],
+       "only the later-today row is hidden")
+}
+
 // done_body_carries_typed_value_like_the_web
 do {
     let t = Parsers.tasks(JSON.parse(tasksJson)!)[1]
@@ -174,6 +203,45 @@ do {
     eq(InkwellConfig.dtdBase, InkwellConfig.defaultDtd, "blank → default")
     eq(InkwellConfig.dashboardURL, InkwellConfig.defaultDashboard, "dashboard keeps its trailing slash")
     InkwellConfig.resetToDefaults()
+}
+
+// markdown list autofill continues / breaks out like Obsidian
+do {
+    // Insert at caret (end of line): continue the marker on the next line.
+    func cont(_ s: String) -> MarkdownList.Edit? {
+        MarkdownList.onNewline(text: s as NSString, selection: NSRange(location: (s as NSString).length, length: 0))
+    }
+    eq(cont("- milk")?.replacement, "\n- ", "unordered continues")
+    eq(cont("* milk")?.replacement, "\n* ", "asterisk bullet preserved")
+    eq(cont("+ milk")?.replacement, "\n+ ", "plus bullet preserved")
+    eq(cont("1. first")?.replacement, "\n2. ", "ordered increments")
+    eq(cont("9. nine")?.replacement, "\n10. ", "ordered rolls into two digits")
+    eq(cont("3) third")?.replacement, "\n4) ", "paren delimiter preserved")
+    eq(cont("- [ ] todo")?.replacement, "\n- [ ] ", "checkbox continues unchecked")
+    eq(cont("- [x] done")?.replacement, "\n- [ ] ", "checked box continues unchecked")
+    eq(cont("  - nested")?.replacement, "\n  - ", "indent preserved")
+    eq(cont("\t1. tabbed")?.replacement, "\n\t2. ", "tab indent preserved")
+    check(cont("plain prose") == nil, "non-list line → plain newline")
+    check(cont("") == nil, "empty buffer → plain newline")
+
+    // Empty item: break out — strip the marker, no new line.
+    let e1 = cont("- ")
+    eq(e1?.replacement, "", "empty bullet strips marker")
+    eq(e1?.range, NSRange(location: 0, length: 2), "clears the whole '- ' marker")
+    eq(e1?.cursor, 0, "caret returns to line start")
+    eq(cont("  - ")?.range, NSRange(location: 0, length: 4), "empty nested bullet clears indent+marker")
+    eq(cont("1. ")?.replacement, "", "empty ordered breaks out")
+    eq(cont("- [ ] ")?.replacement, "", "empty checkbox breaks out")
+
+    // Caret position carries through on a continuation.
+    let mid = "- a\n- b"
+    let e2 = MarkdownList.onNewline(text: mid as NSString, selection: NSRange(location: 3, length: 0))
+    eq(e2?.replacement, "\n- ", "continuation mid-buffer")
+    eq(e2?.cursor, 6, "caret sits after the inserted marker")
+
+    // A non-empty selection never triggers autofill.
+    check(MarkdownList.onNewline(text: "- a" as NSString, selection: NSRange(location: 0, length: 3)) == nil,
+          "selection replace → plain newline")
 }
 
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }

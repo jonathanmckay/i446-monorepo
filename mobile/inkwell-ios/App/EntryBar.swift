@@ -10,6 +10,7 @@ struct EntryBar: View {
     var focus: FocusState<Bool>.Binding
     var disabled: Bool = false
     var multiline: Bool = false        // notes: return inserts a newline, + sends
+    var codingKeys: Bool = true        // iOS keyboard accessory row of shorthand symbols
     var onSubmit: (String) -> Void
     var onPlus: () -> Void
 
@@ -23,6 +24,7 @@ struct EntryBar: View {
                 #if os(iOS)
                 .textInputAutocapitalization(multiline ? .sentences : .never)
                 .submitLabel(multiline ? .return : .go)
+                .toolbar { if codingKeys { codingKeyRow } }
                 #endif
                 .onSubmit { if !multiline { submit() } }
                 .padding(.horizontal, 12).padding(.vertical, 9)
@@ -48,4 +50,45 @@ struct EntryBar: View {
         text = ""
         onSubmit(t)
     }
+
+    #if os(iOS)
+    /// "Coding keys": a scrollable accessory row above the keyboard with the
+    /// symbols JM's task shorthand needs — `(N)` time, `[N]` points, `{N}` 0g
+    /// points, `@code` domain, `#label`, `-` for time ranges (1400-1415) and
+    /// `-1g`-style labels, and the fullwidth `，` used as a batch separator —
+    /// followed by the digits. SwiftUI's TextField exposes no caret position,
+    /// so each key appends to the end of the field. That is exactly the
+    /// left-to-right flow for these commands: tap `(`, type `30`, tap `)` →
+    /// `(30)`. (Mid-string edits still need the on-screen keyboard.)
+    private var codingKeyRow: some ToolbarContent {
+        ToolbarItem(placement: .keyboard) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Self.keys, id: \.self) { k in
+                        Button { insert(k) } label: {
+                            Text(k)
+                                .font(Theme.mono)
+                                .foregroundStyle(Theme.fg)
+                                .frame(minWidth: 30, minHeight: 34)
+                                .background(Color(white: 0.16))
+                                .clipShape(RoundedRectangle(cornerRadius: 7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Symbols first (the high-value, hard-to-reach ones), then digits.
+    private static let keys = ["(", ")", "[", "]", "{", "}", "@", "#", "-", "，",
+                               "1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+
+    private func insert(_ s: String) {
+        text.append(s)
+        Platform.haptic(.key)
+    }
+    #endif
 }
