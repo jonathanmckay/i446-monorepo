@@ -6,10 +6,13 @@ This module answers the one question every consumer has — "the entries for
 these local days" — in the same v9 shape toggl_api.get_entries returns, so
 callers need not know which source served them.
 
-A day is SETTLED when it is at least one full day before the last completed
-sync: the nightly 05:10 sync re-pulls the last 14 days, so everything up to
-yesterday is complete by then, and edits made to older entries are picked
-up by the Sunday 120-day and monthly 400-day sweeps.
+A day is SETTLED when it is at least two full days before the last completed
+sync: the nightly 05:10 sync re-pulls the last 14 days, and edits made to
+older entries are picked up by the Sunday 120-day and monthly 400-day sweeps.
+Yesterday is never settled: JM backfills the previous evening after the
+05:10 sync (2026-10-22: 睡觉 21:15-23:59 logged that morning was missing from
+the store, so /0t read a midnight bedtime, undercounted sleep by 164 min and
+docked 30分 for a late night that didn't happen).
 """
 from __future__ import annotations
 
@@ -48,7 +51,7 @@ def settled_until(path: Path = STORE_PATH) -> date | None:
         conn.close()
     if not ts:
         return None
-    return datetime.fromtimestamp(ts, HOME_TZ).date() - timedelta(days=1)
+    return datetime.fromtimestamp(ts, HOME_TZ).date() - timedelta(days=2)
 
 
 def covers(start: date, end: date, path: Path = STORE_PATH) -> bool:

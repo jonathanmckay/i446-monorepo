@@ -77,6 +77,20 @@ def test_no_store_and_forced_live_both_go_live(tmp_path, monkeypatch):
 def test_store_covers_rejects_days_before_the_first_entry(tmp_path):
     import toggl_store
     db = _store(tmp_path)
-    assert toggl_store.covers(date(2018, 3, 28), date.today() - timedelta(days=1), db)
-    assert not toggl_store.covers(date(2018, 3, 27), date.today() - timedelta(days=1), db)
+    assert toggl_store.covers(date(2018, 3, 28), date.today() - timedelta(days=2), db)
+    assert not toggl_store.covers(date(2018, 3, 27), date.today() - timedelta(days=2), db)
     assert not toggl_store.covers(date.today() - timedelta(days=2), date.today(), db)
+
+
+def test_yesterday_goes_live_even_right_after_a_sync(tmp_path, monkeypatch):
+    """Yesterday's evening is often backfilled after the 05:10 sync; /0t read
+    it from the store on 2026-10-22 and missed 睡觉 21:15-23:59."""
+    import toggl_store
+    db = _store(tmp_path)  # synced just now
+    yesterday = date.today() - timedelta(days=1)
+    assert not toggl_store.covers(yesterday, yesterday, db)
+    monkeypatch.setattr(toggl_api, "STORE_PATH", db)
+    calls = []
+    monkeypatch.setattr(toggl_api, "_request", lambda *a, **k: calls.append(a) or [])
+    toggl_api.get_entries(yesterday.isoformat(), date.today().isoformat())
+    assert len(calls) == 1

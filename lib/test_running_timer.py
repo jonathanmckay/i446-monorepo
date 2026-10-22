@@ -64,3 +64,13 @@ def test_norm_folds_annotations_dashes_and_case(tmp_path):
     assert rt.norm("1 F693  (30) [30]") == rt.norm("1 f693")
     assert rt.norm("check-in with Bei") == "check in with bei"
     assert rt.norm("   ") == ""
+
+
+def test_dash_one_ritual_does_not_resolve_to_the_weekly_card(tmp_path):
+    """2026-10-22: norm() folds the leading dash, so a '-1g' timer resolved to
+    the weekly '1g' card listed before it and dtd's -1g row lost its spinner."""
+    q = tmp_path / "task-queue.json"
+    q.write_text(json.dumps({"1neon": [{"id": "W1", "content": "1g (20) [20]"}],
+                             "today": [{"id": "R1", "content": "-1g (5) [5]"}]}))
+    assert rt.task_for_desc("-1g", queue_path=q)["id"] == "R1"
+    assert rt.task_for_desc("1g", queue_path=q)["id"] == "W1"
