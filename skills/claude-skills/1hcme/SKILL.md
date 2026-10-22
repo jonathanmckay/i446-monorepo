@@ -15,8 +15,8 @@ been written since 1/1/26 (col A's M.W label on that row names the week).
 
 1. One Ix round trip reads the week's rows (values **and** `display format`
    fill/font colors, so conditional formatting comes through) for the window
-   **Friday after the previous check-in → the target week's Saturday**,
-   clipped to today. The previous Thursday's own check-in text is shown first.
+   **Thursday → Wednesday**: the previous check-in's Thursday through the
+   day before the target Thursday, clipped to today. The previous Thursday's own check-in text is shown first.
 2. Renders one **table row per day** with truecolor cells painted in their
    Excel colors: day, then the numbers (⌈ ⌊ x̄ 他⌈ 他⌊ 霓 帮 身 ₹), then
    text columns in priority order (Title, Win, Learning, Thankful, Proud·o,
@@ -24,10 +24,9 @@ been written since 1/1/26 (col A's M.W label on that row names the week).
    characters (default 24, ellipsis on the cut); as many text columns as fit
    the terminal width are shown and the rest are named in a footer. `--cols
    N` caps the text columns. White fills render as terminal default; blank
-   cells are `·`. The target Thursday's row is bold.
-3. Asks: **What did I learn this week about my emotions that I should
-   remember?** One thought per line; blank line or `^D` finishes; an empty
-   answer aborts without writing.
+   cells are `·`. 3. Asks: **What did I learn this week about my emotions that I should
+   remember?** One thought per line; Enter on an empty line or `Ctrl+S` saves
+   and exits (`^D` too); `Ctrl+C` or an empty answer aborts without writing.
 4. Writes the answer (one `• ` bullet per line, matching the existing cells)
    to `0s897!X{thursday row}` via `ix-osa.sh`, then marks the habit done
    through the normal `/did` path (`tools/did/run.py "1 hcme"` → 1n+ col X

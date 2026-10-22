@@ -1678,7 +1678,16 @@ if [[ -e "$DTD_BLOCKPICK" ]]; then
   rm -f "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed"
   echo "↩ back to list" > "$DTD_HDR"
 elif [[ -z "\$1" ]]; then
-  zmodload zsh/datetime 2>/dev/null
+  zmodload zsh/datetime zsh/stat 2>/dev/null
+  # Within 10 s of leaving the edit form, Esc was meant for the form (see
+  # the formexit stamp in the edit script): stay, and let a second Esc quit.
+  _fx="/tmp/dtd-$DTD_ID.formexit"
+  if [[ -e "\$_fx" ]] && zstat -A _fm +mtime "\$_fx" 2>/dev/null && (( EPOCHSECONDS - _fm[1] < 10 )); then
+    rm -f "\$_fx"
+    echo "esc again to quit dtd" > "$DTD_HDR"
+    print -rn -- "transform-header(\$DTD_HDRGEN)"
+    exit 0
+  fi
   print -- "\$EPOCHREALTIME\tback-abort\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
   print -n abort
   exit 0
@@ -1750,6 +1759,11 @@ while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
 # Give the tty its interrupt chars back (both exit paths pass here). fzf's
 # Resume() re-applies raw mode anyway; this just leaves no surprise behind.
 stty intr '^C' quit '^\\' < /dev/tty 2>/dev/null
+# Form-exit stamp (2026-10-22, "tried to change the project of a -1g and
+# dtd died"): Enter on the last field (project) saves and closes the form,
+# and an Esc meant for the form then landed on the bare list, which quits
+# dtd. The back router reads this stamp and makes that Esc a no-op.
+: > "/tmp/dtd-$DTD_ID.formexit"
 if [[ ! -s "\$_out" ]]; then
   if (( _rc == 2 )); then echo "edit cancelled" > "\$HDR"
   else echo "✗ edit form exited \$_rc: \$(tail -c 120 /tmp/dtd-$DTD_ID.edit.err 2>/dev/null | tr '\\n' ' ')" > "\$HDR"; fi
@@ -1795,6 +1809,7 @@ else
       curl -s -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
     fi
   fi
+  "/tmp/dtd-$DTD_ID.bgrefresh.sh"   # then the ctrl-r pull, so Todoist-side changes show (2026-10-22)
 fi
 print -- "\$EPOCHREALTIME\tedit-saved\t\$1" >> "\$TIMING" 2>/dev/null
 } </dev/null >> "/tmp/dtd-edit.log" 2>&1 &!
@@ -3284,6 +3299,7 @@ if _lost:
 with open(hdr_file, 'w') as f: f.write(msg)
 " "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "${bonus_today:-}" "${bonus_total:-}" "${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}" "${done_short:-}" "${rem_short:-}" "${rem_bonus_override:-}" "${rem_due:-}" "${keep_rem:-1}"
 print -- "$EPOCHREALTIME\tsplit-bg-end\t$task_id rc=$?" >> "$TIMING" 2>/dev/null
+"/tmp/dtd-PLACEHOLDER_SID.bgrefresh.sh"   # pull Todoist + reload so the split shows (2026-10-22)
 } </dev/null >> "/tmp/dtd-split.log" 2>&1 &!
 print -- "$EPOCHREALTIME\tsplit-end\t$task_id" >> "$TIMING" 2>/dev/null
 
@@ -3500,6 +3516,30 @@ else
 fi
 UNDOEOF
 chmod +x "$DTD_UNDO"
+
+# --- Background refresh after an edit-form save (2026-10-22) ---
+# "after running ctrl+p in dtd, can you run ctrl+r so that the change to that
+# task is visible when I return to dtd?" The edit/split writes run detached
+# AFTER fzf's own reload, so the list kept the pre-save row until a manual
+# ctrl-r. Once the writer finishes it calls this: the same Todoist pull as
+# ctrl-r, then a reload poked through fzf's listen port. No tty I/O (it runs
+# in the background while fzf owns the terminal) and no header write, so the
+# save's own result line stays visible.
+DTD_BGREFRESH="/tmp/dtd-$DTD_ID.bgrefresh.sh"
+cat > "$DTD_BGREFRESH" << BGREFRESHEOF
+#!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0
+python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 && cp "$CACHE" "$DTD_CACHE_FILE"
+_port="\$(cat "$DTD_PORT" 2>/dev/null)"
+[[ -n "\$_port" ]] || exit 0
+_reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$(date +%Y-%m-%d)' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
+if [[ -n "\$FZF_API_KEY" ]]; then
+  curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+else
+  curl -s -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+fi
+BGREFRESHEOF
+chmod +x "$DTD_BGREFRESH"
 
 # --- Refresh script used by fzf ctrl-r binding ---
 # Was an inline execute-silent(...) command in the --bind string itself until
@@ -3819,7 +3859,7 @@ _dtd_warm() { local _s; for _s in "$@"; do [[ -x "$_s" ]] && DTD_WARM=1 "$_s" </
   _dtd_warm "$DTD_LIST" "$DTD_HDRGEN" "$DTD_BLOCKARM" "$DTD_PICKENTER" "$DTD_BLOCKAPPLY" \
             "$DTD_DEFER" "$DTD_DONE_ROUTER" "$DTD_DONE_HIDE" "$DTD_DONE" "$DTD_START" "$DTD_ENTER" "$DTD_BACK" &
   _dtd_warm "$DTD_DOMAINSEARCH" "$DTD_EDIT" "$DTD_SPLIT" "$DTD_UNDO" "$DTD_BUMP" "$DTD_SKIP" \
-            "$DTD_DELETE" "$DTD_REFRESH" "$DTD_VIEWTOGGLE" "$DTD_AGENT" "$DTD_FORM" &
+            "$DTD_DELETE" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_VIEWTOGGLE" "$DTD_AGENT" "$DTD_FORM" &
   wait
   : > "$DTD_WARM_DONE"
 ) &>/dev/null &!
@@ -3920,7 +3960,7 @@ while true; do
       --multi \
       --bind "shift-down:toggle+down" --bind "shift-up:toggle+up" \
       $( : "ctrl-d/v/k end at clear-query (2026-10-21): reload-sync is followed by the load event, whose transform-header already repaints the arm script's '📅 schedule' line; the explicit one was a second spawn for the same text" ) \
-      --bind "ctrl-o:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-o:execute($DTD_EDIT {2})+clear-screen+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "esc:transform($DTD_BACK {q})" \
       --bind "ctrl-c:transform($DTD_BACK {q})" \
@@ -3928,10 +3968,10 @@ while true; do
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "ctrl-x:select+execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-p:execute(DTD_SPLIT_SEED=1 $DTD_EDIT {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-p:execute(DTD_SPLIT_SEED=1 $DTD_EDIT {2})+clear-screen+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "alt-up:select+execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-g:execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      --bind "ctrl-g:execute($DTD_EDIT {2})+clear-screen+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
