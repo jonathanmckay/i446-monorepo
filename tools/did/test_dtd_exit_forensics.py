@@ -11,7 +11,8 @@ DTD = (Path(__file__).resolve().parent / "dtd.sh").read_text()
 
 
 def test_fzf_exit_code_logged_before_break():
-    m = re.search(r'fzf_output=\$\(eval .*?\n  _fzf_rc=\$\?\n  task="\$fzf_output"', DTD, re.S)
+    # (the intr/quit restore may sit between: it runs after $? is captured)
+    m = re.search(r'fzf_output=\$\(eval .*?\n  _fzf_rc=\$\?\n(?:  stty intr [^\n]*\n)?  task="\$fzf_output"', DTD, re.S)
     assert m, "_fzf_rc must capture fzf's status immediately after the picker returns"
     blk = DTD[DTD.index('if [[ -z "$task" ]]; then', m.end()):][:400]
     assert 'fzf-exit\\trc=$_fzf_rc' in blk and blk.index("fzf-exit") < blk.index("break")

@@ -21,11 +21,12 @@ import shlex
 import socket
 import subprocess
 import sys
+from pathlib import Path
 
-PROFILES = {"m5x2": ("Profile 11", "m5c7.com"), "i9": ("Profile 1", "MSFT")}
-DEFAULT_PROFILE = ("Profile 5", "个")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dtd_link  # noqa: E402  profiles + new-window open (2026-10-22)
+
 STRAYLIGHT = "straylight-refit"
-_URL = re.compile(r"https?://[^\s)\]>]+")
 
 
 def find_task(cache: dict, task_id: str) -> dict | None:
@@ -38,20 +39,15 @@ def find_task(cache: dict, task_id: str) -> dict | None:
 
 
 def first_url(task: dict) -> str | None:
-    m = _URL.search(task.get("content") or "") or _URL.search(task.get("description") or "")
-    return m.group(0) if m else None
+    urls = dtd_link.urls_in(task.get("content") or "", task.get("description") or "")
+    return urls[0] if urls else None
 
 
 def profile_for(task: dict) -> tuple[str, str]:
-    labels = task.get("labels") or []
-    for dom, prof in PROFILES.items():
-        if dom in labels:
-            return prof
-    return DEFAULT_PROFILE
+    return dtd_link.profile_for(task.get("labels"))
 
 
-def open_cmd(url: str, profile_dir: str) -> list[str]:
-    return ["open", "-na", "Google Chrome", "--args", f"--profile-directory={profile_dir}", url]
+open_cmd = dtd_link.open_cmd
 
 
 def on_ix() -> bool:

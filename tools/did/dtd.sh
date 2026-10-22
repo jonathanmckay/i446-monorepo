@@ -2617,10 +2617,19 @@ for t in unique:
         # OSC 8 wrap AFTER layout so the escape bytes never skew the padding.
         # ST spelled with chr(92): this python lives in a zsh double-quoted
         # string where a backslash pair would collapse and break the escape.
+        # Target is the hammerspoon:// handler (dtd_link.click_url), so a
+        # click opens the task's Chrome profile in a new window (2026-10-22);
+        # a bare URL target opened whichever profile Chrome used last.
         _st = '\x1b' + chr(92)
+        try:
+            _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
+            import dtd_link as _dl
+            _target = _dl.click_url(link_url, t.get('labels'))
+        except Exception:
+            _target = link_url
         body = body.replace(
             link_text,
-            '\x1b]8;;' + link_url + _st + link_text + '\x1b]8;;' + _st, 1)
+            '\x1b]8;;' + _target + _st + link_text + '\x1b]8;;' + _st, 1)
     if is_running:
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
@@ -4024,6 +4033,7 @@ while true; do
       --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "esc:transform($DTD_BACK {q})" \
       --bind "ctrl-c:transform($DTD_BACK {q})" \
+      --bind "ctrl-q:transform($DTD_BACK {q})" \
       --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \

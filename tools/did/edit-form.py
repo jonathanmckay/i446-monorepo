@@ -59,6 +59,8 @@ import unicodedata
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import dtd_link  # noqa: E402  link parsing + click targets (2026-10-22)
 _NUM_ANNOT = re.compile(r"\s*(?:\(\d*\)|\[\d*\]|\[[\d.+]*/m\]|\{\d*\})")
 _EST = re.compile(r"\(\(?\d+\)?\)|\[\d*G?\]|\{\d+\}")
 _INT = re.compile(r"^\d+$")
@@ -102,8 +104,15 @@ def prefill(task: dict, description: str | None, domains=DOMAINS) -> dict:
     labels = [l for l in task.get("labels", []) if l in domains]
     prose = prose_of(content)
     short = task.get("short") or ""
+    name_full = re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip()
+    name, name_links = split_links(name_full)
     return {
-        "name": re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip(),
+        # Links are cut out of the name fields (2026-10-22, "more info page
+        # mangles links": a raw [(link)](https://…) filled both name rows and
+        # was cut off) and shown whole under notes; result() puts them back.
+        "name": name,
+        "name_full": name_full,
+        "name_links": name_links,
         "points": pts.group(1) if pts else "",
         "bonus": curly.group(1) if curly else "",
         "has_bonus": bool(curly),
@@ -116,6 +125,25 @@ def prefill(task: dict, description: str | None, domains=DOMAINS) -> dict:
         "desc_loaded": description is not None,
         "domain": labels[0] if labels else "",
     }
+
+
+def split_links(text: str) -> tuple[str, list[str]]:
+    """(text without its links, the link tokens as written: [t](url) or url)."""
+    toks: list[str] = []
+
+    def cut(m):
+        toks.append(m.group(0))
+        return " "
+
+    rest = dtd_link.MD_LINK.sub(cut, text or "")
+    rest = dtd_link.URL.sub(cut, rest)
+    return " ".join(rest.split()), toks
+
+
+def show_links(text: str) -> str:
+    """[text](url) -> text, bare url -> (link): for one-line display."""
+    text = dtd_link.MD_LINK.sub(lambda m: m.group(1) or "(link)", text or "")
+    return dtd_link.URL.sub("(link)", text)
 
 
 def remainder(total: str, time_: str, done_pts: str, done_min: str) -> tuple[str, str]:
@@ -215,8 +243,16 @@ def result(vals: dict) -> dict:
     """What edit-fast receives. Blank = keep (notes: blank = clear, as before)."""
     due = (vals.get("due") or "").strip()
     due_iso = "" if (not due or due == (vals.get("due_pre") or "")) else (parse_date(due) or "")
+    name = " ".join((vals.get("name") or "").split())
+    if vals.get("name_links") and name:
+        # untouched name: send the original (links in place, edit-fast sees
+        # no change); edited: the links ride along at the end
+        if name == vals.get("name_pre"):
+            name = vals.get("name_full") or name
+        else:
+            name = name + " " + " ".join(vals["name_links"])
     out = {
-        "name": " ".join((vals.get("name") or "").split()),
+        "name": name,
         "points": (vals.get("points") or "").strip(),
         "bonus": (vals.get("bonus") or "").strip(),
         "due": due_iso,
@@ -297,15 +333,23 @@ def detail_lines(bundle: dict | None, project: str | None) -> list[tuple[str, st
         rows.append(("dim", f"{(c.get('posted_at') or '')[:10]} {body.splitlines()[0] if body else ''}"))
     if len(kept) > 3:
         rows.append(("dim", f"… {len(kept) - 3} more comments"))
-    urls: list[str] = []
-    for text in [t.get("content", ""), t.get("description", "")] + [c.get("content", "") for c in kept]:
-        for u in _URL.findall(text or ""):
-            u = u.rstrip(".,;:!?'\"")
-            if u not in urls:
-                urls.append(u)
-    for u in urls[:4]:
-        rows.append(("link", u))
     return rows
+
+
+def task_links(task: dict, bundle: dict | None) -> list[str]:
+    """Every URL on the task: title, notes, comments (links block under notes).
+    The snapshot task's title works before the live bundle lands."""
+    t = (bundle or {}).get("task") or {}
+    kept = [c for c in ((bundle or {}).get("comments") or [])
+            if not (c.get("content") or "").startswith("dtd-short:")]
+    return dtd_link.urls_in(task.get("content", ""), t.get("content", ""), t.get("description", ""),
+                            *[c.get("content", "") for c in kept])
+
+
+def wrap_url(url: str, width: int) -> list[str]:
+    """A URL cut into width-sized pieces (URLs are ASCII: one column each)."""
+    width = max(10, width)
+    return [url[i:i + width] for i in range(0, len(url), width)] or [""]
 
 
 def project_name(task: dict) -> str | None:
@@ -516,6 +560,8 @@ class Form:
         if not self.by["due"].touched:
             v["due"] = ""
         v["short_enabled"] = self.pre["short_enabled"]
+        v["name_pre"], v["name_full"] = self.pre["name"], self.pre.get("name_full", "")
+        v["name_links"] = self.pre.get("name_links") or []
         v["desc_loaded"] = self.pre["desc_loaded"] and self.by["desc"].enabled
         return v
 
@@ -540,9 +586,16 @@ class Form:
         # detail block and the notes box take what is left.
         FIXED = 1 + 5 + 1 + 7 + 1 + 1 + 1 + 1   # title, done (hdr+name2+haiku+nums), blank, remainder (+do-date, keep), blank, common hdr, project, legend
         spare = max(0, h - FIXED)
+        # Links under notes, each URL whole (wrapped), ahead of the detail
+        # block and extra notes rows in the height budget (2026-10-22).
+        link_w = max(10, w - self.LABEL_W - 2)
+        link_rows = [(u, seg) for u in task_links(self.task, self.bundle) for seg in wrap_url(u, link_w)]
+        link_rows = link_rows[:max(0, min(len(link_rows), spare - 1, 8))]
+        spare -= len(link_rows)
         notes_rows = max(1, min(6, spare - 1)) if spare > 1 else 1
         detail_cap = max(0, min(6, spare - notes_rows))
-        put(y, 0, self.task.get("content", ""), curses.A_BOLD); y += 1
+        self._links_drawn = []
+        put(y, 0, show_links(self.task.get("content", "")), curses.A_BOLD); y += 1
         for style, text in detail_lines(self.bundle, self.project)[:detail_cap]:
             put(y, 0, text, curses.A_DIM if style == "dim" else curses.A_UNDERLINE); y += 1
         cursor = (y, 0)
@@ -583,6 +636,12 @@ class Form:
         header("common")
         c, used = self._draw_multiline(scr, y, self.by["desc"], w, notes_rows)
         cursor = c or cursor; y += used
+        for i, (u, seg) in enumerate(link_rows):
+            if i == 0 or link_rows[i - 1][0] != u:
+                put(y, 0, f"{'link':<{self.LABEL_W}}", curses.A_DIM)
+            put(y, self.LABEL_W, seg, curses.A_UNDERLINE)
+            self._links_drawn.append((y, self.LABEL_W, seg, u))
+            y += 1
         c = self._draw_row(scr, y, [self.by["domain"]], w); cursor = c or cursor; y += 1
         legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^P done · ^O remainder"
         put(h - 1, 0, legend, curses.A_REVERSE if self.msg else curses.A_DIM)
@@ -591,6 +650,29 @@ class Form:
         except curses.error:
             pass
         scr.refresh()
+        self._hyperlink()
+
+    def _hyperlink(self) -> None:
+        """Make the link rows clickable. curses can't emit OSC 8, so after each
+        refresh the same text is rewritten in place wrapped in a hyperlink
+        whose target opens the task's Chrome profile in a new window
+        (dtd_link.click_url). Cursor saved/restored around it (ESC 7 / ESC 8),
+        so curses' idea of the screen stays true."""
+        if not getattr(self, "_links_drawn", None):
+            return
+        labels = self.task.get("labels") or []
+        out = ["\x1b7"]
+        st = "\x1b\\"
+        for yy, xx, seg, url in self._links_drawn:
+            # one id per URL: the wrapped pieces of a link hover as one link
+            out.append(f"\x1b[{yy + 1};{xx + 1}H\x1b[4m"
+                       f"\x1b]8;id=dtd{abs(hash(url)) % 10**8};{dtd_link.click_url(url, labels)}{st}"
+                       f"{seg}\x1b]8;;{st}\x1b[0m")
+        out.append("\x1b8")
+        try:
+            os.write(sys.stdout.fileno(), "".join(out).encode())
+        except OSError:
+            pass
 
     def _draw_row(self, scr, y, fields: list[Field], w):
         """Single-line fields on one row; returns the cursor (y, x) if focused."""
@@ -790,6 +872,11 @@ class Form:
         curses.raw()
         curses.noecho()
         scr.keypad(True)
+        # Repaint cells, never shift them with insert/delete line or char ops:
+        # the link rows carry OSC 8 hyperlinks written behind curses' back
+        # (_hyperlink), and a shifted block would drag stale links along.
+        scr.idlok(False)
+        scr.idcok(False)
         try:
             curses.set_escdelay(40)
         except Exception:  # noqa: BLE001
