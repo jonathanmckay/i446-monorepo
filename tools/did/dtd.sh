@@ -2528,6 +2528,9 @@ for t in unique:
     #      my time is on a certain task, it should be a clock ticker or
     #      something like the claude snowflake that shows movement'; the
     #      watcher reloads once a second while the timer runs so it moves)
+    #      plus 🧮 after the minutes (2026-10-22: 'what happened to the abacus
+    #      for tasks that I'm doing myself'; the spinner was meant to add
+    #      motion, not to take the abacus away)
     #   A2 JM started it today (Enter/ctrl-s), timer moved on, not done: 🧮
     #      ('if I started but didn't finish, it can just show the abacus')
     #   C  agent claim working: spinner + 😈, grey
@@ -2543,7 +2546,7 @@ for t in unique:
                   and not is_claimed and not is_skipped)
     if is_running:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
-        prefix = f'{_agent_frame} {elapsed}m · {dom_tag}'
+        prefix = f'{_agent_frame} {elapsed}m · 🧮 {dom_tag}'
     elif is_started:
         prefix = '🧮 ' + repeat + dom_tag
     else:
@@ -2556,9 +2559,8 @@ for t in unique:
         # A2 + working (2026-10-21: 'shouldn't dtd have the abacus for the
         # project that I'm working on currently? Right now it's not there'):
         # JM started it today and an agent is on it now, so the agent's
-        # spinner + N😈 lead and his 🧮 stays, right before the title. Only
-        # the running-timer case drops it (10-16: the timer's glyph becomes
-        # spinner + 😈).
+        # spinner + N😈 lead and his 🧮 stays, right before the title. A
+        # running row already carries its 🧮 after the minutes (2026-10-22).
         if str(t.get('id', '')) in started_at and not is_running and not is_skipped:
             _rest = '🧮 ' + _rest
         prefix = _agent_frame + ' ' + _pane + '😈 ' + _rest

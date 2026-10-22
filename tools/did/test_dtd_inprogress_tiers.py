@@ -135,7 +135,9 @@ def test_tier_markers():
     out = _run("R1")
     a, b, c = (_row_for_id(out, i) for i in ("R1", "I1", "W1"))
     assert _lead_glyph(a) in SPIN and " 5m · " in a, a
-    assert "🧮" not in a and "😈" not in a and "🕐" not in a and GREY not in a
+    # 2026-10-22: the running row keeps JM's 🧮 after the moving minutes
+    assert " 5m · 🧮 " in a, a
+    assert "😈" not in a and "🕐" not in a and GREY not in a
     assert "🧮 🕐 " in b and "😈" not in b and GREY not in b
     assert "😈" in c and "🧮" not in c and c.startswith(GREY)
     for i in ("N1", "N2"):
@@ -152,7 +154,7 @@ def test_working_claim_replaces_abacus_on_timed_task():
     ids = _ids(out)
     assert ids[0] == "RC" and ids.index("W1") < ids.index("I1"), ids
     row = _row_for_id(out, "RC")
-    assert "😈" in row and "🧮" not in row and "5m · " in row and row.startswith(GREY), row
+    assert "😈" in row and "5m · 🧮 " in row and row.startswith(GREY), row
 
 
 def test_working_claim_on_started_task_keeps_abacus():
@@ -166,7 +168,7 @@ def test_working_claim_on_started_task_keeps_abacus():
     row = _row_for_id(out, "W1")
     assert _lead_glyph(row) in SPIN and "😈 🧮 agent working" in row and row.startswith(GREY), row
     rc = _row_for_id(_run("RC", started=[("2026-10-11", "RC", now - 600)]), "RC")
-    assert "😈" in rc and "🧮" not in rc and "5m · " in rc, rc
+    assert "😈" in rc and "5m · 🧮 " in rc, rc
 
 
 def test_idle_claim_loses_to_running_timer():
@@ -175,7 +177,7 @@ def test_idle_claim_loses_to_running_timer():
     out = _run("RC", rc_state="idle")
     row = _row_for_id(out, "RC")
     assert _lead_glyph(row) in SPIN and " 5m · " in row, row
-    assert "🧮" not in row and "🕐" not in row and "😈" not in row and GREY not in row, row
+    assert "5m · 🧮 " in row and "🕐" not in row and "😈" not in row and GREY not in row, row
 
 
 def test_running_timer_moves_started_keeps_abacus():
@@ -187,7 +189,7 @@ def test_running_timer_moves_started_keeps_abacus():
     now = int(time.time())
     out = _run("R1", started=[("2026-10-11", "N1", now - 600)])
     r1, n1 = _row_for_id(out, "R1"), _row_for_id(out, "N1")
-    assert _lead_glyph(r1) in SPIN and "🧮" not in r1 and "😈" not in r1, r1
+    assert _lead_glyph(r1) in SPIN and "5m · 🧮 " in r1 and "😈" not in r1, r1
     assert "🧮 " in n1 and _lead_glyph(n1) == "🧮", n1
     assert _ids(out)[:2] == ["R1", "N1"]
     # the glyph is a function of time, so two renders ~0.5s apart differ
