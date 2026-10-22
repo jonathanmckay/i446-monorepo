@@ -198,7 +198,12 @@ public struct Timeline: Equatable {
     public let trackedMin: Int
     public let points: Int?
     public let date: String
-    public init(rows: [TimelineRow], trackedMin: Int, points: Int?, date: String) {
-        self.rows = rows; self.trackedMin = trackedMin; self.points = points; self.date = date
+    /// Whether `date` is the live day. False on a back/forward (?offset=) view,
+    /// which is read-only. Defaults true so an old cached payload (always
+    /// today's) and any non-server construction read as today.
+    public let isToday: Bool
+    public init(rows: [TimelineRow], trackedMin: Int, points: Int?, date: String, isToday: Bool = true) {
+        self.rows = rows; self.trackedMin = trackedMin; self.points = points
+        self.date = date; self.isToday = isToday
     }
 }

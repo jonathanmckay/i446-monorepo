@@ -156,6 +156,15 @@ do {
     check(tl.points == nil, "points null → nil")
 }
 
+// timeline_is_today: present → honoured; absent → defaults true (old cache)
+do {
+    let past = Parsers.timeline(JSON.parse(#"{"ok":true,"rows":[],"tracked_min":0,"points":null,"date":"2026-10-21","is_today":false}"#)!)
+    check(!past.isToday, "is_today:false → read-only past view")
+    let today = Parsers.timeline(JSON.parse(#"{"ok":true,"rows":[],"tracked_min":0,"points":null,"date":"2026-10-22","is_today":true}"#)!)
+    check(today.isToday, "is_today:true → live")
+    check(Parsers.timeline(JSON.parse(timelineJson)!).isToday, "is_today absent → defaults true")
+}
+
 // janus_bodies_match_web_payloads
 do {
     let tl = Parsers.timeline(JSON.parse(timelineJson)!)
