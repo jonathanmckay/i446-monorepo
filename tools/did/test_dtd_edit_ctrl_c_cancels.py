@@ -10,8 +10,8 @@ zsh action script AND fzf, its parent. fzf dies, so dtd exits.
 
 Fix (dtd.sh, DTD_EDIT heredoc): undefine the tty intr/quit chars as the
 first thing the script does, repeat it on the `stty sane` line (sane resets
-intr), and restore them right after the tty drain, which both exit paths
-pass through. Since 2026-10-21 the screen is the curses form (edit-form.py):
+intr), and leave them undefined until fzf exits (restored in the UI loop,
+2026-10-22: restoring them in the script raced a second ^C). Since 2026-10-21 the screen is the curses form (edit-form.py):
 it runs the tty raw, so a ^C once it is up is a key (cancel, exit 2); the
 guard covers the ~50 ms before raw mode and the drain after.
 
@@ -67,13 +67,13 @@ def test_stty_sane_in_edit_script_is_followed_by_intr_undef():
         assert lines[i + 1].startswith("stty intr undef quit undef"), lines[i:i + 2]
 
 
-def test_intr_restored_after_drain_before_cancel_check():
-    body = _edit_heredoc()
-    drain = body.find(DRAIN)
-    restore = body.find("stty intr '^C' quit")
-    cancel = body.find('echo "edit cancelled"')
-    assert -1 not in (drain, restore, cancel)
-    assert drain < restore < cancel
+def test_intr_stays_undefined_until_fzf_exits():
+    """2026-10-22: restoring intr at the end of the edit script left a ~15 ms
+    window before fzf's Resume() re-raw; a second ^C landing in it killed fzf
+    (rc=130 right after a clean cancel). The restore lives after fzf now."""
+    assert "stty intr '^C'" not in _edit_heredoc()
+    m = re.search(r"\n  _fzf_rc=\$\?\n  stty intr '\^C' quit '\^\\' < /dev/tty", DTD)
+    assert m, "dtd no longer restores intr/quit right after fzf exits"
 
 
 # ── pty harness ──────────────────────────────────────────────────────────────
@@ -96,7 +96,6 @@ def _script(tmp_path: Path, guarded: bool) -> str:
     guard = next(l for l in body if l.startswith("stty intr undef"))
     i = next(i for i, l in enumerate(body) if l.startswith("stty sane"))
     sane = "\n".join(body[i:i + 2]) if guarded else body[i]   # sane + its re-undef
-    restore = next(l for l in body if l.startswith("stty intr '^C'")) if guarded else ""
     form = f'python3 "{_HERE / "edit-form.py"}" --id t1 "{tmp_path / "cache.json"}" --out "{tmp_path / "out.json"}" < /dev/tty > /dev/tty'
     return "\n".join([
         "#!/bin/zsh",
@@ -107,7 +106,6 @@ def _script(tmp_path: Path, guarded: bool) -> str:
         "rc=$?",
         "stty -echo < /dev/tty 2>/dev/null || true",
         DRAIN,
-        restore,
         "print -- \"AFTER rc=$rc out=$([[ -s " + str(tmp_path / "out.json") + " ]] && echo yes || echo no)"
         " intr=$(stty -a < /dev/tty | grep -o 'intr = [^;]*')\"",
         "",
@@ -169,7 +167,7 @@ def test_ctrl_c_cancels_the_edit_and_fzf_survives(tmp_path, at):
     assert "PARENT_SIGINT=0" in out, out[-400:]
     assert "CHILD_RC=0" in out, out[-400:]
     assert "AFTER rc=2 out=no" in out, out[-400:]     # the form cancelled, nothing saved
-    assert "intr = ^C" in out, out[-400:]            # restored for fzf
+    assert "intr = <undef>" in out, out[-400:]       # still undefined while fzf resumes
 
 
 def test_control_run_without_the_guard_reproduces_the_bug(tmp_path):

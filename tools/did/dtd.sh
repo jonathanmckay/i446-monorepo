@@ -113,7 +113,9 @@ DTD_ID="$$-$(date +%s)-$RANDOM"
 # a detached did-fast/defer child of a just-exited run is never cut off.
 for _f in /tmp/dtd-<->-*(Nmh+1); do
   _pid=${${_f:t}#dtd-}; _pid=${_pid%%-*}
-  [[ "$_pid" == <-> ]] && ! kill -0 "$_pid" 2>/dev/null && rm -f "$_f"
+  # -rf: .resolved is a directory; plain rm printed one "is a directory" line
+  # per dead launch and they piled up into a scrolling wall at startup (2026-10-22).
+  [[ "$_pid" == <-> ]] && ! kill -0 "$_pid" 2>/dev/null && rm -rf "$_f" 2>/dev/null
 done
 unset _f _pid
 
@@ -225,7 +227,28 @@ DTD_CACHE_MAX_AGE=${DTD_CACHE_MAX_AGE:-600}  # seconds
 # four stacked ones. One refresh attempt per launch is enough — a second
 # attempt run milliseconds later against the same degraded network isn't
 # going to succeed where the first didn't.
-_dtd_refresh_done=""
+_dtd_refresh_done=""; _dtd_refresh_sync_done=""
+# Age/block staleness refreshes in the BACKGROUND (2026-10-22, "anything we can
+# do to make startup faster"): the synchronous refresh was ~2.2s of a ~3.7s
+# cold start. fzf opens on the slightly stale cache and the auto-reload watcher
+# swaps the fresh one in when its mtime moves (baseline = DTD_SNAP_M, taken at
+# snapshot time, so a refresh that lands before fzf publishes its port is not
+# missed). The count guards below mean the cache is broken, not just old: they
+# still block, by waiting on this same refresh rather than starting a second.
+_dtd_bg_refresh=""
+_dtd_refresh_bg() {
+  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 &!
+  _dtd_bg_refresh=$!
+  _dtd_refresh_done=1
+}
+_dtd_refresh_sync() {
+  if [[ -n "$_dtd_bg_refresh" ]]; then
+    while kill -0 "$_dtd_bg_refresh" 2>/dev/null; do sleep 0.1; done
+  else
+    python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
+  fi
+  _dtd_refresh_done=1
+}
 cache_age=$(python3 -c "
 import json, sys, datetime as dt
 try:
@@ -242,9 +265,7 @@ except Exception:
     print(10**9)
 " "$CACHE" 2>/dev/null || echo 1000000000)
 if [[ -z "$_dtd_refresh_done" && "$cache_age" -gt "$DTD_CACHE_MAX_AGE" ]]; then
-  echo "Task cache is ${cache_age}s old (>${DTD_CACHE_MAX_AGE}s). Refreshing..."
-  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-  _dtd_refresh_done=1
+  _dtd_refresh_bg
 fi
 
 # Block-aware freshness. -1neon ritual cards roll over every 2h 地支 block (the
@@ -268,15 +289,13 @@ except Exception:
     print('1')
 " "$CACHE" 2>/dev/null || echo 1)
 if [[ -z "$_dtd_refresh_done" && "$stale_block" == "1" ]]; then
-  echo "Cache built in a previous block. Refreshing for new-block rituals..."
-  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-  _dtd_refresh_done=1
+  _dtd_refresh_bg
 fi
 
-if [[ -z "$_dtd_refresh_done" && $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
+if [[ -z "$_dtd_refresh_sync_done" && $(jq '.today | length // 0' "$CACHE") -lt 5 ]]; then
   echo "Refreshing task cache..."
-  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-  _dtd_refresh_done=1
+  _dtd_refresh_sync
+  _dtd_refresh_sync_done=1
 fi
 
 setopt NO_MONITOR 2>/dev/null
@@ -285,6 +304,7 @@ DONE_NAMES=$(jq -c --arg today "$LOCAL_TODAY" \
   'if .date == $today then [.names[] | ascii_downcase] else [] end' "$DONE" 2>/dev/null || echo '[]')
 
 # ── SNAPSHOT the cache into a variable. Never read the file again. ──
+DTD_SNAP_M=$(stat -f %m "$CACHE" 2>/dev/null)
 CACHE_SNAPSHOT=$(cat "$CACHE")
 
 # Invariant check on the snapshot
@@ -298,10 +318,11 @@ due_today=$(echo "$CACHE_SNAPSHOT" | jq --arg today "$LOCAL_TODAY" '
   | group_by(.id) | map(.[0])
   | length
 ')
-if [[ -z "$_dtd_refresh_done" && $due_today -lt 30 ]]; then
+if [[ -z "$_dtd_refresh_sync_done" && $due_today -lt 30 ]]; then
   echo "⚠ Only $due_today tasks due today (expected ~80+). Refreshing..."
-  python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1
-  _dtd_refresh_done=1
+  _dtd_refresh_sync
+  _dtd_refresh_sync_done=1
+  DTD_SNAP_M=$(stat -f %m "$CACHE" 2>/dev/null)
   CACHE_SNAPSHOT=$(cat "$CACHE")
   due_today=$(echo "$CACHE_SNAPSHOT" | jq --arg today "$LOCAL_TODAY" '
     (
@@ -3741,7 +3762,7 @@ TALLY_PID=$!
     [[ -f "$DTD_PORT" ]] && break
     sleep 0.2
   done
-  last_m=$(stat -f %m "$CACHE" 2>/dev/null)
+  last_m=${DTD_SNAP_M:-$(stat -f %m "$CACHE" 2>/dev/null)}
   last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
   last_day="$(date +%Y-%m-%d)"
   while [[ -f "$DTD_PORT" ]]; do
@@ -4147,3 +4168,4 @@ kill "$TALLY_PID" 2>/dev/null
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
+rm -rf "$DTD_RESOLVED_DIR" 2>/dev/null

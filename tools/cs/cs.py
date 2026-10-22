@@ -14,6 +14,8 @@
                                --latest: skip matching, take the session you last typed into)
   cs tmux <query>              print the tmux session holding the match's live claude process
                                (same flags as id; exits 1 when it is not running in tmux here)
+  cs tmux-map                  JSON [{tmux, surface, sid, title}] for every live claude in tmux here
+                               (Straylight's cmux_panes asks ix for it to number ix-hosted tabs)
   cs fork [query] [-- args]    new session branched from the match (claude --resume ID --fork-session)
   cs open [query] [-- args]    resume the match in place (same session id)
   cs pick [query]              interactive fzf picker; prints the chosen id
@@ -336,6 +338,16 @@ def cmux_panes():
                 sid_of[m_s.group(1)] = m_i.group(1)      # a live process beats cmux's recorded binding
     except Exception:
         pass
+    try:
+        missing = {sf['id']: sf.get('ref') for sf in surfaces
+                   if sf['id'] not in sid_of and sf.get('type') == 'terminal'
+                   and NUM_PREFIX_RE.sub('', sf.get('title') or '').strip().lower() not in TOOL_PANES}
+        for sfid, (rsid, rtitle) in _remote_surfaces(missing).items():
+            sid_of[sfid] = rsid
+            if rtitle:
+                REMOTE_TITLES[rsid] = rtitle
+    except Exception:
+        pass
     skip = os.environ.get('CS_EXCLUDE_SID', '')   # set by the SessionEnd hook: the exiting session is still in ps
     order = []
     for pn in panes:
@@ -445,10 +457,10 @@ def _live_sids():
     return set(re.findall(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', ps))
 
 
-def tmux_session_of(sid):
-    """Name of the tmux session whose pane holds the live claude process for `sid`, or None.
-    Walks each matching process up its parent chain to a tmux pane's root pid, so it finds the
-    session whatever wrapper (claude-tracked, zsh -lic) sits between them."""
+def _tmux_claudes():
+    """{session_id: tmux_session_name} for every live claude process inside a tmux pane here.
+    Walks each claude process up its parent chain to a pane's root pid, so it finds the session
+    whatever wrapper (claude-tracked, zsh -lic) sits between them."""
     ps = subprocess.run(['ps', '-axo', 'pid=,ppid=,command='], capture_output=True, text=True).stdout
     procs = {}
     for line in ps.splitlines():
@@ -461,16 +473,155 @@ def tmux_session_of(sid):
     except FileNotFoundError:
         return None
     panes = {int(p): n for p, n in (l.split(' ', 1) for l in tl.splitlines() if ' ' in l) if p.isdigit()}
-    pat = re.compile(rf'--(?:session-id|resume)[ =]{re.escape(sid)}\b')
+    out = {}
     for pid, (_pp, cmd) in procs.items():
-        if not pat.search(cmd):
+        m = re.search(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})\b', cmd)
+        if not m or m.group(1) in out:
             continue
         p, hops = pid, 0
         while p in procs and hops < 20:
             if p in panes:
-                return panes[p]
+                out[m.group(1)] = panes[p]
+                break
             p, hops = procs[p][0], hops + 1
-    return None
+    return out
+
+
+def tmux_session_of(sid):
+    """Name of the tmux session holding the live claude process for `sid`, or None."""
+    return (_tmux_claudes() or {}).get(sid)
+
+
+def tmux_map(idx):
+    """[{tmux, surface, sid, title}] for every live claude in tmux here. `surface` is the cmux
+    surface id cc tagged the tmux session with (@cmux_surface; '' when untagged, e.g. a phone
+    session or a hand-typed `tmux attach`)."""
+    tags = {}
+    try:
+        tl = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}\t#{@cmux_surface}'],
+                            capture_output=True, text=True).stdout
+        tags = dict(l.split('\t', 1) for l in tl.splitlines() if '\t' in l)
+    except FileNotFoundError:
+        pass
+    by_id = {v['id']: v for v in idx.values()}
+    live = _tmux_claudes()
+    out = [{'tmux': t, 'surface': tags.get(t, ''), 'sid': sid,
+            'title': title_of(by_id[sid]) if sid in by_id else ''}
+           for sid, t in sorted(live.items())]
+    # One hop of nesting: a tmux session whose pane runs `ssh ix tmux attach -t X` (attached from
+    # inside ix) shows X's Claude, so it inherits X's entry under its own name and tag.
+    by_tmux = {e['tmux']: e for e in out}
+    try:
+        tl = subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{session_name}'],
+                            capture_output=True, text=True).stdout
+        ps = subprocess.run(['ps', '-ww', '-axo', 'pid=,ppid=,command='], capture_output=True, text=True).stdout
+        kids = {}
+        for line in ps.splitlines():
+            f = line.split(None, 2)
+            if len(f) == 3 and f[1].isdigit():
+                kids.setdefault(int(f[1]), []).append((int(f[0]), f[2]))
+        for line in tl.splitlines():
+            pid, _, name = line.partition(' ')
+            if name in by_tmux or not pid.isdigit():
+                continue
+            stack, hops = [int(pid)], 0
+            while stack and hops < 50:
+                p = stack.pop(); hops += 1
+                for c, cmd in kids.get(p, []):
+                    m = TMUX_NAME_RE.search(cmd) if SSH_IX_RE.search(cmd) else None
+                    if m and m.group(1) in by_tmux:
+                        out.append({**by_tmux[m.group(1)], 'tmux': name, 'surface': tags.get(name, '')})
+                        stack = []
+                        break
+                    stack.append(c)
+    except Exception:
+        pass
+    return out
+
+
+IX_MAP_CACHE = STATE / 'ix-tmux-map.json'   # {ts, map}: ix's tmux_map, refreshed at most every 20 s
+SSH_IX_RE = re.compile(r'(?:^|/)(?:ssh|mosh|mosh-client)\s.*\bix(?:\.local)?\b')
+TMUX_NAME_RE = re.compile(r'tmux\s+(?:attach(?:-session)?|a|new(?:-session)?)\b[^;]*?\s-[ts]\s+[\'"]?([A-Za-z0-9_.:-]+)')
+
+
+def _ix_tmux_map(force=False):
+    try:
+        c = json.loads(IX_MAP_CACHE.read_text())
+        if not force and time.time() - c.get('ts', 0) < 20:
+            return c.get('map') or []
+    except Exception:
+        c = {}
+    try:
+        r = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2', 'ix',
+                            '~/.local/bin/cs tmux-map'], capture_output=True, text=True, timeout=5)
+        m = json.loads(r.stdout) if r.returncode == 0 else None
+    except Exception:
+        m = None
+    if m is None:
+        return c.get('map') or []
+    try:
+        IX_MAP_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        IX_MAP_CACHE.write_text(json.dumps({'ts': time.time(), 'map': m}))
+    except Exception:
+        pass
+    return m
+
+
+def _remote_surfaces(surface_ids):
+    """{surface_id: (session_id, title)} for cmux tabs whose Claude runs on ix: the tab's own
+    process is an ssh/mosh to ix, so the local scan finds no claude to read a session id from
+    (2026-10-22: tabs `cc` sends to ix, and hand-attached phone sessions, had no pane number, so
+    dtd drew a bare 😈 for their claims). Matched to ix's live tmux sessions by the surface tag cc
+    sets, else by the tmux name in the ssh/mosh argv on that tab's tty."""
+    if not surface_ids:
+        return {}
+    try:
+        tree = json.loads(subprocess.run(['cmux', 'tree', '--json'], capture_output=True, text=True,
+                                         timeout=3).stdout)
+    except Exception:
+        return {}
+    ref_tty = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get('ref') and o.get('tty'):
+                ref_tty[o['ref']] = o['tty']
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(tree)
+    sf_tty = {sid: ref_tty.get(ref) for sid, ref in surface_ids.items() if ref_tty.get(ref)}
+    if not sf_tty:
+        return {}
+    ps = subprocess.run(['ps', '-ww', '-axo', 'tty=,command='], capture_output=True, text=True).stdout
+    names = {}
+    for line in ps.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) < 2 or not SSH_IX_RE.search(parts[1]):
+            continue
+        for sf, tty in sf_tty.items():
+            if parts[0] == tty:
+                m = TMUX_NAME_RE.search(parts[1])
+                names.setdefault(sf, m.group(1) if m else '')
+    if not names:
+        return {}
+    out = {}
+    for force in (False, True):
+        mp = _ix_tmux_map(force)
+        by_tag = {e['surface']: e for e in mp if e.get('surface')}
+        by_name = {e['tmux']: e for e in mp}
+        for sf, name in names.items():
+            e = by_tag.get(sf) or by_name.get(name)
+            if e:
+                out[sf] = (e['sid'], e.get('title') or '')
+        if len(out) == len(names):
+            break
+    return out
+
+
+REMOTE_TITLES = {}   # session_id -> title, for ix-hosted panes (cmd_retitle has no local transcript)
 
 
 def cmux_numbers():
@@ -511,7 +662,7 @@ def cmd_retitle():
         print(f'{title.split()[0]}\t{sf["id"]}\t{title}')
     for n, sid, sfid, cur in cmux_panes():
         f = titles / sid
-        base = f.read_text().strip() if f.exists() else cur
+        base = f.read_text().strip() if f.exists() else (REMOTE_TITLES.get(sid) or cur)
         base = NUM_PREFIX_RE.sub('', base).strip()
         if not base:
             continue
@@ -664,6 +815,8 @@ def main(argv):
     idx = load_index(full)
     if cmd == 'ls':
         return cmd_ls(idx, query, show_all, long)
+    if cmd == 'tmux-map':
+        print(json.dumps(tmux_map(idx))); return
     if cmd == 'order':
         return cmd_order(idx, rest)
     if cmd == 'pick':
