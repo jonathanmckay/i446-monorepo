@@ -135,7 +135,9 @@ def test_tier_markers():
     out = _run("R1")
     a, b, c = (_row_for_id(out, i) for i in ("R1", "I1", "W1"))
     assert _lead_glyph(a) in SPIN and " 5m · " in a, a
-    assert "🧮" not in a and "😈" not in a and "🕐" not in a and GREY not in a
+    # 2026-10-22: the running row keeps JM's 🧮 after the moving minutes
+    assert " 5m · 🧮 " in a, a
+    assert "😈" not in a and "🕐" not in a and GREY not in a
     assert "🧮 🕐 " in b and "😈" not in b and GREY not in b
     assert "😈" in c and "🧮" not in c and c.startswith(GREY)
     for i in ("N1", "N2"):
