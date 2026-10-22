@@ -156,6 +156,19 @@ do {
     check(tl.points == nil, "points null → nil")
 }
 
+// dtd_fuzzy_word: subsequence match, contiguous short-circuit, AND-per-word
+do {
+    func fuzzy(_ w: String, _ hay: String) -> Bool {   // mirror of DtdStore.fuzzyWord
+        if hay.contains(w) { return true }
+        var it = hay.makeIterator()
+        for ch in w { var hit = false; while let h = it.next() { if h == ch { hit = true; break } }; if !hit { return false } }
+        return true
+    }
+    check(fuzzy("biks", "fix bikes (delegate?) xk87"), "dropped letter still matches (subsequence)")
+    check(fuzzy("xk87", "kids nature xk87"), "bare domain code matches contiguously")
+    check(!fuzzy("prius", "kids nature lands end"), "no 'prius' chars in order → no match")
+}
+
 // timeline_is_today: present → honoured; absent → defaults true (old cache)
 do {
     let past = Parsers.timeline(JSON.parse(#"{"ok":true,"rows":[],"tracked_min":0,"points":null,"date":"2026-10-21","is_today":false}"#)!)

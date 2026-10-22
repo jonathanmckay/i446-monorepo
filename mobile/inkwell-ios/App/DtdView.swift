@@ -16,6 +16,7 @@ struct DtdView: View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        onRetry: { store.reload() })
+            filterBar
             if store.agentCount > 0 { agentBanner }
             taskList
         }
@@ -29,6 +30,34 @@ struct DtdView: View {
         .task { if !store.loadedOnce { await store.load(refresh: false) } }
         .modifier(ValuePrompt(task: $valuePrompt, text: $valueText, store: store))
         .modifier(DelayDialog(task: $delayTarget, options: delayOptions, store: store))
+    }
+
+    /// Fuzzy filter box (wave 2 #1, 2026-10-22), the native mirror of the dtd
+    /// web filter. Typing narrows the list as a subsequence match; submitting a
+    /// query that matches nothing "refills" — moves the text into the add bar
+    /// and focuses it, so a failed search becomes a new task (one return to
+    /// filter, another to add), like the terminal dtd's one dual-purpose box.
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(Theme.dim)
+            TextField("filter — words or a domain (xk87)", text: $store.filter)
+                .font(Theme.mono).autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .submitLabel(.search)
+                .onSubmit {
+                    if !store.filter.isEmpty && store.visibleTasks.isEmpty {
+                        addText = store.filter; store.filter = ""; addFocused = true
+                    }
+                }
+            if !store.filter.isEmpty {
+                Button { store.filter = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim)
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
     }
 
     /// Web's "◐ 😈 ×N": how many cards a Claude session is working right now.
@@ -47,7 +76,7 @@ struct DtdView: View {
         // scroll the list back to the top where it was just reordered.
         ScrollViewReader { proxy in
             List {
-                ForEach(store.tasks) { t in
+                ForEach(store.visibleTasks) { t in
                     TaskRow(task: t)
                         .id(t.id)
                         .listRowBackground(Theme.bg)
@@ -56,8 +85,9 @@ struct DtdView: View {
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) { trailingButtons(t) }
                         .disabled(store.inFlight.contains(t.id))
                 }
-                if store.tasks.isEmpty && store.loadedOnce {
-                    Text("nothing due · 🎉").font(Theme.mono).foregroundStyle(Theme.dim)
+                if store.visibleTasks.isEmpty && store.loadedOnce {
+                    Text(store.filter.isEmpty ? "nothing due · 🎉" : "no match · ↵ to add “\(store.filter)”")
+                        .font(Theme.mono).foregroundStyle(Theme.dim)
                         .frame(maxWidth: .infinity).listRowBackground(Theme.bg)
                 }
             }

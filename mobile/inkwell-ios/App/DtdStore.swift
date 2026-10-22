@@ -13,6 +13,7 @@ final class DtdStore: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var inFlight: Set<String> = []   // ids with a POST outstanding — no double swipes
     @Published private(set) var scrollTick = 0               // bumps whenever the list should jump to the top
+    @Published var filter = ""                               // fuzzy filter box text (wave 2 #1)
 
     private let api = Api()
     private var activeId: String? = nil                      // id of the current top/active row — detects a new claim
@@ -29,6 +30,33 @@ final class DtdStore: ObservableObject {
     }
 
     var title: String { "\(summary.points)分 · dtd · \(summary.done) done · \(tasks.count) left" }
+
+    /// The list the view renders: `tasks` narrowed by the fuzzy filter box
+    /// (wave 2 #1, 2026-10-22), the native mirror of the dtd web filter. Each
+    /// whitespace word must match the row's title, raw content or domain as an
+    /// in-order subsequence, so a bare domain ("xk87") scopes the list and a
+    /// dropped letter ("biks") still hits. Empty filter → everything.
+    var visibleTasks: [DtdTask] {
+        let words = filter.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !words.isEmpty else { return tasks }
+        return tasks.filter { t in
+            let hay = (t.title + " " + t.raw + " " + t.domain).lowercased()
+            return words.allSatisfy { DtdStore.fuzzyWord($0, hay) }
+        }
+    }
+
+    /// True if every character of `w` appears in `hay` in order (a contiguous
+    /// substring short-circuits). Same semantics as the web page's fuzzyWord.
+    static func fuzzyWord(_ w: String, _ hay: String) -> Bool {
+        if hay.contains(w) { return true }
+        var it = hay.makeIterator()
+        for ch in w {
+            var hit = false
+            while let h = it.next() { if h == ch { hit = true; break } }
+            if !hit { return false }
+        }
+        return true
+    }
     var agentCount: Int { tasks.filter { $0.agent }.count }
     var status: String {
         if let e = lastError { return "⚠ " + e }
