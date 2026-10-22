@@ -45,27 +45,28 @@ def test_flag_declared_before_any_guard():
 
 
 def test_every_startup_refresh_call_is_guarded_and_sets_the_flag():
-    # Each `--refresh-cache` invocation in the startup section must sit
-    # inside an `if` whose condition checks the flag is unset, and the same
-    # block must set the flag afterward so later guards see it.
-    calls = [m.start() for m in re.finditer(re.escape(CALL), STARTUP)]
-    assert len(calls) == 4, (
-        f"expected exactly 4 refresh-cache call sites in dtd.sh startup, found {len(calls)} "
-        "-- update this test if a guard was added/removed intentionally")
-    for pos in calls:
-        # Nearest enclosing `if [[ ... ]]; then` above this call.
-        if_pos = STARTUP.rindex("if [[", 0, pos)
-        cond_end = STARTUP.index("]]; then", if_pos)
-        cond = STARTUP[if_pos:cond_end]
-        assert f'-z "${FLAG}"' in cond, (
-            f"refresh-cache call at offset {pos} is not gated on an unset {FLAG}: {cond!r}")
-        # The flag must be set somewhere between this call and the next
-        # `fi` closing this block (so a second guard doesn't re-fire).
-        fi_pos = STARTUP.index("\nfi", pos)
-        block_tail = STARTUP[pos:fi_pos]
-        assert f"{FLAG}=1" in block_tail, (
-            f"refresh-cache call at offset {pos} never sets {FLAG}=1, so a later "
-            "guard could still re-trigger a redundant refresh")
+    # 2026-10-22: the age/block guards refresh in the BACKGROUND
+    # (_dtd_refresh_bg) and the count guards block via _dtd_refresh_sync,
+    # which WAITS on that background refresh instead of starting a second.
+    # Still at most one refresh-cache process per launch: two call sites,
+    # one per helper, and every guard calls a helper under its flag.
+    calls = [m.start() for m in re.finditer(re.escape('python3 "$DID_FAST" --refresh-cache'), STARTUP)]
+    assert len(calls) == 2, (
+        f"expected 2 refresh-cache call sites (bg + sync helpers), found {len(calls)}")
+    bg = STARTUP[STARTUP.index("_dtd_refresh_bg() {"):STARTUP.index("\n}\n", STARTUP.index("_dtd_refresh_bg() {"))]
+    sync = STARTUP[STARTUP.index("_dtd_refresh_sync() {"):STARTUP.index("\n}\n", STARTUP.index("_dtd_refresh_sync() {"))]
+    assert "&!" in bg and f"{FLAG}=1" in bg and "_dtd_bg_refresh=$!" in bg
+    assert 'kill -0 "$_dtd_bg_refresh"' in sync and f"{FLAG}=1" in sync
+    # the sync helper only refreshes itself when no background refresh exists
+    assert sync.index('if [[ -n "$_dtd_bg_refresh" ]]') < sync.index("--refresh-cache")
+    guards = {"_dtd_refresh_bg": f'-z "${FLAG}"', "_dtd_refresh_sync": '-z "$_dtd_refresh_sync_done"'}
+    for helper, gate in guards.items():
+        uses = [m.start() for m in re.finditer(rf"\n  {helper}\n", STARTUP)]
+        assert len(uses) == 2, f"expected 2 guards calling {helper}, found {len(uses)}"
+        for pos in uses:
+            if_pos = STARTUP.rindex("if [[", 0, pos)
+            cond = STARTUP[if_pos:STARTUP.index("]]; then", if_pos)]
+            assert gate in cond, f"{helper} guard not gated on {gate}: {cond!r}"
 
 
 def test_flag_not_reset_between_guards():
