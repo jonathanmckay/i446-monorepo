@@ -1,145 +1,145 @@
 ---
 name: "1hcb"
-description: "Weekly nutrition review. Reads food logs from hcbi sheet, gives 6 suggestions, collects feedback, sets goals for next week."
+description: "Weekly health/body review. Survey (lowest weight, what I learned, goals) written to hcbi BG/BH/BJ, plus a food-log analysis with 6 suggestions that inform the goals. Enter on the dtd '1 hcb' card runs the survey alone."
 user-invocable: true
 ---
 
-# Weekly Nutrition Review (/1hcb)
+# Weekly Health Review (/1hcb)
 
-Analyze the past week's food data and generate actionable suggestions for improvement.
+A three-question survey recorded in Neon (hcbi), wrapped around an analysis of
+the week's food logs so the goals answer is informed by data.
 
 ## Usage
 
 ```
-/1hcb
+/1hcb [YYYY-MM-DD]
 ```
+
+The date picks the hcb week containing it (default: this week).
+
+**From dtd:** Enter on the `1 hcb` card opens the survey form directly
+(`tools/1hcb/1hcb.py`): the three questions, the write, and the habit close.
+No analysis. That path is for when JM just wants to record the week.
+
+## The survey and where it lands
+
+| # | Question | hcbi column |
+|---|----------|-------------|
+| 1 | What was your lowest weight this week? | **BG** (Weight) |
+| 2 | What did you learn from this week? | **BH** (Notes) |
+| 3 | Goals for this week | **BJ** (Goals (w/hci)) |
+
+All three go on the **Thursday row** that starts the hcb week (the hcb week
+runs **Thursday to Wednesday**; every weekly entry since 2026-01-01 sits on a
+Thursday row). Answers 2 and 3 are stored as `• ` bullets, one per line, the
+sheet's existing style.
+
+`tools/1hcb/1hcb.py` owns the row lookup and the write (through the
+excel-http daemon via `lib/neon/excel.py`, journaled in the neon ledger).
+Never write these cells by hand or through excel-mcp.
 
 ## Steps
 
-### Step 1: Read the food log data
+### Step 1: Context
 
-Read the hcbi sheet from `~/OneDrive/vault-excel/Neon分v12.2.xlsx` using excel-mcp.
+```bash
+python3 ~/i446-monorepo/tools/1hcb/1hcb.py [YYYY-MM-DD] --print-context
+```
 
-Find the most recent 7 rows with data (non-empty column B dates). Read columns A-BK for those rows.
+Shows the week's Thursday, last week's lowest weight and goals, and anything
+already recorded for this week (if so, confirm before overwriting).
 
-Key columns to analyze:
-- **B**: Date
-- **E-N**: Food group servings (bn=beans, br=bread, fr=fruit, cr=crackers, gr=grains, vg=vegetables, fx=flax, g=greens, nt=nuts, sp=spices)
-- **O**: Water
-- **P**: Protein (g)
-- **Q**: Caffeine (mg)
-- **R**: Alcohol (g)
-- **U**: Calories
-- **AL-BG**: Meal breakdowns by time of day (Early Morning, Breakfast, Early Snack, Lunch, Afternoon Snack, Dinner, Late Snack) with food description, calories, protein per meal
-- **BH**: Weight
-- **BI**: Notes (user reflections)
-- **BK**: Previous goals
+### Step 2: Survey questions 1 and 2
 
-### Step 2: Read the guide doc for context
+Ask in chat, one message:
+1. What was your lowest weight this week?
+2. What did you learn from this week?
 
-Read `~/vault/hcbi/hcbc/0n-hcb-guide.md` for:
-- Previous feedback on suggestions (what worked, what didn't)
-- Any accumulated context about preferences and constraints
+### Step 3: Read the food log data
 
-### Step 3: Read previous weeks for patterns
+Read the hcbi sheet (reads only: excel-mcp on
+`~/OneDrive/vault-excel/Neon分v12.2.xlsx`, or `lib/neon/excel.py`) for the
+hcb week's 7 day rows (Thu-Wed). Column map (row 1 headers, verified
+2026-10-22):
 
-Check 2-3 weeks prior to the current week for trend context (is weight going up/down? are food groups improving?).
+- **A**: week label (周), **B**: date
+- **D**: ∑ (food points)
+- **E-N**: food group servings (bn beans, br bread, fr fruit, cr crackers, gr grains, vg vegetables, fx flax, g greens, nt nuts, sp spices)
+- **O**: water, **P**: protein (g), **Q**: caffeine (mg), **R**: alcohol (g)
+- **U**: calories
+- **AK-BE**: meals by 地支 block, three columns each (卯 AK, 辰 AN, 巳 AQ, 午 AT, 未 AW, 申 AZ, 戌 BC): food, calories, protein
+- **BG**: weight, **BH**: notes, **BJ**: goals (Thursday rows only)
 
-### Step 4: Generate 6 suggestions
+### Step 4: Read the guide and previous weeks
 
-Based on the data, generate exactly 6 suggestions for next week. Each suggestion should be:
-- **Specific** — not "eat more vegetables" but "replace afternoon mocha with chai tea + apple"
-- **Actionable** — something that can be done this week
-- **Measurable** — can tell if it was done or not
-- **Contextual** — based on patterns in the actual data, not generic nutrition advice
-- **Prioritized by ROI** — highest impact for lowest effort first
+- `~/vault/hcbi/hcbc/0n-hcb-guide.md`: previous feedback on suggestions (what worked, what didn't), preferences and constraints.
+- The 2-3 prior Thursday rows (BG weight trend, BH notes, BJ goals) and their weeks' food data for trend context.
 
-Format each suggestion as:
+### Step 5: Generate 6 suggestions
+
+Exactly 6, each:
+- **Specific**: not "eat more vegetables" but "replace afternoon mocha with chai tea + apple"
+- **Actionable** this week, **measurable** (done or not)
+- **Contextual**: from patterns in the actual data and JM's answer to question 2, not generic advice
+- **Ordered by ROI**: highest impact for lowest effort first
+
 ```
 1. [SUGGESTION] — [WHY: data-backed reason]
 ```
 
-Consider:
-- Food group gaps (especially greens, vegetables, fruit)
-- Protein adequacy
-- Caffeine patterns (tea vs coffee)
-- Calorie consistency
-- Meal timing and snacking patterns
-- What the user's own notes say they're struggling with
-- Previous goals and whether they were met
-- What previous feedback said worked vs didn't
+Consider food group gaps (greens, vegetables, fruit), protein, caffeine (tea vs
+coffee), calorie consistency, meal timing and snacking, whether last week's BJ
+goals were met, and what the guide says worked.
 
-### Step 5: Present and collect feedback
+### Step 6: Feedback and survey question 3
 
-Show all 6 suggestions to the user. For each, ask:
-- Hit (good suggestion) / Miss (not useful) / Skip
+Show the 6 suggestions; for each ask Hit / Miss / Skip. Then ask question 3,
+**Goals for this week**, proposing 2-3 goals drawn from the Hits for JM to
+accept or rewrite.
 
-Collect any additional context the user provides.
+### Step 7: Write
 
-### Step 6: Set next week's goals
+**7a. Neon (the survey):**
 
-Based on the suggestions rated "Hit", propose 2-3 goals for next week. Ask the user to confirm.
+```bash
+python3 ~/i446-monorepo/tools/1hcb/1hcb.py [YYYY-MM-DD] \
+  --weight "<lowest weight>" --learned "<answer 2, one item per line>" --goals "<answer 3, one item per line>"
+```
 
-### Step 7: Write results
+Writes BG/BH/BJ on the Thursday row and completes the `1 hcb` habit (pass
+`--no-mark` to skip that). A blank answer leaves its cell untouched. If the
+write fails the script prints the answers back; rerun it, never hand-write
+the cells.
 
-**7a. Append to the guide doc** (`~/vault/hcbi/hcbc/0n-hcb-guide.md`):
-
-Under "## Weekly Reviews", add a new entry:
+**7b. Guide doc:** append under "## Weekly Reviews" in
+`~/vault/hcbi/hcbc/0n-hcb-guide.md`:
 
 ```markdown
 ### Week of YYYY-MM-DD
 
-**Data snapshot:** avg calories X, avg protein Xg, weight X lbs
-**Food group gaps:** [list lowest-scoring groups]
+**Lowest weight:** X lbs
+**Data snapshot:** avg calories X, avg protein Xg
+**Food group gaps:** [lowest-scoring groups]
+**Learned:** [answer 2]
 
 **Suggestions:**
-1. [suggestion] — [Hit/Miss/Skip] [user feedback if any]
+1. [suggestion] — [Hit/Miss/Skip] [feedback if any]
 2. ...
 
-**Goals for next week:**
+**Goals for this week:**
 - Goal 1
 - Goal 2
 ```
 
-**7b. Optionally write goals to hcbi sheet column BK** for the
-current week's rows (if user confirms).
-
-The write must go through Ix via `~/.claude/skills/_lib/ix-osa.sh`
-(NEVER excel-mcp or local osascript for writes — those edit the
-local OneDrive copy and produce merge conflicts against the
-canonical workbook on Ix). Compose an AppleScript that finds each
-day's row in `hcbi` col B and writes the goal text to column BK,
-then pipe it on stdin:
-
-```bash
-~/.claude/skills/_lib/ix-osa.sh <<'AS'
-tell application "Microsoft Excel"
-    set ws to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
-    -- For each (date, goal_text), find row by M/D in col B, write BK.
-    return "OK: wrote goals to BK"
-end tell
-AS
-```
-
-If Ix is unreachable the helper exits 3 and Step 7b is skipped with
-an error — do NOT fall back to a local write.
-
 ### Step 8: Report
 
-Confirm completion:
 ```
-1hcb review complete. N/6 suggestions rated. Goals set for next week.
-Guide updated: vault/hcbi/hcbc/0n-hcb-guide.md
+1hcb: BG 191.4 · BH 3 notes · BJ 2 goals → hcbi 10/22 · 1 hcb ✓
+N/6 suggestions rated · guide updated
 ```
 
 ## Notes
 
-- The hcbi sheet tracks food in a detailed daily format — each row is one day
-- Column A is the week number (e.g., 1.1, 1.2), column B is the date (M/D format)
-- **The hcb week runs Thursday to Wednesday** (not Sunday to Saturday). When finding "this week's" data, look for the most recent Thursday through the following Wednesday.
-- Recent weeks may have sparse data — if the current week has no food logs, look back further
-- The user has historically struggled with: leafy greens, replacing coffee with tea, eating vegetables consistently
-- Previous goals have focused on: "21 leafy greens per week" and "4 HIIT workouts"
-- Use excel-mcp for **reads only** (not AppleScript) since this is
-  read-only analysis. Any write (Step 7b) must route through Ix via
-  `_lib/ix-osa.sh` to avoid OneDrive merge conflicts.
+- Recent weeks may have sparse food logs; if the week has none, say so and look back further for the analysis (the survey still runs).
+- Long-running struggles: leafy greens, replacing coffee with tea, vegetables consistently, cardio while travelling.
+- The hcb week (Thu-Wed) differs from the Neon 1n+ fiscal week (Sun-Sat); the `1 hcb` habit close goes through /did, which handles its own week.
