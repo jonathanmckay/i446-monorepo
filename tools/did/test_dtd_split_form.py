@@ -89,6 +89,20 @@ def test_split_script_takes_minutes_done_and_emits_tags_independently():
     assert "split cancelled" in body
 
 
+def test_cancelling_ctrl_p_keeps_the_search_query():
+    """Bug 2026-10-22: "cancelling out of the split leads to the task
+    disappearing". ctrl-p ended in clear-query, so Esc out of the breakoff
+    form wiped the search that had found the task and the list snapped back
+    to the full 70 rows with the task far off-screen."""
+    bind = next(l for l in DTD.splitlines() if '--bind "ctrl-p:' in l)
+    assert "+clear-query" not in bind, bind     # never unconditional
+    assert "transform([[ -e /tmp/dtd-$DTD_ID.editsaved ]] && echo clear-query)" in bind
+    body = _edit()
+    # marker reset on entry, set only on the save path (after the cancel exit)
+    assert 'rm -f "\\$_out" "/tmp/dtd-$DTD_ID.editsaved"' in body
+    assert body.index('edit cancelled') < body.index(': > "/tmp/dtd-$DTD_ID.editsaved"')
+
+
 def test_legend_names_the_breakoff():
     assert "ctrl-p: ✂done-so-far" in DTD
 

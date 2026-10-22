@@ -1742,7 +1742,7 @@ printf "\033[2J\033[H⏳" > /dev/tty
 # paint (budget: < 200, aim 80–100). ctrl-p from the list lands on "pts
 # done" (DTD_SPLIT_SEED=1); ctrl-o on the task fields; ^O/^P jump inside.
 _out="/tmp/dtd-$DTD_ID.edit.\$1.json"
-rm -f "\$_out"
+rm -f "\$_out" "/tmp/dtd-$DTD_ID.editsaved"
 python3 "\$EDIT_FORM" --id "\$1" "$DTD_CACHE_FILE" --out "\$_out" --timing "\$TIMING" \\
   \${DTD_SPLIT_SEED:+--focus split} < /dev/tty > /dev/tty 2>/tmp/dtd-$DTD_ID.edit.err
 _rc=\$?
@@ -1771,6 +1771,7 @@ if [[ ! -s "\$_out" ]]; then
   exit 0
 fi
 echo "⏳ saving…" > "\$HDR"
+: > "/tmp/dtd-$DTD_ID.editsaved"   # ctrl-p clears the query only after a save (cancel keeps the search)
 print -- "\$EPOCHREALTIME\tedit-end\t\$1" >> "\$TIMING" 2>/dev/null
 # The save runs in the BACKGROUND (2026-10-21: "call haiku for the short name
 # after exit and async with UI"): edit-fast's Todoist calls and the Haiku
@@ -3968,7 +3969,8 @@ while true; do
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "ctrl-x:select+execute-silent($DTD_DELETE {+2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
-      --bind "ctrl-p:execute(DTD_SPLIT_SEED=1 $DTD_EDIT {2})+clear-screen+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      $( : "ctrl-p clears the query only after a SAVE (2026-10-22, 'cancelling out of the split leads to the task disappearing'): an unconditional clear-query wiped the search on a cancel too, so a task found by typing snapped back to row 64 of 70 and read as deleted. A cancel keeps query and cursor (fzf preserves both across reload)." ) \
+      --bind "ctrl-p:execute(DTD_SPLIT_SEED=1 $DTD_EDIT {2})+clear-screen+deselect-all+reload($DTD_RELOAD)+transform([[ -e /tmp/dtd-$DTD_ID.editsaved ]] && echo clear-query)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "alt-up:select+execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+clear-screen+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
