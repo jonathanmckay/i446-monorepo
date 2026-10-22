@@ -4,6 +4,7 @@ Chrome profile (2026-10-13: "m5x2, i9, everything else goes to 个")."""
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -56,7 +57,7 @@ def test_on_straylight_opens_locally_in_profile(tmp_path, monkeypatch):
     rc, calls, hdr = _main(tmp_path, monkeypatch, "Straylight-Refit.local",
                            {"id": "t", "content": "lease [(link)](https://m.com) (5)", "labels": ["m5x2"]})
     assert rc == 0 and calls == [["open", "-na", "Google Chrome", "--args",
-                                  "--profile-directory=Profile 11", "https://m.com"]]
+                                  "--profile-directory=Profile 11", "--new-window", "https://m.com"]]
     assert "m5c7.com" in hdr
 
 
@@ -64,7 +65,7 @@ def test_on_ix_opens_on_straylight_over_ssh(tmp_path, monkeypatch):
     rc, calls, _ = _main(tmp_path, monkeypatch, "ix.local",
                          {"id": "t", "content": "read https://n.com/a (5)", "labels": ["i9"]})
     assert rc == 0 and calls[0][:4] == ["ssh", "-o", "BatchMode=yes", "-o"]
-    assert "straylight-refit" in calls[0] and "'--profile-directory=Profile 1' https://n.com/a" in calls[0][-1]
+    assert "straylight-refit" in calls[0] and "'--profile-directory=Profile 1' --new-window https://n.com/a" in calls[0][-1]
 
 
 def test_no_link_says_so(tmp_path, monkeypatch):
@@ -114,6 +115,8 @@ def test_every_link_shows_as_link():
                     short="review storage tier design doc (30) [20]"),
                  _t("N", "call [Bob](https://bob.com) re lease (15) [10]")])
     b, s, n = (_row_for_id(out, i) for i in "BSN")
-    assert "(link)" in b and "example.com" not in b.replace("\x1b]8;;https://example.com/very/long/path?x=1", "")
+    assert "(link)" in b and "example.com" not in re.sub(r"\x1b\]8;;[^\x1b]*", "", b)
+    # the click target opens the task's profile (i9 -> Profile 1) in a new window
+    assert "\x1b]8;;hammerspoon://dtdlink?p=Profile%201&u=https%3A%2F%2Fexample.com%2Fvery%2Flong%2Fpath%3Fx%3D1\x1b" in b
     assert "(link)" in s and s.index("(link)") < s.index("(30)")      # short name dropped it; re-added before estimates
     assert "Bob" in n and "(link)" in n

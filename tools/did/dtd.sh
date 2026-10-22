@@ -1777,9 +1777,12 @@ _rc=\$?
 printf '\033[?1002l\033[?1003l\033[?1000h\033[?1006h' > /dev/tty 2>/dev/null || true
 stty -echo < /dev/tty 2>/dev/null || true  # echo OFF before draining (bug 2026-09-24, see DRAIN_ECHO note)
 while read -t 0.05 -k 1 _discard 2>/dev/null; do : ; done < /dev/tty
-# Give the tty its interrupt chars back (both exit paths pass here). fzf's
-# Resume() re-applies raw mode anyway; this just leaves no surprise behind.
-stty intr '^C' quit '^\\' < /dev/tty 2>/dev/null
+# intr/quit stay UNDEFINED until fzf exits (restored after fzf in the UI
+# loop). Restoring them here (2026-10-17 to 10-22) opened a ~15 ms window
+# between this line and fzf's Resume() re-raw: a second ^C, or a held key's
+# repeat, landed in it as SIGINT for the whole process group and fzf exited
+# 130 straight after a clean cancel (session 63658, 2026-10-22: edit-end
+# rc=2, fzf-exit rc=130 12 ms later, no back event).
 # Form-exit stamp (2026-10-22, "tried to change the project of a -1g and
 # dtd died"): Enter on the last field (project) saves and closes the form,
 # and an Esc meant for the form then landed on the bare list, which quits
@@ -2614,10 +2617,19 @@ for t in unique:
         # OSC 8 wrap AFTER layout so the escape bytes never skew the padding.
         # ST spelled with chr(92): this python lives in a zsh double-quoted
         # string where a backslash pair would collapse and break the escape.
+        # Target is the hammerspoon:// handler (dtd_link.click_url), so a
+        # click opens the task's Chrome profile in a new window (2026-10-22);
+        # a bare URL target opened whichever profile Chrome used last.
         _st = '\x1b' + chr(92)
+        try:
+            _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
+            import dtd_link as _dl
+            _target = _dl.click_url(link_url, t.get('labels'))
+        except Exception:
+            _target = link_url
         body = body.replace(
             link_text,
-            '\x1b]8;;' + link_url + _st + link_text + '\x1b]8;;' + _st, 1)
+            '\x1b]8;;' + _target + _st + link_text + '\x1b]8;;' + _st, 1)
     if is_running:
         # NB: this python lives inside a zsh double-quoted string — never use
         # double quotes in here, they terminate the -c argument.
@@ -3832,6 +3844,15 @@ TALLY_PID=$!
     if [[ -n "$cur_ac" && "$cur_ac" != "${last_ac:-}" ]]; then
       [[ -n "${last_ac:-}" ]] && ac_reload=1
       last_ac="$cur_ac"
+      # Renumber cmux tabs on a claim change (2026-10-22): an ix-hosted session's
+      # hooks run on ix, where there is no cmux, so its pane number (the N in
+      # "N😈") reached panes.json only when some LOCAL session's hook happened
+      # to run. cs writes panes.json only when the map changed, so the mtime
+      # bump it causes settles after one more pass. Detached, at most every 10s.
+      if command -v cmux >/dev/null 2>&1 && (( EPOCHSECONDS - ${last_retitle:-0} >= 10 )); then
+        last_retitle=$EPOCHSECONDS
+        ( "$HOME/.local/bin/cs" retitle </dev/null >/dev/null 2>&1 & )
+      fi
     fi
     _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
     (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && ac_reload=1
@@ -4012,6 +4033,7 @@ while true; do
       --bind "enter:transform($DTD_PICKENTER {2} {q})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "esc:transform($DTD_BACK {q})" \
       --bind "ctrl-c:transform($DTD_BACK {q})" \
+      --bind "ctrl-q:transform($DTD_BACK {q})" \
       --bind "alt-enter:transform($DTD_DONE_ROUTER {2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-s:execute-silent($DTD_START {2})+deselect-all+reload($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-d:select+execute-silent(DTD_PICK_MODE=days $DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
@@ -4028,6 +4050,7 @@ while true; do
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)")
 
   _fzf_rc=$?
+  stty intr '^C' quit '^\' < /dev/tty 2>/dev/null   # the edit script leaves them undefined for fzf's lifetime
   task="$fzf_output"
 
   if [[ -z "$task" ]]; then
