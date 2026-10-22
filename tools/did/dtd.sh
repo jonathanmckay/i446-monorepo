@@ -3250,6 +3250,17 @@ for l in labels:
     if l in domains:
         label_arg = f'@{l}'
         break
+# No label with a 0分 column (qz12, n156, untagged...): credit 个, the same
+# catch-all did-fast's own Todoist-match path uses (_project_fen_col). Without
+# it the bare name fell to needs_agent and the [N] done today was never
+# logged (bug 2026-10-22: a qz12 split lost its [20]).
+if not label_arg:
+    try:
+        _ge = _df.neon_cols.domain_col('0分', '个')
+        label_arg = next((f'@{k}' for k, v in _df.LABEL_TO_0FEN.items() if v == _ge and k in domains), '')
+    except Exception:
+        label_arg = ''
+    label_arg = label_arg or '@g245'
 # did-fast splits its input on commas/semicolons — a task name containing
 # one would be parsed as multiple items, detaching [pts]/@label from the
 # name and scattering the points (regression 2026-06-06: a name like
