@@ -62,23 +62,30 @@ def task_for_desc(desc, queue_path=None):
         data = json.loads(Path(queue_path or _queue_path()).read_text())
     except Exception:  # noqa: BLE001 -- no cache is just "no match"
         return None
+    # Exact (annotation-stripped, lowercased) name first, then norm()'s
+    # dash-folded key. norm() strips a leading dash, so '-1g' == '1g' and the
+    # walk returned whichever came first: the -1g ritual timer resolved to the
+    # weekly 1g card, and dtd's running row lost its spinner (2026-10-22).
+    exact = _ANNOT_RE.sub("", desc or "").strip().lower()
     found = None
 
-    def walk(o):
+    def walk(o, key):
         nonlocal found
         if found is not None:
             return
         if isinstance(o, dict):
-            if o.get("id") and o.get("content") and norm(o["content"]) == target:
+            if o.get("id") and o.get("content") and key(o["content"]):
                 found = o
                 return
             for v in o.values():
-                walk(v)
+                walk(v, key)
         elif isinstance(o, list):
             for v in o:
-                walk(v)
+                walk(v, key)
 
-    walk(data)
+    walk(data, lambda c: _ANNOT_RE.sub("", c).strip().lower() == exact)
+    if found is None:
+        walk(data, lambda c: norm(c) == target)
     return found
 
 
