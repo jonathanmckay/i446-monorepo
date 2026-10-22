@@ -3031,12 +3031,12 @@ cat > "$DTD_SPLIT" << 'SPLITEOF'
 #!/bin/zsh
 [[ -n "${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHREALTIME${_T}PLACEHOLDER_SID${_T}action${_T}split${_T}$1${_T}" >> "PLACEHOLDER_EVENTS" 2>/dev/null
-# Split a task: claim partial points today, defer the rest to tomorrow.
+# Split a task: claim partial points today; the rest stays on today unless a do-date moves it.
 # Args: $1 task id, $2 [N] points done today, $3 done record name (blank =
 # the task's own name), $4 remainder name (blank = keep), $5 points remaining
 # (blank = total - done), $6 min done, $7 min remaining, $8/$9 haiku names,
 # $10 {N} bonus done, $11 bonus remaining (blank = total - done), $12 the
-# remainder's do-date (YYYY-MM-DD, blank = tomorrow), $13 keep remainder
+# remainder's do-date (YYYY-MM-DD, blank = today), $13 keep remainder
 # (0 = close the task: partial credit, nothing deferred; 2026-10-22). Since 2026-10-21 the questions are asked on the
 # ctrl-o/ctrl-g edit screen (" ✓ <pts> [what I did]" on the edit line) and
 # dtd's edit script calls this with the answers; there is no prompt here.
@@ -3198,12 +3198,12 @@ if posthoc:
             pass
 
 # 2. Update original task: new content with remaining description + reschedule
-#    to the do-date (blank = tomorrow). keep_rem off = partial credit: the task
-#    is closed as it stands, nothing deferred.
-from datetime import timedelta
-tomorrow = (date.today() + timedelta(days=1)).isoformat()
+#    to the do-date (blank = today: 2026-10-22, the remainder of a split kept
+#    vanishing from dtd because it defaulted to tomorrow). keep_rem off =
+#    partial credit: the task is closed as it stands, nothing deferred.
+rem_date = date.today().isoformat()
 if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', rem_due):
-    tomorrow = rem_due
+    rem_date = rem_due
 # Tags are emitted independently: time may run out while points remain and
 # vice versa; an empty duration never writes a bare '()'.
 _tags = []
@@ -3217,7 +3217,7 @@ new_content = ' '.join([remaining_desc or clean] + _tags)
 if keep_rem:
     api('POST', f'/tasks/{tid}', {
         'content': new_content,
-        'due_date': tomorrow,
+        'due_date': rem_date,
     })
 else:
     api('POST', f'/tasks/{tid}/close')
@@ -3278,6 +3278,17 @@ def _credit(item):
 # [N] with its domain label; {N} alone (a label beside it double-credits)
 didfast_out = _credit(f'{safe_name} [{pts_today}] {label_arg}') if pts_today > 0 else None
 didfast_bonus = _credit(f'{safe_name} {{{bonus_today}}}') if bonus_today > 0 else None
+# The credit above records the done name in completed-today with NO id, and
+# dtd hides a name-only completion by NAME, which hid the remainder sharing
+# that name (bug 2026-10-22: a split remainder never showed up). Tie the name
+# to the completed done record's id: id-backed names hide by id only.
+if posthoc and keep_rem and (didfast_out or didfast_bonus):
+    try:
+        _mspec = importlib.util.spec_from_file_location('mc_split', '$HOME/i446-monorepo/tools/did/mark-completed.py')
+        _mc = importlib.util.module_from_spec(_mspec); _mspec.loader.exec_module(_mc)
+        _mc.append_names([safe_name.strip()], ids={safe_name.strip(): posthoc['id']})
+    except Exception as _e:
+        print(f'split: completed-today id tie failed: {_e}', file=sys.stderr)
 
 # 4. Journal for ctrl-z undo
 record = {
@@ -3297,10 +3308,14 @@ subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
                capture_output=True, timeout=10)
 
 # Write results
-with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
+# Hide the name only when the task leaves today (closed or deferred); a
+# remainder kept on today shares the name and must stay listed.
+if not keep_rem or rem_date > date.today().isoformat():
+    with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
 _got = ' '.join(t for t in ([f'[{pts_today}]'] if pts_today > 0 else []) + ([f'{{{bonus_today}}}'] if bonus_today > 0 else [])) or '0'
 _left = ' '.join(_tags[1:] if _tags and _tags[0].startswith('(') else _tags) or 'nothing'
-msg = f'✂ +{_got} today / {_left} deferred to {tomorrow}' if keep_rem else f'✂ +{_got} today · rest dropped, task closed'
+_where = 'kept for today' if rem_date <= date.today().isoformat() else f'deferred to {rem_date}'
+msg = f'✂ +{_got} today / {_left} {_where}' if keep_rem else f'✂ +{_got} today · rest dropped, task closed'
 _lost = []
 if pts_today > 0 and not (didfast_out or {}).get('results'):
     _lost.append(f'[{pts_today}] (did-fast: no domain)')

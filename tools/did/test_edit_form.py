@@ -243,13 +243,16 @@ def test_pty_bonus_only_shows_with_curly_and_drives_its_remainder(tmp_path):
     rc, _, _, _, screen = _run(tmp_path, "\x1b")
     assert rc == 2 and "bonus" not in screen and "do-date" in screen and "keep remainder" in screen
     # {N}: done → min 20, pts 15, bonus 4; the remainder's {N} follows to 6 and
-    # the do-date to tomorrow
+    # the do-date to today (the remainder stays in dtd)
     rc, out, _, _, screen = _run(tmp_path / "b", "\t20\t15\t4\x13", focus="split", content=BONUS)
     assert rc == 0 and "{N} bonus" in screen
     j = json.loads(out.read_text())
     assert j["split"]["bonus"] == 4 and j["split"]["pts"] == 15 and j["split"]["keep"] is True
     assert (j["points"], j["bonus"], j["time"]) == ("5", "6", "10")
-    assert j["due"] == ""          # untouched do-date: the split script defers to tomorrow itself
+    assert j["due"] == ""          # untouched do-date: the split script keeps the remainder on today
+    import datetime as _dt
+    assert _dt.date.today().isoformat() in screen
+    assert (_dt.date.today() + _dt.timedelta(days=1)).isoformat() not in screen
 
 
 def test_pty_unchecking_keep_remainder_is_partial_credit(tmp_path):

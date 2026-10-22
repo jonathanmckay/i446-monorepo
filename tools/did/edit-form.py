@@ -26,7 +26,8 @@ Bonus and do-date (2026-10-22, "-1g goals"): a task with {N} gets a bonus
 field beside pts done and a {N} bonus field in the remainder; with no {N}
 neither appears. Bonus done reduces the remainder's bonus exactly like pts
 done reduces [N]. The remainder's do-date shows the task's due date and
-follows to tomorrow once anything is done (typed: ISO, M/D, M.D, today,
+follows to today once anything is done (2026-10-22: it used to jump to
+tomorrow, and the remainder vanished from dtd) (typed: ISO, M/D, M.D, today,
 tmrw, mon..sun, +N). "keep remainder" (default checked) unchecked means
 partial credit for a partial task: the done record is logged and the task is
 closed, nothing deferred. Space / x toggles it.
@@ -484,11 +485,11 @@ class Form:
         follow = [("points", pts), ("time", mins)]
         if "bonus" in self.by:
             follow.append(("bonus", remainder_of(self.pre["bonus"], self.by["done_bonus"].text)))
-        # the do-date: the task's own due date, tomorrow once anything is done
+        # the do-date: the task's own due date, today once anything is done
+        # (the remainder stays in dtd; type a date to push it)
         import datetime as _dt
         split = splitting({k: f.text for k, f in self.by.items()})
-        follow.append(("due", (_dt.date.today() + _dt.timedelta(days=1)).isoformat() if split
-                       else self.pre["due"]))
+        follow.append(("due", _dt.date.today().isoformat() if split else self.pre["due"]))
         # unchecked keep remainder: there is no remainder to shape
         keep = bool(self.by["keep"].text)
         for key in ("time", "points", "bonus", "due"):
@@ -510,7 +511,7 @@ class Form:
         v["total_bonus"] = self.pre["bonus"]
         v["keep"] = bool(self.by["keep"].text)
         # an untouched do-date (still following) never reschedules on a plain
-        # edit; on a split the split script defers to tomorrow by itself
+        # edit; on a split the split script keeps the remainder on today itself
         v["due_pre"] = self.pre["due"] if not self.by["due"].touched else ""
         if not self.by["due"].touched:
             v["due"] = ""
