@@ -103,6 +103,21 @@ def test_cancelling_ctrl_p_keeps_the_search_query():
     assert body.index('edit cancelled') < body.index(': > "/tmp/dtd-$DTD_ID.editsaved"')
 
 
+def test_split_remainder_stays_on_today_by_default():
+    """Bug 2026-10-22: "I split a task and the remainder isn't showing up in
+    dtd". A blank do-date deferred the remainder to tomorrow, and the split
+    also hid the task's name for the session, so the remainder could not
+    show today. Blank now means today, and the name is hidden only when the
+    task leaves today (closed, or a later do-date typed)."""
+    body = _split()
+    assert "rem_date = date.today().isoformat()" in body
+    assert "timedelta(days=1)" not in body
+    assert "'due_date': rem_date," in body
+    guard = "if not keep_rem or rem_date > date.today().isoformat():\n    with open(removed_file, 'a') as f: f.write(clean.lower()"
+    assert guard in body
+    assert body.count("with open(removed_file, 'a')") == 1
+
+
 def test_legend_names_the_breakoff():
     assert "ctrl-p: ✂done-so-far" in DTD
 
@@ -118,7 +133,7 @@ def test_split_script_handles_bonus_do_date_and_partial_credit():
     assert "open_b" not in body and "$bracket" not in body
     assert "remaining_bonus = max(0, bonus_total - bonus_today) if bonus_total > 0 else 0" in body
     assert "_tags.append(f'{{{remaining_bonus}}}')" in body
-    assert "if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', rem_due):\n    tomorrow = rem_due" in body
+    assert "if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', rem_due):\n    rem_date = rem_due" in body
     assert "else:\n    api('POST', f'/tasks/{tid}/close')" in body
     assert "didfast_out = _credit(f'{safe_name} [{pts_today}] {label_arg}') if pts_today > 0 else None" in body
     assert "didfast_bonus = _credit(f'{safe_name} {{{bonus_today}}}') if bonus_today > 0 else None" in body
