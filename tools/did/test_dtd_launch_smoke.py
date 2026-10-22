@@ -233,7 +233,7 @@ def _check_usage_event_hooks(found, stem):
 def test_every_generated_script_has_the_warm_guard_on_line_two():
     src = DTD.read_text()
     starts = re.findall(r'^cat > "\$DTD_[A-Z_]*" <<\s*\'?[A-Z]*EOF\'?\n#!/bin/zsh\n(.*)$', src, re.M)
-    assert len(starts) == 23, len(starts)
+    assert len(starts) == 24, len(starts)
     for line in starts:
         assert line.startswith('[[ -n "') and 'DTD_WARM:-}" ]] && exit 0' in line, line
     assert 'DTD_WARM=1 "$_s" </dev/null' in src
