@@ -631,7 +631,10 @@ class Form:
         c = self._draw_row(scr, y, [self.by[k] for k in ("time", "points", "bonus") if k in self.by], w)
         cursor = c or cursor; y += 1
         c = self._draw_row(scr, y, [self.by["due"]], w); cursor = c or cursor; y += 1
-        c = self._draw_row(scr, y, [self.by["keep"]], w); cursor = c or cursor; y += 1
+        c = self._draw_row(scr, y, [self.by["keep"]], w); cursor = c or cursor
+        if not self.by["keep"].text:
+            put(y, dwidth("[ ] keep remainder") + 1, "→ close task after done credit", curses.A_DIM)
+        y += 1
         y += 1
         header("common")
         c, used = self._draw_multiline(scr, y, self.by["desc"], w, notes_rows)
@@ -643,7 +646,8 @@ class Form:
             self._links_drawn.append((y, self.LABEL_W, seg, u))
             y += 1
         c = self._draw_row(scr, y, [self.by["domain"]], w); cursor = c or cursor; y += 1
-        legend = self.msg or "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^P done · ^O remainder"
+        legend = self.msg or ("space/⏎ toggle · Tab/↓ next · ^S save · Esc cancel" if self.focus.check
+                              else "⏎/Tab next · ⏎ on last or ^S save · Esc cancel · ^P done · ^O remainder")
         put(h - 1, 0, legend, curses.A_REVERSE if self.msg else curses.A_DIM)
         try:
             scr.move(*cursor)
@@ -681,7 +685,7 @@ class Form:
         h, _ = scr.getmaxyx()
         if y >= h - 1:
             return None
-        for f in fields:
+        for n, f in enumerate(fields):
             if f.check:
                 box = f"[{'x' if f.text else ' '}] {f.label}"
                 try:
@@ -692,19 +696,24 @@ class Form:
                     cursor = (y, x + 1)
                 x += dwidth(box) + 3
                 continue
-            label = f"{f.label:<{self.LABEL_W}}"
+            # The first field keeps the label column; the ones after it take
+            # their label's own width and a 2-col gap (2026-10-22: "too wide,
+            # I can't see bonus points": min/pts/bonus came to 54 cols, now 46,
+            # so a ~50-col dtd pane shows the bonus field).
+            lw = self.LABEL_W if n == 0 else dwidth(f.label) + 1
+            label = f"{f.label:<{lw}}"
             try:
                 scr.addstr(y, x, label, curses.A_DIM)
             except curses.error:
                 pass
-            x += self.LABEL_W
+            x += lw
             avail = (f.width or (w - x - 2))
             if not f.enabled:
                 try:
                     scr.addstr(y, x, fit(f.text or f.hint, avail), curses.A_DIM)
                 except curses.error:
                     pass
-                x += avail + 3
+                x += avail + 2
                 continue
             # horizontal window so the cursor stays visible (focused field
             # only; an unfocused long value shows its beginning)
@@ -720,7 +729,7 @@ class Form:
                 pass
             if f is self.focus:
                 cursor = (y, x + dwidth(f.text[start:f.cur]))
-            x += avail + 3
+            x += avail + 2
         return cursor
 
     def _draw_wrapped(self, scr, y, f: Field, w):
@@ -797,6 +806,13 @@ class Form:
         """Returns 'save' / 'cancel' / None."""
         f = self.focus
         self.msg = ""
+        if f.check and key in ("\n", "\r", curses.KEY_ENTER, curses.KEY_LEFT, curses.KEY_RIGHT):
+            # 2026-10-22 ("I couldn't deselect the 'keep remainder'"): only
+            # space/x toggled and nothing said so; Enter just moved on. Enter
+            # and ←/→ toggle now too; Tab / ↓ move on.
+            f.text = "" if f.text else "x"
+            f.touched = True
+            return None
         if f.check and key not in ("\n", "\r", "\t", "\x13", "\x03", "\x11", "\x0f", "\x10", "\x1b",
                                    curses.KEY_ENTER, curses.KEY_UP, curses.KEY_DOWN, curses.KEY_BTAB,
                                    curses.KEY_RESIZE):
