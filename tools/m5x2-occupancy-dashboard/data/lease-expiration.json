@@ -652,7 +652,7 @@
     "property_name": "j312",
     "unit": "3128",
     "tenant_name": "Sullivan, Tsha S.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-12-10",
     "move_in": "2026-01-01",
     "renewal_start_date": null,
@@ -660,23 +660,11 @@
     "rent": "1015.00"
   },
   {
-    "unit_id": 693,
-    "property_name": "j312",
-    "unit": "3130",
-    "tenant_name": "Pallett, Melody D.",
-    "status": "Pending",
-    "lease_sign_date": "2025-12-05",
-    "move_in": "2025-12-10",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1265.00"
-  },
-  {
     "unit_id": 838,
     "property_name": "kn47 K1",
     "unit": "B104",
     "tenant_name": "Miller, Craig",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2017-10-04",
     "renewal_start_date": null,
@@ -744,18 +732,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 1075,
-    "property_name": "kn47-k3",
-    "unit": "K104",
-    "tenant_name": "Phommachanh, Sandy",
-    "status": "Pending",
-    "lease_sign_date": "2025-11-23",
-    "move_in": "2025-11-24",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1430.00"
-  },
-  {
     "unit_id": 562,
     "property_name": "rl16",
     "unit": "C01",
@@ -820,7 +796,7 @@
     "property_name": "tc34",
     "unit": "B10",
     "tenant_name": "Anderson, Helen",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2025-03-05",
     "renewal_start_date": null,
@@ -838,18 +814,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1625.00"
-  },
-  {
-    "unit_id": 798,
-    "property_name": "v202",
-    "unit": "12",
-    "tenant_name": "Slater, Terri",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-12-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-12-01",
-    "rent": "1310.00"
   },
   {
     "unit_id": 786,

@@ -8178,5 +8178,45 @@
     "unit": "C78",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-22",
+    "effective": "2026-10-23",
+    "kind": "leased",
+    "unit_id": "1155",
+    "prop": "tc68",
+    "unit": "A06",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-22",
+    "effective": "2026-10-25",
+    "kind": "leased",
+    "unit_id": "461",
+    "prop": "c302",
+    "unit": "7",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-22",
+    "effective": "2026-10-23",
+    "kind": "leased",
+    "unit_id": "410",
+    "prop": "ps17",
+    "unit": "A8",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-22",
+    "effective": "2026-11-05",
+    "kind": "leased",
+    "unit_id": "386",
+    "prop": "ps25",
+    "unit": "D28",
+    "tenant": null,
+    "baseline": false
   }
 ]
