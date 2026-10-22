@@ -24,7 +24,7 @@ final class DtdStore: ObservableObject {
     init() {
         // Paint the last known list immediately; the fetch in .task refreshes it.
         if let (j, at) = PayloadCache.load("dtd"), PayloadCache.isToday(at) {
-            tasks = Parsers.tasks(j); summary = Parsers.summary(j); cachedAt = at
+            tasks = DtdTask.visible(Parsers.tasks(j)); summary = Parsers.summary(j); cachedAt = at
         }
     }
 
@@ -55,7 +55,10 @@ final class DtdStore: ObservableObject {
             loadedOnce = true
             lastError = nil
             loadedAt = Date()
-            tasks = activeFirst(Parsers.tasks(j))
+            // Hide tasks deferred to later today (scheduledTime still in the
+            // future, same day) before ordering — they reappear once their time
+            // passes on the next refresh. Bug 2026-10-22: these leaked through.
+            tasks = activeFirst(DtdTask.visible(Parsers.tasks(j)))
             summary = Parsers.summary(j)
             PayloadCache.save("dtd", j)
             // A task that went active since the last load (e.g. claimed from

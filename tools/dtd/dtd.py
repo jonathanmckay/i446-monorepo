@@ -537,6 +537,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "recurring": bool(t.get("recurring")),
             "variablePrompt": variable_prompt(raw),
             "variableRate": variable_rate(raw),
+            # Todoist due datetime (RFC3339) when the task carries a time-of-day,
+            # else "". The phone/web hide it until that time arrives today
+            # (later-today defer); a date-only due sends "" and is never hidden.
+            "scheduled": t.get("due_datetime") or "",
             "agent": tid is not None and str(tid) in agent_ids,
             "agentPane": agent_pane.get(str(tid), "") if tid is not None else "",
             "running": bool(tid is not None and running_id and str(tid) == running_id)

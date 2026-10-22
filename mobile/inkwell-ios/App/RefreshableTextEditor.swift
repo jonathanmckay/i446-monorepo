@@ -6,6 +6,7 @@ import SwiftUI
 /// a UIRefreshControl. Falls back to TextEditor on macOS for the typecheck.
 #if canImport(UIKit)
 import UIKit
+import InkwellCore
 
 struct RefreshableTextEditor: UIViewRepresentable {
     @Binding var text: String
@@ -45,6 +46,24 @@ struct RefreshableTextEditor: UIViewRepresentable {
         var parent: RefreshableTextEditor
         init(_ parent: RefreshableTextEditor) { self.parent = parent }
         func textViewDidChange(_ tv: UITextView) { parent.text = tv.text }
+
+        /// Obsidian-style list autofill: on return, continue the current list
+        /// item's marker (or break out of an empty one). Falls through to a
+        /// plain newline for non-list lines.
+        func textView(_ tv: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            guard text == "\n",
+                  let edit = MarkdownList.onNewline(text: tv.text as NSString, selection: range),
+                  let start = tv.position(from: tv.beginningOfDocument, offset: edit.range.location),
+                  let end = tv.position(from: start, offset: edit.range.length),
+                  let target = tv.textRange(from: start, to: end)
+            else { return true }
+            tv.replace(target, withText: edit.replacement)   // keeps undo intact
+            if let caret = tv.position(from: tv.beginningOfDocument, offset: edit.cursor) {
+                tv.selectedTextRange = tv.textRange(from: caret, to: caret)
+            }
+            parent.text = tv.text   // `replace` doesn't fire textViewDidChange
+            return false
+        }
         @objc func pulled(_ rc: UIRefreshControl) {
             Task { @MainActor in
                 let started = Date()

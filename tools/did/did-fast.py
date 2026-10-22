@@ -55,6 +55,21 @@ TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS_MAX_AGE_HOURS = 24
 
+
+def _due_datetime(task: dict) -> str:
+    """RFC3339 datetime of a Todoist task's due WHEN it carries a time-of-day,
+    else "". The unified v1 API puts the time either in a dedicated `datetime`
+    field or inline in `date` (a value containing "T"); a plain YYYY-MM-DD has
+    no time. dtd/web hide a timed due until that moment arrives today
+    (later-today defer); `due` (date-only) still drives the <= today ordering,
+    so this is a separate, additive field."""
+    due = task.get("due") or {}
+    dt = due.get("datetime")
+    if dt:
+        return str(dt)
+    date = str(due.get("date") or "")
+    return date if "T" in date else ""
+
 # Import ix_osa (hyphenated filename → importlib)
 _IX_PATH = Path.home() / ".claude/skills/_lib/ix-osa.py"
 _IX_SPEC = importlib.util.spec_from_file_location("ix_osa", _IX_PATH)
@@ -952,6 +967,7 @@ def _refresh_task_queue_inner() -> dict:
                          "labels": t.get("labels", []),
                          "priority": t.get("priority", "p4"),
                          "due": t.get("due", {}).get("date", "") if t.get("due") else "",
+                         "due_datetime": _due_datetime(t),
                          "due_string": (t.get("due") or {}).get("string", "") or "",
                          "recurring": bool((t.get("due") or {}).get("is_recurring"))}
                         for t in tasks]
@@ -993,6 +1009,7 @@ def _refresh_task_queue_inner() -> dict:
                     "labels": t.get("labels", []),
                     "priority": t.get("priority", "p4"),
                     "due": t.get("due", {}).get("date", "") if t.get("due") else "",
+                    "due_datetime": _due_datetime(t),
                     "due_string": (t.get("due") or {}).get("string", "") or "",
                     "recurring": bool(t.get("due", {}).get("is_recurring")) if t.get("due") else False,
                 })

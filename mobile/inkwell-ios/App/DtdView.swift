@@ -53,7 +53,7 @@ struct DtdView: View {
                         .listRowBackground(Theme.bg)
                         .listRowSeparatorTint(Color(white: 0.15))
                         .swipeActions(edge: .leading, allowsFullSwipe: true) { doneButton(t) }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) { trailingButtons(t) }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) { trailingButtons(t) }
                         .disabled(store.inFlight.contains(t.id))
                 }
                 if store.tasks.isEmpty && store.loadedOnce {
@@ -64,6 +64,11 @@ struct DtdView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Theme.bg)
+            #if os(iOS)
+            // Drag the list to dismiss the entry keyboard (complements the
+            // keyboard toolbar's "Done" in EntryBar).
+            .scrollDismissesKeyboard(.interactively)
+            #endif
             .refreshable { await store.load(refresh: true) }
             .onChange(of: store.scrollTick) {
                 guard let top = store.tasks.first?.id else { return }
@@ -85,6 +90,9 @@ struct DtdView: View {
         .tint(Theme.done)
     }
 
+    /// Trailing edge = left swipe. `start` is the primary action (declared
+    /// first, so it sits at the edge) and a full left swipe fires it directly;
+    /// +1d / delay remain as secondary buttons a partial swipe reveals.
     @ViewBuilder
     private func trailingButtons(_ t: DtdTask) -> some View {
         Button { store.start(t) } label: { Label("start", systemImage: "play.fill") }.tint(.blue)

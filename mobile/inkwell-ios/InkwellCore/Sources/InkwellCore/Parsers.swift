@@ -15,6 +15,7 @@ public enum Parsers {
                 domain: t.string("domain"),
                 recurring: t.bool("recurring"),
                 variablePrompt: t.bool("variablePrompt"),
+                scheduledTime: DtdTask.parseScheduled(t.string("scheduled")),
                 agent: t.bool("agent"),
                 running: t.bool("running"))
         }

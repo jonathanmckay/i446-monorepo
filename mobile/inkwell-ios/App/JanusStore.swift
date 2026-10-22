@@ -21,6 +21,13 @@ final class JanusStore: ObservableObject {
     private var base: String { InkwellConfig.janusBase }
     private let toast = Toaster.shared
 
+    /// How long a good load stays "fresh" before a foreground-return or the
+    /// on-screen poll will refetch. Deliberately short (2026-10-22: a coarse
+    /// gate let the timeline sit visibly stale — entries logged on desktop or
+    /// another device didn't appear for ages). Writes still invalidate at once
+    /// via `act` → `load`; this only bounds *passive* staleness.
+    static let cacheTTL: TimeInterval = 60
+
     init() {
         // Only today's cached timeline is worth painting (2026-10-20 "should be
         // today": yesterday's rows showed until the fetch landed).
@@ -49,7 +56,7 @@ final class JanusStore: ObservableObject {
     /// foreground; a good one only when stale.
     func refreshIfStale() {
         if lastError != nil || !loadedOnce { Task { await load() }; return }
-        guard let at = loadedAt, Date().timeIntervalSince(at) > 120 else { return }
+        guard let at = loadedAt, Date().timeIntervalSince(at) > Self.cacheTTL else { return }
         Task { await load() }
     }
 
@@ -118,6 +125,19 @@ final class JanusStore: ObservableObject {
     }
     func edit(_ r: TimelineRow, desc: String, start: String, end: String, project: String) {
         act("/api/edit", Bodies.edit(id: r.id, desc: desc, start: start, end: end, project: project)) { _ in "edited ✓" }
+    }
+    /// Resume an entry (janus full left-swipe): start a fresh ongoing Toggl
+    /// timer carrying the same description + project. There is no dedicated
+    /// server route for resuming an *entry* — only calendar events resume via
+    /// /api/convert-event — so this reuses /api/fill with a blank end, which
+    /// is exactly what "start now" does and which the server returns as a
+    /// running entry. Tags aren't carried (fill has no tags field), matching
+    /// the existing fill / start-now behaviour.
+    func resume(_ r: TimelineRow) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let now = f.string(from: Date())
+        act("/api/fill", Bodies.fill(desc: r.desc, start: now, end: "", project: r.project)) { _ in
+            "▶ resumed" + (r.project.isEmpty ? "" : " → " + r.project) + " ✓" }
     }
     func split(_ r: TimelineRow, mode: String) {
         act("/api/split", Bodies.split(id: r.id, mode: mode)) { _ in mode == "top" ? "split ▲ ✓" : "split ▼ ✓" }

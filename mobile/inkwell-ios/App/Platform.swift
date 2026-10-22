@@ -27,12 +27,13 @@ enum Platform {
         #if canImport(UIKit)
         switch kind {
         case .commit: UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        case .key: UIImpactFeedbackGenerator(style: .light).impactOccurred()
         case .success: UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .failure: UINotificationFeedbackGenerator().notificationOccurred(.error)
         }
         #endif
     }
-    enum Haptic { case commit, success, failure }
+    enum Haptic { case commit, key, success, failure }
 }
 
 /// Phone beacon (lib/where.py on Ix): this phone's zone decides "today"

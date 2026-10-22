@@ -11,14 +11,16 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public let domain: String
     public let recurring: Bool
     public let variablePrompt: Bool   // ask for a value before completing (variable habits)
+    public let scheduledTime: Date?   // Todoist due datetime when the task carries a time-of-day → hidden until it arrives (later-today defer)
     public let agent: Bool            // a Claude session is mid-turn on it (/claim) → 😈, grey
     public let running: Bool          // its Toggl timer is the live one (dtd Enter / janus /d) → ▶
 
     public init(id: String, raw: String, title: String, est: Int?, points: Int?, color: String,
-                domain: String, recurring: Bool, variablePrompt: Bool, agent: Bool = false, running: Bool = false) {
+                domain: String, recurring: Bool, variablePrompt: Bool, scheduledTime: Date? = nil,
+                agent: Bool = false, running: Bool = false) {
         self.id = id; self.raw = raw; self.title = title; self.est = est; self.points = points
         self.color = color; self.domain = domain; self.recurring = recurring; self.variablePrompt = variablePrompt
-        self.agent = agent; self.running = running
+        self.scheduledTime = scheduledTime; self.agent = agent; self.running = running
     }
 
     /// A task is "active" when it's the live timer (▶) or a Claude session has
@@ -30,7 +32,46 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public func withRunning(_ v: Bool) -> DtdTask {
         DtdTask(id: id, raw: raw, title: title, est: est, points: points, color: color,
                 domain: domain, recurring: recurring, variablePrompt: variablePrompt,
-                agent: agent, running: v)
+                scheduledTime: scheduledTime, agent: agent, running: v)
+    }
+
+    /// True when the task is deferred to later TODAY: it has a time-of-day and
+    /// that time is still in the future on the current calendar day. dtd hides
+    /// these until their time arrives (same contract as a block/minute snooze);
+    /// a date-only due (scheduledTime == nil) is never hidden this way, and a
+    /// time already past today stays visible. Bug 2026-10-22: later-today tasks
+    /// were showing immediately because the client had no time field to test.
+    public func deferredToLaterToday(_ now: Date, calendar: Calendar = .current) -> Bool {
+        guard let t = scheduledTime else { return false }
+        return t > now && calendar.isDate(t, inSameDayAs: now)
+    }
+
+    /// Drop tasks deferred to later today — what the dtd list should show now.
+    public static func visible(_ list: [DtdTask], now: Date = Date(), calendar: Calendar = .current) -> [DtdTask] {
+        list.filter { !$0.deferredToLaterToday(now, calendar: calendar) }
+    }
+
+    /// Parse a server `scheduled` string into a Date, but only when it carries a
+    /// time-of-day (an ISO datetime with a `T`). A bare `YYYY-MM-DD` means "due
+    /// today, no specific time" → nil, so it is never treated as a later-today
+    /// defer. Accepts Z / ±offset (absolute instant) and floating local
+    /// datetimes (no zone → parsed in the current time zone).
+    public static func parseScheduled(_ s: String) -> Date? {
+        guard s.contains("T") else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: s) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: s) { return d }
+        // Floating datetime with no zone (e.g. "2026-10-22T15:00:00"): local.
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        for fmt in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm"] {
+            f.dateFormat = fmt
+            if let d = f.date(from: s) { return d }
+        }
+        return nil
     }
 
     /// Row prefix, same order as the web page: ▶ running · 😈 agent · ↻ recurring.
