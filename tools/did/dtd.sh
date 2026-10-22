@@ -3278,6 +3278,17 @@ def _credit(item):
 # [N] with its domain label; {N} alone (a label beside it double-credits)
 didfast_out = _credit(f'{safe_name} [{pts_today}] {label_arg}') if pts_today > 0 else None
 didfast_bonus = _credit(f'{safe_name} {{{bonus_today}}}') if bonus_today > 0 else None
+# The credit above records the done name in completed-today with NO id, and
+# dtd hides a name-only completion by NAME, which hid the remainder sharing
+# that name (bug 2026-10-22: a split remainder never showed up). Tie the name
+# to the completed done record's id: id-backed names hide by id only.
+if posthoc and keep_rem and (didfast_out or didfast_bonus):
+    try:
+        _mspec = importlib.util.spec_from_file_location('mc_split', '$HOME/i446-monorepo/tools/did/mark-completed.py')
+        _mc = importlib.util.module_from_spec(_mspec); _mspec.loader.exec_module(_mc)
+        _mc.append_names([safe_name.strip()], ids={safe_name.strip(): posthoc['id']})
+    except Exception as _e:
+        print(f'split: completed-today id tie failed: {_e}', file=sys.stderr)
 
 # 4. Journal for ctrl-z undo
 record = {

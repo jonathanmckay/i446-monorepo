@@ -118,6 +118,21 @@ def test_split_remainder_stays_on_today_by_default():
     assert body.count("with open(removed_file, 'a')") == 1
 
 
+def test_split_ties_the_done_name_to_the_done_record_id():
+    """Bug 2026-10-22 (same report): even on today, the remainder stayed
+    hidden. The done credit (did-fast --points-only) records its name in
+    completed-today with no id, and dtd hides a name-only completion by NAME,
+    so the remainder, which shares the name, vanished. The split now maps
+    that name to the completed done record's id, and id-backed names hide by
+    id only (test_dtd_done_id_hide)."""
+    body = _split()
+    credit = body.index("didfast_bonus = _credit(")
+    tie = body.index("_mc.append_names([safe_name.strip()], ids={safe_name.strip(): posthoc['id']})")
+    assert credit < tie
+    assert "if posthoc and keep_rem and (didfast_out or didfast_bonus):" in body
+    assert "mark-completed.py" in body[credit:tie]
+
+
 def test_legend_names_the_breakoff():
     assert "ctrl-p: ✂done-so-far" in DTD
 
