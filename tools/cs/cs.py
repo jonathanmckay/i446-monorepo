@@ -11,7 +11,9 @@
                                the limit. -l adds cwd + id
   cs id <query>                print the best-matching session id (-l: id, title, live|idle;
                                --title: only accept a title/claim match, never a first-prompt one;
-                               --latest: skip matching, take the most recently active session)
+                               --latest: skip matching, take the session you last typed into)
+  cs tmux <query>              print the tmux session holding the match's live claude process
+                               (same flags as id; exits 1 when it is not running in tmux here)
   cs fork [query] [-- args]    new session branched from the match (claude --resume ID --fork-session)
   cs open [query] [-- args]    resume the match in place (same session id)
   cs pick [query]              interactive fzf picker; prints the chosen id
@@ -49,7 +51,7 @@ STATE = Path.home() / '.local' / 'state' / 'jm'
 INDEX = STATE / 'session-index.json'
 ORDER = STATE / 'pane-order.json'   # {workspace_id: [session_id, ...]} pinned by `cs order`
 TITLE_RE = re.compile(rb'"type":"(custom-title|ai-title)","(?:customTitle|aiTitle)":"((?:[^"\\]|\\.)*)"')
-SCHEMA = 6                      # bump when scan_one's output changes; stale records get rescanned
+SCHEMA = 7                      # bump when scan_one's output changes; stale records get rescanned
 CMD_RE = re.compile(r'<command-name>\s*/?([^<]*?)\s*</command-name>(?:.*?<command-args>(.*?)</command-args>)?', re.S)
 TAG_RE = re.compile(r'<(system-reminder|command-message|command-name|command-args|local-command-stdout|local-command-caveat|pasted_content[^>]*)>.*?</\1>', re.S)
 SKIP_PREFIXES = ('Base directory for this skill', '<local-command')
@@ -81,6 +83,38 @@ def prompt_text(o):
     return ' '.join(c.split())[:80]
 
 
+# User records that are not something JM typed: background-task and system notices the
+# harness injects, and the echo of a local command's output.
+INJECTED_PREFIXES = ('<task-notification>', '[SYSTEM NOTIFICATION', '<local-command-stdout>',
+                     '<local-command-caveat>', '<bash-stdout>', '<bash-stderr>')
+
+
+def last_user_ts(f: Path) -> float:
+    """Epoch of the last prompt JM typed into session `f` (0.0 if none). The file's mtime moves
+    whenever an agent is still working, so "latest" by mtime picked a session churning on its own
+    over the one he was just typing in (2026-10-22). Tool results, skill bodies (isMeta), sidechains
+    and injected notices are not input; slash commands and `!` shell lines are."""
+    import datetime
+    out = subprocess.run(['grep', '-a', '-F', '"type":"user"', str(f)], capture_output=True).stdout
+    for line in reversed(out.splitlines()):
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        if o.get('type') != 'user' or o.get('isMeta') or o.get('isSidechain'):
+            continue
+        c = (o.get('message') or {}).get('content')
+        if isinstance(c, list):
+            c = ' '.join(b.get('text', '') for b in c if isinstance(b, dict) and b.get('type') == 'text')
+        if not isinstance(c, str) or not c.strip() or c.lstrip().startswith(INJECTED_PREFIXES):
+            continue
+        try:
+            return datetime.datetime.fromisoformat(o['timestamp'].replace('Z', '+00:00')).timestamp()
+        except Exception:
+            continue
+    return 0.0
+
+
 def session_files():
     for proj in PROJECTS.iterdir():
         if not proj.is_dir():
@@ -91,7 +125,7 @@ def session_files():
 
 def scan_one(f: Path):
     rec = {'v': SCHEMA, 'mtime': f.stat().st_mtime, 'id': f.stem, 'custom': '', 'ai': '', 'cwd': '', 'prompt': '',
-           'proj': f.parent.name, 'claims': []}
+           'proj': f.parent.name, 'claims': [], 'last_user': 0.0}
     try:
         out = subprocess.run(['grep', '-ao', '-E', r'"type":"(custom-title|ai-title)","(customTitle|aiTitle)":"([^"\\]|\\.)*"', str(f)],
                              capture_output=True).stdout
@@ -113,6 +147,7 @@ def scan_one(f: Path):
                 seen.pop(m.group(2), None)                 # re-claim moves it to the end (most recent)
                 seen[m.group(2)] = ' '.join(ANNOT_RE.sub('', m.group(1)).split())
         rec['claims'] = list(seen.values())[-MAX_CLAIMS:]
+        rec['last_user'] = last_user_ts(f)
         with open(f, 'rb') as fh:
             for i, line in enumerate(fh):
                 if i > 150:
@@ -410,6 +445,34 @@ def _live_sids():
     return set(re.findall(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', ps))
 
 
+def tmux_session_of(sid):
+    """Name of the tmux session whose pane holds the live claude process for `sid`, or None.
+    Walks each matching process up its parent chain to a tmux pane's root pid, so it finds the
+    session whatever wrapper (claude-tracked, zsh -lic) sits between them."""
+    ps = subprocess.run(['ps', '-axo', 'pid=,ppid=,command='], capture_output=True, text=True).stdout
+    procs = {}
+    for line in ps.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            procs[int(parts[0])] = (int(parts[1]), parts[2] if len(parts) > 2 else '')
+    try:
+        tl = subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{session_name}'],
+                            capture_output=True, text=True).stdout
+    except FileNotFoundError:
+        return None
+    panes = {int(p): n for p, n in (l.split(' ', 1) for l in tl.splitlines() if ' ' in l) if p.isdigit()}
+    pat = re.compile(rf'--(?:session-id|resume)[ =]{re.escape(sid)}\b')
+    for pid, (_pp, cmd) in procs.items():
+        if not pat.search(cmd):
+            continue
+        p, hops = pid, 0
+        while p in procs and hops < 20:
+            if p in panes:
+                return panes[p]
+            p, hops = procs[p][0], hops + 1
+    return None
+
+
 def cmux_numbers():
     """{session_id: n} from cmux_panes(). cmux's socket only answers from inside the GUI login
     session (over ssh/cron `cmux rpc` dies with a broken pipe), so when it does not answer the
@@ -613,9 +676,16 @@ def main(argv):
     if latest:
         if not idx:
             sys.exit('cs: no sessions indexed')
-        r = max(idx.values(), key=lambda v: v['mtime'])
+        # the session JM last typed into, not the one whose file last changed (an agent still
+        # running moves mtime); sessions with no typed prompt rank by mtime, below all others
+        r = max(idx.values(), key=lambda v: (v.get('last_user') or 0.0, v['mtime']))
     else:
         r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick, title_only)
+    if cmd == 'tmux':
+        t = tmux_session_of(r['id'])
+        if not t:
+            sys.exit(1)
+        print(t); return
     if cmd == 'id':
         if want_path:
             print(next(p for p, v in idx.items() if v['id'] == r['id']))

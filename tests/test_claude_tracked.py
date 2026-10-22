@@ -73,3 +73,21 @@ def test_main_checks_list_args_before_opening_a_db_session(ct):
     src = SCRIPT.read_text()
     main_src = src[src.index('def main():'):]
     assert main_src.index('list_args(') < main_src.index('init_session()')
+
+
+def test_live_attach_probe_targets_latest_or_title(ct):
+    """Phone → laptop handoff (2026-10-22): `cc r` / `cc <title>` attach to the tmux already
+    holding that live session on ix instead of opening a new tmux that forks it."""
+    r = ct.live_attach_probe(['r'])
+    assert 'cs tmux --latest' in r and 'exec tmux attach -d -t "$t"' in r
+    t = ct.live_attach_probe(['janus', "jm's"])
+    assert "cs tmux --title --no-pick janus 'jm'\"'\"'s'" in t
+    assert ct.live_attach_probe([]) == '' and ct.live_attach_probe(['--resume', 'x']) == ''
+
+
+def test_exec_on_ix_probes_before_opening_a_new_tmux(ct, monkeypatch, capsys):
+    monkeypatch.setenv('CC_DRY', '1')
+    monkeypatch.setenv('CC_NO_MOSH', '1')
+    ct.exec_on_ix(['r'])
+    remote = capsys.readouterr().out.split('would run:', 1)[1]
+    assert remote.index('cs tmux --latest') < remote.index('exec tmux new -A -D')
