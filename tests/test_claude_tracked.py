@@ -90,4 +90,38 @@ def test_exec_on_ix_probes_before_opening_a_new_tmux(ct, monkeypatch, capsys):
     monkeypatch.setenv('CC_NO_MOSH', '1')
     ct.exec_on_ix(['r'])
     remote = capsys.readouterr().out.split('would run:', 1)[1]
-    assert remote.index('cs tmux --latest') < remote.index('exec tmux new -A -D')
+    assert remote.index('cs tmux --latest') < remote.index('tmux new -d -s')
+
+
+def test_ix_tmux_is_tagged_with_the_cmux_surface(ct, monkeypatch, capsys):
+    """dtd draws 'N😈' from the pane number cs gives each cmux tab; a tab cc sent to ix only runs
+    mosh/ssh locally, so cc tags the tmux session with the tab's surface id for cs to match
+    (2026-10-22). The tag lands before the attach blocks, on both the live and the new path."""
+    monkeypatch.setenv('CC_DRY', '1')
+    monkeypatch.setenv('CC_NO_MOSH', '1')
+    monkeypatch.setenv('CMUX_SURFACE_ID', 'DBF01CA2-00AD-4A13-9380-495A16FB0419')
+    ct.exec_on_ix(['r'])
+    remote = capsys.readouterr().out.split('would run:', 1)[1]
+    tag = '@cmux_surface DBF01CA2-00AD-4A13-9380-495A16FB0419'
+    assert remote.count(tag) == 2
+    assert remote.index('-t "$t" ' + tag) < remote.index('exec tmux attach -d -t "$t"')
+    assert remote.rindex(tag) < remote.rindex('exec tmux attach -d -t')
+
+
+def test_exact_match_tmux_targets_are_quoted_for_zsh(ct, monkeypatch, capsys):
+    """zsh expands a bare =word to a command path ('zsh: cc-x not found'), so tmux's exact-match
+    '=name' target must be quoted in the remote shell string."""
+    import os
+    monkeypatch.delenv('CC_DRY', raising=False)
+    monkeypatch.setenv('CC_NO_MOSH', '1')
+    got = []
+    monkeypatch.setattr(os, 'execvp', lambda f, argv: got.append(argv))
+    ct.exec_on_ix(['taxes'])
+    remote = got[0][-1]
+    assert "has-session -t '=cc-taxes'" in remote and "attach -d -t '=cc-taxes'" in remote
+    assert ' -t =cc' not in remote
+
+
+def test_no_tag_outside_cmux(ct, monkeypatch):
+    monkeypatch.delenv('CMUX_SURFACE_ID', raising=False)
+    assert ct.surface_tag('x') == ''
