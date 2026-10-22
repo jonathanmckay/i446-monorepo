@@ -11,7 +11,8 @@
                                the limit. -l adds cwd + id
   cs id <query>                print the best-matching session id (-l: id, title, live|idle;
                                --title: only accept a title/claim match, never a first-prompt one;
-                               --latest: skip matching, take the session you last typed into)
+                               --latest: skip matching, take the session you last typed into;
+                               --not-live: with --latest, skip sessions a claude process here is running)
   cs tmux <query>              print the tmux session holding the match's live claude process
                                (same flags as id; exits 1 when it is not running in tmux here)
   cs tmux-map                  JSON [{tmux, surface, sid, title}] for every live claude in tmux here
@@ -798,6 +799,7 @@ def main(argv):
     no_pick = '--no-pick' in argv; argv = [a for a in argv if a != '--no-pick']
     title_only = '--title' in argv; argv = [a for a in argv if a != '--title']
     latest = '--latest' in argv; argv = [a for a in argv if a != '--latest']
+    not_live = '--not-live' in argv; argv = [a for a in argv if a != '--not-live']
     host = None
     if '--from' in argv:
         i = argv.index('--from'); host = argv[i + 1]; del argv[i:i + 2]
@@ -831,7 +833,14 @@ def main(argv):
             sys.exit('cs: no sessions indexed')
         # the session JM last typed into, not the one whose file last changed (an agent still
         # running moves mtime); sessions with no typed prompt rank by mtime, below all others
-        r = max(idx.values(), key=lambda v: (v.get('last_user') or 0.0, v['mtime']))
+        # --not-live (cc r, 2026-10-22): the session JM is typing into right now is always the
+        # latest, and it is already open on this screen; cc r means "the one I left", so skip
+        # anything a claude process here is running.
+        live_here = _live_sids() if not_live else set()
+        pool = [v for v in idx.values() if v['id'] not in live_here]
+        if not pool:
+            sys.exit('cs: no session that is not already open')
+        r = max(pool, key=lambda v: (v.get('last_user') or 0.0, v['mtime']))
     else:
         r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick, title_only)
     if cmd == 'tmux':
@@ -846,7 +855,8 @@ def main(argv):
             live = r['id'] in cmux_numbers() or bool(re.search(
                 rf'--(?:session-id|resume)[ =]{r["id"]}',
                 subprocess.run(['ps', '-axo', 'command='], capture_output=True, text=True).stdout))
-            print(f"{r['id']}\t{title_of(r)}\t{'live' if live else 'idle'}")
+            # 4th column: epoch of JM's last typed prompt (cc compares hosts with it)
+            print(f"{r['id']}\t{title_of(r)}\t{'live' if live else 'idle'}\t{r.get('last_user') or 0.0:.0f}")
         else:
             print(r['id'])
         return
