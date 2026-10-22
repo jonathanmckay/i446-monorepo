@@ -43,24 +43,33 @@ struct DtdView: View {
     }
 
     private var taskList: some View {
-        List {
-            ForEach(store.tasks) { t in
-                TaskRow(task: t)
-                    .listRowBackground(Theme.bg)
-                    .listRowSeparatorTint(Color(white: 0.15))
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) { doneButton(t) }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) { trailingButtons(t) }
-                    .disabled(store.inFlight.contains(t.id))
+        // ScrollViewReader so a task becoming active (▶ start / 😈 claim) can
+        // scroll the list back to the top where it was just reordered.
+        ScrollViewReader { proxy in
+            List {
+                ForEach(store.tasks) { t in
+                    TaskRow(task: t)
+                        .id(t.id)
+                        .listRowBackground(Theme.bg)
+                        .listRowSeparatorTint(Color(white: 0.15))
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) { doneButton(t) }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) { trailingButtons(t) }
+                        .disabled(store.inFlight.contains(t.id))
+                }
+                if store.tasks.isEmpty && store.loadedOnce {
+                    Text("nothing due · 🎉").font(Theme.mono).foregroundStyle(Theme.dim)
+                        .frame(maxWidth: .infinity).listRowBackground(Theme.bg)
+                }
             }
-            if store.tasks.isEmpty && store.loadedOnce {
-                Text("nothing due · 🎉").font(Theme.mono).foregroundStyle(Theme.dim)
-                    .frame(maxWidth: .infinity).listRowBackground(Theme.bg)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
+            .refreshable { await store.load(refresh: true) }
+            .onChange(of: store.scrollTick) {
+                guard let top = store.tasks.first?.id else { return }
+                withAnimation { proxy.scrollTo(top, anchor: .top) }
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Theme.bg)
-        .refreshable { await store.load(refresh: true) }
     }
 
     /// Leading edge = Android's right-swipe = done. A full swipe commits
@@ -175,15 +184,25 @@ struct TaskRow: View {
             Text(task.prefix + task.title)
                 .font(Theme.mono).foregroundStyle(color).lineLimit(2)
             Spacer(minLength: 8)
-            if task.running { Spinner().foregroundStyle(Theme.accent) }
+            if task.running { Abacus().foregroundStyle(Theme.accent) }
             Text(task.meta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
         }
         .padding(.vertical, 4)
     }
 }
 
-/// The web's ◐ rotating glyph (1 rev/s), used beside a running row and in
-/// the header when any 😈 agent is mid-turn.
+/// The 🧮 abacus glyph marking the one task whose Toggl timer is live. The
+/// running row is a state (分 are being counted), not an indeterminate wait,
+/// so it gets a steady abacus rather than the ◐ spinner. SF Symbol `abacus`
+/// is iOS 18+; the app targets iOS 17, so a Text glyph is the equivalent.
+struct Abacus: View {
+    var body: some View {
+        Text("🧮").font(Theme.mono)
+    }
+}
+
+/// The web's ◐ rotating glyph (1 rev/s), used in the header when any 😈 agent
+/// is mid-turn.
 struct Spinner: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 12)) { ctx in

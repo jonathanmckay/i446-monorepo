@@ -43,6 +43,28 @@ do {
     eq(Parsers.summary(j), DtdSummary(points: 497, done: 12), "summary")
 }
 
+// est_falls_back_to_raw_then_domain_default (bug 2026-10-22: hcmc/i444 blank)
+do {
+    let estJson = """
+    {"ok": true, "tasks": [
+      {"id": "a", "raw": "night hcmc", "title": "night hcmc", "est": null, "points": null,
+       "color": "#0d3b66", "domain": "hcmc", "recurring": true, "variablePrompt": true},
+      {"id": "b", "raw": "i444", "title": "i444", "est": null, "points": null,
+       "color": "#616161", "domain": "i444", "recurring": true, "variablePrompt": true},
+      {"id": "c", "raw": "read paper (45)", "title": "read paper", "est": null, "points": null,
+       "color": "#0d3b66", "domain": "hcmc", "recurring": false, "variablePrompt": false},
+      {"id": "d", "raw": "random (12)", "title": "random", "est": null, "points": null,
+       "color": "#bdbdbd", "domain": "", "recurring": false, "variablePrompt": false}
+    ]}
+    """
+    let ts = Parsers.tasks(JSON.parse(estJson)!)
+    eq(ts[0].est, 30, "hcmc default est")
+    eq(ts[0].meta, "(30)", "hcmc shows default time")
+    eq(ts[1].est, 15, "i444 default est")
+    eq(ts[2].est, 45, "raw (N) wins over domain default")
+    eq(ts[3].est, 12, "raw (N) recovers est for domains without a default")
+}
+
 // done_body_carries_typed_value_like_the_web
 do {
     let t = Parsers.tasks(JSON.parse(tasksJson)!)[1]

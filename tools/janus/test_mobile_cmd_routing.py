@@ -141,6 +141,22 @@ def test_comma_parts_run_sequentially_each_routed_on_its_own(jm, calls):
     assert r["msg"].count(" | ") == 2
 
 
+def test_fullwidth_comma_parts_split_each_routed_on_its_own(jm, calls):
+    # A CJK IME emits a fullwidth comma "，"; split_parts must treat it as a
+    # separator (like did-fast / tg-fast / desktop janus) or both commands
+    # lump into one bogus part and the 睡觉 entry never logs. Regression for
+    # "adding a 睡觉 entry does not work" (fullwidth-comma multi-command).
+    r = jm.run_command("0000-0744 睡觉，0744-0810 xk22")
+    assert calls == [("tg-fast.py", "0000-0744 睡觉"),
+                     ("tg-fast.py", "0744-0810 xk22")]
+    assert r["ok"]
+
+
+def test_fullwidth_semicolon_splits_parts(jm, calls):
+    jm.run_command("睡觉；coffee @epcn")
+    assert calls == [("tg-fast.py", "睡觉"), ("tg-fast.py", "coffee @epcn")]
+
+
 def test_multi_part_failure_reports_error(jm, monkeypatch):
     def fake_run(args, **kw):
         if args[2] == "x @zz":

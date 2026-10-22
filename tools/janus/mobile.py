@@ -1489,8 +1489,12 @@ def resolve_part(part: str) -> tuple[str, bool]:
 
 
 def split_parts(text: str) -> list[str]:
-    """Comma splits multiple commands (desktop convention); run in order."""
-    return [p.strip() for p in text.split(",") if p.strip()] or [text.strip()]
+    """Comma splits multiple commands (desktop convention); run in order.
+    Splits on ASCII , ; AND their fullwidth forms ，； — a fullwidth comma
+    from a CJK IME (e.g. "0000-0744 睡觉，0744-0810 xk22") otherwise left both
+    commands lumped into one bogus part, so the 睡觉 entry never logged. Same
+    separator set as did-fast / tg-fast / desktop janus (all split on [,;，；])."""
+    return [p.strip() for p in re.split(r"[,;，；]", text) if p.strip()] or [text.strip()]
 
 
 def _is_plain_switch(cmd: str) -> bool:
