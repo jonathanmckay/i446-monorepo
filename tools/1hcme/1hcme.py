@@ -20,9 +20,9 @@ Thursday (the open card) is targeted instead. `YYYY-MM-DD` targets the
 Thursday of the Sun-Sat week containing that date; `M.W` targets that fiscal
 week's Thursday (same label system as /1s897).
 
-Display window: the Friday after the previous check-in through the target
-week's Saturday (clipped to today) — i.e. "everything since the last 1 hcme".
-The previous check-in's own text is shown first for continuity.
+Display window: Thursday through Wednesday, i.e. the previous check-in's
+Thursday through the day before the target Thursday (clipped to today). The
+previous check-in's own text is shown first for continuity.
 
 Usage:
   python3 1hcme.py                       # interactive
@@ -126,11 +126,24 @@ def thursday_for_label(label: str) -> _dt.date:
 
 
 def window(target: _dt.date, today: _dt.date) -> list[_dt.date]:
-    start = target - _dt.timedelta(days=6)           # Friday after prior card
-    end = min(today, target + _dt.timedelta(days=2))  # target week's Saturday
+    start = target - _dt.timedelta(days=7)            # prior card's Thursday
+    end = min(today, target - _dt.timedelta(days=1))  # Wednesday before target
     if end < start:
         end = start
     return [start + _dt.timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+def load(target: _dt.date, today: _dt.date):
+    """(dates, recs-by-date-index, prev check-in rec, target Thursday rec).
+
+    The target Thursday sits just past the Thu-Wed window, so it is fetched
+    as an extra leading date; the prior check-in is the window's first day."""
+    dates = window(target, today)
+    raw = fetch([target] + dates)
+    trec = raw.pop(0, None)
+    recs = {i - 1: r for i, r in raw.items()}
+    prev = recs.get(0) if dates[0] == target - _dt.timedelta(days=7) else None
+    return dates, recs, prev, trec
 
 
 def _mdy(d: _dt.date) -> str:
@@ -330,13 +343,12 @@ def layout(width: int, cell_w: int, max_text: int | None) -> tuple[list[tuple[st
 
 
 def render(dates: list[_dt.date], recs: dict[int, dict], target: _dt.date,
-           prev: dict | None, *, cell_w: int = CELL_W, max_text: int | None = None) -> str:
+           prev: dict | None, trec: dict | None = None, *, cell_w: int = CELL_W,
+           max_text: int | None = None) -> str:
     width = shutil.get_terminal_size((160, 40)).columns
     text_cols, cell_w = layout(width, cell_w, max_text)
     out = []
-    tlabel = ""
-    if (ti := dates.index(target) if target in dates else None) is not None:
-        tlabel = recs.get(ti, {}).get("cells", {}).get("A", ("",))[0]
+    tlabel = (trec or {}).get("cells", {}).get("A", ("",))[0]
     out.append(BOLD + "1 hcme · week %s · check-in row Th %d/%d" % (
         tlabel or "?", target.month, target.day) + RESET)
     if prev:
@@ -354,7 +366,7 @@ def render(dates: list[_dt.date], recs: dict[int, dict], target: _dt.date,
     for i, d in enumerate(dates):
         rec = recs.get(i)
         day = "%s %d/%d" % (DAY_ABBR[d.weekday()], d.month, d.day)
-        day = (BOLD if d == target else "") + _fit(day, DAY_W) + RESET
+        day = _fit(day, DAY_W) + RESET
         if not rec:
             out.append(day + " " + DIM + "(no 0s897 row)" + RESET)
             continue
@@ -444,19 +456,35 @@ def _hold_pane(args) -> None:
 
 
 def read_answer() -> str:
+    """Multiline answer. Enter on an empty line or Ctrl+S saves and exits;
+    Enter elsewhere starts a new line; Ctrl+C aborts (empty = no write)."""
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.key_binding import KeyBindings
+
     print(BOLD + QUESTION + RESET)
-    print(DIM + "(one thought per line; blank line or ^D to finish; empty = abort)" + RESET)
-    lines: list[str] = []
-    while True:
-        try:
-            ln = input("> ")
-        except EOFError:
-            print()
-            break
-        if not ln.strip():
-            break
-        lines.append(ln)
-    return "\n".join(lines).strip()
+    print(DIM + "(one thought per line; Enter on an empty line or Ctrl+S saves; "
+          "Ctrl+C aborts)" + RESET)
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _(e):
+        buf = e.current_buffer
+        if not buf.document.current_line.strip():
+            buf.validate_and_handle()
+        else:
+            buf.insert_text("\n")
+
+    @kb.add("c-s")
+    @kb.add("c-d")
+    def _(e):
+        e.current_buffer.validate_and_handle()
+
+    try:
+        text = PromptSession(key_bindings=kb, multiline=True).prompt(
+            "> ", prompt_continuation=lambda *_a: "> ")
+    except (KeyboardInterrupt, EOFError):
+        return ""
+    return "\n".join(ln for ln in text.splitlines() if ln.strip()).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -482,35 +510,25 @@ def main(argv=None) -> int:
         return 0
 
     dates = window(target, today)
-    prev_date = target - _dt.timedelta(days=7)
     print(DIM + "loading %s %s → %s from Ix… (Excel can take a minute when busy)" % (
         SHEET, _mdy(dates[0]), _mdy(dates[-1])) + RESET, flush=True)
     try:
-        recs = fetch([prev_date] + dates)
+        dates, recs, prev, trec = load(target, today)
     except Exception as e:  # noqa: BLE001
         print("✗ could not read %s from Ix: %s" % (SHEET, str(e).strip()[:300]))
         _hold_pane(args)
         return 1
-    prev = recs.pop(0, None)
-    recs = {i - 1: r for i, r in recs.items()}
-
-    ti = dates.index(target) if target in dates else None
-    trec = recs.get(ti) if ti is not None else None
     # No arg + this week's card already filled → roll forward to the next
     # Thursday if the sheet has that row.
     if not args.week and trec and trec["cells"].get(HCME_COL, ("",))[0].strip():
         nxt = target + _dt.timedelta(days=7)
         if nxt <= today + _dt.timedelta(days=6):
-            ndates = window(nxt, today)
-            nrecs = fetch([target] + ndates)
-            if 1 in nrecs:  # next Thursday's week has rows
-                prev = nrecs.pop(0, None)
-                recs = {i - 1: r for i, r in nrecs.items()}
-                dates, target = ndates, nxt
-                ti = dates.index(target) if target in dates else None
-                trec = recs.get(ti) if ti is not None else None
+            nload = load(nxt, today)
+            if nload[3] is not None:  # next Thursday's row exists
+                dates, recs, prev, trec = nload
+                target = nxt
 
-    print(render(dates, recs, target, prev, cell_w=args.cell, max_text=args.cols))
+    print(render(dates, recs, target, prev, trec, cell_w=args.cell, max_text=args.cols))
 
     if trec is None:
         print("✗ no %s row for Th %s — cannot write %s" % (SHEET, _mdy(target), HCME_COL))

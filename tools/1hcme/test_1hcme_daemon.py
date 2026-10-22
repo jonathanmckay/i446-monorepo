@@ -40,3 +40,33 @@ def test_write_answer_falls_back_when_daemon_down(hm, monkeypatch):
         stderr = ""
     monkeypatch.setattr(hm, "run_bounded", lambda *a, **k: P())
     assert hm.write_answer(300, "x") == "OK: 0s897!X300"
+
+
+def test_window_is_thursday_through_wednesday(hm):
+    import datetime as dt
+    target = dt.date(2026, 10, 22)  # Thursday
+    days = hm.window(target, dt.date(2026, 10, 24))
+    assert days[0] == dt.date(2026, 10, 15) and days[0].weekday() == 3
+    assert days[-1] == dt.date(2026, 10, 21) and days[-1].weekday() == 2
+
+
+def _answer(hm, keys):
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    with create_pipe_input() as inp:
+        inp.send_text(keys)
+        with create_app_session(input=inp, output=DummyOutput()):
+            return hm.read_answer()
+
+
+def test_enter_on_empty_line_saves(hm):
+    assert _answer(hm, "one\rtwo\r\r") == "one\ntwo"
+
+
+def test_ctrl_s_saves(hm):
+    assert _answer(hm, "one\rtwo\x13") == "one\ntwo"
+
+
+def test_ctrl_c_aborts(hm):
+    assert _answer(hm, "one\x03") == ""
