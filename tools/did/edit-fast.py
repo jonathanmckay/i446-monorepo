@@ -79,6 +79,14 @@ def set_time(content: str, minutes: int) -> str:
     return f"{content.rstrip()} ({minutes})"
 
 
+def set_bonus(content: str, bonus: int) -> str:
+    """Replace the first {N} in content, or append one (the edit form's
+    {N} bonus field, 2026-10-22)."""
+    if re.search(r"\{\d+\}", content):
+        return re.sub(r"\{\d+\}", "{" + str(bonus) + "}", content, count=1)
+    return f"{content.rstrip()} {{{bonus}}}"
+
+
 def set_manual_short(cache: dict, task_id: str, content: str, short_prose: str) -> str | None:
     """A haiku name the user typed on the edit form. Stored exactly where the
     generated one lives (sidecar + a `dtd-short:` comment for the FINAL
@@ -172,12 +180,15 @@ def current_fields(task: dict, description: str) -> dict:
     content = task.get("content") or ""
     m = re.search(r"\[(\d+)\]", content)
     t = re.search(r"\((\d+)\)", content)
+    b = re.search(r"\{(\d+)\}", content)
     dom = [l for l in task.get("labels", []) if l in DOMAINS]
     short = task.get("short") or ""
     return {
         "name": re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip(),
         "domain": dom[0] if dom else "",
         "points": m.group(1) if m else "",
+        "bonus": b.group(1) if b else "",
+        "due": str(task.get("due") or "")[:10],
         "time": t.group(1) if t else "",
         "short": _short.split_estimates(short)[0] if short else "",
         "desc": description or "",
@@ -270,7 +281,7 @@ def changed_fields(cur: dict, new: dict) -> dict:
     or points means "leave it" (there's no removing a title); an emptied
     description clears it."""
     out = {}
-    for k in ("name", "domain", "points", "time", "short"):
+    for k in ("name", "domain", "points", "bonus", "time", "short", "due"):
         v = (new.get(k) or "").strip()
         if v and v != (cur.get(k) or "").strip():
             out[k] = v.lstrip("@") if k == "domain" else v
@@ -387,7 +398,7 @@ def _main_fields(argv: list[str]) -> int:
             except (OSError, ValueError) as e:
                 print(f"✗ form result unreadable: {e}")
                 return 1
-            for k in ("name", "domain", "points", "time", "short", "desc"):
+            for k in ("name", "domain", "points", "bonus", "due", "time", "short", "desc"):
                 if k in j:
                     new[k] = j[k]
             if not j.get("short_enabled"):
@@ -399,10 +410,15 @@ def _main_fields(argv: list[str]) -> int:
                 def _int(v):
                     v = (v or "").strip() if isinstance(v, str) else v
                     return int(v) if isinstance(v, int) or (isinstance(v, str) and v.isdigit()) else None
-                new["split"] = {"pts": int(j["split"]["pts"]), "name": j["split"].get("name") or "",
-                                "minutes": j["split"].get("minutes"),
-                                "done_short": (j["split"].get("short") or "") if j.get("short_enabled") else "",
+                sp = j["split"]
+                new["split"] = {"pts": _int(sp.get("pts")), "bonus": _int(sp.get("bonus")),
+                                "name": sp.get("name") or "",
+                                "minutes": sp.get("minutes"),
+                                "done_short": (sp.get("short") or "") if j.get("short_enabled") else "",
                                 "rem_pts": _int(new.pop("points", None)), "rem_min": _int(new.pop("time", None)),
+                                "rem_bonus": _int(new.pop("bonus", None)),
+                                "rem_due": (new.pop("due", None) or "").strip(),
+                                "keep": 0 if sp.get("keep") is False else 1,
                                 "rem_short": new.pop("short", None) or ""}
         elif rest[i] in flags:
             new[flags[rest[i]]] = rest[i + 1]
@@ -444,8 +460,19 @@ def _main_fields(argv: list[str]) -> int:
                 print(f"✗ time must be a number: {ch['time']}")
                 return 1
             minutes = int(ch["time"].strip("()"))
+        bonus = None
+        if "bonus" in ch:
+            if not re.fullmatch(r"\d+", ch["bonus"].strip("{}")):
+                print(f"✗ bonus must be a number: {ch['bonus']}")
+                return 1
+            bonus = int(ch["bonus"].strip("{}"))
+        due = ch.get("due")
+        if due is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
+            print(f"✗ do-date must be YYYY-MM-DD: {due}")
+            return 1
         rc = apply(task, cache, cache_file, ch.get("name"), ch.get("domain"), pts,
-                   description=ch.get("desc"), minutes=minutes, short=ch.get("short"))
+                   description=ch.get("desc"), minutes=minutes, short=ch.get("short"),
+                   bonus=bonus, due=due)
         if rc != 0 or split is None:
             return rc
     # Split: the edits above already landed in Todoist and the snapshot cache,
@@ -461,9 +488,11 @@ def _main_fields(argv: list[str]) -> int:
         return shlex.quote((split.get(k) or "").replace(chr(10), " "))
     # A short for the remainder is stored by the split script against the
     # FINAL content (its tags change there), not here.
-    print(f"SPLIT pts={split['pts']} done_name={_q('name')}"
+    print(f"SPLIT pts={_i('pts')} done_name={_q('name')}"
           f" done_min={_i('minutes')} rem_pts={_i('rem_pts')} rem_min={_i('rem_min')}"
-          f" done_short={_q('done_short')} rem_short={_q('rem_short')}")
+          f" done_short={_q('done_short')} rem_short={_q('rem_short')}"
+          f" done_bonus={_i('bonus')} rem_bonus={_i('rem_bonus')} rem_due={_q('rem_due')}"
+          f" keep={split.get('keep', 1)}")
     return 0
 
 
@@ -474,7 +503,7 @@ def _standalone_checks(text: str) -> int:
     return len(_STANDALONE_CHECK.findall(text))
 def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
           description: str | None = None, minutes: int | None = None,
-          short: str | None = None) -> int:
+          short: str | None = None, bonus: int | None = None, due: str | None = None) -> int:
     orig_content = task["content"]
     orig_clean = _pf._ANNOT.sub("", orig_content).strip()
     summary: list[str] = []
@@ -487,11 +516,19 @@ def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
         new_content = _pf.set_points(new_content, points)
     if minutes is not None:
         new_content = set_time(new_content, minutes)
+    if bonus is not None:
+        new_content = set_bonus(new_content, bonus)
     body = {}
     if new_content != orig_content:
         body["content"] = new_content
     if description is not None:
         body["description"] = description
+    if due is not None:
+        # a plain due_date would strip a recurring task's cadence
+        if task.get("recurring"):
+            summary.append("⚠ do-date not changed (recurring task)")
+        else:
+            body["due_date"] = due
     if body:
         try:
             _df._api("POST", f"/tasks/{task['id']}", body)
@@ -500,6 +537,13 @@ def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
             return 1
     if description is not None:
         summary.append("description cleared" if not description else "description updated")
+    if "due_date" in body:
+        for v in cache.values():
+            if isinstance(v, list):
+                for t in v:
+                    if isinstance(t, dict) and t.get("id") == task["id"]:
+                        t["due"] = due
+        summary.append(f"do {due}")
     if new_content != orig_content:
         # Resync the Haiku short on EVERY content change, not just renames —
         # dtd renders `short` preferentially, so a points-only edit ("10")
@@ -514,6 +558,8 @@ def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
             summary.append(f"[{points}]")
         if minutes is not None:
             summary.append(f"({minutes})")
+        if bonus is not None:
+            summary.append(f"{{{bonus}}}")
         if short_ok is False:
             summary.append("⚠ no short name (Haiku call failed; check ANTHROPIC_API_KEY)")
     if short:

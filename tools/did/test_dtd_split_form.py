@@ -51,7 +51,8 @@ def test_edit_screen_runs_one_form_then_edit_fast_json_then_the_split_script():
     assert '--fields --id "\\$1" "$DTD_CACHE_FILE" --json "\\$_out"' in body
     assert "grep '^SPLIT ' | tail -n 1" in body
     assert ('"/tmp/dtd-$DTD_ID.split.sh" "\\$1" "\\$pts" "\\$done_name" "" "\\$rem_pts" "\\$done_min" '
-            '"\\$rem_min" "\\$done_short" "\\$rem_short"') in body
+            '"\\$rem_min" "\\$done_short" "\\$rem_short" "\\$done_bonus" "\\$rem_bonus" "\\$rem_due" "\\$keep"') in body
+    assert 'done_bonus=""; rem_bonus=""; rem_due=""; keep="1"' in body
     # the save is backgrounded (haiku regeneration must not block the list) and
     # pokes fzf's port to reload once the cache is patched
     assert "} </dev/null >> \"/tmp/dtd-edit.log\" 2>&1 &!" in body
@@ -77,10 +78,12 @@ def test_split_script_takes_minutes_done_and_emits_tags_independently():
     assert "if len(sys.argv) > 14 and sys.argv[14].strip().isdigit():" in body
     assert "split-form" not in body.replace("# form (split-form.py, 2026-10-04)", "")
     assert "vared" not in body and "read -r pts_today" not in body
-    assert '"${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}" "${done_short:-}" "${rem_short:-}"' in body
+    assert ('"$task_id" "${bonus_today:-}" "${bonus_total:-}" "${remaining_override:-}" "${minutes_done:-}" '
+            '"${remaining_min_override:-}" "${done_short:-}" "${rem_short:-}" "${rem_bonus_override:-}" '
+            '"${rem_due:-}" "${keep_rem:-1}"') in body
     assert "minutes_done = sys.argv[13].strip() if len(sys.argv) > 13 else ''" in body
     assert "remaining_dur = str(max(0, int(duration) - int(minutes_done)))" in body
-    assert "posthoc_content = f'{today_label} ({done_dur or pts_today}) {open_b}{pts_today}{close_b}'" in body
+    assert "posthoc_content = ' '.join([today_label] + _done_tags)" in body
     assert "new_content = ' '.join([remaining_desc or clean] + _tags)" in body
     assert "if remaining_dur and remaining_dur != '0':" in body
     assert "split cancelled" in body
@@ -88,3 +91,27 @@ def test_split_script_takes_minutes_done_and_emits_tags_independently():
 
 def test_legend_names_the_breakoff():
     assert "ctrl-p: ✂done-so-far" in DTD
+
+
+def test_split_script_handles_bonus_do_date_and_partial_credit():
+    """-1g goals (2026-10-22): [N] and {N} are independent (each has its own
+    done/remaining and did-fast write, {N} never with a domain label); the
+    remainder defers to the typed do-date; keep=0 closes the task and undo
+    reopens it."""
+    body = _split()
+    assert '[[ "$pts_today" =~ ^[0-9]+$ || "$bonus_today" =~ ^[0-9]+$ ]] || { echo "split cancelled"' in body
+    assert "bonus_total=$(echo \"$task\" | grep -oE '\\{[0-9]+\\}'" in body
+    assert "open_b" not in body and "$bracket" not in body
+    assert "remaining_bonus = max(0, bonus_total - bonus_today) if bonus_total > 0 else 0" in body
+    assert "_tags.append(f'{{{remaining_bonus}}}')" in body
+    assert "if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', rem_due):\n    tomorrow = rem_due" in body
+    assert "else:\n    api('POST', f'/tasks/{tid}/close')" in body
+    assert "didfast_out = _credit(f'{safe_name} [{pts_today}] {label_arg}') if pts_today > 0 else None" in body
+    assert "didfast_bonus = _credit(f'{safe_name} {{{bonus_today}}}') if bonus_today > 0 else None" in body
+    assert "'didfast_bonus': didfast_bonus," in body and "'closed': not keep_rem," in body
+    # the python -c body is double-quoted in zsh: a bare double quote would end it
+    py = body[body.index('python3 -c "') + len('python3 -c "'):body.index('" "$clean"')]
+    assert '"' not in py.replace('\\"', "")
+    undo = (HERE / "undo-fast.py").read_text()
+    assert 'if tid and record.get("closed"):' in undo and '_api("POST", f"/tasks/{tid}/reopen")' in undo
+    assert 'for key in ("didfast", "didfast_bonus"):' in undo

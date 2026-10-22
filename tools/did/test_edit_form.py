@@ -47,10 +47,13 @@ def test_prefill_points_time_short_name_domain(ef):
     assert p["desc"] == "notes" and p["desc_loaded"]
 
 
-def test_prefill_short_title_disables_haiku_and_curly_points_are_read_only(ef):
-    p = ef.prefill({"id": "t2", "content": "call LR {15}", "labels": []}, None)
-    assert not p["short_enabled"] and p["points"] == "{15}" and p["points_curly"]
+def test_prefill_short_title_disables_haiku_and_reads_the_bonus(ef):
+    p = ef.prefill({"id": "t2", "content": "call LR {15}", "labels": [], "due": "2026-10-22"}, None)
+    assert not p["short_enabled"] and p["points"] == "" and p["bonus"] == "15" and p["has_bonus"]
+    assert p["due"] == "2026-10-22"
     assert not p["desc_loaded"] and p["desc"] == ""
+    q = ef.prefill({"id": "t3", "content": "call LR (10) [5]", "labels": []}, None)
+    assert q["bonus"] == "" and not q["has_bonus"] and q["due"] == ""
 
 
 def test_remainder_values_are_independent_and_prefill_with_the_totals(ef):
@@ -62,13 +65,19 @@ def test_remainder_values_are_independent_and_prefill_with_the_totals(ef):
 
 
 def test_validate_numbers_and_bounds(ef):
-    base = {"points": "5", "time": "20", "total_pts": "20", "total_min": "30", "points_curly": False}
+    base = {"points": "5", "time": "20", "total_pts": "20", "total_min": "30", "total_bonus": "10"}
     assert ef.validate({**base, "done_pts": "15", "done_min": "10"}) is None
     assert "number" in ef.validate({**base, "done_pts": "ten"})
     assert "> current" in ef.validate({**base, "done_pts": "25"})
     assert "> current" in ef.validate({**base, "done_pts": "5", "done_min": "45"})
-    assert "needs pts done" in ef.validate({**base, "done_min": "5"})
-    assert ef.validate({**base, "points": "{15}", "points_curly": True}) is None
+    assert "needs pts or bonus done" in ef.validate({**base, "done_min": "5"})
+    assert ef.validate({**base, "done_bonus": "4", "done_min": "5"}) is None       # bonus alone is a split
+    assert "bonus done 12 > current 10" in ef.validate({**base, "done_bonus": "12"})
+    assert "number" in ef.validate({**base, "bonus": "x"})
+    assert "keep remainder" in ef.validate({**base, "keep": False})              # nothing done to credit
+    assert ef.validate({**base, "keep": False, "done_pts": "3"}) is None
+    assert "do-date" in ef.validate({**base, "due": "someday"})
+    assert ef.validate({**base, "due": "fri"}) is None
 
 
 def test_result_shapes_the_edit_fast_payload(ef):
@@ -78,11 +87,26 @@ def test_result_shapes_the_edit_fast_payload(ef):
     r = ef.result(vals)
     assert r["name"] == "memo" and r["domain"] == "i9" and r["desc"] == "a\nb"
     assert r["points"] == "5" and r["time"] == "30"        # the remainder section = what the task keeps
-    assert r["split"] == {"pts": 15, "minutes": None, "name": "drafted it", "short": ""}
+    assert r["split"] == {"pts": 15, "bonus": None, "minutes": None, "name": "drafted it", "short": "",
+                          "keep": True}
     assert r["short"] == "" and r["short_enabled"] is False   # haiku is generated, never typed
-    vals.update(desc_loaded=False, done_pts="", points_curly=True)
+    vals.update(desc_loaded=False, done_pts="")
     r = ef.result(vals)
-    assert r["desc"] is None and r["split"] is None and r["points"] == ""
+    assert r["desc"] is None and r["split"] is None and r["due"] == ""
+    vals.update(done_bonus="5", keep=False, bonus="10", due="2026-10-30")
+    r = ef.result(vals)
+    assert r["split"]["pts"] is None and r["split"]["bonus"] == 5 and r["split"]["keep"] is False
+    assert r["bonus"] == "10" and r["due"] == "2026-10-30"
+
+
+def test_parse_date_forms(ef):
+    import datetime as dt
+    t = dt.date(2026, 10, 22)                      # a Thursday
+    assert ef.parse_date("tmrw", t) == "2026-10-23" and ef.parse_date("today", t) == "2026-10-22"
+    assert ef.parse_date("fri", t) == "2026-10-23" and ef.parse_date("thu", t) == "2026-10-29"
+    assert ef.parse_date("10/24", t) == "2026-10-24" and ef.parse_date("1.5", t) == "2027-01-05"
+    assert ef.parse_date("+3", t) == "2026-10-25" and ef.parse_date("2026-11-02", t) == "2026-11-02"
+    assert ef.parse_date("month", t) is None and ef.parse_date("13/40", t) is None
 
 
 # ── pty: the real form ──────────────────────────────────────────────────────
@@ -172,8 +196,8 @@ def test_pty_ctrl_p_done_section_drives_the_remainder_and_ctrl_s_saves(tmp_path)
     rc, out, _, _, screen = _run(tmp_path, "\t20\t15\x13", focus="split")
     assert rc == 0
     j = json.loads(out.read_text())
-    assert j["split"] == {"pts": 15, "minutes": 20, "name": "write the quarterly planning memo for the whole org",
-                          "short": ""}
+    assert j["split"] == {"pts": 15, "bonus": None, "minutes": 20,
+                          "name": "write the quarterly planning memo for the whole org", "short": "", "keep": True}
     assert j["points"] == "5" and j["time"] == "10"
     assert j["name"] == "write the quarterly planning memo for the whole org"
     assert j["desc"] == "old notes"
@@ -209,6 +233,39 @@ def test_pty_rejects_done_over_total_and_stays_open(tmp_path):
     rc, out, _, _, screen = _run(tmp_path, "\t\t99\x13" "\x1b", focus="split")
     assert rc == 2 and not out.exists()
     assert "pts done 99 > current 20" in screen
+
+
+BONUS = "ship the -1g memo for the whole org (30) [20] {10}"
+
+
+def test_pty_bonus_only_shows_with_curly_and_drives_its_remainder(tmp_path):
+    # no {N}: neither bonus field is drawn
+    rc, _, _, _, screen = _run(tmp_path, "\x1b")
+    assert rc == 2 and "bonus" not in screen and "do-date" in screen and "keep remainder" in screen
+    # {N}: done → min 20, pts 15, bonus 4; the remainder's {N} follows to 6 and
+    # the do-date to tomorrow
+    rc, out, _, _, screen = _run(tmp_path / "b", "\t20\t15\t4\x13", focus="split", content=BONUS)
+    assert rc == 0 and "{N} bonus" in screen
+    j = json.loads(out.read_text())
+    assert j["split"]["bonus"] == 4 and j["split"]["pts"] == 15 and j["split"]["keep"] is True
+    assert (j["points"], j["bonus"], j["time"]) == ("5", "6", "10")
+    assert j["due"] == ""          # untouched do-date: the split script defers to tomorrow itself
+
+
+def test_pty_unchecking_keep_remainder_is_partial_credit(tmp_path):
+    # pts done 15, ^O to the remainder, Tab ×4 → keep, space unchecks, ^S
+    rc, out, _, _, screen = _run(tmp_path, "\t\t15\x0f\t\t\t\t \x13", focus="split")
+    assert rc == 0, screen[-300:]
+    j = json.loads(out.read_text())
+    assert j["split"]["keep"] is False and j["split"]["pts"] == 15
+
+
+def test_pty_typed_do_date_is_saved_as_iso(tmp_path):
+    import datetime as dt
+    rc, out, _, _, _ = _run(tmp_path, "\t\t15\x0f\t\t\t\x15+2\x13", focus="split")
+    assert rc == 0
+    j = json.loads(out.read_text())
+    assert j["due"] == (dt.date.today() + dt.timedelta(days=2)).isoformat()
 
 
 if __name__ == "__main__":

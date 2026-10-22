@@ -137,7 +137,7 @@ def remainder_of(total: str, done: str) -> str:
     return str(max(0, int(total) - int(done))) if _INT.match(done or "") else total
 
 
-_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
 def parse_date(text: str, today=None) -> str | None:
@@ -163,7 +163,7 @@ def parse_date(text: str, today=None) -> str | None:
     if m:
         return (today + _dt.timedelta(days=int(m.group(1)))).isoformat()
     for i, wd in enumerate(_WEEKDAYS):
-        if t[:3] == wd and wd.startswith(t[:3]) and len(t) >= 3:
+        if len(t) >= 3 and wd.startswith(t):
             ahead = (i - today.weekday()) % 7 or 7
             return (today + _dt.timedelta(days=ahead)).isoformat()
     m = re.fullmatch(r"(\d{1,2})[/.](\d{1,2})", t)
@@ -714,6 +714,14 @@ class Form:
         """Returns 'save' / 'cancel' / None."""
         f = self.focus
         self.msg = ""
+        if f.check and key not in ("\n", "\r", "\t", "\x13", "\x03", "\x11", "\x0f", "\x10", "\x1b",
+                                   curses.KEY_ENTER, curses.KEY_UP, curses.KEY_DOWN, curses.KEY_BTAB,
+                                   curses.KEY_RESIZE):
+            # a checkbox only toggles; editing keys must not eat its "x"
+            if key in (" ", "x", "X"):
+                f.text = "" if f.text else "x"
+                f.touched = True
+            return None
         if isinstance(key, int):
             if key == curses.KEY_LEFT:
                 f.cur = max(0, f.cur - 1)
@@ -773,10 +781,6 @@ class Form:
             self.focus = self.by["done_name"]
         elif key == "\x1b":
             return "esc"
-        elif f.check:
-            if key in (" ", "x", "X"):
-                f.text = "" if f.text else "x"
-                f.touched = True
         elif key >= " ":
             f.insert(key)
         return None

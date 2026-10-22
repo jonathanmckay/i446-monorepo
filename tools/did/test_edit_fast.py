@@ -251,7 +251,7 @@ def test_form_prefill_splits_title_domain_points_description():
     mod = _load()
     cur = mod.current_fields(_form_task(), "notes here")
     assert cur == {"name": "write memo (see doc)", "domain": "i9", "points": "20", "time": "30",
-                   "short": "", "desc": "notes here"}
+                   "bonus": "5", "due": "", "short": "", "desc": "notes here"}
 
 
 def test_form_untouched_fields_change_nothing():
@@ -401,14 +401,14 @@ def test_split_applies_edits_first_then_hands_off_one_shell_line(tmp_path, monke
     assert mod.main() == 0
     assert calls == [{"content": "write memo (see doc) (30) [40] {5}"}]   # [N] = new TOTAL, applied before the split
     out = capsys.readouterr().out.splitlines()
-    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done' done_min= rem_pts= rem_min= done_short='' rem_short=''"   # one line, newline sanitised
+    assert out[-1] == "SPLIT pts=15 done_name='it'\"'\"'s half done' done_min= rem_pts= rem_min= done_short='' rem_short='' done_bonus= rem_bonus= rem_due='' keep=1"   # one line, newline sanitised
     assert json.loads(cache.read_text())["tasks"][0]["content"].endswith("[40] {5}")
 
 
 def test_split_with_no_other_change_skips_the_api(tmp_path, monkeypatch, capsys):
     mod, calls, _ = _split_run(tmp_path, monkeypatch, "write memo (see doc) @i9 [20] // old notes ✓ 5")
     assert mod.main() == 0 and calls == []
-    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name='' done_min= rem_pts= rem_min= done_short='' rem_short=''"
+    assert capsys.readouterr().out.strip() == "SPLIT pts=5 done_name='' done_min= rem_pts= rem_min= done_short='' rem_short='' done_bonus= rem_bonus= rem_due='' keep=1"
 
 
 def test_seeded_check_left_alone_is_a_cancelled_split(tmp_path, monkeypatch, capsys):
@@ -474,7 +474,7 @@ def test_json_form_split_leaves_tags_to_the_split_script(tmp_path, monkeypatch, 
     assert mod.main() == 0
     assert calls == [{"content": "write memo v2 (30) [40]"}]       # renamed, tags untouched
     assert capsys.readouterr().out.strip().splitlines()[-1] == \
-        "SPLIT pts=15 done_name=half done_min=20 rem_pts=25 rem_min=10 done_short=Half rem_short='Memo v2'"
+        "SPLIT pts=15 done_name=half done_min=20 rem_pts=25 rem_min=10 done_short=Half rem_short='Memo v2' done_bonus= rem_bonus= rem_due='' keep=1"
 
 
 def test_json_form_result_null_desc_means_never_loaded_keep(tmp_path, monkeypatch, capsys):
@@ -504,3 +504,58 @@ def test_manual_short_is_stored_for_long_titles_only(tmp_path, monkeypatch):
     assert cache["today"][0]["short"] == "Quarterly memo (30) [20]"
     assert stored["comment"] == ("t1", "Quarterly memo (30) [20]")
     assert mod.set_manual_short({}, "t2", "short title [5]", "x") is None
+
+
+def test_json_form_split_carries_bonus_do_date_and_keep(tmp_path, monkeypatch, capsys):
+    """-1g goals (2026-10-22): bonus done / remaining bonus, the remainder's
+    do-date and "keep remainder" ride the SPLIT line; a bonus-only split has
+    an empty pts=."""
+    mod = _load()
+    cache = {"today": [{"id": "t1", "content": "ship memo (30) [40] {20}", "labels": ["i9"]}]}
+    cf = tmp_path / "c.json"; cf.write_text(json.dumps(cache))
+    monkeypatch.setattr(mod._df, "_api", lambda m, p, body=None: {})
+    monkeypatch.setattr(mod, "_description", lambda tid: "")
+    monkeypatch.setattr(mod, "_resync_short", lambda *a: True)
+    res = tmp_path / "r.json"
+    res.write_text(json.dumps({"name": "ship memo", "points": "40", "bonus": "15", "time": "30",
+                               "due": "2026-10-27", "short": "", "short_enabled": False,
+                               "domain": "i9", "desc": "",
+                               "split": {"pts": None, "bonus": 5, "minutes": None, "name": "outline",
+                                         "short": "", "keep": False}}))
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cf), "--json", str(res)])
+    assert mod.main() == 0
+    assert capsys.readouterr().out.strip().splitlines()[-1] == (
+        "SPLIT pts= done_name=outline done_min= rem_pts=40 rem_min=30 done_short='' rem_short=''"
+        " done_bonus=5 rem_bonus=15 rem_due=2026-10-27 keep=0")
+
+
+def test_plain_edit_sets_bonus_and_do_date_but_never_a_recurring_due(tmp_path, monkeypatch, capsys):
+    mod = _load()
+    cache = {"today": [{"id": "t1", "content": "ship memo (30) [40] {20}", "labels": ["i9"], "due": "2026-10-22"},
+                       {"id": "t2", "content": "stretch (10) [5]", "labels": ["hcb"], "due": "2026-10-22",
+                        "recurring": True}]}
+    cf = tmp_path / "c.json"; cf.write_text(json.dumps(cache))
+    calls = []
+    monkeypatch.setattr(mod._df, "_api", lambda m, p, body=None: calls.append(body) or {})
+    monkeypatch.setattr(mod, "_description", lambda tid: "")
+    monkeypatch.setattr(mod, "_resync_short", lambda *a: True)
+    res = tmp_path / "r.json"
+    res.write_text(json.dumps({"name": "ship memo", "points": "40", "bonus": "25", "time": "30",
+                               "due": "2026-10-24", "short": "", "short_enabled": False,
+                               "domain": "i9", "desc": None, "split": None}))
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t1", str(cf), "--json", str(res)])
+    assert mod.main() == 0
+    assert calls == [{"content": "ship memo (30) [40] {25}", "due_date": "2026-10-24"}]
+    assert json.loads(cf.read_text())["today"][0]["due"] == "2026-10-24"
+    calls.clear(); capsys.readouterr()
+    res.write_text(json.dumps({"name": "stretch", "points": "5", "time": "10", "due": "2026-10-24",
+                               "short": "", "short_enabled": False, "domain": "hcb", "desc": None, "split": None}))
+    monkeypatch.setattr(sys, "argv", ["edit-fast.py", "--fields", "--id", "t2", str(cf), "--json", str(res)])
+    assert mod.main() == 0
+    assert calls == [] and "recurring" in capsys.readouterr().out
+
+
+def test_set_bonus_replaces_or_appends():
+    mod = _load()
+    assert mod.set_bonus("a (5) [10] {20}", 7) == "a (5) [10] {7}"
+    assert mod.set_bonus("a (5) [10]", 7) == "a (5) [10] {7}"
