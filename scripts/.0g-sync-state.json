@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-22T08:00:07.373567-07:00"
+  "tasks": {
+    "500分": {
+      "todoist_id": "6hq4Pm3grVV5FX22",
+      "minutes": 50
+    },
+    "ic time to get to real i9 tasks": {
+      "todoist_id": "6hq4Pm23WjrHG4G2",
+      "minutes": 20
+    },
+    "below 50 by eod": {
+      "todoist_id": "6hq4PmCC72hjRMWR",
+      "minutes": 60
+    }
+  },
+  "last_sync": "2026-10-22T10:00:03.558205-07:00"
 }
