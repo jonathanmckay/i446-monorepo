@@ -463,6 +463,12 @@ def reverse_record(record: dict, errors: list[str]) -> None:
             except Exception as e:
                 errors.append(f"posthoc delete {ph}: {e}")
         tid = record.get("task_id")
+        if tid and record.get("closed"):
+            # "keep remainder" unchecked closed the task (2026-10-22)
+            try:
+                _api("POST", f"/tasks/{tid}/reopen")
+            except Exception as e:
+                errors.append(f"reopen task {tid}: {e}")
         if tid:
             try:
                 _api("POST", f"/tasks/{tid}", {
@@ -471,9 +477,9 @@ def reverse_record(record: dict, errors: list[str]) -> None:
                 })
             except Exception as e:
                 errors.append(f"restore task {tid}: {e}")
-        didfast = record.get("didfast")
-        if didfast:
-            reverse_didfast_output(didfast, target_md, today_iso, errors)
+        for key in ("didfast", "didfast_bonus"):
+            if record.get(key):
+                reverse_didfast_output(record[key], target_md, today_iso, errors)
         mc.remove_names(record.get("names", []))
 
     elif rtype == "delete":

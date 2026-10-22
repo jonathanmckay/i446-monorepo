@@ -1772,14 +1772,16 @@ rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/n
 # Split: when the form's done card held pts done, edit-fast has applied the
 # remainder card's name/haiku/notes/project and prints ONE line of shell
 # assignments prefixed SPLIT (pts=, done_name=, done_min=, rem_pts=,
-# rem_min=, done_short=, rem_short=; newlines sanitised). The remainder's
-# [N]/(N) travel as overrides: the split script writes them. It owns the
-# header from here.
+# rem_min=, done_short=, rem_short=, done_bonus=, rem_bonus=, rem_due=,
+# keep=; newlines sanitised). The remainder's [N]/(N)/{N} and do-date travel
+# as overrides: the split script writes them; keep=0 closes the task instead
+# (partial credit, 2026-10-22). It owns the header from here.
 _split_line=\$(print -r -- "\$out" | grep '^SPLIT ' | tail -n 1)
 if [[ -n "\$_split_line" ]]; then
   pts=""; done_name=""; done_min=""; rem_pts=""; rem_min=""; done_short=""; rem_short=""
+  done_bonus=""; rem_bonus=""; rem_due=""; keep="1"
   eval "\${_split_line#SPLIT }"
-  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "\$rem_pts" "\$done_min" "\$rem_min" "\$done_short" "\$rem_short"
+  "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "\$rem_pts" "\$done_min" "\$rem_min" "\$done_short" "\$rem_short" "\$done_bonus" "\$rem_bonus" "\$rem_due" "\$keep"
 else
   echo "\${out:-✗ edit failed}" > "\$HDR"
   _port="\$(cat "$DTD_PORT" 2>/dev/null)"
@@ -3013,9 +3015,12 @@ cat > "$DTD_SPLIT" << 'SPLITEOF'
 [[ -n "${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHREALTIME${_T}PLACEHOLDER_SID${_T}action${_T}split${_T}$1${_T}" >> "PLACEHOLDER_EVENTS" 2>/dev/null
 # Split a task: claim partial points today, defer the rest to tomorrow.
-# Args: $1 task id, $2 points done today, $3 done record name (blank = the
-# task's own name), $4 remainder name (blank = keep), $5 points remaining
-# (blank = total - done). Since 2026-10-21 the questions are asked on the
+# Args: $1 task id, $2 [N] points done today, $3 done record name (blank =
+# the task's own name), $4 remainder name (blank = keep), $5 points remaining
+# (blank = total - done), $6 min done, $7 min remaining, $8/$9 haiku names,
+# $10 {N} bonus done, $11 bonus remaining (blank = total - done), $12 the
+# remainder's do-date (YYYY-MM-DD, blank = tomorrow), $13 keep remainder
+# (0 = close the task: partial credit, nothing deferred; 2026-10-22). Since 2026-10-21 the questions are asked on the
 # ctrl-o/ctrl-g edit screen (" ✓ <pts> [what I did]" on the edit line) and
 # dtd's edit script calls this with the answers; there is no prompt here.
 # All Todoist/Neon writes done inline via Python.
@@ -3037,20 +3042,19 @@ task=$(python3 "$HOME/i446-monorepo/tools/did/dtd_resolve.py" "$CACHE_FILE" "$1"
 # curly style throughout — treating it as [N] silently loses the total
 # (regression 2026-07-28: a {50} task's total came back "?", forcing
 # remaining_pts to 0 and wiping the {N} marker off both halves entirely).
-bracket='['
-close=']'
+# Since 2026-10-22 a task may carry BOTH ([N] task points, {N} 0g bonus,
+# common on -1g goals): each has its own done/remaining pair and its own
+# did-fast write, so neither style is lost.
 total=$(echo "$task" | grep -oE '\[[0-9]+\]' | head -1 | tr -d '[]')
-if [[ -z "$total" ]]; then
-  total=$(echo "$task" | grep -oE '\{[0-9]+\}' | head -1 | tr -d '{}')
-  [[ -n "$total" ]] && { bracket='{'; close='}'; }
-fi
+bonus_total=$(echo "$task" | grep -oE '\{[0-9]+\}' | head -1 | tr -d '{}')
 duration=$(echo "$task" | grep -oE '\([0-9]+\)' | head -1 | tr -d '()')
 [[ -z "$total" ]] && total="?"
 
 # Was three GUI dialogs (2026-06), three sequential prompts, then one curses
 # form (split-form.py, 2026-10-04); now the answers arrive as arguments.
 pts_today="${2:-}"; done_desc="${3:-}"; remaining_desc="${4:-}"; remaining_override="${5:-}"; minutes_done="${6:-}"; remaining_min_override="${7:-}"; done_short="${8:-}"; rem_short="${9:-}"
-[[ -z "$pts_today" || ! "$pts_today" =~ ^[0-9]+$ ]] && { echo "split cancelled" > "$HDR"; exit 0; }
+bonus_today="${10:-}"; rem_bonus_override="${11:-}"; rem_due="${12:-}"; keep_rem="${13:-1}"
+[[ "$pts_today" =~ ^[0-9]+$ || "$bonus_today" =~ ^[0-9]+$ ]] || { echo "split cancelled" > "$HDR"; exit 0; }
 
 clean=$(echo "$task" | sed -E 's/ *\([0-9]*\)//g; s/ *\[[0-9]*\]//g; s/ *\[[0-9.+]*\/m\]//g; s/ *\{[0-9]*\}//g; s/  +/ /g; s/ *$//')
 # Strip truncation: if fzf middle-truncated the name with …, search by the
@@ -3083,7 +3087,8 @@ BASE = 'https://api.todoist.com/api/v1'
 HDR = {'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'}
 
 clean = sys.argv[1]
-pts_today = int(sys.argv[2])
+has_pts = sys.argv[2].strip().isdigit()
+pts_today = int(sys.argv[2]) if has_pts else 0
 total = int(sys.argv[3]) if sys.argv[3] != '?' else 0
 done_desc = sys.argv[4]
 remaining_desc = sys.argv[5]
@@ -3091,7 +3096,15 @@ duration = sys.argv[6]
 hdr_file = sys.argv[7]
 removed_file = sys.argv[8]
 task_id = sys.argv[9]
-open_b, close_b = sys.argv[10], sys.argv[11]  # '[' ']' or '{' '}' -- preserve the original's point style
+# {N} bonus: 10th done, 11th the task total, 17th typed remaining
+has_bonus = sys.argv[10].strip().isdigit()
+bonus_today = int(sys.argv[10]) if has_bonus else 0
+bonus_total = int(sys.argv[11]) if sys.argv[11].strip().isdigit() else 0
+remaining_bonus = max(0, bonus_total - bonus_today) if bonus_total > 0 else 0
+if len(sys.argv) > 17 and sys.argv[17].strip().isdigit():
+    remaining_bonus = int(sys.argv[17].strip())
+rem_due = sys.argv[18].strip() if len(sys.argv) > 18 else ''
+keep_rem = (sys.argv[19].strip() if len(sys.argv) > 19 else '1') != '0'
 
 remaining_pts = max(0, total - pts_today) if total > 0 else 0
 # Points remaining typed in the form (12th arg) wins over total - done.
@@ -3142,7 +3155,12 @@ prev_due = (task.get('due') or {}).get('date', '')
 
 # 1. Create completed posthoc for today's portion
 today_label = done_desc if done_desc else clean
-posthoc_content = f'{today_label} ({done_dur or pts_today}) {open_b}{pts_today}{close_b}'
+_done_tags = [f'({done_dur or pts_today or bonus_today})']
+if pts_today > 0:
+    _done_tags.append(f'[{pts_today}]')
+if bonus_today > 0:
+    _done_tags.append(f'{{{bonus_today}}}')
+posthoc_content = ' '.join([today_label] + _done_tags)
 from datetime import date
 today_iso = date.today().isoformat()
 posthoc = api('POST', '/tasks', {
@@ -3163,21 +3181,30 @@ if posthoc:
             pass
 
 # 2. Update original task: new content with remaining description + reschedule
+#    to the do-date (blank = tomorrow). keep_rem off = partial credit: the task
+#    is closed as it stands, nothing deferred.
 from datetime import timedelta
 tomorrow = (date.today() + timedelta(days=1)).isoformat()
+if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', rem_due):
+    tomorrow = rem_due
 # Tags are emitted independently: time may run out while points remain and
 # vice versa; an empty duration never writes a bare '()'.
 _tags = []
 if remaining_dur and remaining_dur != '0':
     _tags.append(f'({remaining_dur})')
 if remaining_pts > 0:
-    _tags.append(f'{open_b}{remaining_pts}{close_b}')
+    _tags.append(f'[{remaining_pts}]')
+if remaining_bonus > 0:
+    _tags.append(f'{{{remaining_bonus}}}')
 new_content = ' '.join([remaining_desc or clean] + _tags)
-api('POST', f'/tasks/{tid}', {
-    'content': new_content,
-    'due_date': tomorrow,
-})
-if rem_short:
+if keep_rem:
+    api('POST', f'/tasks/{tid}', {
+        'content': new_content,
+        'due_date': tomorrow,
+    })
+else:
+    api('POST', f'/tasks/{tid}/close')
+if rem_short and keep_rem:
     # stored against the FINAL content (tags just changed), sidecar + comment
     import subprocess as _sp
     _sp.run(['python3', '$HOME/i446-monorepo/tools/did/edit-fast.py', '--set-short', '--id', tid,
@@ -3202,11 +3229,10 @@ try:
 except Exception:
     domains = {'i9','i447','f693','f694','m5x2','m828','g245','infra','cc','hcmc','hcm','hci','hcb','hcbp','xk87','xk88','xk20','xk22','s897'}
 label_arg = ''
-if open_b == '[':
-    for l in labels:
-        if l in domains:
-            label_arg = f'@{l}'
-            break
+for l in labels:
+    if l in domains:
+        label_arg = f'@{l}'
+        break
 # did-fast splits its input on commas/semicolons — a task name containing
 # one would be parsed as multiple items, detaching [pts]/@label from the
 # name and scattering the points (regression 2026-06-06: a name like
@@ -3214,13 +3240,16 @@ if open_b == '[':
 # NB: NO bare double quotes in this comment — they terminate the enclosing
 # python -c string and silently break the whole split (see line ~551).
 safe_name = re.sub(r'[,;]+', ' ', clean)
-df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py',
-                '--points-only', f'{safe_name} {open_b}{pts_today}{close_b} {label_arg}'],
-               capture_output=True, text=True, timeout=30)
-try:
-    didfast_out = json.loads(df.stdout)
-except Exception:
-    didfast_out = None
+def _credit(item):
+    df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py', '--points-only', item],
+                        capture_output=True, text=True, timeout=30)
+    try:
+        return json.loads(df.stdout)
+    except Exception:
+        return None
+# [N] with its domain label; {N} alone (a label beside it double-credits)
+didfast_out = _credit(f'{safe_name} [{pts_today}] {label_arg}') if pts_today > 0 else None
+didfast_bonus = _credit(f'{safe_name} {{{bonus_today}}}') if bonus_today > 0 else None
 
 # 4. Journal for ctrl-z undo
 record = {
@@ -3231,6 +3260,8 @@ record = {
     'prev_due': prev_due,
     'posthoc_id': posthoc['id'] if posthoc else None,
     'didfast': didfast_out,
+    'didfast_bonus': didfast_bonus,
+    'closed': not keep_rem,
 }
 subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
                 '--append', 'PLACEHOLDER_JOURNAL'],
@@ -3239,11 +3270,18 @@ subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
 
 # Write results
 with open(removed_file, 'a') as f: f.write(clean.lower() + '\n')
-msg = f'✂ +{pts_today} today / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
-if not (didfast_out or {}).get('results'):
-    msg = f'⚠ split: {open_b}{pts_today}{close_b} NOT logged (did-fast: no domain) / {open_b}{remaining_pts}{close_b} deferred to {tomorrow}'
+_got = ' '.join(t for t in ([f'[{pts_today}]'] if pts_today > 0 else []) + ([f'{{{bonus_today}}}'] if bonus_today > 0 else [])) or '0'
+_left = ' '.join(_tags[1:] if _tags and _tags[0].startswith('(') else _tags) or 'nothing'
+msg = f'✂ +{_got} today / {_left} deferred to {tomorrow}' if keep_rem else f'✂ +{_got} today · rest dropped, task closed'
+_lost = []
+if pts_today > 0 and not (didfast_out or {}).get('results'):
+    _lost.append(f'[{pts_today}] (did-fast: no domain)')
+if bonus_today > 0 and not (didfast_bonus or {}).get('results'):
+    _lost.append(f'{{{bonus_today}}}')
+if _lost:
+    msg = '⚠ split: ' + ' '.join(_lost) + ' NOT logged / ' + msg[2:]
 with open(hdr_file, 'w') as f: f.write(msg)
-" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "$bracket" "$close" "${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}" "${done_short:-}" "${rem_short:-}"
+" "$clean" "$pts_today" "${total:-?}" "${done_desc:-}" "${remaining_desc:-}" "${duration:-}" "$HDR" "$REMOVED" "$task_id" "${bonus_today:-}" "${bonus_total:-}" "${remaining_override:-}" "${minutes_done:-}" "${remaining_min_override:-}" "${done_short:-}" "${rem_short:-}" "${rem_bonus_override:-}" "${rem_due:-}" "${keep_rem:-1}"
 print -- "$EPOCHREALTIME\tsplit-bg-end\t$task_id rc=$?" >> "$TIMING" 2>/dev/null
 } </dev/null >> "/tmp/dtd-split.log" 2>&1 &!
 print -- "$EPOCHREALTIME\tsplit-end\t$task_id" >> "$TIMING" 2>/dev/null

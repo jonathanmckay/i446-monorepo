@@ -10,7 +10,8 @@ sections, a blank line between them; inside a section the order is name
                   off the task; the name is prefilled from the task
     remainder     name · haiku · (N) min · [N] pts — what the task keeps:
                   min/pts are current − done, following the done section
-                  as you type until you type here
+                  as you type until you type here; then do-date and a
+                  "keep remainder" checkbox
     common        notes · project — the task's own description and @domain
 
 The haiku (short row name, shorten.py) is NOT typed: it shows the current
@@ -20,6 +21,15 @@ simply the task (ctrl-o / ctrl-g: a plain edit). ctrl-p opens on the done
 section, ctrl-o on the remainder; ^P / ^O jump between them. Enter / Tab
 move on (Enter in notes = newline), Enter on the last field or ^S saves,
 Esc / ^C / ^Q cancel.
+
+Bonus and do-date (2026-10-22, "-1g goals"): a task with {N} gets a bonus
+field beside pts done and a {N} bonus field in the remainder; with no {N}
+neither appears. Bonus done reduces the remainder's bonus exactly like pts
+done reduces [N]. The remainder's do-date shows the task's due date and
+follows to tomorrow once anything is done (typed: ISO, M/D, M.D, today,
+tmrw, mon..sun, +N). "keep remainder" (default checked) unchecked means
+partial credit for a partial task: the done record is logged and the task is
+closed, nothing deferred. Space / x toggles it.
 
 Budget (user, 2026-10-21): the form must paint in well under 200 ms, ideally
 80–100. So: curses (stdlib, ~10 ms), ONE interpreter (the cache is read here,
@@ -93,8 +103,11 @@ def prefill(task: dict, description: str | None, domains=DOMAINS) -> dict:
     short = task.get("short") or ""
     return {
         "name": re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip(),
-        "points": pts.group(1) if pts else (("{" + curly.group(1) + "}") if curly else ""),
-        "points_curly": bool(curly and not pts),
+        "points": pts.group(1) if pts else "",
+        "bonus": curly.group(1) if curly else "",
+        "has_bonus": bool(curly),
+        "due": str(task.get("due") or "")[:10],
+        "recurring": bool(task.get("recurring")),
         "time": mins.group(1) if mins else "",
         "short": prose_of(short) if short else "",
         "short_enabled": len(prose) > PROSE_CAP,
@@ -116,29 +129,96 @@ def remainder(total: str, time_: str, done_pts: str, done_min: str) -> tuple[str
     return pts, mins
 
 
+def remainder_of(total: str, done: str) -> str:
+    """One tag's remainder: total − done, the whole total when nothing is
+    done, "" when the task has no such tag."""
+    if not _INT.match(total or ""):
+        return ""
+    return str(max(0, int(total) - int(done))) if _INT.match(done or "") else total
+
+
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def parse_date(text: str, today=None) -> str | None:
+    """A typed do-date as ISO, or None when unreadable. Accepts ISO, M/D,
+    M.D (this year, or next once that date has passed), today/tod,
+    tomorrow/tmrw/tmr, a weekday (its next occurrence, never today) and
+    +N (days from today)."""
+    import datetime as _dt
+    today = today or _dt.date.today()
+    t = (text or "").strip().lower()
+    if not t:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
+        try:
+            return _dt.date.fromisoformat(t).isoformat()
+        except ValueError:
+            return None
+    if t in ("today", "tod"):
+        return today.isoformat()
+    if t in ("tomorrow", "tmrw", "tmr"):
+        return (today + _dt.timedelta(days=1)).isoformat()
+    m = re.fullmatch(r"\+(\d{1,3})d?", t)
+    if m:
+        return (today + _dt.timedelta(days=int(m.group(1)))).isoformat()
+    for i, wd in enumerate(_WEEKDAYS):
+        if len(t) >= 3 and wd.startswith(t):
+            ahead = (i - today.weekday()) % 7 or 7
+            return (today + _dt.timedelta(days=ahead)).isoformat()
+    m = re.fullmatch(r"(\d{1,2})[/.](\d{1,2})", t)
+    if m:
+        try:
+            d = _dt.date(today.year, int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
+        if d < today:
+            d = d.replace(year=today.year + 1)
+        return d.isoformat()
+    return None
+
+
+def splitting(vals: dict) -> bool:
+    return bool((vals.get("done_pts") or "").strip() or (vals.get("done_bonus") or "").strip())
+
+
 def validate(vals: dict) -> str | None:
     """None when the form may be saved, else the reason."""
-    for k, label in (("points", "[N] pts"), ("time", "(N) min"),
-                     ("done_pts", "pts done"), ("done_min", "min done")):
+    for k, label in (("points", "[N] pts"), ("time", "(N) min"), ("bonus", "{N} bonus"),
+                     ("done_pts", "pts done"), ("done_min", "min done"), ("done_bonus", "bonus done")):
         v = (vals.get(k) or "").strip()
-        if v and not _INT.match(v) and not (k == "points" and vals.get("points_curly")):
+        if v and not _INT.match(v):
             return f"{label} must be a number"
     dp, dm = (vals.get("done_pts") or "").strip(), (vals.get("done_min") or "").strip()
-    if dm and not dp:
-        return "min done needs pts done too"
+    db = (vals.get("done_bonus") or "").strip()
+    if dm and not (dp or db):
+        return "min done needs pts or bonus done too"
     tp, tt = (vals.get("total_pts") or "").strip(), (vals.get("total_min") or "").strip()
+    tb = (vals.get("total_bonus") or "").strip()
     if dp and _INT.match(tp) and int(dp) > int(tp):
         return f"pts done {dp} > current {tp}"
+    if db and _INT.match(tb) and int(db) > int(tb):
+        return f"bonus done {db} > current {tb}"
     if dm and _INT.match(tt) and int(dm) > int(tt):
         return f"min done {dm} > current {tt}"
+    keep = vals.get("keep", True)
+    if not keep and not (dp or db):
+        return "unchecked keep remainder needs pts or bonus done"
+    due = (vals.get("due") or "").strip()
+    if keep and due and due != (vals.get("due_pre") or "") and parse_date(due) is None:
+        return f"do-date {due!r}: try 2026-10-24, 10/24, tmrw, fri, +3"
     return None
 
 
 def result(vals: dict) -> dict:
     """What edit-fast receives. Blank = keep (notes: blank = clear, as before)."""
+    due = (vals.get("due") or "").strip()
+    due_iso = "" if (not due or due == (vals.get("due_pre") or "")) else (parse_date(due) or "")
     out = {
         "name": " ".join((vals.get("name") or "").split()),
-        "points": "" if vals.get("points_curly") else (vals.get("points") or "").strip(),
+        "points": (vals.get("points") or "").strip(),
+        "bonus": (vals.get("bonus") or "").strip(),
+        "due": due_iso,
         "time": (vals.get("time") or "").strip(),
         "short": "",                # haiku names are generated, never typed (2026-10-21)
         "short_enabled": False,
@@ -146,11 +226,13 @@ def result(vals: dict) -> dict:
         "desc": (vals.get("desc") or "").rstrip() if vals.get("desc_loaded") else None,
         "split": None,
     }
-    dp = (vals.get("done_pts") or "").strip()
-    if dp:
+    dp, db = (vals.get("done_pts") or "").strip(), (vals.get("done_bonus") or "").strip()
+    if dp or db:
         dm = (vals.get("done_min") or "").strip()
-        out["split"] = {"pts": int(dp), "minutes": int(dm) if _INT.match(dm) else None,
-                        "name": " ".join((vals.get("done_name") or "").split()), "short": ""}
+        out["split"] = {"pts": int(dp) if dp else None, "bonus": int(db) if db else None,
+                        "minutes": int(dm) if _INT.match(dm) else None,
+                        "name": " ".join((vals.get("done_name") or "").split()), "short": "",
+                        "keep": bool(vals.get("keep", True))}
     return out
 
 
@@ -249,8 +331,9 @@ def dwidth(s: str) -> int:
 
 class Field:
     def __init__(self, key: str, label: str, text: str = "", *, multiline=False,
-                 width: int | None = None, enabled=True, hint="", rows: int = 1):
+                 width: int | None = None, enabled=True, hint="", rows: int = 1, check=False):
         self.key, self.label, self.text = key, label, text
+        self.check = check          # a checkbox: text "x" = checked, "" = not
         self.multiline, self.width, self.enabled, self.hint = multiline, width, enabled, hint
         self.rows = rows            # > 1: a single value soft-wrapped over several rows
         self.cur = len(text)
@@ -342,10 +425,14 @@ class Form:
             Field("done_name", "name", pre["name"], rows=2),
             Field("done_min", "min done", "", width=6),
             Field("done_pts", "pts done", "", width=6),
+            *([Field("done_bonus", "bonus", "", width=6)] if pre["has_bonus"] else []),
             # remainder (the task itself)
             Field("name", "name", pre["name"], rows=2),
             Field("time", "(N) min", pre["time"], width=6),
-            Field("points", "[N] pts", pre["points"], width=6, enabled=not pre["points_curly"]),
+            Field("points", "[N] pts", pre["points"], width=6),
+            *([Field("bonus", "{N} bonus", pre["bonus"], width=6)] if pre["has_bonus"] else []),
+            Field("due", "do-date", pre["due"], width=12),
+            Field("keep", "keep remainder", "x", check=True),
             # common
             Field("desc", "notes", pre["desc"], multiline=True, enabled=pre["desc_loaded"],
                   hint="loading notes…"),
@@ -394,7 +481,20 @@ class Form:
         user types into them; an emptied field goes back to following."""
         pts, mins = remainder(self.pre["points"], self.pre["time"],
                               self.by["done_pts"].text, self.by["done_min"].text)
-        for key, val in (("points", pts), ("time", mins)):
+        follow = [("points", pts), ("time", mins)]
+        if "bonus" in self.by:
+            follow.append(("bonus", remainder_of(self.pre["bonus"], self.by["done_bonus"].text)))
+        # the do-date: the task's own due date, tomorrow once anything is done
+        import datetime as _dt
+        split = splitting({k: f.text for k, f in self.by.items()})
+        follow.append(("due", (_dt.date.today() + _dt.timedelta(days=1)).isoformat() if split
+                       else self.pre["due"]))
+        # unchecked keep remainder: there is no remainder to shape
+        keep = bool(self.by["keep"].text)
+        for key in ("time", "points", "bonus", "due"):
+            if key in self.by:
+                self.by[key].enabled = keep
+        for key, val in follow:
             f = self.by[key]
             # an emptied field resumes following once the cursor has left it
             # (while it is focused, "" is the user mid-edit, not "auto")
@@ -407,7 +507,13 @@ class Form:
     def values(self) -> dict:
         v = {f.key: f.text for f in self.fields}
         v["total_pts"], v["total_min"] = self.pre["points"], self.pre["time"]
-        v["points_curly"] = self.pre["points_curly"]
+        v["total_bonus"] = self.pre["bonus"]
+        v["keep"] = bool(self.by["keep"].text)
+        # an untouched do-date (still following) never reschedules on a plain
+        # edit; on a split the split script defers to tomorrow by itself
+        v["due_pre"] = self.pre["due"] if not self.by["due"].touched else ""
+        if not self.by["due"].touched:
+            v["due"] = ""
         v["short_enabled"] = self.pre["short_enabled"]
         v["desc_loaded"] = self.pre["desc_loaded"] and self.by["desc"].enabled
         return v
@@ -431,7 +537,7 @@ class Form:
         # Budget the height from the bottom up (2026-10-21: in a short pane the
         # remainder fell off the screen): the field rows always fit; the
         # detail block and the notes box take what is left.
-        FIXED = 1 + 5 + 1 + 5 + 1 + 1 + 1 + 1   # title, done (hdr+name2+haiku+nums), blank, remainder, blank, common hdr, project, legend
+        FIXED = 1 + 5 + 1 + 7 + 1 + 1 + 1 + 1   # title, done (hdr+name2+haiku+nums), blank, remainder (+do-date, keep), blank, common hdr, project, legend
         spare = max(0, h - FIXED)
         notes_rows = max(1, min(6, spare - 1)) if spare > 1 else 1
         detail_cap = max(0, min(6, spare - notes_rows))
@@ -460,14 +566,18 @@ class Form:
         header("done so far")
         c, used = self._draw_wrapped(scr, y, self.by["done_name"], w); cursor = c or cursor; y += used
         haiku("auto")
-        c = self._draw_row(scr, y, [self.by["done_min"], self.by["done_pts"]], w); cursor = c or cursor; y += 1
+        c = self._draw_row(scr, y, [self.by[k] for k in ("done_min", "done_pts", "done_bonus") if k in self.by], w)
+        cursor = c or cursor; y += 1
         y += 1
         header("remainder")
         c, used = self._draw_wrapped(scr, y, self.by["name"], w); cursor = c or cursor; y += used
         changed = " ".join(self.by["name"].text.split()) != self.pre["name"]
         haiku(("auto after save" if changed else (self.pre["short"] or "auto"))
               if self.pre["short_enabled"] or changed else "— title fits the row")
-        c = self._draw_row(scr, y, [self.by["time"], self.by["points"]], w); cursor = c or cursor; y += 1
+        c = self._draw_row(scr, y, [self.by[k] for k in ("time", "points", "bonus") if k in self.by], w)
+        cursor = c or cursor; y += 1
+        c = self._draw_row(scr, y, [self.by["due"]], w); cursor = c or cursor; y += 1
+        c = self._draw_row(scr, y, [self.by["keep"]], w); cursor = c or cursor; y += 1
         y += 1
         header("common")
         c, used = self._draw_multiline(scr, y, self.by["desc"], w, notes_rows)
@@ -489,6 +599,16 @@ class Form:
         if y >= h - 1:
             return None
         for f in fields:
+            if f.check:
+                box = f"[{'x' if f.text else ' '}] {f.label}"
+                try:
+                    scr.addstr(y, x, box, curses.A_BOLD if f is self.focus else 0)
+                except curses.error:
+                    pass
+                if f is self.focus:
+                    cursor = (y, x + 1)
+                x += dwidth(box) + 3
+                continue
             label = f"{f.label:<{self.LABEL_W}}"
             try:
                 scr.addstr(y, x, label, curses.A_DIM)
@@ -594,6 +714,14 @@ class Form:
         """Returns 'save' / 'cancel' / None."""
         f = self.focus
         self.msg = ""
+        if f.check and key not in ("\n", "\r", "\t", "\x13", "\x03", "\x11", "\x0f", "\x10", "\x1b",
+                                   curses.KEY_ENTER, curses.KEY_UP, curses.KEY_DOWN, curses.KEY_BTAB,
+                                   curses.KEY_RESIZE):
+            # a checkbox only toggles; editing keys must not eat its "x"
+            if key in (" ", "x", "X"):
+                f.text = "" if f.text else "x"
+                f.touched = True
+            return None
         if isinstance(key, int):
             if key == curses.KEY_LEFT:
                 f.cur = max(0, f.cur - 1)
