@@ -28,7 +28,7 @@ def _load():
 def test_ctrl_o_and_ctrl_g_open_the_same_edit_screen():
     """2026-10-11: "ideally ctrl+g and ctrl+o go to the same place, and show the
     different fields that I could add along with all the context"."""
-    action = "execute($DTD_EDIT {2})+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)"
+    action = "execute($DTD_EDIT {2})+clear-screen+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)"
     assert f'--bind "ctrl-o:{action}"' in DTD
     assert f'--bind "ctrl-g:{action}"' in DTD
     assert "--preview " not in DTD
