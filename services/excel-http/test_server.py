@@ -549,3 +549,36 @@ class TestReviewSheetSupport:
                             "writes": [{"col": "E", "value": "- item\nmore", "mode": "text"}]})
         assert 'set value of theCell to "- item" & linefeed & "more"' in scripts[-1]
         assert 'set formula of theCell to oldFormula &' not in scripts[-1]   # never the append branch
+
+
+def test_save_loop_survives_a_save_timeout():
+    """Regression (2026-10-22): a save past osascript's 15 s timeout raised
+    TimeoutExpired out of save_loop, killing the thread and every later save;
+    the web copy of Neon froze at 13:26 while Ix's Excel kept taking writes."""
+    import subprocess
+    import threading
+
+    calls = {"save": 0, "sleep": 0}
+
+    class Stop(Exception):
+        pass
+
+    def sleep(_):
+        calls["sleep"] += 1
+        if calls["sleep"] > 3:
+            raise Stop
+
+    def save_workbook():
+        calls["save"] += 1
+        if calls["save"] == 1:
+            raise subprocess.TimeoutExpired("osascript", 15)
+        return 0, "", ""
+
+    ns = {"time": type("T", (), {"sleep": staticmethod(sleep)}), "SAVE_INTERVAL": 0,
+          "EXCEL_LOCK": threading.Lock(), "save_workbook": save_workbook,
+          "ensure_events_on": lambda: None, "ping_macro": lambda: None,
+          "sys": __import__("sys")}
+    exec(textwrap.dedent(_load_func_source("save_loop")), ns)
+    with pytest.raises(Stop):
+        ns["save_loop"]()
+    assert calls["save"] == 3      # the timeout on pass 1 did not end the loop

@@ -285,15 +285,23 @@ def save_loop() -> None:
     explicit save every SAVE_INTERVAL seconds instead of trusting AutoSave."""
     while True:
         time.sleep(SAVE_INTERVAL)
-        with EXCEL_LOCK:
-            rc, _, err = save_workbook()
-            ensure_events_on()
-            try:
-                ping_macro()
-            except Exception as e:
-                sys.stderr.write(f"ping_macro: {e}\n")
-        if rc != 0:
-            sys.stderr.write(f"save_loop: save failed: {err}\n")
+        # Nothing may escape this body (bug 2026-10-22): one save that ran past
+        # osascript's 15 s timeout raised TimeoutExpired, killed this thread,
+        # and with it every later save. Excel on Ix kept taking writes but its
+        # co-authoring upload stopped at 13:26, so the web copy went stale while
+        # the daemon looked healthy. A failed pass just waits for the next one.
+        try:
+            with EXCEL_LOCK:
+                rc, _, err = save_workbook()
+                ensure_events_on()
+                try:
+                    ping_macro()
+                except Exception as e:
+                    sys.stderr.write(f"ping_macro: {e}\n")
+            if rc != 0:
+                sys.stderr.write(f"save_loop: save failed: {err}\n")
+        except Exception as e:
+            sys.stderr.write(f"save_loop: pass failed, retrying next interval: {e!r}\n")
 
 
 _DATE_FORMS = (
