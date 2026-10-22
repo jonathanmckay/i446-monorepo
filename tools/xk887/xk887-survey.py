@@ -433,7 +433,7 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
         areas[fkey] = (area, kind, label)
         ordered_keys.append(fkey)
         tag = " #" if kind in ("num", "num_auto") else ""
-        lbl = Window(FormattedTextControl(label + tag), width=32,
+        lbl = Window(FormattedTextControl(label + tag), width=27,
                     style="class:label", dont_extend_width=True, wrap_lines=True)
         rows.append(VSplit([lbl, Window(width=1, char=" "), area]))
 
