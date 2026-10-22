@@ -9,7 +9,7 @@ public enum Parsers {
                 id: t.string("id"),
                 raw: raw,
                 title: title.trimmingCharacters(in: .whitespaces).isEmpty ? raw : title,
-                est: t.intOrNil("est"),
+                est: DtdTask.resolveEst(serverEst: t.intOrNil("est"), raw: raw, domain: t.string("domain")),
                 points: t.intOrNil("points"),
                 color: t.string("color", "#e6e6e0"),
                 domain: t.string("domain"),

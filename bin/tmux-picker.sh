@@ -4,20 +4,27 @@
 
 CC_CMD="$HOME/vault/i447/i446/claude-tracked"
 
+# Show at most 4 sessions, matching cc-pick's MAX_ROWS=4 ("4 max"): a login
+# picker should fit on one glance, not page through every stale pane. Capping
+# the array (not just the printout) keeps hidden sessions unselectable.
+MAX=4
+
 sessions=("${(@f)$(tmux ls -F '#{session_name}' 2>/dev/null)}")
 sessions=(${sessions:#})
+(( ${#sessions[@]} > MAX )) && sessions=("${sessions[@]:0:$MAX}")
 
 if (( ${#sessions[@]} == 0 )); then
   exec tmux new -A -s cc "$CC_CMD"
 fi
 
 print
-print "tmux sessions on $(hostname -s):"
+print "cc sessions on $(hostname -s):"
 for i in {1..${#sessions[@]}}; do
-  print "  $i) ${sessions[$i]}"
+  name="${sessions[$i]}"
+  print "  $i) ${name[1,20]}"   # truncate long names so each row stays terse
 done
 print "  n) new"
-print "  s) shell"
+print "  s) sh"
 print
 
 printf "Pick [1]: "

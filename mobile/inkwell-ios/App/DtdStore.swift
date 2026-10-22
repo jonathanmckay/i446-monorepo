@@ -12,8 +12,10 @@ final class DtdStore: ObservableObject {
     @Published private(set) var loadedOnce = false
     @Published private(set) var loading = false
     @Published private(set) var inFlight: Set<String> = []   // ids with a POST outstanding — no double swipes
+    @Published private(set) var scrollTick = 0               // bumps whenever the list should jump to the top
 
     private let api = Api()
+    private var activeId: String? = nil                      // id of the current top/active row — detects a new claim
     private var loadedAt: Date? = nil
     private var cachedAt: Date? = nil
     private var base: String { InkwellConfig.dtdBase }
@@ -53,9 +55,12 @@ final class DtdStore: ObservableObject {
             loadedOnce = true
             lastError = nil
             loadedAt = Date()
-            tasks = Parsers.tasks(j)
+            tasks = activeFirst(Parsers.tasks(j))
             summary = Parsers.summary(j)
             PayloadCache.save("dtd", j)
+            // A task that went active since the last load (e.g. claimed from
+            // another client) bubbles up here — scroll so it's visible.
+            noteActive(scrollIfChanged: true)
         case .error(let m):
             lastError = m
         }
@@ -101,7 +106,13 @@ final class DtdStore: ObservableObject {
     }
 
     // ── trailing actions: start / +1d / ⏰ ───────────────────────────────
+    /// Starting a task makes its Toggl timer the live one. Optimistically mark
+    /// it ▶, float it to the top (only one timer runs at a time, so any other
+    /// ▶ is cleared), and scroll the list up so the now-active row is visible.
+    /// A failure reloads to let the server's truth reassert the order.
     func start(_ t: DtdTask) {
+        Platform.haptic(.commit)   // medium impact the instant the timer starts
+        promoteToTop(t, running: true)
         Task {
             switch await api.post(base + "/api/start", Bodies.start(t)) {
             case .ok(let j):
@@ -110,8 +121,34 @@ final class DtdStore: ObservableObject {
                 toast.show("▶ " + clean + (proj.isEmpty ? "" : " → \(proj)"))
             case .error(let m):
                 toast.show("not started: \(m)")
+                await load(refresh: false)
             }
         }
+    }
+
+    /// Partition active rows (▶ live timer / 😈 claimed) to the front, keeping
+    /// each group's existing relative order. Mirrors the web page's row order.
+    private func activeFirst(_ list: [DtdTask]) -> [DtdTask] {
+        list.filter { $0.isActive } + list.filter { !$0.isActive }
+    }
+
+    /// Record which row is active now; if it changed to a new task, ask the
+    /// list to scroll to the top.
+    private func noteActive(scrollIfChanged: Bool) {
+        let top = tasks.first { $0.isActive }?.id
+        if scrollIfChanged, let top, top != activeId { scrollTick &+= 1 }
+        activeId = top
+    }
+
+    /// Optimistically move a task to index 0 and flag it running (clearing any
+    /// other ▶), then trigger a scroll to the top.
+    private func promoteToTop(_ t: DtdTask, running: Bool) {
+        guard let i = index(of: t) else { return }
+        tasks.remove(at: i)
+        if running { tasks = tasks.map { $0.running ? $0.withRunning(false) : $0 } }
+        tasks.insert(t.withRunning(running), at: 0)
+        activeId = t.id
+        scrollTick &+= 1
     }
 
     func delayDay(_ t: DtdTask) {
