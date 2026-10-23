@@ -850,8 +850,36 @@ def _imessage_recent():
 # Source 12: slack
 # ---------------------------------------------------------------------------
 
+def _on_ix() -> bool:
+    """True on the ix mac mini (same test as did-fast/_on_ix)."""
+    import socket
+    host = socket.gethostname().lower()
+    return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
+
+
+def _outlook_skip(server_name: str):
+    """Skip result for an Agency source that cannot authenticate here, or None.
+
+    On ix the dream run is headless: MSAL's keychain read fails (-61) and
+    Agency falls back to interactive sign-in that nobody completes, so every
+    Outlook source sat until the 30s source timeout (v160-v166). Unless an
+    AGENCY_REMOTE_<NAME>_PORT tunnel delegates to a host that can auth,
+    return immediately instead of hanging."""
+    if not _on_ix():
+        return None
+    env_key = f"AGENCY_REMOTE_{server_name.upper()}_PORT"
+    if os.environ.get(env_key):
+        return None
+    return {"status": "skipped",
+            "reason": f"on ix without {env_key}: headless MSAL (keychain -61) "
+                      f"cannot complete interactive auth"}
+
+
 @source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
 def _outlook_inbox():
+    skip = _outlook_skip("mail")
+    if skip:
+        return skip
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
     from datetime import timezone
@@ -923,6 +951,9 @@ def _outlook_inbox():
 
 @source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
 def _outlook_calendar():
+    skip = _outlook_skip("calendar")
+    if skip:
+        return skip
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
     from datetime import timezone
@@ -1109,8 +1140,9 @@ def run_sources(selected=None, timeout=30):
         try:
             data = info["fn"]()
             elapsed = time.time() - t0
+            skipped = isinstance(data, dict) and data.get("status") == "skipped"
             return name, {
-                "status": "ok",
+                "status": "skipped" if skipped else "ok",
                 "elapsed_ms": round(elapsed * 1000),
                 "data": data,
             }
@@ -1193,7 +1225,7 @@ def print_test_table(results):
                 elif "conversation_count" in d:
                     notes = f"conversations={d['conversation_count']}"
                 elif "status" in d:
-                    notes = d["status"]
+                    notes = d.get("reason", d["status"])[:50]
                 else:
                     notes = f"keys={list(d.keys())[:3]}"
 
@@ -1209,7 +1241,7 @@ def print_test_table(results):
         print(f"{name:<25} {status_str:<19} {elapsed:>8}  {notes}")
 
     ok = sum(1 for r in results.values() if r["status"] == "ok")
-    err = sum(1 for r in results.values() if r["status"] != "ok")
+    err = sum(1 for r in results.values() if r["status"] not in ("ok", "skipped"))
     total_ms = sum(r["elapsed_ms"] for r in results.values())
     print("-" * 70)
     print(f"Total: {ok} ok, {err} failed, {total_ms}ms cumulative\n")
