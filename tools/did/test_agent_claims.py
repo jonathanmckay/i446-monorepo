@@ -250,6 +250,16 @@ def test_hook_unmatched_d_creates_then_claims(hooked, monkeypatch):
     assert (hooked / "by-session" / "S9").read_text().strip() == "N2"
 
 
+def test_hook_multiline_d_queries_first_line_only(hooked, monkeypatch):
+    """2026-10-22: `/d work offline sync` followed by a pasted /bug paragraph
+    (no colon anywhere) became one multi-line query, matched nothing, and
+    created a task named after the whole paragraph instead of claiming."""
+    monkeypatch.setattr(ac, "new_task", lambda c: (_ for _ in ()).throw(AssertionError(f"created {c!r}")))
+    out = _fast("/d source logging\n\n/bug I tested it offline and it did not stick")
+    assert "😈 claimed: source logging" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "T1"
+
+
 def test_hook_matched_d_does_not_create(hooked, monkeypatch):
     monkeypatch.setattr(ac, "new_task", lambda c: (_ for _ in ()).throw(AssertionError("created")))
     assert "😈 claimed: source logging" in _fast("/d source logging")

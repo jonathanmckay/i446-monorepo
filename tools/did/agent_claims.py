@@ -417,7 +417,11 @@ def hook(payload: str) -> str:
     if not m or not session:
         return ""
     arg = (m.group(1) or "").strip()
-    query = arg.split(":", 1)[0].strip()
+    # The task is the first line, up to a colon. Anything after (a `:` or a
+    # newline) is the request: `/d work offline sync` + a pasted /bug
+    # paragraph used to become one long query that matched nothing and was
+    # created as a new task (2026-10-22).
+    query = arg.split("\n", 1)[0].split(":", 1)[0].strip()
     if query.lower() in ("off", "release", "done"):
         release(session)
         push()
