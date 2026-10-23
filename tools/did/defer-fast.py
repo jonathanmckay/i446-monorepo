@@ -434,6 +434,12 @@ def handle_recurring(task: dict, target_date: str,
     skip_copy=True ("0"/blank defer target): the occurrence is skipped, not
     carried — no one-off copy is created; the parent just advances to its next
     natural occurrence, which becomes the reported target_date.
+
+    Absorbed defer: when target_date is on/after the parent's next occurrence
+    and the copy would be content-identical to the parent (i.e. not a dated
+    habit copy), the copy is redundant — the advanced parent already surfaces
+    the same task on/before the target. It is treated exactly like skip mode
+    (no copy, target_date = next occurrence, "absorbed": True in the result).
     """
     task_id = task["id"]
     content = task["content"]
@@ -458,13 +464,28 @@ def handle_recurring(task: dict, target_date: str,
     #    Skip mode carries nothing — the occurrence is simply skipped.
     #    Daily habits (0neon/夜neon) get the origin date stamped into the copy
     #    so it stays distinct from the daily card (see HABIT_LABELS).
+    #
+    #    Bug (2026-10-23): "→ 2026-10-23 (recurring; next 2026-10-23)" — the
+    #    copy was made unconditionally, so a target on/after next_date left
+    #    two identical same-day tasks (the copy + the advanced parent). An
+    #    undated copy whose target is not BEFORE next_date is absorbed by the
+    #    parent's own next occurrence. Dated habit copies are deliberately
+    #    distinct catch-up cards (HABIT_LABELS) and are still created.
     copy = None
     copy_content = content
-    if skip_copy:
+    if HABIT_LABELS & set(labels):
+        copy_content = _dated_copy_content(content, current_due)
+    absorbed = False
+    if not skip_copy and copy_content == content:
+        try:
+            absorbed = date.fromisoformat(str(target_date)[:10]) >= date.fromisoformat(next_date)
+        except ValueError:
+            absorbed = False  # unparsed target: keep the old copy behavior
+    if skip_copy or absorbed:
+        skip_copy = True
+        copy_content = content
         target_date = next_date
     else:
-        if HABIT_LABELS & set(labels):
-            copy_content = _dated_copy_content(content, current_due)
         copy = create_task(copy_content, labels, project_id, target_date, priority)
 
     # 2. Posthoc eval record (due today, immediately closed) — created and
@@ -519,6 +540,7 @@ def handle_recurring(task: dict, target_date: str,
         "remaining_points": total_points,
         "closed": False,
         "deferred_copy_content": copy_content if copy else None,
+        "absorbed": absorbed,
         "stubs": {"today": posthoc["id"],
                   "deferred_copy": copy["id"] if copy else None,
                   "future": task_id},
