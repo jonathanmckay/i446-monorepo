@@ -36,6 +36,15 @@ def test_plan_rem_due_and_comma_safe_name():
     assert p["safe_name"] == "buy nightshade  2"
 
 
+def test_safe_name_strips_fullwidth_separators_did_fast_splits_on():
+    # did-fast splits items on ，； since 2026-10-22; a CJK name holding one
+    # would scatter the split's [N] across two /did items.
+    p = sf.plan("回复王，李；张 (10) [10]", pts=5, today=T)
+    assert not set("，；,;") & set(p["safe_name"]), p["safe_name"]
+    dtd_sh = (Path(__file__).parent / "dtd.sh").read_text()
+    assert "safe_name = re.sub(r'[,;，；]+'" in dtd_sh
+
+
 def _fake(task):
     calls = []
 
