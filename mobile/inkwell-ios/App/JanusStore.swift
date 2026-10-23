@@ -14,12 +14,24 @@ final class JanusStore: ObservableObject {
     @Published private(set) var loadedOnce = false
     @Published private(set) var loading = false
     @Published private(set) var busy = false   // one action at a time; did-fast writes aren't idempotent
+    /// 0 = today, -1 = yesterday, … (≤0). The back/forward day view (the CLI's
+    /// ctrl+/ / ctrl+=). A past day is read-only: the write endpoints all
+    /// target today on the server, so the view hides the swipes and bottom bar.
+    @Published private(set) var dayOffset = 0
 
     private let api = Api()
     private var loadedAt: Date? = nil
     private var cachedAt: Date? = nil
+    private var loadSeq = 0
     private var base: String { InkwellConfig.janusBase }
     private let toast = Toaster.shared
+
+    /// How long a good load stays "fresh" before a foreground-return or the
+    /// on-screen poll will refetch. Deliberately short (2026-10-22: a coarse
+    /// gate let the timeline sit visibly stale — entries logged on desktop or
+    /// another device didn't appear for ages). Writes still invalidate at once
+    /// via `act` → `load`; this only bounds *passive* staleness.
+    static let cacheTTL: TimeInterval = 60
 
     init() {
         // Only today's cached timeline is worth painting (2026-10-20 "should be
@@ -32,6 +44,32 @@ final class JanusStore: ObservableObject {
 
     /// The live Toggl entry, if any (the top card + what the command bar acts on).
     var running: TimelineRow? { rows.first { $0.running } }
+
+    /// A past day is read-only. Keyed off dayOffset (authoritative on the
+    /// client) so the view gates immediately on a tap, before the fetch lands.
+    var viewingToday: Bool { dayOffset == 0 }
+
+    /// "◀ Wed 10/21" while viewing a past day; "" on today.
+    var dayLabel: String {
+        guard dayOffset != 0, let d = timeline?.date else { return "" }
+        let inF = DateFormatter(); inF.dateFormat = "yyyy-MM-dd"; inF.locale = Locale(identifier: "en_US_POSIX")
+        guard let date = inF.date(from: d) else { return d }
+        let outF = DateFormatter(); outF.dateFormat = "EEE M/d"
+        return "◀ " + outF.string(from: date)
+    }
+
+    func prevDay() { dayOffset -= 1; Task { await load() } }
+    func nextDay() { guard dayOffset < 0 else { return }; dayOffset += 1; Task { await load() } }
+    func goToday() { guard dayOffset != 0 else { return }; dayOffset = 0; Task { await load() } }
+
+    /// The ISO date a given offset should resolve to, computed client-side so
+    /// load() can tell a cold/day-switched view (wants the fast lite paint)
+    /// from a warm reload after an action (full fetch only, no flicker).
+    private func expectedDate(_ offset: Int) -> String {
+        let d = Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
+        return f.string(from: d)
+    }
 
     var title: String {
         let pts = timeline?.points.map { "\($0)分" } ?? "–分"
@@ -49,20 +87,42 @@ final class JanusStore: ObservableObject {
     /// foreground; a good one only when stale.
     func refreshIfStale() {
         if lastError != nil || !loadedOnce { Task { await load() }; return }
-        guard let at = loadedAt, Date().timeIntervalSince(at) > 120 else { return }
+        guard let at = loadedAt, Date().timeIntervalSince(at) > Self.cacheTTL else { return }
         Task { await load() }
     }
 
     func load() async {
         loading = true
-        switch await api.get(base + "/api/timeline") {
+        loadSeq += 1
+        let seq = loadSeq
+        let offsetQ = dayOffset != 0 ? "offset=\(dayOffset)" : ""
+        // Two-phase first paint (mirrors the web, 2026-10-22): on a cold load
+        // or a day switch, a lite pass (Toggl entries + gaps only — no calendar
+        // subprocesses, no Neon reads, ~0.3 s vs ~15 s) paints fast, then the
+        // full payload replaces it. A warm reload after an action skips lite so
+        // calendar events / points don't flicker out and back. A newer load()
+        // (another day tap) bumps loadSeq and supersedes this one's writes.
+        let fresh = timeline?.date != expectedDate(dayOffset)
+        if fresh {
+            let liteQ = ["lite=1", offsetQ].filter { !$0.isEmpty }.joined(separator: "&")
+            if case .ok(let j) = await api.get(base + "/api/timeline?" + liteQ) {
+                if seq == loadSeq {
+                    let t = Parsers.timeline(j); timeline = t; rows = t.rows
+                }
+            }
+        }
+        let fullURL = base + "/api/timeline" + (offsetQ.isEmpty ? "" : "?" + offsetQ)
+        switch await api.get(fullURL) {
         case .ok(let j):
+            guard seq == loadSeq else { loading = false; return }
             loadedOnce = true; lastError = nil; loadedAt = Date()
             let t = Parsers.timeline(j)
             timeline = t; rows = t.rows
-            PayloadCache.save("janus", j)
+            // Only today's payload is restored on next launch (see init); never
+            // cache a past-day view under the "janus" key.
+            if t.isToday { PayloadCache.save("janus", j) }
         case .error(let m):
-            lastError = m
+            if seq == loadSeq { lastError = m }
         }
         loading = false
     }
@@ -118,6 +178,19 @@ final class JanusStore: ObservableObject {
     }
     func edit(_ r: TimelineRow, desc: String, start: String, end: String, project: String) {
         act("/api/edit", Bodies.edit(id: r.id, desc: desc, start: start, end: end, project: project)) { _ in "edited ✓" }
+    }
+    /// Resume an entry (janus full left-swipe): start a fresh ongoing Toggl
+    /// timer carrying the same description + project. There is no dedicated
+    /// server route for resuming an *entry* — only calendar events resume via
+    /// /api/convert-event — so this reuses /api/fill with a blank end, which
+    /// is exactly what "start now" does and which the server returns as a
+    /// running entry. Tags aren't carried (fill has no tags field), matching
+    /// the existing fill / start-now behaviour.
+    func resume(_ r: TimelineRow) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let now = f.string(from: Date())
+        act("/api/fill", Bodies.fill(desc: r.desc, start: now, end: "", project: r.project)) { _ in
+            "▶ resumed" + (r.project.isEmpty ? "" : " → " + r.project) + " ✓" }
     }
     func split(_ r: TimelineRow, mode: String) {
         act("/api/split", Bodies.split(id: r.id, mode: mode)) { _ in mode == "top" ? "split ▲ ✓" : "split ▼ ✓" }

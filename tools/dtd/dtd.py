@@ -55,6 +55,21 @@ def _now() -> "_dt.datetime":
 
 def _today() -> "_dt.date":
     return _now().date()
+
+
+def _parse_scheduled(s: str) -> "_dt.datetime | None":
+    """A Todoist timed due (`due_datetime`, RFC3339 — may be 'Z', an offset, or
+    floating with no zone) as a tz-aware datetime in JM's zone, or None if it
+    carries no time / can't be parsed. Floating values are read as local."""
+    if not s:
+        return None
+    try:
+        dt = _dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=daytime.active_zone())
+    return dt.astimezone(daytime.active_zone())
 TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
 
 # Neon domain palette — mirrors tools/did/dtd.sh COLORS (RGB → hex).
@@ -512,6 +527,15 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         blk = next((block_hours[l] for l in t.get("labels", []) if l in block_hours), None)
         if blk is not None and now_hour < blk:
             continue
+        # Later-today defer (2026-10-22): a task whose Todoist due carries a
+        # time-of-day still ahead of now is hidden until that moment arrives —
+        # the hide the `scheduled` field's comment always promised but that no
+        # code actually did (the recurring bug: xk87 tasks deferred to later
+        # today kept showing on dtd web/phone). A date-only due has no datetime
+        # and is never hidden here; a timed due already past today still shows.
+        sched_dt = _parse_scheduled(t.get("due_datetime") or "")
+        if sched_dt is not None and sched_dt > _now():
+            continue
         # Cross-machine "done today": a recurring daily habit whose due date has
         # advanced past today was completed today (each /close bumps it +1 day).
         # The 0neon/夜neon sections are bounded to due<=tomorrow (to survive a
@@ -537,6 +561,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "recurring": bool(t.get("recurring")),
             "variablePrompt": variable_prompt(raw),
             "variableRate": variable_rate(raw),
+            # Todoist due datetime (RFC3339) when the task carries a time-of-day,
+            # else "". The phone/web hide it until that time arrives today
+            # (later-today defer); a date-only due sends "" and is never hidden.
+            "scheduled": t.get("due_datetime") or "",
             "agent": tid is not None and str(tid) in agent_ids,
             "agentPane": agent_pane.get(str(tid), "") if tid is not None else "",
             "running": bool(tid is not None and running_id and str(tid) == running_id)
@@ -1404,11 +1432,21 @@ let allTasks = [];   // last /api/tasks payload, unfiltered
 // the list to that domain exactly like terminal dtd's domain search, and a
 // word scopes it like fzf's query. Case-insensitive. The query survives a
 // reload/refresh (filtered re-render) and is remembered per browser.
+// Fuzzy (wave 2 #1, 2026-10-22): each word matches as a subsequence of the
+// haystack — "ktsch" finds "kids school", a dropped letter still hits — not
+// just a contiguous substring. A contiguous hit short-circuits (the common
+// case, and the strongest signal); otherwise fall back to in-order chars.
+function fuzzyWord(w, hay){
+  if(hay.includes(w)) return true;
+  let i = 0;
+  for(let k = 0; k < hay.length && i < w.length; k++) if(hay[k] === w[i]) i++;
+  return i === w.length;
+}
 function matchesFilter(t, q){
   const words = (q||'').toLowerCase().split(/\s+/).filter(Boolean);
   if(!words.length) return true;
   const hay = ((t.title||'')+' '+(t.raw||'')+' '+(t.domain||'')).toLowerCase();
-  return words.every(w => hay.includes(w));
+  return words.every(w => fuzzyWord(w, hay));
 }
 function filterTasks(tasks, q){ return tasks.filter(t => matchesFilter(t, q)); }
 
@@ -1746,21 +1784,31 @@ function applyFilter(){
   render(filterTasks(allTasks, q));
 }
 filterInput.addEventListener('input', applyFilter);
-filterInput.addEventListener('keydown', e => { if(e.key === 'Escape'){ filterInput.value=''; applyFilter(); filterInput.blur(); } });
+filterInput.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){ filterInput.value=''; applyFilter(); filterInput.blur(); return; }
+  // Refill (wave 2 #1, 2026-10-22): Enter on a query that matches nothing turns
+  // the search into a new task — the add sheet opens pre-filled with what was
+  // typed, mirroring the terminal dtd box's type-to-add. A query that DOES
+  // match just leaves the filtered list (Enter is a no-op there).
+  if(e.key === 'Enter'){
+    const q = filterInput.value.trim();
+    if(q && !filterTasks(allTasks, q).length){ openAdd(q); }
+  }
+});
 filterClear.onclick = ()=> { filterInput.value=''; applyFilter(); };
 try { filterInput.value = localStorage.getItem('dtd.filter') || ''; filterClear.hidden = !filterInput.value; } catch(e){}
 
 const addWrap = document.getElementById('addWrap');
 const addInput = document.getElementById('addInput');
 
-function openAdd(){
+function openAdd(prefill){
   addWrap.classList.add('show');
-  addInput.value = '';
-  setTimeout(()=>addInput.focus(), 50);
+  addInput.value = typeof prefill === 'string' ? prefill : '';
+  setTimeout(()=>{ addInput.focus(); if(addInput.value) addInput.select(); }, 50);
 }
 function closeAdd(){ addWrap.classList.remove('show'); addInput.blur(); }
 
-document.getElementById('fab').onclick = openAdd;
+document.getElementById('fab').onclick = ()=> openAdd();
 document.getElementById('addCancel').onclick = closeAdd;
 addWrap.addEventListener('click', e=>{ if(e.target===addWrap) closeAdd(); });
 addInput.addEventListener('keydown', e=>{

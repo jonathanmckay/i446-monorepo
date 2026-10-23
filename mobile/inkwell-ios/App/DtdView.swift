@@ -16,6 +16,7 @@ struct DtdView: View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        onRetry: { store.reload() })
+            filterBar
             if store.agentCount > 0 { agentBanner }
             taskList
         }
@@ -29,6 +30,34 @@ struct DtdView: View {
         .task { if !store.loadedOnce { await store.load(refresh: false) } }
         .modifier(ValuePrompt(task: $valuePrompt, text: $valueText, store: store))
         .modifier(DelayDialog(task: $delayTarget, options: delayOptions, store: store))
+    }
+
+    /// Fuzzy filter box (wave 2 #1, 2026-10-22), the native mirror of the dtd
+    /// web filter. Typing narrows the list as a subsequence match; submitting a
+    /// query that matches nothing "refills" — moves the text into the add bar
+    /// and focuses it, so a failed search becomes a new task (one return to
+    /// filter, another to add), like the terminal dtd's one dual-purpose box.
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(Theme.dim)
+            TextField("filter — words or a domain (xk87)", text: $store.filter)
+                .font(Theme.mono).autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .submitLabel(.search)
+                .onSubmit {
+                    if !store.filter.isEmpty && store.visibleTasks.isEmpty {
+                        addText = store.filter; store.filter = ""; addFocused = true
+                    }
+                }
+            if !store.filter.isEmpty {
+                Button { store.filter = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim)
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
     }
 
     /// Web's "◐ 😈 ×N": how many cards a Claude session is working right now.
@@ -47,23 +76,29 @@ struct DtdView: View {
         // scroll the list back to the top where it was just reordered.
         ScrollViewReader { proxy in
             List {
-                ForEach(store.tasks) { t in
+                ForEach(store.visibleTasks) { t in
                     TaskRow(task: t)
                         .id(t.id)
                         .listRowBackground(Theme.bg)
                         .listRowSeparatorTint(Color(white: 0.15))
                         .swipeActions(edge: .leading, allowsFullSwipe: true) { doneButton(t) }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) { trailingButtons(t) }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) { trailingButtons(t) }
                         .disabled(store.inFlight.contains(t.id))
                 }
-                if store.tasks.isEmpty && store.loadedOnce {
-                    Text("nothing due · 🎉").font(Theme.mono).foregroundStyle(Theme.dim)
+                if store.visibleTasks.isEmpty && store.loadedOnce {
+                    Text(store.filter.isEmpty ? "nothing due · 🎉" : "no match · ↵ to add “\(store.filter)”")
+                        .font(Theme.mono).foregroundStyle(Theme.dim)
                         .frame(maxWidth: .infinity).listRowBackground(Theme.bg)
                 }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Theme.bg)
+            #if os(iOS)
+            // Drag the list to dismiss the entry keyboard (complements the
+            // keyboard toolbar's "Done" in EntryBar).
+            .scrollDismissesKeyboard(.interactively)
+            #endif
             .refreshable { await store.load(refresh: true) }
             .onChange(of: store.scrollTick) {
                 guard let top = store.tasks.first?.id else { return }
@@ -85,6 +120,9 @@ struct DtdView: View {
         .tint(Theme.done)
     }
 
+    /// Trailing edge = left swipe. `start` is the primary action (declared
+    /// first, so it sits at the edge) and a full left swipe fires it directly;
+    /// +1d / delay remain as secondary buttons a partial swipe reveals.
     @ViewBuilder
     private func trailingButtons(_ t: DtdTask) -> some View {
         Button { store.start(t) } label: { Label("start", systemImage: "play.fill") }.tint(.blue)
@@ -185,7 +223,10 @@ struct TaskRow: View {
                 .font(Theme.mono).foregroundStyle(color).lineLimit(2)
             Spacer(minLength: 8)
             if task.running { Abacus().foregroundStyle(Theme.accent) }
-            Text(task.meta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            // Time/value meta at the task-text size (wave 2 #2, 2026-10-22):
+            // the (time)[pts] column was monoSmall against a mono title and
+            // read as an afterthought; match it to the title.
+            Text(task.meta).font(Theme.mono).foregroundStyle(Theme.dim)
         }
         .padding(.vertical, 4)
     }

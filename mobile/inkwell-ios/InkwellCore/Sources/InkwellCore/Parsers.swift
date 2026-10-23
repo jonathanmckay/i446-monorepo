@@ -15,6 +15,7 @@ public enum Parsers {
                 domain: t.string("domain"),
                 recurring: t.bool("recurring"),
                 variablePrompt: t.bool("variablePrompt"),
+                scheduledTime: DtdTask.parseScheduled(t.string("scheduled")),
                 agent: t.bool("agent"),
                 running: t.bool("running"))
         }
@@ -56,7 +57,8 @@ public enum Parsers {
             return row
         }
         return Timeline(rows: rows, trackedMin: json.int("tracked_min"), points: json.intOrNil("points"),
-                        date: json.string("date"))
+                        date: json.string("date"),
+                        isToday: json.has("is_today") ? json.bool("is_today") : true)
     }
 
     public static func projectCodes(_ json: JSON) -> [String] { json.strings("codes") }

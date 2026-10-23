@@ -21,6 +21,25 @@ struct JanusView: View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        onRetry: { store.reload() })
+            // Back/forward day navigation (2026-10-22): ‹ steps to earlier days
+            // (the CLI's ctrl+/), › returns toward today (ctrl+=), disabled on
+            // today. A past day shows its date + a "today" jump and is read-only.
+            HStack(spacing: 14) {
+                Button { store.prevDay() } label: { Image(systemName: "chevron.left") }
+                    .buttonStyle(.plain)
+                if !store.viewingToday {
+                    Text(store.dayLabel).foregroundStyle(Theme.accent)
+                    Button { store.goToday() } label: { Text("today") }.buttonStyle(.plain)
+                }
+                Spacer()
+                Button { store.nextDay() } label: { Image(systemName: "chevron.right") }
+                    .buttonStyle(.plain)
+                    .disabled(store.viewingToday)
+                    .opacity(store.viewingToday ? 0.3 : 1)
+            }
+            .font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            .padding(.horizontal, 16).padding(.vertical, 5)
+            .background(Theme.bg)
             List {
                 ForEach(Array(store.rows.enumerated()), id: \.offset) { _, r in
                     if r.isDivider {
@@ -33,8 +52,9 @@ struct JanusView: View {
                             .swipeActions(edge: .leading, allowsFullSwipe: r.isEntry && !r.running) {
                                 // Full-swipe commit only for a plain entry → /api/log, which
                                 // the server's per-day ledger makes idempotent. Everything
-                                // else (stop+log, convert, fill) reveals then taps.
-                                if r.canSwipeRight {
+                                // else (stop+log, convert, fill) reveals then taps. A past-day
+                                // view is read-only (writes target today server-side).
+                                if store.viewingToday && r.canSwipeRight {
                                     Button {
                                         if r.isGap { fillTarget = FillTarget(gap: r) } else { store.onRight(r) }
                                     } label: { Label(r.rightLabel, systemImage: r.isGap ? "plus" : "checkmark") }
@@ -42,7 +62,7 @@ struct JanusView: View {
                                 }
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if r.canSwipeLeft {
+                                if store.viewingToday && r.canSwipeLeft {
                                     Button { editTarget = r } label: { Label("edit / split", systemImage: "pencil") }
                                         .tint(Theme.edit)
                                 }
@@ -63,17 +83,21 @@ struct JanusView: View {
         .background(Theme.bg)
         .safeAreaInset(edge: .bottom) {
             // Live timer card sits just above the command bar (2026-10-21: moved
-            // down from the header). Shown only while something is running.
-            VStack(spacing: 0) {
-                if let r = store.running {
-                    CurrentTimerCard(row: r, busy: store.busy,
-                                     onDone: { t in store.onRight(t) }, onEdit: { t in editTarget = t })
+            // down from the header). Shown only while something is running. The
+            // whole bottom bar (timer + command bar) hides on a past-day view —
+            // both act on today, so there is nothing to do here.
+            if store.viewingToday {
+                VStack(spacing: 0) {
+                    if let r = store.running {
+                        CurrentTimerCard(row: r, busy: store.busy,
+                                         onDone: { t in store.onRight(t) }, onEdit: { t in editTarget = t })
+                    }
+                    // Command bar + "start now" at the bottom right (2026-10-20).
+                    EntryBar(placeholder: "coffee 1400-1415 @epcn · same as the CLI", text: $cmd,
+                             focus: $cmdFocused, disabled: store.busy,
+                             onSubmit: { store.run($0) },
+                             onPlus: { fillTarget = FillTarget(gap: nil) })
                 }
-                // Command bar + "start now" at the bottom right (2026-10-20).
-                EntryBar(placeholder: "coffee 1400-1415 @epcn · same as the CLI", text: $cmd,
-                         focus: $cmdFocused, disabled: store.busy,
-                         onSubmit: { store.run($0) },
-                         onPlus: { fillTarget = FillTarget(gap: nil) })
             }
         }
         .task {
@@ -175,7 +199,7 @@ struct TimelineRowView: View {
     var body: some View {
         let color: Color = row.isGap ? Theme.dim : Color(hex: row.color)
         HStack(spacing: 10) {
-            Text(row.displayMeta).font(Theme.monoSmall).foregroundStyle(Theme.dim)
+            Text(row.displayMeta).font(Theme.mono).foregroundStyle(Theme.dim)
                 .fixedSize(horizontal: true, vertical: false)
             Text(row.displayTitle).font(Theme.mono).foregroundStyle(color).lineLimit(2)
                 .opacity(row.logged && !row.running ? 0.55 : 1)

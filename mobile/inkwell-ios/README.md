@@ -60,21 +60,36 @@ second line (a wedged tailnet must not look like an empty day).
 
 Prereqs (one-time): Xcode from the Mac App Store; an Apple Developer Program
 membership if you want the install to outlive 7 days (free Apple ID = 7-day
-provisioning, re-plug weekly; paid = 1 year per cable install, 90 days per
-TestFlight build); Developer Mode on the iPhone (Settings › Privacy & Security).
+provisioning, re-plug weekly; paid = 1 year per install, 90 days per
+TestFlight build); Developer Mode on the iPhone (Settings › Privacy & Security);
+and **network pairing** enabled once (see below) so reinstalls go over the air.
+
+**Wireless install is the default (2026-10-22).** The install targets the phone
+by its stable UDID, which `devicectl` reaches over Wi-Fi / Tailscale once the
+device is network-paired — no cable. One-time enablement: cable the phone in
+once, open Xcode › Window › Devices and Simulators, select imago-c, and tick
+**"Connect via network."** After that the phone only needs to be unlocked and
+on the network; the cable is never required again.
+
+**Must run in a GUI login session on Straylight** (Terminal.app, or Screen
+Sharing) — not SSH. `codesign` needs the unlocked login keychain; over SSH it
+fails with `errSecInternalComponent` (compile/provisioning succeed, only the
+signature can't be produced).
 
 ```
 brew install xcodegen            # already on Straylight
 cd mobile/inkwell-ios
 xcodegen generate                # writes Inkwell.xcodeproj (three schemes)
-# build + install all three over the cable (team is pinned in project.yml):
-UDID=$(xcrun devicectl list devices | awk '/connected/{print $3}' | head -1)
-for s in dtd janus Inkwell; do
-  xcodebuild -project Inkwell.xcodeproj -scheme $s -destination "id=$UDID" \
+# team is pinned in project.yml; DEVICE is imago-c's stable UDID (over the air).
+DEVICE=00008160-000435C93EE00036   # `xcrun devicectl list devices` to confirm / re-pair
+for s in dtd janus Inkwell; do     # one app only (e.g. a janus change): for s in janus
+  xcodebuild -project Inkwell.xcodeproj -scheme $s -destination "id=$DEVICE" \
     -allowProvisioningUpdates -derivedDataPath build/DerivedData build
-  xcrun devicectl device install app --device $UDID build/DerivedData/Build/Products/Debug-iphoneos/$s.app
+  xcrun devicectl device install app --device $DEVICE build/DerivedData/Build/Products/Debug-iphoneos/$s.app
 done
 # free Apple ID: profiles expire after 7 days → rerun the loop
+# cable fallback (device not network-paired yet): plug in, same commands —
+#   DEVICE=$(xcrun devicectl list devices | awk '/connected/{print $3}' | head -1)
 ```
 
 Checks without Xcode: `cd InkwellCore && swift run CoreCheck` (parsers and
@@ -84,7 +99,7 @@ typecheck of the UI:
 
 ```
 swiftc -typecheck -I InkwellCore/.build/arm64-apple-macosx/debug/Modules \
-  -I VaultCore/.build/arm64-apple-macosx/debug/Modules Fuchikoma/*.swift
+  -I VaultCore/.build/arm64-apple-macosx/debug/Modules App/*.swift
 ```
 
 ## Vault tab (2026-10-19)
