@@ -6,6 +6,17 @@
 set +e
 input=$(cat)
 tp=$(printf '%s' "$input" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("transcript_path",""))' 2>/dev/null)
+# Record which session this cmux tab is running (2026-10-22): a forked session's
+# claude argv carries the PARENT's id (--resume <parent> --fork-session), and an
+# in-session /resume switches ids with no argv change, so cs could not number the
+# tab and dtd drew a bare 😈 on its claims. cs trusts this record over argv when
+# it is newer than the tab's claude process.
+surf=${CMUX_SURFACE_ID:-$CMUX_PANEL_ID}
+sid0=$(printf '%s' "$input" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null)
+if [ -n "$surf" ] && [ -n "$sid0" ]; then
+  mkdir -p ~/.local/state/jm/surface-sessions
+  printf '%s\n' "$sid0" > ~/.local/state/jm/surface-sessions/"$surf"
+fi
 [ -n "$tp" ] && [ -f "$tp" ] || exit 0
 title=$(python3 - "$tp" <<'PY' 2>/dev/null
 import sys, json
