@@ -273,3 +273,18 @@ def test_pty_typed_do_date_is_saved_as_iso(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_pty_mouse_reports_never_type_into_a_field(tmp_path):
+    """Bug 2026-10-22: "dtd more info screen is taking in mouse movements and
+    clicks as input to things like remainder name". fzf leaves mouse reporting
+    on; a report (ESC [ < b ; x ; y M) read as Esc + key dropped the "ESC [" as
+    an alt-combo and typed "<0;16;15M" into the focused field. Each report goes
+    in as ONE write, the way the terminal sends it."""
+    mouse = ["\x1b[<35;20;10M", "\x1b[<0;20;10M", "\x1b[<0;20;10m", "\x1b[<64;20;10M",
+             "\x1b[M #("]                                   # SGR motion/press/release/wheel, legacy X10
+    rc, out, _, _, screen = _run(tmp_path, mouse + ["\x13"])
+    assert rc == 0, "a mouse report must not cancel the form either"
+    j = json.loads(out.read_text())
+    assert j["name"] == "write the quarterly planning memo for the whole org", j["name"]
+    assert "<0;" not in screen and "<35;" not in screen
