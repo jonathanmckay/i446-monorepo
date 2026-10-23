@@ -577,8 +577,49 @@ def test_save_loop_survives_a_save_timeout():
     ns = {"time": type("T", (), {"sleep": staticmethod(sleep)}), "SAVE_INTERVAL": 0,
           "EXCEL_LOCK": threading.Lock(), "save_workbook": save_workbook,
           "ensure_events_on": lambda: None, "ping_macro": lambda: None,
-          "sys": __import__("sys")}
+          "recalc_guard": lambda: "ok", "sys": __import__("sys")}
     exec(textwrap.dedent(_load_func_source("save_loop")), ns)
     with pytest.raises(Stop):
         ns["save_loop"]()
     assert calls["save"] == 3      # the timeout on pass 1 did not end the loop
+
+
+
+def test_save_loop_runs_the_recalc_guard_and_survives_its_failure():
+    """2026-10-22: Excel stopped recalculating dependents for 5.5 h (Σ stuck at
+    1099 while P:Y summed to 1382). Every save pass checks Σ against the live
+    sum; a guard that raises must not end the loop either."""
+    import threading
+    calls = {"guard": 0, "sleep": 0}
+
+    class Stop(Exception):
+        pass
+
+    def sleep(_):
+        calls["sleep"] += 1
+        if calls["sleep"] > 3:
+            raise Stop
+
+    def guard():
+        calls["guard"] += 1
+        if calls["guard"] == 1:
+            raise RuntimeError("osascript timed out")
+        return "STALE 1099.0 1382.0"
+
+    ns = {"time": type("T", (), {"sleep": staticmethod(sleep)}), "SAVE_INTERVAL": 0,
+          "EXCEL_LOCK": threading.Lock(), "save_workbook": lambda: (0, "", ""),
+          "ensure_events_on": lambda: None, "ping_macro": lambda: None,
+          "recalc_guard": guard, "sys": __import__("sys")}
+    exec(textwrap.dedent(_load_func_source("save_loop")), ns)
+    with pytest.raises(Stop):
+        ns["save_loop"]()
+    assert calls["guard"] == 3
+
+
+def test_recalc_guard_compares_sigma_to_the_live_sum_and_only_then_recalcs():
+    src = _load_func_source("recalc_guard")
+    src = src[src.index('tell application "Microsoft Excel"'):]       # the script, not the docstring
+    assert 'is not "=SUM(P{row}:Y{row})" then return "skip"' in src      # only when D is the Σ formula
+    assert "repeat with i from 1 to count of row1" in src                  # indexed (refs break `as real`)
+    i_cmp, i_calc = src.index("(d - s) > 0.5 or (s - d) > 0.5"), src.index("calculate full")
+    assert i_cmp < i_calc < src.index('return "STALE ')                    # full recalc only on mismatch
