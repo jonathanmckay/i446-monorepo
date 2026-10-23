@@ -68,6 +68,18 @@ def deferred_marker_path(when: date | None = None) -> Path:
             / f"habits-deferred-{(when or date.today()).isoformat()}.ids")
 
 
+def deferred_mirror_path(when: date | None = None) -> Path:
+    """This host's Syncthing-carried copy of the per-day marker, in vault
+    z_ibx (dtd.sh/dtd.py union every host's). Undo-fast clears the id here
+    too, and must compute the same host slug. A function (not inline) so tests
+    can redirect it — inline, every pytest run appended TASK123/TASK456 to
+    the live vault file."""
+    import socket
+    host = re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
+    return (Path.home() / "vault/z_ibx"
+            / f"habits-deferred-{host}-{(when or date.today()).isoformat()}.ids")
+
+
 def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
     """Record a deferred daily habit's parent id for today (best-effort)."""
     if not HABIT_LABELS & set(labels):
@@ -87,10 +99,7 @@ def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
     # its own ~/.cache/jm). Append the id to a per-host copy in the vault
     # z_ibx, which Syncthing carries to every host; dtd.py unions them all.
     try:
-        import socket
-        host = re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
-        m = (Path.home() / "vault/z_ibx"
-             / f"habits-deferred-{host}-{date.today().isoformat()}.ids")
+        m = deferred_mirror_path()
         if m.parent.is_dir():
             with open(m, "a") as f:
                 f.write(f"{task_id}\n")
