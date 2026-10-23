@@ -16,7 +16,7 @@ same non-destructive move as the rest of ibx:
 Every filtered email is appended to ~/.config/ibx/agent_filtered.jsonl so a
 bad call can be found and undone.
 
-Usage: agent_triage.py i9|m5x2 [--dry-run]
+Usage: agent_triage.py i9|m5x2 [--dry-run] [--all]   (--all: read inbox mail too, m5x2)
 """
 
 import fcntl
@@ -132,7 +132,9 @@ def fetch_m5x2():
     svc = _gmail["svc"] = ibx.get_gmail_service(acct["tokens"], acct["creds"])
     _gmail["label"] = ibx.get_or_create_label(svc, ibx.TRIAGE_LABEL)
     out = []
-    for ref in ibx.fetch_inbox(svc, max_results=100, unread_only=True):
+    # The timer hook triages unread only; /ibxm5x2 passes --all (2026-10-23)
+    # so read-but-unanswered inbox mail gets the same pass.
+    for ref in ibx.fetch_inbox(svc, max_results=100, unread_only=not _gmail.get("all")):
         e = ibx.get_email(svc, ref["id"])
         out.append({"id": ref["id"], "from": e["from"], "subject": e["subject"], "body": e["body"]})
     return out
@@ -159,7 +161,7 @@ def notify(title, msg):
 def run(source, dry_run=False):
     fetch, ask, do_filter = SOURCES[source]
     emails = fetch()
-    log(f"{source}: {len(emails)} unread")
+    log(f"{source}: {len(emails)} {'in inbox' if _gmail.get('all') else 'unread'}")
     if not emails:
         return 0, 0
     skips = parse_verdicts(ask(build_prompt(source, emails)), len(emails))
@@ -188,8 +190,9 @@ def run(source, dry_run=False):
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in SOURCES:
-        sys.exit("Usage: agent_triage.py i9|m5x2 [--dry-run]")
+        sys.exit("Usage: agent_triage.py i9|m5x2 [--dry-run] [--all]")
     source, dry = args[0], "--dry-run" in args
+    _gmail["all"] = "--all" in args
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     # One run per source at a time: restarting the timer mid-triage is a no-op.
     lock = open(str(LOCK_FILE).format(source), "w")
