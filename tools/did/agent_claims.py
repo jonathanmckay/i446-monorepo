@@ -179,9 +179,11 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
             continue
         rec["state"] = state
         rec["working"] = state == "working" and now - ts < STALE_SECS
-        # A released claim's session is gone or elsewhere: no pane number.
+        # A released claim's session is gone or elsewhere: no pane number. A
+        # done one keeps it while its session is still numbered, so dtd draws
+        # "6✅" and JM can see which tab finished it (2026-10-22).
         rec["done"] = state == "done"
-        rec["pane"] = None if state in ("released", "done") else panes.get(str(rec.get("session", "")))
+        rec["pane"] = None if state == "released" else panes.get(str(rec.get("session", "")))
         out[tid] = rec
     return out
 

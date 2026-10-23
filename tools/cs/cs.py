@@ -303,6 +303,42 @@ TOOL_PANES = ('dtd', 'janus')   # non-Claude TUI panes, numbered 1 and 2 in this
 CLAUDE_FIRST = len(TOOL_PANES) + 1   # Claude panes continue the same series: 3, 4, ...
 
 
+SURFACE_SESSIONS = STATE / 'surface-sessions'   # <surface_id> → session id, written by session-title.sh
+
+
+def _etime_secs(t: str) -> int:
+    """ps etime ([[dd-]hh:]mm:ss) → seconds."""
+    days, _, t = t.rpartition('-')
+    parts = [int(x) for x in t.split(':')]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    return (int(days) if days else 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+
+
+def _apply_surface_records(sid_of, pid_of):
+    """Prefer the session id the tab's own hook recorded over the one in claude's argv, when the
+    record is newer than that claude process. A fork runs as `claude --resume <parent>
+    --fork-session` and an in-session /resume switches ids, so argv names the wrong session
+    (2026-10-22: the forked tab got no number, its claims a bare 😈). A record older than the
+    process is left over from an earlier session in that tab and is ignored."""
+    if not pid_of:
+        return
+    try:
+        out = subprocess.run(['ps', '-o', 'pid=,etime=', '-p', ','.join(map(str, pid_of.values()))],
+                             capture_output=True, text=True).stdout
+        started = {int(p): time.time() - _etime_secs(e) for p, e in (l.split() for l in out.splitlines() if l.strip())}
+    except Exception:
+        return
+    for sf, pid in pid_of.items():
+        f = SURFACE_SESSIONS / sf
+        try:
+            rec = f.read_text().strip()
+            if re.fullmatch(r'[0-9a-f-]{36}', rec) and f.stat().st_mtime >= started.get(pid, float('inf')) - 2:
+                sid_of[sf] = rec
+        except OSError:
+            continue
+
+
 def cmux_panes():
     """[(n, session_id, surface_id, surface_title)] for the Claude sessions open in the current
     cmux workspace, numbered from CLAUDE_FIRST (3) in reading order of their panes (top-left to
@@ -330,6 +366,7 @@ def cmux_panes():
         # Scan argv+env of every process rather than `pgrep -x claude`: a claude launched through
         # cmux's shim keeps its full path as the process name, which pgrep -x does not match.
         ps = subprocess.run(['ps', '-Eww', '-axo', 'pid=,command='], capture_output=True, text=True).stdout
+        pid_of = {}
         for line in ps.splitlines():
             if not CLAUDE_PROC_RE.match(line):
                 continue
@@ -337,6 +374,8 @@ def cmux_panes():
             m_i = re.search(r'--(?:session-id|resume)[ =]([0-9a-f-]{36})', line)
             if m_s and m_i:
                 sid_of[m_s.group(1)] = m_i.group(1)      # a live process beats cmux's recorded binding
+                pid_of[m_s.group(1)] = int(line.split()[0])
+        _apply_surface_records(sid_of, pid_of)
     except Exception:
         pass
     try:

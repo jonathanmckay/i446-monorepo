@@ -36,3 +36,21 @@ def test_release_all_held(tmp_path):
     ac.claim({"id": "b", "content": "B"}, "S", tmp_path, also=True)
     assert ac.release("S", tmp_path) == "a"
     assert {r["state"] for r in ac.load(tmp_path).values()} == {"released"}
+
+
+def test_done_claim_keeps_its_session_pane_number(tmp_path):
+    """2026-10-22: "that number should then flow through to each task that you
+    have claimed" — a done claim still shows which tab finished it ('6✅')."""
+    import json
+    (tmp_path / "panes.json").write_text(json.dumps({"S": 6}))
+    ac.claim({"id": "a", "content": "A"}, "S", tmp_path)
+    ac.mark_done("S", ["a"], tmp_path)
+    assert ac.load(tmp_path)["a"]["pane"] == 6
+    ac.claim({"id": "b", "content": "B"}, "S", tmp_path)       # replaces: a is done, stays done
+    ac.release("S", tmp_path)
+    assert ac.load(tmp_path)["b"]["pane"] is None              # released: session elsewhere
+
+
+def test_dtd_draws_the_pane_number_before_the_done_check():
+    dtd = (Path(__file__).parent / "dtd.sh").read_text()
+    assert "prefix = _pane + '✅ ' + prefix" in dtd
