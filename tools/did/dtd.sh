@@ -3156,7 +3156,13 @@ echo "⏳ splitting: $clean" > "$HDR"
 # and let the writer flip the header from ⏳ to ✂ (or ⚠) when it lands.
 # </dev/null so no child inherits the tty; &! disowns so fzf's reload can't
 # SIGHUP it; stdout/err to a log so a traceback is still findable.
-echo "$clean" | tr '[:upper:]' '[:lower:]' >> "$REMOVED"
+# Only when the task LEAVES today (closed, or remainder due later): a
+# remainder kept on today shares the name, and a name-hide here kept it out
+# of dtd for the rest of the session (bug 2026-10-23: split task vanished
+# though it was still in Todoist). Same rule as the writer's own hide below.
+if [[ "$keep_rem" == 0 || ( "$rem_due" == [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] && "$rem_due" > "$(date +%Y-%m-%d)" ) ]]; then
+  echo "$clean" | tr '[:upper:]' '[:lower:]' >> "$REMOVED"
+fi
 print -- "$EPOCHREALTIME\tsplit-bg\t$task_id" >> "$TIMING" 2>/dev/null
 {
 trap '' HUP   # outlive the tty: a dtd exit (or a closing pane) mid-write must not kill the writer
