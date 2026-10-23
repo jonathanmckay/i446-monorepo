@@ -17,7 +17,8 @@ public enum Parsers {
                 variablePrompt: t.bool("variablePrompt"),
                 scheduledTime: DtdTask.parseScheduled(t.string("scheduled")),
                 agent: t.bool("agent"),
-                running: t.bool("running"))
+                running: t.bool("running"),
+                form: t.string("form"))
         }
     }
 
@@ -49,6 +50,7 @@ public enum Parsers {
             row.running = r.bool("running")
             row.logged = r.bool("logged")
             row.points = r.intOrNil("points")
+            row.previewPoints = r.intOrNil("preview_points")
             row.title = r.string("title")
             row.isPast = r.bool("is_past")
             row.started = r.bool("started")
@@ -62,4 +64,17 @@ public enum Parsers {
     }
 
     public static func projectCodes(_ json: JSON) -> [String] { json.strings("codes") }
+
+    /// GET /api/form → the card's form, or nil when it has none ({form: null}).
+    public static func form(_ json: JSON) -> DtdForm? {
+        let name = json.string("form")
+        guard !name.isEmpty else { return nil }
+        let fields = json.objects("fields").map { f in
+            DtdForm.Field(key: f.string("key"), label: f.string("label", f.string("key")),
+                          type: f.string("type", "text"), options: f.strings("options"),
+                          min: f.intOrNil("min"), max: f.intOrNil("max"),
+                          value: f.string("value"), help: f.string("help"))
+        }
+        return DtdForm(name: name, title: json.string("title", name), fields: fields)
+    }
 }

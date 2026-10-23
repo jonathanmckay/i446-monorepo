@@ -64,7 +64,8 @@ public final class Api {
         switch e.code {
         case NSURLErrorTimedOut: return "timed out"
         case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost: return "unreachable (tailnet down?)"
-        case NSURLErrorNotConnectedToInternet: return "offline"
+        case NSURLErrorNotConnectedToInternet, NSURLErrorDataNotAllowed,
+             NSURLErrorInternationalRoamingOff: return "offline"
         default: return e.localizedDescription
         }
     }

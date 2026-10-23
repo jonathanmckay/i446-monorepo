@@ -7,6 +7,7 @@ struct JanusView: View {
 
     @State private var fillTarget: FillTarget? = nil
     @State private var editTarget: TimelineRow? = nil
+    @State private var splitTarget: TimelineRow? = nil
 
     /// A gap to fill, or "start now" from the header's +.
     struct FillTarget: Identifiable {
@@ -49,11 +50,13 @@ struct JanusView: View {
                         TimelineRowView(row: r)
                             .listRowBackground(Theme.bg)
                             .listRowSeparatorTint(Color(white: 0.15))
-                            .swipeActions(edge: .leading, allowsFullSwipe: r.isEntry && !r.running) {
-                                // Full-swipe commit only for a plain entry → /api/log, which
-                                // the server's per-day ledger makes idempotent. Everything
-                                // else (stop+log, convert, fill) reveals then taps. A past-day
-                                // view is read-only (writes target today server-side).
+                            // Swipe right all the way = did (2026-10-22 janus note #2 + round 3
+                            // #2): log / stop+log / convert / fill fire on a full swipe, the
+                            // label shows the 分 it will credit, and a success haptic lands
+                            // once the server registers it. /api/log is idempotent by the
+                            // server ledger; done-current/convert are guarded in-flight.
+                            // A past-day view is read-only (writes target today server-side).
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 if store.viewingToday && r.canSwipeRight {
                                     Button {
                                         if r.isGap { fillTarget = FillTarget(gap: r) } else { store.onRight(r) }
@@ -61,10 +64,18 @@ struct JanusView: View {
                                     .tint(r.isGap ? .blue : Theme.done)
                                 }
                             }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            // Swipe left all the way = resume (a fresh timer, same desc +
+                            // project); half way reveals the options: edit, split.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 if store.viewingToday && r.canSwipeLeft {
-                                    Button { editTarget = r } label: { Label("edit / split", systemImage: "pencil") }
+                                    if !r.running {
+                                        Button { store.resume(r) } label: { Label("resume", systemImage: "play.fill") }
+                                            .tint(.blue)
+                                    }
+                                    Button { editTarget = r } label: { Label("edit", systemImage: "pencil") }
                                         .tint(Theme.edit)
+                                    Button { splitTarget = r } label: { Label("split", systemImage: "scissors") }
+                                        .tint(.orange)
                                 }
                             }
                             .disabled(store.busy)
@@ -110,6 +121,12 @@ struct JanusView: View {
             FillSheet(gap: t.gap) { desc, start, end, project in
                 store.fill(desc: desc, start: start, end: end, project: project) }
         }
+        .confirmationDialog("split", isPresented: isPresented($splitTarget), titleVisibility: .visible,
+                            presenting: splitTarget) { r in
+            Button("split ▲ (keep top)") { store.split(r, mode: "top") }
+            Button("split ▼ (keep bottom)") { store.split(r, mode: "bottom") }
+            Button("cancel", role: .cancel) {}
+        } message: { r in Text("\(r.start)–\(r.end) " + r.desc) }
         .sheet(item: $editTarget) { r in
             EditSheet(row: r, loadCodes: { await store.projectCodes() },
                       onSave: { d, s, e, p in store.edit(r, desc: d, start: s, end: e, project: p) },
@@ -198,12 +215,16 @@ struct TimelineRowView: View {
     let row: TimelineRow
     var body: some View {
         let color: Color = row.isGap ? Theme.dim : Color(hex: row.color)
+        // start · title … duration · 分 (2026-10-22 janus notes #3/#4: start
+        // time only on the left, time and points right-justified).
         HStack(spacing: 10) {
             Text(row.displayMeta).font(Theme.mono).foregroundStyle(Theme.dim)
                 .fixedSize(horizontal: true, vertical: false)
             Text(row.displayTitle).font(Theme.mono).foregroundStyle(color).lineLimit(2)
                 .opacity(row.logged && !row.running ? 0.55 : 1)
             Spacer(minLength: 8)
+            Text(row.rightMeta).font(Theme.mono).foregroundStyle(Theme.dim)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.vertical, 4)
     }

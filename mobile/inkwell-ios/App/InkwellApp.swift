@@ -11,6 +11,7 @@ struct InkwellApp: App {
         // vault syncs without typing anything on the phone (2026-10-20).
         if VaultConfig.token.isEmpty, !VaultSecrets.token.isEmpty { VaultConfig.token = VaultSecrets.token }
         #endif
+        Theme.applyUIKitMonospace()
     }
     var body: some Scene {
         WindowGroup { RootView() }

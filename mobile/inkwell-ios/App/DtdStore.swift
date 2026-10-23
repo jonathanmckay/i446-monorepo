@@ -16,6 +16,9 @@ final class DtdStore: ObservableObject {
     @Published var filter = ""                               // fuzzy filter box text (wave 2 #1)
 
     private let api = Api()
+    private let outbox = Outbox("dtd")
+    /// Writes queued while offline (⇡N in the title), replayed on reconnect.
+    @Published private(set) var pending = 0
     private var activeId: String? = nil                      // id of the current top/active row — detects a new claim
     private var loadedAt: Date? = nil
     private var cachedAt: Date? = nil
@@ -27,9 +30,12 @@ final class DtdStore: ObservableObject {
         if let (j, at) = PayloadCache.load("dtd"), PayloadCache.isToday(at) {
             tasks = DtdTask.visible(Parsers.tasks(j)); summary = Parsers.summary(j); cachedAt = at
         }
+        pending = outbox.count
     }
 
-    var title: String { "\(summary.points)分 · dtd · \(summary.done) done · \(tasks.count) left" }
+    var title: String {
+        "\(summary.points)分 · dtd · \(summary.done) done · \(tasks.count) left" + (pending > 0 ? " · ⇡\(pending)" : "")
+    }
 
     /// The list the view renders: `tasks` narrowed by the fuzzy filter box
     /// (wave 2 #1, 2026-10-22), the native mirror of the dtd web filter. Each
@@ -75,7 +81,29 @@ final class DtdStore: ObservableObject {
         Task { await load(refresh: false) }
     }
 
+    /// Replay offline writes (completions, delays, adds) in order. Called on
+    /// foreground, on network return and before every load, so the list that
+    /// load() fetches already reflects them.
+    func flushOutbox() async {
+        guard outbox.count > 0 else { return }
+        let r = await outbox.flush(api)
+        pending = outbox.count
+        if !r.rejected.isEmpty { toast.show("sync refused: " + r.rejected.joined(separator: "; ")) }
+        else if r.sent > 0 { toast.show("synced \(r.sent) offline change\(r.sent == 1 ? "" : "s") ✓") }
+    }
+
+    /// Offline: keep the write for replay and leave the optimistic UI as is.
+    /// Returns false (caller rolls back) for any other failure.
+    private func queueIfOffline(_ m: String, path: String, body: [String: Any], label: String) -> Bool {
+        guard Outbox.isOffline(m) else { return false }
+        outbox.enqueue(url: base + path, body: body, label: label)
+        pending = outbox.count
+        toast.show("offline · queued ⇡\(pending), syncs when back online")
+        return true
+    }
+
     func load(refresh: Bool) async {
+        await flushOutbox()
         loading = true
         let url = base + "/api/tasks" + (refresh ? "?refresh=1" : "")
         switch await api.get(url) {
@@ -108,8 +136,9 @@ final class DtdStore: ObservableObject {
         summary.points += t.points ?? 0
         summary.done += 1
         Platform.haptic(.commit)
+        let body = Bodies.done(t, value: value)
         Task {
-            let r = await Platform.keepAlive { await api.post(base + "/api/done", Bodies.done(t, value: value)) }
+            let r = await Platform.keepAlive { await api.post(base + "/api/done", body) }
             inFlight.remove(t.id)
             switch r {
             case .ok(let j):
@@ -119,6 +148,8 @@ final class DtdStore: ObservableObject {
                     : j.bool("future_skipped") ? "+\(pts) 分 · recurring"
                     : "+\(pts) 分"
                 toast.show(msg)
+            case .error(let m) where queueIfOffline(m, path: "/api/done", body: body, label: "done \(t.title)"):
+                break
             case .error(let m):
                 summary.points -= t.points ?? 0
                 summary.done -= 1
@@ -209,6 +240,8 @@ final class DtdStore: ObservableObject {
             inFlight.remove(t.id)
             switch r {
             case .ok(let j): toast.show(toastText(j))
+            case .error(let m) where queueIfOffline(m, path: path, body: body, label: "delay \(t.title)"):
+                break
             case .error(let m):
                 restoreRow(t, at: pos)
                 toast.show("not delayed: \(m)", retry: { [weak self] in self?.delay(t, path: path, body: body, toastText: toastText) })
@@ -229,8 +262,74 @@ final class DtdStore: ObservableObject {
         Task {
             switch await api.post(base + "/api/add", Bodies.add(c)) {
             case .ok: toast.show("+ added"); await load(refresh: true)
+            case .error(let m) where queueIfOffline(m, path: "/api/add", body: Bodies.add(c), label: "add \(c)"):
+                break
             case .error(let m): toast.show("not added: \(m)")
             }
         }
     }
+}
+
+// ── edit / split / survey forms (round 3 #5 and #1, 2026-10-22) ─────────
+extension DtdStore {
+    /// ctrl-g prefill: name/domain/points/notes plus the allowed domain list.
+    func editFields(_ t: DtdTask) async -> DtdEditFields? {
+        let q = t.id.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? t.id
+        guard case .ok(let j) = await Api().get(InkwellConfig.dtdBase + "/api/edit-get?id=" + q) else { return nil }
+        return DtdEditFields(name: j.string("name"), domain: j.string("domain"), points: j.string("points"),
+                             desc: j.string("desc"), domains: j.strings("domains"))
+    }
+
+    /// Same contract as terminal dtd's ctrl-g: edit-fast applies only what changed.
+    func applyEdit(_ t: DtdTask, _ f: DtdEditFields) {
+        post("/api/edit", ["id": t.id, "name": f.name, "domain": f.domain, "points": f.points, "desc": f.desc],
+             ok: { _ in "edited ✓" }, fail: "not edited")
+    }
+
+    /// ctrl-p "done so far": credit part of the task now, keep the remainder.
+    func split(_ t: DtdTask, pts: Int?, minutes: Int?, name: String, keep: Bool) {
+        var b: [String: Any] = ["id": t.id, "keep": keep]
+        if let pts { b["pts"] = pts }
+        if let minutes { b["minutes"] = minutes }
+        if !name.isEmpty { b["name"] = name }
+        Platform.haptic(.commit)
+        post("/api/split", b, ok: { j in j.string("message", "✂ split ✓") }, fail: "not split")
+    }
+
+    enum FormLookup { case form(DtdForm), none, failed }
+    /// Survey card → its form schema. `.none` = the server has no form for
+    /// this card (complete it normally); `.failed` = couldn't ask (do nothing:
+    /// completing a survey without its answers would lose them).
+    func form(_ t: DtdTask) async -> FormLookup {
+        let q = t.id.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? t.id
+        switch await Api().get(InkwellConfig.dtdBase + "/api/form?id=" + q) {
+        case .ok(let j): return Parsers.form(j).map { .form($0) } ?? FormLookup.none
+        case .error(let m) where m.contains("not JSON") || m == "HTTP 404" || m == "HTTP 200": return FormLookup.none
+        case .error(let m): Toaster.shared.show("form: \(m)"); return .failed
+        }
+    }
+
+    func submitForm(_ t: DtdTask, _ f: DtdForm, values: [String: String]) {
+        Platform.haptic(.commit)
+        post("/api/form", ["id": t.id, "form": f.name, "values": values],
+             ok: { j in j.string("message", "✓ \(f.title)") }, fail: "form not saved")
+    }
+
+    private func post(_ path: String, _ body: [String: Any], ok: @escaping (JSON) -> String, fail: String) {
+        Task {
+            switch await Platform.keepAlive({ await Api().post(InkwellConfig.dtdBase + path, body) }) {
+            case .ok(let j): Platform.haptic(.success); Toaster.shared.show(ok(j)); await load(refresh: true)
+            case .error(let m): Platform.haptic(.failure); Toaster.shared.show("\(fail): \(m)")
+            }
+        }
+    }
+}
+
+struct DtdEditFields: Identifiable {
+    let id = UUID()
+    var name: String
+    var domain: String
+    var points: String
+    var desc: String
+    var domains: [String]
 }

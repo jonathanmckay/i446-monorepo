@@ -46,3 +46,27 @@ enum WhereBeacon {
         }
     }
 }
+
+#if canImport(Network)
+import Network
+#endif
+
+/// Connectivity flips (round 3 #6, 2026-10-22): when the path comes back,
+/// RootView flushes the offline outbox and reloads, so writes made on a plane
+/// land without the user doing anything.
+@MainActor
+final class NetWatch: ObservableObject {
+    @Published private(set) var online = true
+    #if canImport(Network)
+    private let monitor = NWPathMonitor()
+    #endif
+    init() {
+        #if canImport(Network)
+        monitor.pathUpdateHandler = { [weak self] path in
+            let up = path.status == .satisfied
+            Task { @MainActor in if self?.online != up { self?.online = up } }
+        }
+        monitor.start(queue: DispatchQueue(label: "netwatch"))
+        #endif
+    }
+}

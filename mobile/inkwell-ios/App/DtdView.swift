@@ -10,6 +10,9 @@ struct DtdView: View {
     @State private var delayTarget: DtdTask? = nil
     @State private var delayOptions = DelayOptions.empty
     @State private var addText = ""
+    @State private var editing: (task: DtdTask, fields: DtdEditFields)? = nil
+    @State private var splitTarget: DtdTask? = nil
+    @State private var formOpen: (task: DtdTask, form: DtdForm)? = nil
     @FocusState private var addFocused: Bool
 
     var body: some View {
@@ -30,6 +33,19 @@ struct DtdView: View {
         .task { if !store.loadedOnce { await store.load(refresh: false) } }
         .modifier(ValuePrompt(task: $valuePrompt, text: $valueText, store: store))
         .modifier(DelayDialog(task: $delayTarget, options: delayOptions, store: store))
+        .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
+            if let e = editing {
+                DtdEditSheet(task: e.task, fields: e.fields) { f in store.applyEdit(e.task, f) }
+            }
+        }
+        .sheet(item: $splitTarget) { t in
+            DtdSplitSheet(task: t) { pts, mins, name, keep in store.split(t, pts: pts, minutes: mins, name: name, keep: keep) }
+        }
+        .sheet(isPresented: Binding(get: { formOpen != nil }, set: { if !$0 { formOpen = nil } })) {
+            if let o = formOpen {
+                DtdFormSheet(form: o.form) { values in store.submitForm(o.task, o.form, values: values) }
+            }
+        }
     }
 
     /// Fuzzy filter box (wave 2 #1, 2026-10-22), the native mirror of the dtd
@@ -113,9 +129,11 @@ struct DtdView: View {
     /// retry can never double-credit. A variable habit still asks its value.
     private func doneButton(_ t: DtdTask) -> some View {
         Button {
-            if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }
+            if !t.form.isEmpty { openForm(t) }
+            else if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }
         } label: {
-            Label(t.points.map { "done +\($0)分" } ?? "done", systemImage: "checkmark")
+            if !t.form.isEmpty { Label("form", systemImage: "list.bullet.clipboard") }
+            else { Label(t.points.map { "done +\($0)分" } ?? "done", systemImage: "checkmark") }
         }
         .tint(Theme.done)
     }
@@ -128,6 +146,29 @@ struct DtdView: View {
         Button { store.start(t) } label: { Label("start", systemImage: "play.fill") }.tint(.blue)
         Button { store.delayDay(t) } label: { Label("+1d", systemImage: "calendar") }.tint(.orange)
         Button { openDelay(t) } label: { Label("delay", systemImage: "alarm") }.tint(.gray)
+        // Round 3 #5: edit (ctrl-g) and split / done-so-far (ctrl-p), as in the CLI.
+        Button { openEdit(t) } label: { Label("edit", systemImage: "pencil") }.tint(Theme.edit)
+        Button { splitTarget = t } label: { Label("split", systemImage: "scissors") }.tint(.teal)
+    }
+
+    private func openEdit(_ t: DtdTask) {
+        Task {
+            if let f = await store.editFields(t) { editing = (t, f) }
+            else { Toaster.shared.show("couldn't load \(t.title) for editing") }
+        }
+    }
+
+    /// Survey card (0s, 1s, xk887, …): fetch its form and open it, like
+    /// Enter on the card in terminal dtd. No form on the server → complete.
+    private func openForm(_ t: DtdTask) {
+        Task {
+            switch await store.form(t) {
+            case .form(let f): formOpen = (t, f)
+            case .none:
+                if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }
+            case .failed: break
+            }
+        }
     }
 
     private func openDelay(_ t: DtdTask) {

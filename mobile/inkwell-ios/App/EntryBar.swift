@@ -64,6 +64,16 @@ struct EntryBar: View {
         ToolbarItem(placement: .keyboard) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    // Hide-keyboard key (2026-10-22 dtd note #1: "add hide
+                    // keyboard option"), first so it sits under the thumb.
+                    Button { focus.wrappedValue = false } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .foregroundStyle(Theme.accent)
+                            .frame(minWidth: 36, minHeight: 34)
+                            .background(Color(white: 0.16))
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
                     ForEach(Self.keys, id: \.self) { k in
                         Button { insert(k) } label: {
                             Text(k)

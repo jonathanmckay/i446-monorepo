@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum Theme {
     static let bg = Color(red: 0.04, green: 0.04, blue: 0.06)
@@ -9,6 +12,30 @@ enum Theme {
     static let edit = Color(red: 0.49, green: 0.33, blue: 0.84)
     static let mono = Font.system(.body, design: .monospaced)
     static let monoSmall = Font.system(.caption, design: .monospaced)
+
+    /// The UIKit-drawn chrome that SwiftUI's .fontDesign can't reach: nav
+    /// bar titles, bar buttons (sheet cancel/save), tab bar labels, segmented
+    /// pickers. System alerts and swipe-action labels stay in the system font
+    /// (iOS gives no hook for those).
+    static func applyUIKitMonospace() {
+        #if canImport(UIKit)
+        func mono(_ size: CGFloat, _ w: UIFont.Weight = .regular) -> UIFont { .monospacedSystemFont(ofSize: size, weight: w) }
+        let nav = UINavigationBarAppearance()
+        nav.configureWithDefaultBackground()
+        nav.titleTextAttributes = [.font: mono(17, .semibold)]
+        nav.largeTitleTextAttributes = [.font: mono(30, .bold)]
+        let button = UIBarButtonItemAppearance()
+        button.normal.titleTextAttributes = [.font: mono(17)]
+        nav.buttonAppearance = button
+        nav.doneButtonAppearance = button
+        UINavigationBar.appearance().standardAppearance = nav
+        UINavigationBar.appearance().scrollEdgeAppearance = nav
+        UINavigationBar.appearance().compactAppearance = nav
+        UITabBarItem.appearance().setTitleTextAttributes([.font: mono(10)], for: .normal)
+        UISegmentedControl.appearance().setTitleTextAttributes([.font: mono(13)], for: .normal)
+        UITextField.appearance().font = mono(17)
+        #endif
+    }
 }
 
 extension Color {
