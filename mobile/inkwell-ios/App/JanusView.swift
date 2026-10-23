@@ -67,7 +67,7 @@ struct JanusView: View {
                             // Swipe left all the way = resume (a fresh timer, same desc +
                             // project); half way reveals the options: edit, split.
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                if store.viewingToday && r.canSwipeLeft {
+                                if store.viewingToday && r.canSwipeLeft && !r.isLocal {
                                     if !r.running {
                                         Button { store.resume(r) } label: { Label("resume", systemImage: "play.fill") }
                                             .tint(.blue)

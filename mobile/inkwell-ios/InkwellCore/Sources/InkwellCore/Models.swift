@@ -30,6 +30,9 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     /// claimed it (😈). Active rows float to the top of dtd.
     public var isActive: Bool { running || agent }
 
+    /// Added on the phone while offline; no Todoist id until its add syncs.
+    public var isLocal: Bool { id.hasPrefix("local-") }
+
     /// Copy with a flipped `running` flag — fields are `let`, so optimistic
     /// "this is now the live timer" updates rebuild the row.
     public func withRunning(_ v: Bool) -> DtdTask {
@@ -161,6 +164,8 @@ public struct TimelineRow: Equatable, Hashable {
     public init(type: String) { self.type = type }
 
     public var isEntry: Bool { type == "entry" }
+    /// A timer started on the phone while offline (id "local-…"), not in Toggl yet.
+    public var isLocal: Bool { id.hasPrefix("local-") }
     public var isGap: Bool { type == "gap" }
     public var isEvent: Bool { type == "event" }
     public var isDivider: Bool { type == "divider" }

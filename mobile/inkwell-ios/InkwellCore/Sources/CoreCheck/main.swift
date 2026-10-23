@@ -313,4 +313,71 @@ do {
     ob.clear()
 }
 
+// Offline → online sync (2026-10-22 /bug): a stubbed network that first
+// refuses every request (no connection), then accepts and records them.
+final class StubNet: URLProtocol {
+    static var online = false
+    static var seen: [(path: String, body: [String: Any])] = []
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard StubNet.online else {
+            client?.urlProtocol(self, didFailWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
+            return
+        }
+        var data = request.httpBody
+        if data == nil, let s = request.httpBodyStream {
+            s.open(); var d = Data(); var buf = [UInt8](repeating: 0, count: 4096)
+            while s.hasBytesAvailable { let n = s.read(&buf, maxLength: buf.count); if n <= 0 { break }; d.append(buf, count: n) }
+            s.close(); data = d
+        }
+        let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        StubNet.seen.append((request.url?.path ?? "", body))
+        let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"# : #"{"ok":true}"#
+        client?.urlProtocol(self, didLoad: reply.data(using: .utf8)!)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+do {
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.protocolClasses = [StubNet.self]
+    let api = Api(configuration: cfg)
+    let ob = Outbox("corecheck-sync"); ob.clear()
+    // What the dtd app queues offline: an add, a done on an existing task,
+    // and a done on the task just added (content-only, no Todoist id yet).
+    ob.enqueue(url: "http://ix/api/add", body: ["content": "buy milk (5) [2]"], label: "add", ref: "add:local-1")
+    ob.enqueue(url: "http://ix/api/done", body: ["id": "T1", "content": "hiit (20) [10]"], label: "done T1", ref: "hide:T1")
+    ob.enqueue(url: "http://ix/api/done", body: ["id": "$ref:add:local-1", "content": "buy milk (5) [2]"],
+               label: "done local", ref: "hide:local-1")
+
+    let sema = DispatchSemaphore(value: 0)
+    var offlineRun: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    var onlineRun: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    var seenOffline = -1
+    var queuedOffline = -1
+    Task {
+        StubNet.online = false
+        offlineRun = await ob.flush(api)
+        seenOffline = StubNet.seen.count; queuedOffline = ob.count
+        StubNet.online = true
+        onlineRun = await ob.flush(api)
+        sema.signal()
+    }
+    sema.wait()
+    eq(offlineRun.sent, 0, "offline flush sends nothing")
+    eq(seenOffline, 0, "offline: no request reached the server")
+    eq(queuedOffline, 3, "offline: all three stay queued")
+    eq(onlineRun.sent, 3, "online flush sends all three")
+    eq(ob.count, 0, "queue empty after sync")
+    eq(StubNet.seen.map(\.path), ["/api/add", "/api/done", "/api/done"], "replayed in order")
+    eq(StubNet.seen[1].body["id"] as? String, "T1", "offline done keeps its task id")
+    eq(StubNet.seen[2].body["id"] as? String, "NEW9", "local task's done gets the id its add returned")
+    eq(onlineRun.refs, ["add:local-1", "hide:T1", "hide:local-1"], "refs returned so the UI retires local rows")
+    ob.clear()
+}
+
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }
