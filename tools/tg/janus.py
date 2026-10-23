@@ -2335,7 +2335,7 @@ def _ytd_applescript_lines() -> str:
     return "\n".join(lines)
 
 
-def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
+def _dozen_applescript_lines(q_label: str, prev_q_label: str = "", year: int = 0) -> str:
     """AppleScript appended to fetch_habits_today's script (after a third
     '||' marker): finds the hcbi sheet's row labeled q_label in column B —
     the current quarter's Daily Dozen summary row — and reads E:Y of that
@@ -2360,6 +2360,12 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
     folding into the block above so a missing prior-quarter row (e.g. Q1,
     with no Q0) degrades to "just this quarter" instead of losing the
     whole segment.
+
+    If year is non-zero, a third search finds the ANNUAL Daily Dozen block,
+    the row labeled with that year in column B (hcbi!E384:P385 for 2026),
+    and appends its two-row E:Y block after a "~". The Daily Dozen chips
+    read from that block, not from any quarter (per JM 2026-10-23); hcbp
+    still comes from the quarter rows because the annual block has no Y.
 
     A final try appends "#" + the value of HCBI_HCB_TOTAL_CELL (hcbi!X388,
     the sheet's own combined hcb total) — "hcb" is read from there, never
@@ -2398,6 +2404,48 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
                 set dv to ""
                 try
                     set dv to (item i of pRow2) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+        end if
+    end try'''
+    annual_block = ""
+    if year:
+        # Column B holds the year as a NUMBER (2026.0); quarter labels ("Q2")
+        # and dates fail the integer coercion and are skipped.
+        annual_block = f'''
+    try
+        set wsA to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set aRow to 0
+        set bValsA to value of range "B300:B450" of wsA
+        repeat with i from 1 to (count of bValsA)
+            try
+                set bvA to item 1 of (item i of bValsA)
+                if class of bvA is real or class of bvA is integer then
+                    if (bvA as integer) = {year} then
+                        set aRow to i + 299
+                        exit repeat
+                    end if
+                end if
+            end try
+        end repeat
+        if aRow > 0 then
+            set tmpA to value of range ("E" & aRow & ":Y" & (aRow + 1)) of wsA
+            set aRow1 to item 1 of tmpA
+            set aRow2 to item 2 of tmpA
+            set out to out & "~"
+            repeat with i from 1 to (count of aRow1)
+                set dv to ""
+                try
+                    set dv to (item i of aRow1) as text
+                end try
+                set out to out & dv & ","
+            end repeat
+            set out to out & "|"
+            repeat with i from 1 to (count of aRow2)
+                set dv to ""
+                try
+                    set dv to (item i of aRow2) as text
                 end try
                 set out to out & dv & ","
             end repeat
@@ -2442,7 +2490,7 @@ def _dozen_applescript_lines(q_label: str, prev_q_label: str = "") -> str:
                 set out to out & dv & ","
             end repeat
         end if
-    end try{prev_block}
+    end try{prev_block}{annual_block}
     try
         set wsT to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
         set out to out & "#" & ((value of range "{HCBI_HCB_TOTAL_CELL}" of wsT) as text)
@@ -2471,7 +2519,8 @@ def _num(s: str) -> float | None:
         return None
 
 
-def _parse_dozen_segment(cur_raw: str, prev_raw: str = "", total_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
+def _parse_dozen_segment(cur_raw: str, prev_raw: str = "", total_raw: str = "",
+                         annual_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
     """(daily_dozen, hcbi_behind) from the hcbi segment: the current
     quarter's "row1|row2" E:Y block plus, when present, the previous
     quarter's block in the same shape. Every figure is the RUNNING
@@ -2481,14 +2530,25 @@ def _parse_dozen_segment(cur_raw: str, prev_raw: str = "", total_raw: str = "") 
     HCBI_HCB_TOTAL_CELL (hcbi!X388) — absent when that read failed, so the
     chip disappears rather than showing a number the sheet doesn't. A
     legacy prev segment that is a bare number (pre-2026-10-01 scripts
-    emitted just the prior row-below X) is ignored."""
+    emitted just the prior row-below X) is ignored.
+
+    annual_raw (2026-10-23, per JM): the annual Daily Dozen block (hcbi
+    E384:P385 for 2026) in the same "row1|row2" shape. When present, the
+    Daily Dozen chips come from it ALONE, not from any quarter; hcbp still
+    comes from the quarter rows (the annual block has no hcbp column)."""
     c1, c2 = _dozen_rows(cur_raw)
     if prev_raw and "|" not in prev_raw and "," not in prev_raw:
         p1, p2 = [], []
     else:
         p1, p2 = _dozen_rows(prev_raw) if prev_raw else ([], [])
     dozen: list[tuple[str, float]] = []
+    a1, a2 = _dozen_rows(annual_raw) if annual_raw else ([], [])
     for offset, key in enumerate(DAILY_DOZEN_ORDER, start=1):
+        if annual_raw:
+            annual = _num(_dozen_cell(a1, a2, offset))
+            if annual is not None:
+                dozen.append((key, annual))
+            continue
         cur, prev = _num(_dozen_cell(c1, c2, offset)), _num(_dozen_cell(p1, p2, offset))
         if cur is None and prev is None:
             continue
@@ -2568,7 +2628,7 @@ def fetch_habits_today():
     set out to out & "|"
 {_ytd_applescript_lines()}
     set out to out & "|"
-{_dozen_applescript_lines(q_label, prev_q_label)}
+{_dozen_applescript_lines(q_label, prev_q_label, now.year)}
     return out
 end tell'''
         proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
@@ -2589,6 +2649,9 @@ end tell'''
         hcb_total_raw = ""
         if "#" in dozen_raw:
             dozen_raw, hcb_total_raw = dozen_raw.split("#", 1)
+        annual_raw = ""
+        if "~" in dozen_raw:  # annual Daily Dozen block (2026-10-23)
+            dozen_raw, annual_raw = dozen_raw.split("~", 1)
         prev_hcb_raw = ""
         if ";" in dozen_raw:
             dozen_raw, prev_hcb_raw = dozen_raw.split(";", 1)
@@ -2599,7 +2662,7 @@ end tell'''
             except ValueError:
                 pass
         STATE.habits_ytd = ytd
-        dozen, behind = _parse_dozen_segment(dozen_raw, prev_hcb_raw, hcb_total_raw)
+        dozen, behind = _parse_dozen_segment(dozen_raw, prev_hcb_raw, hcb_total_raw, annual_raw)
         STATE.daily_dozen = dozen
         STATE.hcbi_behind = behind
         habits = []

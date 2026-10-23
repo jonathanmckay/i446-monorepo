@@ -134,9 +134,10 @@ def test_fetch_reads_hcbi_sheet_for_the_current_quarter():
     src = (HERE / "janus.py").read_text()
     i_def = src.index("def fetch_habits_today():")
     body = src[i_def:src.index("\n\n\n", i_def)]
-    assert "_dozen_applescript_lines(q_label, prev_q_label)" in body, (
+    assert "_dozen_applescript_lines(q_label, prev_q_label, now.year)" in body, (
         "must splice in the hcbi Daily Dozen AppleScript, keyed by the "
-        "current quarter (and the previous one, for the running hcb total), "
+        "current quarter (and the previous one, for the running hcbp total) "
+        "and the year (the annual block the dozen reads, 2026-10-23), "
         "not a hardcoded row")
     i_helper = src.index("def _dozen_applescript_lines(")
     helper_body = src[i_helper:src.index("\n\n\n", i_helper)]
@@ -284,3 +285,39 @@ def test_prev_quarter_applescript_reads_the_full_row_pair():
     prev = body[body.index("prev_block = f'''"):body.index("return f'''")]
     assert '("E" & pRow & ":Y" & (pRow + 1))' in prev, "prev quarter must return E:Y of both rows"
     assert '("X" & (pRow + 1))' not in prev, "the old single-cell X read must be gone"
+
+
+# ── annual block (2026-10-23, per JM): the Daily Dozen reads hcbi E384:P385
+# (the row labeled with the year), not any quarter. Values as read 2026-10-23.
+ANNUAL_2026 = _pair(dict(E=-256, G=-644, I=-130, K=-16, M=-10, O=-4.5, X=-1589.33),
+                    dict(F=11, H=13, J=-17, L=304, N=22))
+
+
+def test_dozen_comes_from_the_annual_block_not_the_quarters():
+    m = _load_tui()
+    dozen, behind = m._parse_dozen_segment(Q4_ROWS, Q3_ROWS, "-1589.33", ANNUAL_2026)
+    d = dict(dozen)
+    assert d["bn"] == -256 and d["fr"] == -644 and d["g"] == 304 and d["wtr"] == -4.5   # annual, verbatim
+    assert d["bn"] != -87                       # not Q3+Q4
+    assert len(dozen) == 11
+    assert behind["hcb"] == -1589.33            # hcbi!X388, unchanged
+    assert behind["hcbp"] == 1323 - 86          # still the quarter rows: the annual block has no Y
+
+
+def test_no_annual_block_falls_back_to_the_quarters():
+    m = _load_tui()
+    dozen, _ = m._parse_dozen_segment(Q4_ROWS, Q3_ROWS, "", "")
+    assert dict(dozen)["bn"] == -87
+
+
+def test_annual_applescript_finds_the_year_row_and_fetch_peels_it_first():
+    m = _load_tui()
+    script = m._dozen_applescript_lines("Q4", "Q3", 2026)
+    a = script[script.index("set aRow to 0"):]
+    assert "(bvA as integer) = 2026" in a and '("E" & aRow & ":Y" & (aRow + 1))' in a
+    assert script.index('"~"') < script.index('"#"')      # annual before the hcb total
+    assert "set aRow to 0" not in m._dozen_applescript_lines("Q4", "Q3")   # off without a year
+    src = (HERE / "janus.py").read_text()
+    body = src[src.index("def fetch_habits_today"):]
+    assert "_dozen_applescript_lines(q_label, prev_q_label, now.year)" in body
+    assert body.index('split("~", 1)') < body.index('split(";", 1)')     # peel annual before prev quarter
