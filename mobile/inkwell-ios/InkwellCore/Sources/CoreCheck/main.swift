@@ -267,4 +267,29 @@ do {
           "selection replace → plain newline")
 }
 
+// Round 3 (2026-10-22): survey forms, janus preview points, offline outbox.
+do {
+    let f = Parsers.form(JSON.parse(#"{"ok":true,"form":"0s","title":"daily review","fields":[{"key":"title","label":"title","type":"text"},{"key":"mood","label":"mood","type":"scale","min":1,"max":7,"value":"5"}]}"#.data(using: .utf8)!)!)
+    eq(f?.name, "0s", "form name")
+    eq(f?.fields.count, 2, "form fields")
+    eq(f?.fields[1].max, 7, "scale max")
+    eq(f?.fields[1].value, "5", "prefill value")
+    check(Parsers.form(JSON.parse(#"{"ok":false,"form":null}"#.data(using: .utf8)!)!) == nil, "no form → nil")
+
+    let tl = Parsers.timeline(JSON.parse(#"{"date":"2026-10-22","rows":[{"type":"entry","id":"1","start":"15:05","end":"15:30","minutes":25,"desc":"XTECH Huddle","logged":false,"points":null,"preview_points":30}]}"#.data(using: .utf8)!)!)
+    let r = tl.rows[0]
+    eq(r.previewPoints, 30, "preview points parsed")
+    eq(r.rightLabel, "log 30分", "swipe label shows the 分 a log credits")
+    eq(r.displayMeta, "15:05", "start time only")
+    eq(r.rightMeta, "25m · ~30分", "preview marked with ~")
+
+    check(Outbox.isOffline("offline") && Outbox.isOffline("unreachable (tailnet down?)"), "offline errors queue")
+    check(!Outbox.isOffline("timed out") && !Outbox.isOffline("HTTP 500"), "timeouts/server errors don't queue")
+    let ob = Outbox("corecheck"); ob.clear()
+    ob.enqueue(url: "http://x/api/done", body: ["id": "1"], label: "done a")
+    ob.enqueue(url: "http://x/api/done", body: ["id": "2"], label: "done b")
+    eq(ob.items.map(\.label), ["done a", "done b"], "outbox keeps order")
+    ob.clear()
+}
+
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }

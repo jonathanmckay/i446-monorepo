@@ -162,8 +162,12 @@ struct DtdView: View {
     /// Enter on the card in terminal dtd. No form on the server → complete.
     private func openForm(_ t: DtdTask) {
         Task {
-            if let f = await store.form(t) { formOpen = (t, f) }
-            else { store.complete(t, value: nil) }
+            switch await store.form(t) {
+            case .form(let f): formOpen = (t, f)
+            case .none:
+                if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }
+            case .failed: break
+            }
         }
     }
 

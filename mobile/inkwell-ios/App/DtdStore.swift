@@ -296,12 +296,16 @@ extension DtdStore {
         post("/api/split", b, ok: { j in j.string("message", "✂ split ✓") }, fail: "not split")
     }
 
-    /// Survey card → its form schema; nil when the server has none for it.
-    func form(_ t: DtdTask) async -> DtdForm? {
+    enum FormLookup { case form(DtdForm), none, failed }
+    /// Survey card → its form schema. `.none` = the server has no form for
+    /// this card (complete it normally); `.failed` = couldn't ask (do nothing:
+    /// completing a survey without its answers would lose them).
+    func form(_ t: DtdTask) async -> FormLookup {
         let q = t.id.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? t.id
         switch await Api().get(InkwellConfig.dtdBase + "/api/form?id=" + q) {
-        case .ok(let j): return Parsers.form(j)
-        case .error(let m): Toaster.shared.show("form: \(m)"); return nil
+        case .ok(let j): return Parsers.form(j).map { .form($0) } ?? FormLookup.none
+        case .error(let m) where m.contains("not JSON") || m == "HTTP 404" || m == "HTTP 200": return FormLookup.none
+        case .error(let m): Toaster.shared.show("form: \(m)"); return .failed
         }
     }
 

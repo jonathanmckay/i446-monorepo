@@ -11,6 +11,7 @@ struct RootView: View {
     @ObservedObject private var toaster = Toaster.shared
     @State private var showSettings = false
     @Environment(\.scenePhase) private var phase
+    @StateObject private var net = NetWatch()
 
     #if APP_DTD
     @StateObject private var dtd = DtdStore()
@@ -32,6 +33,11 @@ struct RootView: View {
                 // refresh the screen if it has gone stale or never loaded.
                 if p == .active { WhereBeacon.send(); refreshAll() }
             }
+            .onChange(of: net.online) { _, up in if up { cameOnline() } }
+            // Every SwiftUI Text/Button/Label/field inherits the monospaced
+            // design (2026-10-22: "all text should be monospaced font,
+            // buttons etc"); UIKit chrome is set in Theme.applyUIKitMonospace.
+            .fontDesign(.monospaced)
             .preferredColorScheme(.dark)
             .tint(Theme.accent)
     }
@@ -40,12 +46,14 @@ struct RootView: View {
     private var surface: some View { DtdView(store: dtd, onSettings: { showSettings = true }) }
     private var bottomPad: CGFloat { 16 }
     private func reloadAll() { dtd.reload() }
-    private func refreshAll() { dtd.refreshIfStale() }
+    private func refreshAll() { dtd.refreshIfStale(); Task { await dtd.flushOutbox() } }
+    private func cameOnline() { Task { await dtd.load(refresh: false) } }
     #elseif APP_JANUS
     private var surface: some View { JanusView(store: janus, onSettings: { showSettings = true }) }
     private var bottomPad: CGFloat { 16 }
     private func reloadAll() { janus.reload() }
-    private func refreshAll() { janus.refreshIfStale() }
+    private func refreshAll() { janus.refreshIfStale(); Task { await janus.flushOutbox() } }
+    private func cameOnline() { Task { await janus.load() } }
     #else
     private var surface: some View {
         TabView(selection: $tab) {
@@ -60,5 +68,6 @@ struct RootView: View {
     private var bottomPad: CGFloat { 56 }
     private func reloadAll() { vault.fetchLanding(VaultView.landing); vault.runSync(force: true) }
     private func refreshAll() { vault.fetchLanding(VaultView.landing); vault.syncIfStale() }
+    private func cameOnline() { vault.syncIfStale() }
     #endif
 }

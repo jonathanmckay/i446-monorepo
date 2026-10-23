@@ -148,8 +148,8 @@ struct FolderView: View {
     }
 }
 
-/// Read-only note. v1 renders the body as plain monospaced text (markdown
-/// rendering comes after a week of real use); wikilinks are listed under
+/// Read-only note, rendered Obsidian-style by MarkdownView (2026-10-22);
+/// wikilinks are listed under
 /// the body and resolve locally, with a "not on phone" stub for anything
 /// outside the subset.
 struct NoteView: View {
@@ -166,7 +166,7 @@ struct NoteView: View {
                 Text(path).font(Theme.monoSmall).foregroundStyle(Theme.dim)
                 if let d = fm["date"] { Text(d).font(Theme.monoSmall).foregroundStyle(Theme.dim) }
                 Divider().overlay(Color(white: 0.2))
-                Text(body).font(Theme.mono).foregroundStyle(Theme.fg).textSelection(.enabled)
+                MarkdownView(text: body).textSelection(.enabled)
                 if !links.isEmpty {
                     Divider().overlay(Color(white: 0.2))
                     Text("links").font(Theme.monoSmall).foregroundStyle(Theme.dim)

@@ -31,8 +31,65 @@ struct RefreshableTextEditor: UIViewRepresentable {
             attributes: [.foregroundColor: UIColor(Theme.accent), .font: UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)])
         rc.addTarget(context.coordinator, action: #selector(Coordinator.pulled(_:)), for: .valueChanged)
         tv.refreshControl = rc
+        tv.inputAccessoryView = Self.keyRow(for: tv)
         tv.text = text
         return tv
+    }
+
+    /// Inkwell's coding-key row (round 3 #7, 2026-10-22: "add the common
+    /// brackets / chars that i use for inkwell too"): the markdown and
+    /// shorthand symbols that are two keyboard pages away, inserted AT the
+    /// caret (a UITextView has one, unlike dtd's SwiftUI field). Pairs like
+    /// [[ ]] insert both halves and park the caret between them. ⌄ hides
+    /// the keyboard.
+    static let keys: [(label: String, insert: String, back: Int)] = [
+        ("⌄", "", 0), ("[[ ]]", "[[]]", 2), ("[ ]", "[]", 1), ("( )", "()", 1), ("{ }", "{}", 1),
+        ("#", "#", 0), ("-", "- ", 0), ("☐", "- [ ] ", 0), ("*", "*", 0), ("`", "`", 0),
+        (">", "> ", 0), ("@", "@", 0), ("|", "|", 0), ("=", "=", 0), ("，", "，", 0), ("⇥", "\t", 0),
+    ]
+
+    static func keyRow(for tv: UITextView) -> UIView {
+        let bar = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+        bar.backgroundColor = UIColor(white: 0.08, alpha: 1)
+        let scroll = UIScrollView()
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        let stack = UIStackView()
+        stack.axis = .horizontal; stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for k in keys {
+            var cfg = UIButton.Configuration.filled()
+            cfg.baseBackgroundColor = UIColor(white: 0.18, alpha: 1)
+            cfg.baseForegroundColor = UIColor(Theme.fg)
+            cfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+            cfg.attributedTitle = AttributedString(k.label, attributes: AttributeContainer(
+                [.font: UIFont.monospacedSystemFont(ofSize: 16, weight: .regular)]))
+            let b = UIButton(configuration: cfg, primaryAction: UIAction { [weak tv] _ in
+                guard let tv else { return }
+                if k.insert.isEmpty { tv.resignFirstResponder(); return }
+                tv.insertText(k.insert)          // fires textViewDidChange → binding stays in sync
+                if k.back > 0, let r = tv.selectedTextRange,
+                   let p = tv.position(from: r.start, offset: -k.back) {
+                    tv.selectedTextRange = tv.textRange(from: p, to: p)
+                }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            })
+            stack.addArrangedSubview(b)
+        }
+        scroll.addSubview(stack)
+        bar.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 6),
+            scroll.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -6),
+            scroll.topAnchor.constraint(equalTo: bar.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
+            stack.heightAnchor.constraint(equalToConstant: 34),
+        ])
+        bar.autoresizingMask = .flexibleWidth
+        return bar
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {

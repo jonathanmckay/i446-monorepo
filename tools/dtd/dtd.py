@@ -35,6 +35,9 @@ TOGGL_CLI = Path.home() / "i446-monorepo/mcp/toggl_server/toggl_cli.py"
 TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 DEFER_FAST = Path.home() / "i446-monorepo/tools/did/defer-fast.py"
 EDIT_FAST = Path.home() / "i446-monorepo/tools/did/edit-fast.py"
+SPLIT_FAST = Path.home() / "i446-monorepo/tools/did/split-fast.py"
+FORMS_PY = Path(__file__).resolve().parent / "dtd_forms.py"
+FORMS_TMP = Path.home() / ".cache/dtd-forms"   # values/result/log per phone form submit
 STATE_DIR = Path.home() / ".local/state/jm"
 CACHE = STATE_DIR / "task-queue.json"
 DONE_FILE = STATE_DIR / "completed-today.json"
@@ -45,6 +48,13 @@ SUMMARY_MAX_AGE = 45  # seconds; day-total (points + done) cache
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import daytime  # noqa: E402  — device-priority 'today' (lib/where.py), not Ix's own clock
+
+# Survey forms (2026-10-22): card -> form map + field specs, loaded by path
+# (tests load this file by path too, so a plain import can't rely on cwd).
+import importlib.util as _ilu  # noqa: E402
+_fspec = _ilu.spec_from_file_location("dtd_forms", Path(__file__).resolve().parent / "dtd_forms.py")
+dtd_forms = _ilu.module_from_spec(_fspec)
+_fspec.loader.exec_module(dtd_forms)
 
 
 def _now() -> "_dt.datetime":
@@ -602,6 +612,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "agentPane": agent_pane.get(str(tid), "") if tid is not None else "",
             "running": bool(tid is not None and running_id and str(tid) == running_id)
                        or bool(running_clean and strip_ann(raw).lower() == running_clean),
+            # Survey card (2026-10-22): the form Enter opens in terminal dtd
+            # (dtd_forms.CARD_FORMS), "" for a plain task; the phone opens
+            # GET /api/form for these instead of starting a timer.
+            "form": dtd_forms.form_for(raw),
         })
     return out
 
@@ -824,6 +838,168 @@ def edit_apply(task_id: str, name: str, domain: str, points: str, desc: str) -> 
         return {"ok": True, "message": out}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _cache_task(task_id: str) -> dict | None:
+    try:
+        d = json.loads(CACHE.read_text())
+    except Exception:
+        return None
+    for v in d.values():
+        if isinstance(v, list):
+            for t in v:
+                if isinstance(t, dict) and str(t.get("id")) == str(task_id):
+                    return t
+    return None
+
+
+def _patch_cache_split(task_id: str, new_content: str, rem_date: str, closed: bool) -> None:
+    """After a split, make the cache show the remainder at once (same reason
+    as _patch_cache_due): rename it in place, or drop the row when the task
+    was closed (keep=false) or its remainder moved past today. The next real
+    refresh overwrites this with Todoist's own state, which agrees."""
+    try:
+        d = json.loads(CACHE.read_text())
+        hit = False
+        gone = closed or (rem_date and rem_date > _today().isoformat())
+        for k, v in d.items():
+            if not isinstance(v, list):
+                continue
+            keep = []
+            for t in v:
+                if isinstance(t, dict) and str(t.get("id")) == str(task_id):
+                    hit = True
+                    if gone:
+                        continue
+                    t["content"] = new_content
+                    if rem_date:
+                        t["due"] = rem_date; t["due_datetime"] = ""
+                keep.append(t)
+            d[k] = keep
+        if hit:
+            tmp = CACHE.with_suffix(".patch.tmp")
+            tmp.write_text(json.dumps(d, ensure_ascii=False))
+            tmp.replace(CACHE)
+    except Exception as e:
+        print("WARN patch cache (split):", e, file=sys.stderr)
+
+
+def split_task(task_id: str, pts, minutes, name: str = "", keep: bool = True) -> dict:
+    """ctrl-p "done so far" (2026-10-22): shell out to split-fast.py, the
+    standalone port of dtd.sh's split.sh (posthoc done record + remainder
+    rename/close + did-fast --points-only credit). The phone sends one pts
+    number: on a {N}-only task (a -1g goal) that is the bonus done, the one
+    field terminal's edit form shows there; otherwise it is [N] pts done."""
+    t = _cache_task(task_id)
+    content = (t or {}).get("content", "")
+    has_sq = bool(re.search(r"\[\d+\]", content))
+    has_curly = bool(re.search(r"\{\d+\}", content))
+    as_bonus = has_curly and not has_sq
+    # edit-form.validate()'s bounds, so the phone can't carve more than exists
+    total = re.search(r"\{(\d+)\}" if as_bonus else r"\[(\d+)\]", content)
+    if total and pts > int(total.group(1)):
+        return {"ok": False, "error": f"pts done {pts} > current {total.group(1)}"}
+    dur = re.search(r"\((\d+)\)", content)
+    if minutes is not None and dur and minutes > int(dur.group(1)):
+        return {"ok": False, "error": f"min done {minutes} > current {dur.group(1)}"}
+    args = ["/usr/bin/python3", str(SPLIT_FAST), "--id", task_id, "--cache", str(CACHE),
+            "--bonus" if as_bonus else "--pts", str(pts)]
+    if minutes is not None:
+        args += ["--minutes", str(minutes)]
+    if name:
+        args += ["--name", name]
+    if not keep:
+        args.append("--no-keep")
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=90)
+        try:
+            data = json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except Exception:
+            data = {}
+        if not data.get("ok"):
+            return {"ok": False, "error": (data.get("error") or proc.stderr or "split failed").strip()[-300:]}
+        _patch_cache_split(task_id, data.get("new_content", ""), data.get("rem_date", ""),
+                           bool(data.get("closed")))
+        return {"ok": True, "message": data.get("message", "")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Survey forms (2026-10-22): GET /api/form describes the card's form, POST
+# runs dtd_forms.py in a subprocess, which writes through each form script's
+# own writer path (see dtd_forms' docstring). Excel round-trips can outlast a
+# phone request, so the POST waits FORM_WAIT seconds and then answers "still
+# saving" while the child finishes on its own (detached; log in FORMS_TMP).
+# ---------------------------------------------------------------------------
+FORM_WAIT = 50
+_FORM_LOCK = threading.Lock()
+_FORM_BUSY: set = set()          # task ids with a submit in flight
+_FORM_DONE: dict = {}            # task id -> (date, message): retried POST = no second write
+
+
+def form_get(task_id: str) -> dict:
+    t = _cache_task(task_id)
+    form = dtd_forms.form_for((t or {}).get("content", ""))
+    sp = dtd_forms.spec(form, _today()) if form else None
+    if not sp:
+        return {"ok": False, "form": None}
+    return {"ok": True, **sp}
+
+
+def form_submit(task_id: str, form: str, values: dict) -> tuple[dict, int]:
+    t = _cache_task(task_id)
+    want = dtd_forms.form_for((t or {}).get("content", ""))
+    today = _today().isoformat()
+    done = _FORM_DONE.get(task_id)
+    if done and done[0] == today and done[1] == form:
+        return {"ok": True, "already": True, "message": done[2]}, 200
+    if not want:
+        return {"ok": False, "error": "no form for this card"}, 400
+    if form != want:
+        return {"ok": False, "error": f"card's form is {want}, not {form}"}, 400
+    sp = dtd_forms.spec(form, _today())
+    if not sp:
+        return {"ok": False, "error": f"{form}: form script missing on this host"}, 400
+    keys = [f["key"] for f in sp["fields"]]
+    vals = {k: str(values.get(k) if values.get(k) is not None else "") for k in keys}
+    err = dtd_forms.validate(form, vals)
+    if err:
+        return {"ok": False, "error": err}, 400
+    with _FORM_LOCK:
+        if task_id in _FORM_BUSY:
+            return {"ok": False, "error": "already saving this form"}, 409
+        _FORM_BUSY.add(task_id)
+    try:
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        d = FORMS_TMP / f"{stamp}-{form.strip('-')}-{task_id}"
+        d.mkdir(parents=True, exist_ok=True)
+        vf, rf = d / "values.json", d / "result.json"
+        vf.write_text(json.dumps(vals, ensure_ascii=False))
+        with open(d / "log.txt", "ab") as log:
+            proc = subprocess.Popen(["/usr/bin/python3", str(FORMS_PY), "run", form, str(vf), str(rf)],
+                                    stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                                    start_new_session=True)
+        try:
+            proc.wait(timeout=FORM_WAIT)
+        except subprocess.TimeoutExpired:
+            msg = f"{form}: still saving in the background (log {d}/log.txt)"
+            _FORM_DONE[task_id] = (today, form, msg)
+            return {"ok": True, "pending": True, "message": msg}, 200
+        try:
+            res = json.loads(rf.read_text())
+        except Exception:
+            res = {"ok": False, "error": f"{form} exited {proc.returncode} (log {d}/log.txt)"}
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error") or "form failed"}, 200
+        _FORM_DONE[task_id] = (today, form, res.get("message", ""))
+        # the form's own close refreshed the cache; pull it in for the reload
+        if _refresh_lock.acquire(blocking=False):
+            threading.Thread(target=_run_refresh_subprocess, daemon=True).start()
+        return {"ok": True, "message": res.get("message", "")}, 200
+    finally:
+        with _FORM_LOCK:
+            _FORM_BUSY.discard(task_id)
 
 
 def _write_snooze(task_id: str, value) -> None:
@@ -1280,6 +1456,50 @@ def api_edit():
                      str(body.get("points") or ""),
                      str(body.get("desc") or ""))
     return jsonify(res), (200 if res.get("ok") else 400)
+
+def _opt_int(v):
+    """None, or a non-negative int (JSON bools are not ints here)."""
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise ValueError
+    return v
+
+@app.route("/api/split", methods=["POST"])
+def api_split():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "error": "no id"}), 400
+    try:
+        pts, minutes = _opt_int(body.get("pts")), _opt_int(body.get("minutes"))
+    except ValueError:
+        return jsonify({"ok": False, "error": "pts/minutes must be whole numbers"}), 400
+    if pts is None:
+        # split.sh cancels without pts (edit-form: "min done needs pts too")
+        return jsonify({"ok": False, "error": "split needs pts done"}), 400
+    keep = body.get("keep", True)
+    res = split_task(task_id, pts, minutes, " ".join(str(body.get("name") or "").split()),
+                     keep is not False)
+    return jsonify(res), (200 if res.get("ok") else 400)
+
+@app.route("/api/form", methods=["GET"])
+def api_form_get():
+    task_id = str(request.args.get("id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "form": None, "error": "no id"}), 400
+    return jsonify(form_get(task_id))
+
+@app.route("/api/form", methods=["POST"])
+def api_form_post():
+    body = request.get_json(force=True, silent=True) or {}
+    task_id = str(body.get("id") or "").strip()
+    form = str(body.get("form") or "").strip()
+    values = body.get("values")
+    if not task_id or not form or not isinstance(values, dict):
+        return jsonify({"ok": False, "error": "need id, form, values"}), 400
+    res, code = form_submit(task_id, form, values)
+    return jsonify(res), code
 
 @app.route("/")
 def index():
