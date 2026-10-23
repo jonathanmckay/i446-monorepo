@@ -41,7 +41,7 @@ final class JanusStore: ObservableObject {
         // today": yesterday's rows showed until the fetch landed).
         if let (j, at) = PayloadCache.load("janus") {
             let t = Parsers.timeline(j)
-            if t.date == PayloadCache.todayISO() { timeline = t; rows = t.rows; cachedAt = at }
+            if t.date == PayloadCache.todayISO() { timeline = t; rows = overlay(t.rows); cachedAt = at }
         }
         pending = outbox.count
     }
@@ -98,9 +98,18 @@ final class JanusStore: ObservableObject {
     /// Replay offline writes, then reload if any landed. Called on foreground,
     /// on network return (RootView's path monitor) and before every load.
     func flushOutbox() async {
+        // The timer still running from offline goes last: a live Toggl timer
+        // started at its real (offline) start time.
+        if NetWatch.shared.online, let i = localTimers.firstIndex(where: { $0.end == nil && !$0.queued }) {
+            let lt = localTimers[i]
+            outbox.enqueue(url: base + "/api/fill", body: Bodies.fill(desc: lt.desc, start: Self.hhmm(lt.start), end: "",
+                                                                     project: lt.project), label: "start \(lt.desc)")
+            localTimers[i].queued = true
+        }
         guard outbox.count > 0 else { return }
         let r = await outbox.flush(api)
         pending = outbox.count
+        if pending == 0 { localTimers = []; stoppedServer = [:] }
         if !r.rejected.isEmpty { toast.show("sync refused: " + r.rejected.joined(separator: "; ")) }
         else if r.sent > 0 { toast.show("synced \(r.sent) offline change\(r.sent == 1 ? "" : "s") ✓") }
     }
@@ -122,7 +131,7 @@ final class JanusStore: ObservableObject {
             let liteQ = ["lite=1", offsetQ].filter { !$0.isEmpty }.joined(separator: "&")
             if case .ok(let j) = await api.get(base + "/api/timeline?" + liteQ) {
                 if seq == loadSeq {
-                    let t = Parsers.timeline(j); timeline = t; rows = t.rows
+                    let t = Parsers.timeline(j); timeline = t; rows = overlay(t.rows)
                 }
             }
         }
@@ -132,7 +141,7 @@ final class JanusStore: ObservableObject {
             guard seq == loadSeq else { loading = false; return }
             loadedOnce = true; lastError = nil; loadedAt = Date()
             let t = Parsers.timeline(j)
-            timeline = t; rows = t.rows
+            timeline = t; rows = overlay(t.rows)
             // Only today's payload is restored on next launch (see init); never
             // cache a past-day view under the "janus" key.
             if t.isToday { PayloadCache.save("janus", j) }
@@ -147,8 +156,14 @@ final class JanusStore: ObservableObject {
         if r.isEvent {
             act("/api/convert-event", Bodies.convertEvent(r)) { d in
                 d.string("mode") == "logged" ? "+\(r.minutes)m → \(d.string("step", "neon")) ✓" : "tracking started ✓" }
+        } else if r.running && (r.isLocal || !NetWatch.shared.online) {
+            stopOffline(r)
         } else if r.running {
             act("/api/done-current", Bodies.doneCurrent(r)) { d in "stopped + logged → \(d.string("step", "neon")) ✓" }
+        } else if r.isLocal {
+            // Its Toggl entry doesn't exist yet; logging now and again after
+            // sync would credit twice.
+            toast.show("offline entry · log it once it syncs")
         } else if r.logged {
             toast.show("already logged")
         } else {
@@ -174,7 +189,9 @@ final class JanusStore: ObservableObject {
         busy = true
         Platform.haptic(.commit)
         Task {
-            let r = await Platform.keepAlive { await api.post(base + path, body) }
+            let r: ApiResult = NetWatch.shared.online
+                ? await Platform.keepAlive { await api.post(base + path, body) }
+                : .error("offline")   // known offline: queue now, don't wait on a timeout
             busy = false
             switch r {
             case .ok(let j): Platform.haptic(.success); toast.show(toastText(j)); await load()
@@ -219,10 +236,17 @@ final class JanusStore: ObservableObject {
     func run(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
+        // Offline, a plain "start something" command becomes a local timer.
+        if !NetWatch.shared.online, let (desc, at) = Self.parseStart(t, now: Date()) {
+            startOffline(desc: desc, project: "", at: at); return
+        }
         act("/api/run", ["text": t], offline: t, queuedBody: ["text": Self.pinStart(t, now: Date())]) { d in d.string("msg", "ok ✓") }
     }
 
     func fill(desc: String, start: String, end: String, project: String = "") {
+        if !NetWatch.shared.online && end.isEmpty {
+            startOffline(desc: desc, project: project, at: Self.todayAt(start) ?? Date()); return
+        }
         // A closed range is replay-safe; an ongoing start-now is not (its
         // start is fixed in the body, but a duplicate would start twice).
         act("/api/fill", Bodies.fill(desc: desc, start: start, end: end, project: project),
@@ -241,6 +265,7 @@ final class JanusStore: ObservableObject {
     /// running entry. Tags aren't carried (fill has no tags field), matching
     /// the existing fill / start-now behaviour.
     func resume(_ r: TimelineRow) {
+        if !NetWatch.shared.online { startOffline(desc: r.desc, project: r.project, at: Date()); return }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let now = f.string(from: Date())
         act("/api/fill", Bodies.fill(desc: r.desc, start: now, end: "", project: r.project)) { _ in
@@ -253,5 +278,119 @@ final class JanusStore: ObservableObject {
     func projectCodes() async -> [String] {
         if case .ok(let j) = await api.get(base + "/api/projects") { return Parsers.projectCodes(j) }
         return []
+    }
+}
+
+// ── offline timers (2026-10-22 /bug: "when offline you should continue the
+// time that was on, then allow me to create new timers as needed, then sync
+// back up once online") ─────────────────────────────────────────────────────
+// The running timer keeps ticking on screen (its row and the timer card read
+// the start time, not the network). A timer started offline closes whatever
+// was running at that moment: a server entry gets a queued /api/edit setting
+// its end, a local one a queued closed /api/fill. The one still open when the
+// network returns is sent last as an open /api/fill (a live Toggl timer from
+// its real start). Everything persists, so a relaunch on the plane keeps it.
+// Points: stopping offline only stops; swipe the synced entry to log 分.
+extension JanusStore {
+    struct LocalTimer: Codable {
+        var id: String
+        var desc: String
+        var project: String
+        var start: Date
+        var end: Date? = nil
+        var queued = false
+    }
+    private static let timersKey = "janus.localTimers"
+    private static let stoppedKey = "janus.stoppedServer"
+
+    var localTimers: [LocalTimer] {
+        get { UserDefaults.standard.data(forKey: Self.timersKey).flatMap { try? JSONDecoder().decode([LocalTimer].self, from: $0) } ?? [] }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.timersKey) }
+    }
+    /// Server entries stopped offline: id → "HH:MM" end.
+    var stoppedServer: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: Self.stoppedKey) as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.stoppedKey) }
+    }
+
+    static func hhmm(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: d) }
+    static func todayAt(_ hhmm: String) -> Date? {
+        let p = hhmm.replacingOccurrences(of: ":", with: "")
+        guard p.count == 4, let h = Int(p.prefix(2)), let m = Int(p.suffix(2)), h < 24, m < 60 else { return nil }
+        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: Date())
+    }
+
+    /// "coffee @epcn" → (desc, now); "1840 coffee" → (desc, 18:40). nil for
+    /// anything else (ranges, +N, /d, batches): those queue as typed.
+    static func parseStart(_ t: String, now: Date) -> (String, Date)? {
+        if t.hasPrefix("/") || t.hasPrefix("+") || t.contains(",") || t.contains("，") { return nil }
+        if t.range(of: #"\b\d{4}-\d{4}\b"#, options: .regularExpression) != nil { return nil }
+        let parts = t.split(separator: " ", maxSplits: 1).map(String.init)
+        if parts.count == 2, parts[0].count == 4, let at = todayAt(parts[0]) { return (parts[1], at) }
+        return (t, now)
+    }
+
+    func startOffline(desc: String, project: String, at start: Date) {
+        closeRunning(at: start)
+        var ts = localTimers
+        ts.append(LocalTimer(id: "local-" + UUID().uuidString, desc: desc, project: project, start: start))
+        localTimers = ts
+        rowsChangedOffline("▶ \(desc) · offline, syncs when back online")
+    }
+
+    func stopOffline(_ r: TimelineRow) {
+        closeRunning(at: Date())
+        rowsChangedOffline("■ stopped offline · swipe to log 分 once synced")
+    }
+
+    /// End whatever is running at `t`: the open local timer (queue its closed
+    /// fill) or the server's running entry (queue an edit with its end).
+    private func closeRunning(at t: Date) {
+        var ts = localTimers
+        if let i = ts.lastIndex(where: { $0.end == nil }) {
+            ts[i].end = t
+            let lt = ts[i]
+            if t.timeIntervalSince(lt.start) >= 60 {
+                enqueueOffline("/api/fill", Bodies.fill(desc: lt.desc, start: Self.hhmm(lt.start), end: Self.hhmm(t),
+                                                        project: lt.project), label: "fill \(lt.desc)")
+            }
+            localTimers = ts
+        } else if let r = rows.first(where: { $0.running && !$0.isLocal }) {
+            enqueueOffline("/api/edit", Bodies.edit(id: r.id, desc: r.desc, start: r.start, end: Self.hhmm(t),
+                                                    project: r.project), label: "stop \(r.desc)")
+            var s = stoppedServer; s[r.id] = Self.hhmm(t); stoppedServer = s
+        }
+    }
+
+    private func enqueueOffline(_ path: String, _ body: [String: Any], label: String) {
+        outbox.enqueue(url: base + path, body: body, label: label)
+        pending = outbox.count
+    }
+
+    private func rowsChangedOffline(_ msg: String) {
+        rows = overlay((timeline?.rows ?? rows).filter { !$0.isLocal })
+        Platform.haptic(.success)
+        toast.show(msg)
+    }
+
+    /// Server rows with offline edits applied, plus the local timers.
+    func overlay(_ server: [TimelineRow]) -> [TimelineRow] {
+        let stopped = stoppedServer
+        let locals = localTimers
+        guard !stopped.isEmpty || !locals.isEmpty else { return server }
+        var out = server.map { r -> TimelineRow in
+            guard let end = stopped[r.id], r.running else { return r }
+            var y = r; y.running = false; y.end = end; return y
+        }
+        for lt in locals {
+            var r = TimelineRow(type: "entry")
+            r.id = lt.id; r.desc = "⇡ " + lt.desc; r.project = lt.project
+            r.start = Self.hhmm(lt.start)
+            r.end = lt.end.map(Self.hhmm) ?? "now"
+            r.running = lt.end == nil
+            r.minutes = Int(((lt.end ?? Date()).timeIntervalSince(lt.start)) / 60)
+            out.append(r)
+        }
+        return out
     }
 }

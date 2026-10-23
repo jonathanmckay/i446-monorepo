@@ -19,9 +19,13 @@ public final class Outbox {
         public let body: Data
         public let label: String
         public let at: Date
+        /// Caller's handle on the write (e.g. a local task id), returned by
+        /// flush once the item lands so the UI can retire its local copy.
+        public var ref: String? = nil
     }
 
     private let key: String
+    private var flushing = false
     public init(_ name: String) { key = "outbox." + name }
 
     public var items: [Item] {
@@ -35,10 +39,14 @@ public final class Outbox {
         if let d = try? JSONEncoder().encode(v) { UserDefaults.standard.set(d, forKey: key) }
     }
 
-    public func enqueue(url: String, body: [String: Any], label: String) {
+    public func enqueue(url: String, body: [String: Any], label: String, ref: String? = nil) {
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
-        save(items + [Item(id: UUID(), url: url, body: data, label: label, at: Date())])
+        save(items + [Item(id: UUID(), url: url, body: data, label: label, at: Date(), ref: ref)])
     }
+
+    /// Drop queued items carrying `ref` (a local-only thing the user undid).
+    public func remove(ref: String) { save(items.filter { $0.ref != ref }) }
+    public func has(ref: String) -> Bool { items.contains { $0.ref == ref } }
 
     public func clear() { UserDefaults.standard.removeObject(forKey: key) }
 
@@ -50,22 +58,30 @@ public final class Outbox {
     /// Replay in order. Stops at the first still-offline item (keeps it and
     /// everything after); a server-side rejection drops that item and reports
     /// it, since retrying a refused write forever would wedge the queue.
-    /// Returns (sent, rejected "label: error" lines).
-    public func flush(_ api: Api) async -> (sent: Int, rejected: [String]) {
+    /// Returns (sent, rejected "label: error" lines, refs of items that landed).
+    @discardableResult
+    public func flush(_ api: Api) async -> (sent: Int, rejected: [String], refs: [String]) {
+        // One flush at a time per queue: reconnect + foreground + load can all
+        // fire together, and two concurrent replays would double-send.
+        guard !flushing else { return (0, [], []) }
+        flushing = true
+        defer { flushing = false }
         var queue = items
         var sent = 0
         var rejected: [String] = []
+        var refs: [String] = []
         while let it = queue.first {
             let body = (try? JSONSerialization.jsonObject(with: it.body)) as? [String: Any] ?? [:]
             switch await api.post(it.url, body) {
             case .ok: sent += 1
             case .error(let m):
-                if Outbox.isOffline(m) || m == "timed out" { save(queue); return (sent, rejected) }
+                if Outbox.isOffline(m) || m == "timed out" { save(queue); return (sent, rejected, refs) }
                 rejected.append("\(it.label): \(m)")
             }
+            if let r = it.ref { refs.append(r) }
             queue.removeFirst()
             save(queue)
         }
-        return (sent, rejected)
+        return (sent, rejected, refs)
     }
 }

@@ -56,6 +56,10 @@ import Network
 /// land without the user doing anything.
 @MainActor
 final class NetWatch: ObservableObject {
+    /// One monitor for the app; stores read `online` to skip a doomed request
+    /// and queue at once (a request on a dead path can hang until timeout,
+    /// and a timeout is never queued — 2026-10-22 offline-add bug).
+    static let shared = NetWatch()
     @Published private(set) var online = true
     #if canImport(Network)
     private let monitor = NWPathMonitor()

@@ -11,7 +11,7 @@ struct RootView: View {
     @ObservedObject private var toaster = Toaster.shared
     @State private var showSettings = false
     @Environment(\.scenePhase) private var phase
-    @StateObject private var net = NetWatch()
+    @ObservedObject private var net = NetWatch.shared
 
     #if APP_DTD
     @StateObject private var dtd = DtdStore()

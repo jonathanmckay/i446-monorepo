@@ -31,6 +31,49 @@ final class DtdStore: ObservableObject {
             tasks = DtdTask.visible(Parsers.tasks(j)); summary = Parsers.summary(j); cachedAt = at
         }
         pending = outbox.count
+        tasks = overlay(tasks)
+    }
+
+    // ── offline overlay (2026-10-22 /bug: "created new tasks while offline,
+    // and they didn't stick") ──────────────────────────────────────────────
+    // What the phone did offline must show on screen until it syncs, across
+    // reloads and relaunches: tasks added offline are drawn from a local list,
+    // and tasks completed/delayed offline stay hidden while their write sits
+    // in the outbox. Outbox refs: "add:<local id>" for an add, "hide:<id>"
+    // for a done/delay.
+    private static let localKey = "dtd.localTasks"
+    private struct LocalTask: Codable { let id: String; let raw: String }
+    private var localTasks: [LocalTask] {
+        get { (UserDefaults.standard.data(forKey: Self.localKey)).flatMap { try? JSONDecoder().decode([LocalTask].self, from: $0) } ?? [] }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.localKey) }
+    }
+
+    private func overlay(_ list: [DtdTask]) -> [DtdTask] {
+        // Retire local tasks whose add has landed (the server list now has them).
+        localTasks = localTasks.filter { outbox.has(ref: "add:" + $0.id) }
+        let shown = list.filter { !outbox.has(ref: "hide:" + $0.id) }
+        let locals = localTasks.filter { !outbox.has(ref: "hide:" + $0.id) }.map(Self.localRow)
+        return shown + locals
+    }
+
+    /// A task typed offline, drawn like any other row ("⇡" marks it unsynced).
+    private static func localRow(_ l: LocalTask) -> DtdTask {
+        let code = l.raw.range(of: #"@(\w+)"#, options: .regularExpression).map { String(l.raw[$0].dropFirst()) } ?? ""
+        let pts = l.raw.range(of: #"\[(\d+)\]"#, options: .regularExpression).flatMap { Int(l.raw[$0].dropFirst().dropLast()) }
+        var title = l.raw
+        for pat in [#"\s*\(\d+\)"#, #"\s*\[\d+\]"#, #"\s*\{\d+\}"#, #"\s*@\w+"#] {
+            title = title.replacingOccurrences(of: pat, with: "", options: .regularExpression)
+        }
+        return DtdTask(id: l.id, raw: l.raw, title: "⇡ " + title.trimmingCharacters(in: .whitespaces),
+                       est: DtdTask.resolveEst(serverEst: nil, raw: l.raw, domain: code), points: pts,
+                       color: "#e6e6e0", domain: code, recurring: false, variablePrompt: false)
+    }
+
+    /// POST unless the phone knows it's offline, in which case answer
+    /// "offline" at once so the caller queues instead of waiting on a timeout.
+    private func send(_ path: String, _ body: [String: Any]) async -> ApiResult {
+        guard NetWatch.shared.online else { return .error("offline") }
+        return await Platform.keepAlive { await api.post(base + path, body) }
     }
 
     var title: String {
@@ -88,15 +131,17 @@ final class DtdStore: ObservableObject {
         guard outbox.count > 0 else { return }
         let r = await outbox.flush(api)
         pending = outbox.count
+        if !r.refs.isEmpty { tasks = overlay(tasks) }
         if !r.rejected.isEmpty { toast.show("sync refused: " + r.rejected.joined(separator: "; ")) }
         else if r.sent > 0 { toast.show("synced \(r.sent) offline change\(r.sent == 1 ? "" : "s") ✓") }
     }
 
     /// Offline: keep the write for replay and leave the optimistic UI as is.
     /// Returns false (caller rolls back) for any other failure.
-    private func queueIfOffline(_ m: String, path: String, body: [String: Any], label: String) -> Bool {
+    private func queueIfOffline(_ m: String, path: String, body: [String: Any], label: String,
+                                ref: String? = nil) -> Bool {
         guard Outbox.isOffline(m) else { return false }
-        outbox.enqueue(url: base + path, body: body, label: label)
+        outbox.enqueue(url: base + path, body: body, label: label, ref: ref)
         pending = outbox.count
         toast.show("offline · queued ⇡\(pending), syncs when back online")
         return true
@@ -114,7 +159,7 @@ final class DtdStore: ObservableObject {
             // Hide tasks deferred to later today (scheduledTime still in the
             // future, same day) before ordering — they reappear once their time
             // passes on the next refresh. Bug 2026-10-22: these leaked through.
-            tasks = activeFirst(DtdTask.visible(Parsers.tasks(j)))
+            tasks = overlay(activeFirst(DtdTask.visible(Parsers.tasks(j))))
             summary = Parsers.summary(j)
             PayloadCache.save("dtd", j)
             // A task that went active since the last load (e.g. claimed from
@@ -136,9 +181,12 @@ final class DtdStore: ObservableObject {
         summary.points += t.points ?? 0
         summary.done += 1
         Platform.haptic(.commit)
-        let body = Bodies.done(t, value: value)
+        // A task added offline has no Todoist id yet: complete it by content
+        // (did-fast matches the task its queued add creates just before).
+        var body = Bodies.done(t, value: value)
+        if t.isLocal { body.removeValue(forKey: "id"); body["content"] = t.raw }
         Task {
-            let r = await Platform.keepAlive { await api.post(base + "/api/done", body) }
+            let r = await send("/api/done", body)
             inFlight.remove(t.id)
             switch r {
             case .ok(let j):
@@ -148,7 +196,8 @@ final class DtdStore: ObservableObject {
                     : j.bool("future_skipped") ? "+\(pts) 分 · recurring"
                     : "+\(pts) 分"
                 toast.show(msg)
-            case .error(let m) where queueIfOffline(m, path: "/api/done", body: body, label: "done \(t.title)"):
+            case .error(let m) where queueIfOffline(m, path: "/api/done", body: body, label: "done \(t.title)",
+                                                     ref: "hide:" + t.id):
                 break
             case .error(let m):
                 summary.points -= t.points ?? 0
@@ -173,6 +222,7 @@ final class DtdStore: ObservableObject {
     /// ▶ is cleared), and scroll the list up so the now-active row is visible.
     /// A failure reloads to let the server's truth reassert the order.
     func start(_ t: DtdTask) {
+        guard !t.isLocal else { toast.show("added offline: start it once it syncs"); return }
         Platform.haptic(.commit)   // medium impact the instant the timer starts
         promoteToTop(t, running: true)
         Task {
@@ -232,15 +282,17 @@ final class DtdStore: ObservableObject {
     /// Delays hide the task until its delayed time, so the row leaves like a
     /// completion does (web: "delaying a day/block hides the task").
     private func delay(_ t: DtdTask, path: String, body: [String: Any], toastText: @escaping (JSON) -> String) {
+        guard !t.isLocal else { toast.show("added offline: delay it once it syncs"); return }
         guard let pos = index(of: t), !inFlight.contains(t.id) else { return }
         inFlight.insert(t.id)
         removeRow(at: pos)
         Task {
-            let r = await api.post(base + path, body)
+            let r = await send(path, body)
             inFlight.remove(t.id)
             switch r {
             case .ok(let j): toast.show(toastText(j))
-            case .error(let m) where queueIfOffline(m, path: path, body: body, label: "delay \(t.title)"):
+            case .error(let m) where queueIfOffline(m, path: path, body: body, label: "delay \(t.title)",
+                                                     ref: "hide:" + t.id):
                 break
             case .error(let m):
                 restoreRow(t, at: pos)
@@ -260,10 +312,15 @@ final class DtdStore: ObservableObject {
         let c = content.trimmingCharacters(in: .whitespaces)
         guard !c.isEmpty else { return }
         Task {
-            switch await api.post(base + "/api/add", Bodies.add(c)) {
+            switch await send("/api/add", Bodies.add(c)) {
             case .ok: toast.show("+ added"); await load(refresh: true)
-            case .error(let m) where queueIfOffline(m, path: "/api/add", body: Bodies.add(c), label: "add \(c)"):
-                break
+            case .error(let m) where Outbox.isOffline(m):
+                // Draw it now, sync it later: the row is usable at once
+                // (complete works; start/delay wait for the real id).
+                let l = LocalTask(id: "local-" + UUID().uuidString, raw: c)
+                localTasks.append(l)
+                _ = queueIfOffline(m, path: "/api/add", body: Bodies.add(c), label: "add \(c)", ref: "add:" + l.id)
+                tasks.append(Self.localRow(l))
             case .error(let m): toast.show("not added: \(m)")
             }
         }

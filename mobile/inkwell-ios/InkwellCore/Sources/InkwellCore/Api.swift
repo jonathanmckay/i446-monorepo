@@ -11,8 +11,9 @@ public enum ApiResult {
 public final class Api {
     private let session: URLSession
 
-    public init() {
-        let cfg = URLSessionConfiguration.ephemeral
+    /// Tests inject a configuration whose protocolClasses stub the network.
+    public init(configuration: URLSessionConfiguration? = nil) {
+        let cfg = configuration ?? URLSessionConfiguration.ephemeral
         // /api/done and /api/log run did-fast.py (Todoist + Neon over ssh) —
         // several seconds on a good day. Reads must outlast that.
         cfg.timeoutIntervalForRequest = 45

@@ -9,7 +9,7 @@ user-invocable: true
 ## Parse
 
 - `/claim off` (or `release`) → release, then stop. `/claim done` → mark done (✅, below), then stop.
-- Otherwise split on the FIRST `:` → `<task query>` and an optional `<request>`.
+- Otherwise split the FIRST LINE on its first `:` → `<task query>` and an optional `<request>` (later lines are request too).
   No colon: the whole argument is the task query and there is no request.
 
 ## Run
