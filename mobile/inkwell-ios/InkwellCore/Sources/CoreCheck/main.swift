@@ -317,6 +317,7 @@ do {
 // refuses every request (no connection), then accepts and records them.
 final class StubNet: URLProtocol {
     static var online = false
+    static var timeoutPaths: Set<String> = []   // reached server, then timed out
     static var seen: [(path: String, body: [String: Any])] = []
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -333,6 +334,10 @@ final class StubNet: URLProtocol {
         }
         let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         StubNet.seen.append((request.url?.path ?? "", body))
+        if StubNet.timeoutPaths.contains(request.url?.path ?? "") {
+            client?.urlProtocol(self, didFailWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
+            return
+        }
         let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
         let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"# : #"{"ok":true}"#
@@ -377,6 +382,32 @@ do {
     eq(StubNet.seen[1].body["id"] as? String, "T1", "offline done keeps its task id")
     eq(StubNet.seen[2].body["id"] as? String, "NEW9", "local task's done gets the id its add returned")
     eq(onlineRun.refs, ["add:local-1", "hide:T1", "hide:local-1"], "refs returned so the UI retires local rows")
+    ob.clear()
+}
+
+
+// A replay that times out may already have landed on Ix: it must NOT stay
+// queued (the next flush would double a /api/fill Toggl entry or a /api/log
+// 分 credit). Dropped and reported; later items still go out.
+do {
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.protocolClasses = [StubNet.self]
+    let api = Api(configuration: cfg)
+    let ob = Outbox("corecheck-timeout"); ob.clear()
+    StubNet.seen = []; StubNet.online = true; StubNet.timeoutPaths = ["/api/fill"]
+    ob.enqueue(url: "http://ix/api/fill", body: ["desc": "standup"], label: "fill standup")
+    ob.enqueue(url: "http://ix/api/done", body: ["id": "T2"], label: "done T2")
+    let sema = DispatchSemaphore(value: 0)
+    var first: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    var second: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    Task { first = await ob.flush(api); second = await ob.flush(api); sema.signal() }
+    sema.wait()
+    StubNet.timeoutPaths = []
+    eq(first.sent, 1, "timeout: the later item still lands")
+    eq(first.rejected.count, 1, "timeout reported, not silent")
+    eq(ob.count, 0, "timed-out write not kept for replay")
+    eq(second.sent, 0, "second flush re-sends nothing")
+    eq(StubNet.seen.filter { $0.path == "/api/fill" }.count, 1, "fill reached Ix exactly once")
     ob.clear()
 }
 

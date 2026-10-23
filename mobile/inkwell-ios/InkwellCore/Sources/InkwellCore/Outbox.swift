@@ -57,7 +57,8 @@ public final class Outbox {
 
     /// Replay in order. Stops at the first still-offline item (keeps it and
     /// everything after); a server-side rejection drops that item and reports
-    /// it, since retrying a refused write forever would wedge the queue.
+    /// it, since retrying a refused write forever would wedge the queue. A
+    /// timeout also drops-and-reports (it may have landed; see below).
     /// Returns (sent, rejected "label: error" lines, refs of items that landed).
     @discardableResult
     public func flush(_ api: Api) async -> (sent: Int, rejected: [String], refs: [String]) {
@@ -85,8 +86,15 @@ public final class Outbox {
                 sent += 1
                 if let r = it.ref { ids[r] = j.string("id") }
             case .error(let m):
-                if Outbox.isOffline(m) || m == "timed out" { save(queue); return (sent, rejected, refs) }
-                rejected.append("\(it.label): \(m)")
+                if Outbox.isOffline(m) { save(queue); return (sent, rejected, refs) }
+                // A replay that TIMES OUT may have reached Ix (did-fast runs
+                // 10–45 s; the request timeout is 45 s). Keeping it for the
+                // next flush would re-send /api/fill or /api/log and double the
+                // Toggl entry or the 分 — the same reason enqueue never queues
+                // a timeout. At-most-once: drop it and say so, loudly.
+                rejected.append(m == "timed out"
+                                ? "\(it.label): timed out, may have landed — check, not retried"
+                                : "\(it.label): \(m)")
             }
             if let r = it.ref { refs.append(r) }
             queue.removeFirst()
