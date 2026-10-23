@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "500分": {
-      "todoist_id": "6hq4Pm3grVV5FX22",
-      "minutes": 50
-    },
-    "below 50 by eod": {
-      "todoist_id": "6hq4PmCC72hjRMWR",
-      "minutes": 60
-    }
-  },
-  "last_sync": "2026-10-22T16:00:01.244736-07:00"
+  "tasks": {},
+  "last_sync": "2026-10-22T18:00:01.493530-07:00"
 }
