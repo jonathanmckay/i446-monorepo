@@ -1767,6 +1767,14 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                 domain_label = var_parts[1]
                 fen_col = LABEL_TO_0FEN[var_parts[1]]
                 item.points_override = int(var_parts[0])
+            elif item.curly_points and item.points_override == item.curly_points:
+                # Only a {N} 0g bonus, no [N] and no domain (2026-10-23: a dtd
+                # ctrl-p split of a 0g goal sends just `name {N}`; it fell to
+                # needs_agent and the bonus never reached 0分!Q). The bonus
+                # needs no domain: route with no column and let the {N} →
+                # Q append below credit it.
+                results.append(RouteResult(item=item, step="variable"))
+                continue
             else:
                 r = RouteResult(item=item, step="needs_agent",
                                 error="no match, needs domain disambiguation")
