@@ -2257,6 +2257,7 @@ def _float(tier):
 # tab has the task (2026-10-21); blank when cs hasn't numbered the session.
 _agent_ids = set()
 _claim_ids = set()
+_done_ids = set()
 _claim_pane = {}
 try:
     _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
@@ -2264,6 +2265,7 @@ try:
     _claims = _ac.load()
     _agent_ids = {i for i, r in _claims.items() if r['working']}
     _claim_ids = set(_claims.keys())
+    _done_ids = {i for i, r in _claims.items() if r.get('done')}
     _claim_pane = {i: str(r['pane']) for i, r in _claims.items() if r.get('pane') is not None}
 except Exception:
     pass
@@ -2618,6 +2620,10 @@ for t in unique:
             _rest = '🧮 ' + _rest
         prefix = _agent_frame + ' ' + _pane + '😈 ' + _rest
         color = AGENT_GREY
+    elif str(t.get('id', '')) in _done_ids:
+        # Agent thinks it's finished (2026-10-22): ✅ on the far left, still
+        # in the claimed tier until JM completes it with ⌥↵.
+        prefix = '✅ ' + prefix
     elif is_claimed:
         prefix = '🧮 ' + _pane + '🕐 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so
