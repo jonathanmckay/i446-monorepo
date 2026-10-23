@@ -82,6 +82,20 @@ def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
             os.close(fd)
     except OSError:
         pass  # marker is a display nicety; never fail the defer over it
+    # Synced mirror (2026-10-22): the marker above is host-local, so a habit
+    # deferred in desktop dtd kept showing on the phone (dtd.py on Ix reads
+    # its own ~/.cache/jm). Append the id to a per-host copy in the vault
+    # z_ibx, which Syncthing carries to every host; dtd.py unions them all.
+    try:
+        import socket
+        host = re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
+        m = (Path.home() / "vault/z_ibx"
+             / f"habits-deferred-{host}-{date.today().isoformat()}.ids")
+        if m.parent.is_dir():
+            with open(m, "a") as f:
+                f.write(f"{task_id}\n")
+    except OSError:
+        pass
 
 WEEKDAYS = {
     "monday": 0, "mon": 0,

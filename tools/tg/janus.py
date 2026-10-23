@@ -71,6 +71,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
 import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
+from neon.rates import speedy_meeting_points  # noqa: E402  25m→30 / 50m→60 meetings
 import outlook_client  # noqa: E402
 from blocks import is_future_block  # noqa: E402  shared future-block gate
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
@@ -5822,6 +5823,38 @@ def _event_to_tg_command(ev: dict, now: dt.datetime) -> str:
     return f"{title}{suffix}"
 
 
+def _hhmm_span_min(start: dt.datetime, end: dt.datetime) -> int:
+    """Minutes between two clock times exactly as did-fast reads the
+    HHMM-HHMM range it is handed (seconds dropped, wraps past midnight)."""
+    return ((end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)) % 1440
+
+
+def _speedy_meeting_tag(desc: str, start: dt.datetime, end: dt.datetime,
+                        is_meeting: bool | None = None) -> str:
+    """Suffix ' [30]' / ' [60]' when a MEETING's HHMM span is a speedy-meeting
+    length (25 / 50 — Outlook ends them 5 min early), else "". 2026-10-22,
+    JM: "logging a 25m meeting should be marked as worth 30". A meeting is a
+    calendar event (callers pass is_meeting=True) or an entry whose title
+    matches an overlapping calendar event (same test _calendar_fallback_code
+    uses). Never overrides a value that already resolves ([N] inline or a
+    dtd task's own [N]), so habits/tasks keep their crediting."""
+    pts = speedy_meeting_points(_hhmm_span_min(start, end))
+    if pts is None or _resolvable_points(desc) is not None:
+        return ""
+    if is_meeting is None:
+        is_meeting = _matches_calendar_event(desc, start, end)
+    return f" [{pts}]" if is_meeting else ""
+
+
+def _matches_calendar_event(desc: str, start: dt.datetime, end: dt.datetime) -> bool:
+    desc_l = (desc or "").strip().lower()
+    return bool(desc_l) and any(
+        (ev.get("title") or "").strip().lower() == desc_l
+        and ev.get("start_dt") is not None and ev.get("end_dt") is not None
+        and ev["start_dt"] < end and ev["end_dt"] > start
+        for ev in STATE.events)
+
+
 def _event_to_did_command(ev: dict) -> str:
     """The /did-style time-range command that backfills an ALREADY-ENDED
     calendar event as a completed Toggl entry AND grants its points in one
@@ -5835,7 +5868,9 @@ def _event_to_did_command(ev: dict) -> str:
     title = _safe_event_title(ev.get("title"))
     code = gcal_project_code(ev)
     suffix = f" @{code}" if code else ""
-    return f"{title} {ev['start_dt']:%H%M}-{ev['end_dt']:%H%M}{suffix}"
+    # A 25/50-min speedy meeting credits its 30/60 slot (2026-10-22).
+    pts = _speedy_meeting_tag(title, ev["start_dt"], ev["end_dt"], is_meeting=True)
+    return f"{title} {ev['start_dt']:%H%M}-{ev['end_dt']:%H%M}{suffix}{pts}"
 
 
 def _enqueue_work(app, label: str, job, key: str | None = None) -> bool:
@@ -6101,7 +6136,7 @@ def _finalize_recording_cmd(now: dt.datetime) -> str | None:
     cmd = f"{desc} {start:%H%M}-{now:%H%M}"
     if code:
         cmd += f" @{code}"
-    return cmd
+    return cmd + _speedy_meeting_tag(desc, start, now, is_meeting=True)
 
 
 async def _finalize_recording(app) -> None:
@@ -6156,6 +6191,13 @@ def _run_current_timer_done(app) -> None:
         flash("timer just started — give it a minute before /done", 3.0)
         return
     code = toggl_project_code(cur.get("project_id"), cur.get("description"))
+    speedy = _speedy_meeting_tag(raw_desc, start, now)
+    if speedy:
+        # A 25/50-min meeting needs no prompt: it's worth its 30/60 slot.
+        cmd = f"{raw_desc} {start:%H%M}-{now:%H%M}" + (f" @{code}" if code else "") + speedy
+        STATE.event_sel = None
+        _run_done_command(app, cmd)
+        return
     if _resolvable_points(raw_desc) is None:
         # Neither an inline [N] nor a matching Todoist task carries a points
         # value — did-fast would silently default to 0. janus is the
@@ -6933,6 +6975,7 @@ def _(event):
     cmd = f"{desc} {start:%H%M}-{end:%H%M}"
     if code:
         cmd += f" @{code}"
+    cmd += _speedy_meeting_tag(desc, start, end)  # 25m meeting → [30] (2026-10-22)
     cmd += date_sfx
     # Habit TAGS on the Toggl entry (其他人, 冥想, …) ride along as extra
     # comma-separated /did items so both ledgers get the minutes (user

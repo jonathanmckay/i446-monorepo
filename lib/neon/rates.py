@@ -44,3 +44,27 @@ def zero_n_points(habit: str, minutes: float) -> int | None:
     """分 Neon credits for `minutes` of a multiplied 0n habit, else None."""
     mult = ZERO_N_MULTIPLIERS.get((habit or "").strip().lower())
     return None if mult is None else int(round(mult * minutes))
+
+
+# Outlook "speedy meetings" end 5 min early, so a 30-min slot shows as 25 and
+# a 60-min slot as 50. A MEETING logged at exactly those lengths is credited
+# the slot's value (JM 2026-10-22: "logging a 25m meeting should be marked as
+# worth 30"). Only these two lengths, and only for meetings — callers decide
+# what counts as one (a calendar event, or an entry titled like one) and pass
+# the result to did-fast as an explicit [N]; habits/tasks never come here.
+SPEEDY_MEETING_POINTS: dict[int, int] = {25: 30, 50: 60}
+
+
+def speedy_meeting_points(minutes) -> int | None:
+    """Points for a meeting of `minutes` when it's a speedy-meeting length
+    (25 → 30, 50 → 60), else None (credit stays minutes as before)."""
+    try:
+        return SPEEDY_MEETING_POINTS.get(int(minutes))
+    except (TypeError, ValueError):
+        return None
+
+
+def meeting_points(minutes) -> int:
+    """What a logged meeting of `minutes` is worth: the speedy-meeting value
+    when it applies, else the minutes themselves."""
+    return speedy_meeting_points(minutes) or int(minutes or 0)

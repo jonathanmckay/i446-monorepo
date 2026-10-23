@@ -70,6 +70,7 @@ from flask import Flask, jsonify, render_template_string, request  # noqa: E402
 
 from mcp.toggl_server import toggl_api  # noqa: E402
 from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
+from neon.rates import meeting_points, speedy_meeting_points  # noqa: E402
 
 # Calendar clients (2026-08-14): both self-contained (gcal_client reads OAuth
 # tokens straight off disk, no MCP server needed at runtime; outlook_client
@@ -555,7 +556,46 @@ def _fetch_events_today(entries: list[dict], day: _dt.date | None = None) -> lis
     today = day or _dt.datetime.now(_tz()).date()
     day_start = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     day_end = day_start + _dt.timedelta(days=1)
-    return _filter_events(_fetch_calendar_raw(day_start, day_end), entries)
+    raw = _fetch_calendar_raw(day_start, day_end)
+    # Remember the day's meeting titles BEFORE tracked ones are filtered out:
+    # an entry titled like one is a meeting for the speedy-meeting rule.
+    _MEETING_TITLES[today] = {_norm_meeting_title(ev.get("title") or "")
+                              for ev in raw if not ev.get("all_day")
+                              and ev.get("transparency") != "transparent"} - {""}
+    return _filter_events(raw, entries)
+
+
+# {day: normalized calendar-event titles} from the last full timeline fetch
+# (2026-10-22). log_entry/done_current only get a description, and re-fetching
+# both calendars per swipe would cost up to CAL_FETCH_TIMEOUT_SEC; the phone
+# always loads the timeline before it can swipe, so this is already warm.
+_MEETING_TITLES: dict = {}
+
+
+def _is_meeting(desc: str, day: _dt.date | None = None) -> bool:
+    day = day or _dt.datetime.now(_tz()).date()
+    t = _norm_meeting_title(desc or "")
+    return bool(t) and t in _MEETING_TITLES.get(day, set())
+
+
+def _speedy_meeting_pts(desc: str, minutes, is_meeting: bool | None = None,
+                        day: _dt.date | None = None) -> int | None:
+    """30 / 60 for a 25 / 50-min MEETING (Outlook speedy meetings end 5 min
+    early; JM 2026-10-22: "logging a 25m meeting should be marked as worth
+    30"), else None. The rule itself is lib/neon/rates.py, shared with the
+    CLI; this only decides "is it a meeting": a calendar event (callers pass
+    is_meeting=True) or an entry titled like one of the day's events."""
+    pts = speedy_meeting_points(minutes)
+    if pts is None:
+        return None
+    if is_meeting is None:
+        is_meeting = _is_meeting(desc, day)
+    return pts if is_meeting else None
+
+
+def _hhmm_span_min(start: _dt.datetime, end: _dt.datetime) -> int:
+    """Minutes as did-fast reads the HHMM-HHMM range it is handed."""
+    return ((end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)) % 1440
 
 
 def _split_gaps_around_events(gaps: list[dict], events: list[dict]) -> list[dict]:
@@ -758,6 +798,14 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
                          # than always implying "minutes = points".
                          "points": _resolvable_points(e["desc"], known_habits),
                          "rate_points": _habit_rate_points(e["desc"], mins)})
+            # What a swipe-log would credit, speedy-meeting rounding included
+            # (2026-10-22): resolved [N] > habit rate > 25→30/50→60 meeting >
+            # minutes. None once logged.
+            r = rows[-1]
+            r["preview_points"] = None if r["logged"] else next(
+                v for v in (r["points"], r["rate_points"],
+                            _speedy_meeting_pts(e["desc"], mins, day=today), mins)
+                if v is not None)
         else:  # event
             ev = it["data"]
             mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
@@ -766,7 +814,10 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
                          "end": hhmm(ev["end_dt"]), "minutes": mins,
                          "is_past": ev["is_past"], "started": ev["started"],
                          "start_iso": ev["start_dt"].isoformat(),
-                         "end_iso": ev["end_dt"].isoformat()})
+                         "end_iso": ev["end_dt"].isoformat(),
+                         # convert_event's credit: 25m → 30, 50m → 60 (2026-10-22)
+                         "preview_points": _resolvable_points(ev["title"], known_habits)
+                         or meeting_points(mins)})
     emit_dividers_before(edge)
 
     # Σ points for the header (same source as mobile dtd: 0分 col D on Ix).
@@ -1215,6 +1266,8 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # instead of dependent on did-fast re-finding the identical task
     # (2026-08-15 user report: dtd-started points weren't reliably landing).
     pts = _resolvable_points(desc)
+    if pts is None:
+        pts = _speedy_meeting_pts(desc, minutes)  # 25m meeting → [30] (2026-10-22)
     text = f"{desc} [{pts}]" if pts is not None else f"{desc} {minutes}"
     if project:
         text += f" @{project}"
@@ -1265,6 +1318,11 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
         if is_past:
             end_dt = _parse_iso(end_iso)
             text = f"{title} {start_dt:%H%M}-{end_dt:%H%M}{suffix}"
+            # A 25/50-min speedy meeting credits its 30/60 slot (2026-10-22),
+            # unless a dtd task's own [N] already resolves for the title.
+            sp = _speedy_meeting_pts(title, _hhmm_span_min(start_dt, end_dt), is_meeting=True)
+            if sp is not None and _resolvable_points(title) is None:
+                text += f" [{sp}]"
             r = _run_did_fast(text)
             return {"ok": r["ok"], "mode": "logged", "step": r.get("step"),
                     "needs_agent": r.get("needs_agent"), "stderr_tail": r.get("stderr_tail")}
@@ -1315,6 +1373,8 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
         if (now - start).total_seconds() < 60:
             return {"ok": False, "error": "just started — give it a minute"}
         pts = _resolvable_points(desc)
+        if pts is None:  # 25m meeting → [30] (2026-10-22)
+            pts = _speedy_meeting_pts(desc, _hhmm_span_min(start, now), day=now.date())
         text = f"{desc} {start:%H%M}-{now:%H%M}"
         if pts is not None:
             text += f" [{pts}]"

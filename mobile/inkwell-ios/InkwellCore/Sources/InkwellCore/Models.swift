@@ -14,13 +14,14 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public let scheduledTime: Date?   // Todoist due datetime when the task carries a time-of-day → hidden until it arrives (later-today defer)
     public let agent: Bool            // a Claude session is mid-turn on it (/claim) → 😈, grey
     public let running: Bool          // its Toggl timer is the live one (dtd Enter / janus /d) → ▶
+    public let form: String           // survey card (0s, 1s, xk887, …): opens a form instead of a timer; "" = none
 
     public init(id: String, raw: String, title: String, est: Int?, points: Int?, color: String,
                 domain: String, recurring: Bool, variablePrompt: Bool, scheduledTime: Date? = nil,
-                agent: Bool = false, running: Bool = false) {
+                agent: Bool = false, running: Bool = false, form: String = "") {
         self.id = id; self.raw = raw; self.title = title; self.est = est; self.points = points
         self.color = color; self.domain = domain; self.recurring = recurring; self.variablePrompt = variablePrompt
-        self.scheduledTime = scheduledTime; self.agent = agent; self.running = running
+        self.scheduledTime = scheduledTime; self.agent = agent; self.running = running; self.form = form
     }
 
     /// A task is "active" when it's the live timer (▶) or a Claude session has
@@ -32,7 +33,7 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public func withRunning(_ v: Bool) -> DtdTask {
         DtdTask(id: id, raw: raw, title: title, est: est, points: points, color: color,
                 domain: domain, recurring: recurring, variablePrompt: variablePrompt,
-                scheduledTime: scheduledTime, agent: agent, running: v)
+                scheduledTime: scheduledTime, agent: agent, running: v, form: form)
     }
 
     /// True when the task is deferred to later TODAY: it has a time-of-day and
@@ -145,6 +146,9 @@ public struct TimelineRow: Equatable, Hashable {
     public var running: Bool = false
     public var logged: Bool = false
     public var points: Int? = nil
+    /// What a log would credit (server `preview_points`, incl. the 25→30
+    /// meeting rounding) for an entry/event not yet logged; nil if unknown.
+    public var previewPoints: Int? = nil
     // event
     public var title: String = ""
     public var isPast: Bool = false
@@ -176,8 +180,8 @@ public struct TimelineRow: Equatable, Hashable {
     public var rightLabel: String {
         if isEvent { return isPast ? "log 分 (\(minutes)m)" : (started ? "resume tracking" : "start tracking") }
         if isGap { return "fill" }
-        if running { return points.map { "done ✓ (\($0)分)" } ?? "done ✓ (stop + log)" }
-        return points.map { "log \($0)分" } ?? "neon log 分 (\(minutes)m)"
+        if running { return shownPoints.map { "done \($0)分" } ?? "done (stop + log)" }
+        return shownPoints.map { "log \($0)分" } ?? "log \(minutes)m"
     }
 
     /// Display line, as the Android adapter renders it.
@@ -188,8 +192,18 @@ public struct TimelineRow: Equatable, Hashable {
         let t = tags.isEmpty ? "" : "  #" + tags.joined(separator: " #")
         return prefix + desc + t
     }
-    public var displayMeta: String {
-        "\(start)–\(end) · \(minutes)m" + (points.map { " · \($0)分" } ?? "")
+    /// Logged points, else the preview of what a log would credit.
+    public var shownPoints: Int? { points ?? previewPoints }
+
+    /// Left column: start time only (2026-10-22, janus note: "time should
+    /// just show start time only"); the end is the next row's start.
+    public var displayMeta: String { start }
+
+    /// Right-justified column: duration and points ("25m · 30分"). A
+    /// preview (not yet logged) reads "~30分" so it can't pass for credit.
+    public var rightMeta: String {
+        let pts: String? = points.map { "\($0)分" } ?? previewPoints.map { "~\($0)分" }
+        return (["\(minutes)m"] + [pts].compactMap { $0 }).joined(separator: " · ")
     }
 }
 
@@ -205,5 +219,34 @@ public struct Timeline: Equatable {
     public init(rows: [TimelineRow], trackedMin: Int, points: Int?, date: String, isToday: Bool = true) {
         self.rows = rows; self.trackedMin = trackedMin; self.points = points
         self.date = date; self.isToday = isToday
+    }
+}
+
+/// A survey card's form (round 3 #1, 2026-10-22: "survey tasks doable in dtd
+/// ios like they are in cli"), as served by dtd's GET /api/form. Rendered
+/// generically on the phone; submitted as {key: string} to POST /api/form.
+public struct DtdForm: Identifiable, Equatable {
+    public struct Field: Equatable, Identifiable {
+        public var id: String { key }
+        public let key: String
+        public let label: String
+        public let type: String        // text | multiline | int | choice | scale
+        public let options: [String]
+        public let min: Int?
+        public let max: Int?
+        public let value: String
+        public let help: String
+        public init(key: String, label: String, type: String, options: [String] = [], min: Int? = nil,
+                    max: Int? = nil, value: String = "", help: String = "") {
+            self.key = key; self.label = label; self.type = type; self.options = options
+            self.min = min; self.max = max; self.value = value; self.help = help
+        }
+    }
+    public var id: String { name }
+    public let name: String
+    public let title: String
+    public let fields: [Field]
+    public init(name: String, title: String, fields: [Field]) {
+        self.name = name; self.title = title; self.fields = fields
     }
 }

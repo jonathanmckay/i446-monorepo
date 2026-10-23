@@ -2170,6 +2170,16 @@ try:
         _deferred_ids = {_l.strip() for _l in _df if _l.strip()}
 except OSError:
     pass
+# Plus every host's synced mirror in z_ibx (2026-10-22): a defer made on the
+# phone runs defer-fast on Ix, whose local marker this host never sees.
+import glob as _glob
+for _mp in _glob.glob(_os.path.expanduser('~/vault/z_ibx/habits-deferred-*-%s.ids'
+                                          % _dt.date.today().isoformat())):
+    try:
+        with open(_mp) as _df:
+            _deferred_ids |= {_l.strip() for _l in _df if _l.strip()}
+    except OSError:
+        pass
 zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
             if t.get('id') not in _deferred_ids
             and t['due'] <= today]

@@ -140,10 +140,11 @@ do {
     eq(entry.displayTitle, "✓ 0g", "logged prefix")
     let running = tl.rows[3]
     check(running.canSwipeRight, "running can swipe right")
-    eq(running.rightLabel, "done ✓ (20分)", "running label")
+    eq(running.rightLabel, "done 20分", "running label")
     eq(running.tags, ["-2"], "tags")
     eq(running.displayTitle, "▶ vibing  #-2", "running title")
-    eq(running.displayMeta, "14:52–now · 40m · 20分", "running meta")
+    eq(running.displayMeta, "14:52", "running meta: start only")
+    eq(running.rightMeta, "40m · 20分", "running right meta")
     check(!tl.rows[0].canSwipeRight, "divider inert")
     check(!tl.rows[1].canSwipeLeft, "gaps: right-swipe only")
     eq(tl.rows[1].rightLabel, "fill", "gap label")

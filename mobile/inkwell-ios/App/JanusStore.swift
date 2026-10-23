@@ -20,6 +20,9 @@ final class JanusStore: ObservableObject {
     @Published private(set) var dayOffset = 0
 
     private let api = Api()
+    private let outbox = Outbox("janus")
+    /// Writes queued while offline (⇡N in the header), replayed on reconnect.
+    @Published private(set) var pending = 0
     private var loadedAt: Date? = nil
     private var cachedAt: Date? = nil
     private var loadSeq = 0
@@ -40,6 +43,7 @@ final class JanusStore: ObservableObject {
             let t = Parsers.timeline(j)
             if t.date == PayloadCache.todayISO() { timeline = t; rows = t.rows; cachedAt = at }
         }
+        pending = outbox.count
     }
 
     /// The live Toggl entry, if any (the top card + what the command bar acts on).
@@ -74,7 +78,7 @@ final class JanusStore: ObservableObject {
     var title: String {
         let pts = timeline?.points.map { "\($0)分" } ?? "–分"
         let tracked = timeline.map { String(format: "%d:%02d", $0.trackedMin / 60, $0.trackedMin % 60) } ?? "0:00"
-        return "\(pts) · janus · \(tracked) tracked"
+        return "\(pts) · janus · \(tracked) tracked" + (pending > 0 ? " · ⇡\(pending)" : "")
     }
     var status: String {
         if let e = lastError { return "⚠ " + e }
@@ -91,7 +95,18 @@ final class JanusStore: ObservableObject {
         Task { await load() }
     }
 
+    /// Replay offline writes, then reload if any landed. Called on foreground,
+    /// on network return (RootView's path monitor) and before every load.
+    func flushOutbox() async {
+        guard outbox.count > 0 else { return }
+        let r = await outbox.flush(api)
+        pending = outbox.count
+        if !r.rejected.isEmpty { toast.show("sync refused: " + r.rejected.joined(separator: "; ")) }
+        else if r.sent > 0 { toast.show("synced \(r.sent) offline change\(r.sent == 1 ? "" : "s") ✓") }
+    }
+
     func load() async {
+        await flushOutbox()
         loading = true
         loadSeq += 1
         let seq = loadSeq
@@ -137,7 +152,8 @@ final class JanusStore: ObservableObject {
         } else if r.logged {
             toast.show("already logged")
         } else {
-            act("/api/log", Bodies.log(r)) { d in
+            act("/api/log", Bodies.log(r), offline: "log \(r.desc)", optimistic: { [weak self] in
+                self?.markLogged(r) }) { d in
                 if d.bool("already") { return "already logged" }
                 let extra = d.strings("tag_steps").joined(separator: ", ")
                 return "+\(r.minutes)m → \(d.string("step", "neon"))" + (extra.isEmpty ? "" : " + \(extra)") + " ✓"
@@ -147,7 +163,13 @@ final class JanusStore: ObservableObject {
 
     /// One POST, then a full reload. `needs_agent` is the server saying it
     /// has no route for this description — the web sends you to desktop /did.
-    func act(_ path: String, _ body: [String: Any], toastText: @escaping (JSON) -> String) {
+    /// `offline`: a label → this write may be queued when the phone has no
+    /// route to Ix (only replay-safe writes pass one), and `optimistic` then
+    /// applies its effect to the visible rows. Haptics: a light tick when the
+    /// swipe fires, a success buzz once the server has registered it
+    /// (round 3 #2: "give haptic feedback when registered").
+    func act(_ path: String, _ body: [String: Any], offline: String? = nil, queuedBody: [String: Any]? = nil,
+             optimistic: (() -> Void)? = nil, toastText: @escaping (JSON) -> String) {
         guard !busy else { return }
         busy = true
         Platform.haptic(.commit)
@@ -155,7 +177,13 @@ final class JanusStore: ObservableObject {
             let r = await Platform.keepAlive { await api.post(base + path, body) }
             busy = false
             switch r {
-            case .ok(let j): toast.show(toastText(j)); await load()
+            case .ok(let j): Platform.haptic(.success); toast.show(toastText(j)); await load()
+            case .error(let m) where offline != nil && Outbox.isOffline(m):
+                outbox.enqueue(url: base + path, body: queuedBody ?? body, label: offline!)
+                pending = outbox.count
+                optimistic?()
+                Platform.haptic(.success)
+                toast.show("offline · queued ⇡\(pending), syncs when back online")
             case .error(let m):
                 Platform.haptic(.failure)
                 toast.show(m.contains("needs_agent") ? "no route — use /did on desktop" : m)
@@ -163,21 +191,47 @@ final class JanusStore: ObservableObject {
         }
     }
 
+    /// Offline log: show the row as ✓ until the queued write lands.
+    private func markLogged(_ r: TimelineRow) {
+        rows = rows.map { x in
+            guard x.isEntry, x.id == r.id else { return x }
+            var y = x; y.logged = true; return y
+        }
+    }
+
     /// The CLI's typed-command path (web command bar): "coffee @epcn",
     /// "1400 coffee", "0000-0550 睡觉", "+5", "/d <task>". Server routes each
     /// comma-separated part to tg-fast or did-fast.
+    /// A typed command with no time of its own ("coffee @epcn") means "start
+    /// now". Pin "now" into it ("1842 coffee @epcn", the CLI's own HHMM-start
+    /// form) so a copy replayed from the offline queue later still starts at
+    /// the moment it was typed. Ranges, HHMM starts, +N, /d and multi-part
+    /// commands pass through untouched.
+    static func pinStart(_ t: String, now: Date) -> String {
+        let first = t.split(separator: " ").first.map(String.init) ?? ""
+        if t.hasPrefix("/") || t.hasPrefix("+") || t.contains(",") || t.contains("，") { return t }
+        if first.count == 4, Int(first) != nil { return t }
+        if t.range(of: #"\b\d{4}-\d{4}\b"#, options: .regularExpression) != nil { return t }
+        let f = DateFormatter(); f.dateFormat = "HHmm"
+        return f.string(from: now) + " " + t
+    }
+
     func run(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
-        act("/api/run", ["text": t]) { d in d.string("msg", "ok ✓") }
+        act("/api/run", ["text": t], offline: t, queuedBody: ["text": Self.pinStart(t, now: Date())]) { d in d.string("msg", "ok ✓") }
     }
 
     func fill(desc: String, start: String, end: String, project: String = "") {
-        act("/api/fill", Bodies.fill(desc: desc, start: start, end: end, project: project)) { d in
+        // A closed range is replay-safe; an ongoing start-now is not (its
+        // start is fixed in the body, but a duplicate would start twice).
+        act("/api/fill", Bodies.fill(desc: desc, start: start, end: end, project: project),
+            offline: end.isEmpty ? nil : "fill \(desc)") { d in
             d.bool("running") ? "▶ started" + (d.string("project").isEmpty ? "" : " → " + d.string("project")) + " ✓" : "saved ✓" }
     }
     func edit(_ r: TimelineRow, desc: String, start: String, end: String, project: String) {
-        act("/api/edit", Bodies.edit(id: r.id, desc: desc, start: start, end: end, project: project)) { _ in "edited ✓" }
+        act("/api/edit", Bodies.edit(id: r.id, desc: desc, start: start, end: end, project: project),
+            offline: "edit \(desc)") { _ in "edited ✓" }
     }
     /// Resume an entry (janus full left-swipe): start a fresh ongoing Toggl
     /// timer carrying the same description + project. There is no dedicated

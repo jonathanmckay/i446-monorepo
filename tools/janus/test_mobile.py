@@ -1000,3 +1000,76 @@ def test_lite_timeline_skips_calendar_and_neon(jm, monkeypatch):
     assert tl["lite"] is True and tl["points"] is None
     assert any(r["type"] == "entry" for r in tl["rows"])
     assert all(r.get("pts") is None for r in tl["rows"] if r["type"] == "divider")
+
+
+# ---------------------------------------------------------------------------
+# Speedy meetings (2026-10-22): a 25/50-min MEETING credits 30/60
+# ---------------------------------------------------------------------------
+
+def _capture_did(jm, monkeypatch):
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["text"] = cmd[-1]
+        class P:
+            returncode = 0
+            stdout = json.dumps({"results": [{"step": "variable"}]})
+            stderr = ""
+        return P()
+    monkeypatch.setattr(jm.subprocess, "run", fake_run)
+    return seen
+
+
+def test_convert_25m_past_event_credits_30(jm, monkeypatch):
+    seen = _capture_did(jm, monkeypatch)
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    jm.convert_event("Sync w/ Asha", mk(14, 5).isoformat(), mk(14, 30).isoformat(), "i9", True)
+    assert seen["text"] == "Sync w/ Asha 1405-1430 @i9 [30]"
+    jm.convert_event("Staff", mk(10, 0).isoformat(), mk(10, 50).isoformat(), "i9", True)
+    assert seen["text"].endswith("[60]")
+
+
+def test_log_entry_25m_meeting_credits_30_but_plain_25m_stays_minutes(jm, monkeypatch):
+    seen = _capture_did(jm, monkeypatch)
+    today = dt.datetime.now(jm.TZ).date()
+    jm._MEETING_TITLES[today] = {"sync w/ asha"}
+    jm.log_entry("m1", "Sync w/ Asha", 25, "i9")
+    assert seen["text"] == "Sync w/ Asha [30] @i9"
+    jm.log_entry("m2", "新闻", 25, "hcmc")
+    assert seen["text"] == "新闻 25 @hcmc"
+    jm.log_entry("m3", "Sync w/ Asha", 30, "i9")
+    assert seen["text"] == "Sync w/ Asha 30 @i9"
+
+
+def test_build_timeline_preview_points_rounds_speedy_meetings(jm, monkeypatch):
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    meet = _entry(jm, 0, 5, 0, 30, desc="Sync w/ Asha", eid="a")
+    plain = _entry(jm, 1, 0, 1, 25, desc="新闻", code="hcmc", eid="b")
+    ev = {"title": "Staff", "start_dt": mk(2, 0), "end_dt": mk(2, 50), "code": "i9",
+          "color": jm.DEFAULT_COLOR, "is_past": True, "started": True}
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [meet, plain])
+
+    def fake_events(entries):
+        jm._MEETING_TITLES[today] = {"sync w/ asha", "staff"}
+        return [ev]
+    monkeypatch.setattr(jm, "_fetch_events_today", fake_events)
+    tl = jm.build_timeline()
+    by = {r.get("desc") or r.get("title"): r for r in tl["rows"]
+          if r["type"] in ("entry", "event")}
+    assert by["Sync w/ Asha"]["preview_points"] == 30
+    assert by["新闻"]["preview_points"] == 25
+    assert by["Staff"]["preview_points"] == 60
+
+
+def test_fetch_events_today_remembers_meeting_titles_even_when_tracked(jm, monkeypatch):
+    """The entry that tracks a meeting hides its event row, yet log_entry still
+    has to know it was a meeting — titles are cached from the RAW fetch."""
+    today = dt.datetime.now(jm.TZ).date()
+    mk = lambda h, m: dt.datetime.combine(today, dt.time(h, m), jm.TZ)
+    raw = [{"title": "Sync w/ Asha", "start_dt": mk(14, 5), "end_dt": mk(14, 30)},
+           {"title": "OOO", "start_dt": mk(0, 0), "end_dt": mk(23, 59), "all_day": True}]
+    monkeypatch.setattr(jm, "_fetch_calendar_raw", lambda s, e: raw)
+    e = _entry(jm, 14, 5, 14, 30, desc="Sync w/ Asha")
+    assert jm._fetch_events_today([e]) == []
+    assert jm._is_meeting("sync w/ asha") and not jm._is_meeting("OOO")

@@ -435,11 +435,44 @@ def _deferred_habit_ids() -> set[str]:
     """Recurring 0neon/夜neon habit-parent ids deferred (/defer) today,
     hidden for the rest of today. Mirrors tools/did/dtd.sh's read of the same
     per-day marker file (same gap as _snoozed_ids above)."""
-    p = DEFERRED_DIR / f"habits-deferred-{_today().isoformat()}.ids"
+    day = _today().isoformat()
+    # Local marker plus every host's synced mirror in z_ibx (2026-10-22: a
+    # habit deferred in desktop dtd only marked Straylight's file, so the
+    # phone kept showing it).
+    paths = [DEFERRED_DIR / f"habits-deferred-{day}.ids"]
+    paths += list(MIRROR_DIR.glob(f"habits-deferred-*-{day}.ids"))
+    ids: set[str] = set()
+    for p in paths:
+        try:
+            ids |= {l.strip() for l in p.read_text().splitlines() if l.strip()}
+        except OSError:
+            pass
+    return ids
+
+
+def _patch_cache_due(task_id: str, target: str) -> None:
+    """After a successful defer, move the task's due in the local cache to
+    `target` so the next /api/tasks hides it at once. Without this a reload
+    inside the cache window (≤180 s, or longer if a background refresh is
+    slow) served the pre-defer due and the delayed task popped back onto the
+    phone (bug 2026-10-22, "still seeing delayed tasks"). The next real
+    refresh overwrites this with Todoist's own value, which agrees."""
     try:
-        return {l.strip() for l in p.read_text().splitlines() if l.strip()}
-    except OSError:
-        return set()
+        if not target or target <= _today().isoformat():
+            return
+        d = json.loads(CACHE.read_text())
+        hit = False
+        for k, v in d.items():
+            if isinstance(v, list):
+                for t in v:
+                    if isinstance(t, dict) and str(t.get("id")) == str(task_id):
+                        t["due"] = target; t["due_datetime"] = ""; hit = True
+        if hit:
+            tmp = CACHE.with_suffix(".patch.tmp")
+            tmp.write_text(json.dumps(d, ensure_ascii=False))
+            tmp.replace(CACHE)
+    except Exception as e:
+        print("WARN patch cache:", e, file=sys.stderr)
 
 def build_tasks(force_refresh: bool = False) -> list[dict]:
     _refresh_cache_if_stale(force=force_refresh)
@@ -737,6 +770,7 @@ def defer_task(task_id: str, days=None) -> dict:
         if proc.returncode != 0:
             return {"ok": False, "error": (proc.stderr or proc.stdout).strip()[-300:]}
         data = json.loads(proc.stdout)
+        _patch_cache_due(task_id, data.get("target_date", ""))
         return {"ok": True, "target_date": data.get("target_date", "")}
     except Exception as e:
         return {"ok": False, "error": str(e)}
