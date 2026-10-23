@@ -719,8 +719,11 @@ def create_todoist_task(content: str, labels: list[str]) -> dict:
                  "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            json.loads(resp.read())  # validate it's a real task response
-        return {"ok": True, "content": content}
+            task = json.loads(resp.read())  # validate it's a real task response
+        # The new id goes back to the caller (2026-10-22): the phone's offline
+        # outbox swaps it into a done queued for the same task right after,
+        # so that done closes THIS task by id instead of a fuzzy name match.
+        return {"ok": True, "content": content, "id": str(task.get("id") or "")}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

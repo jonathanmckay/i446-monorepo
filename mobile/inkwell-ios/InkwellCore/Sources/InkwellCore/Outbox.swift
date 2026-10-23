@@ -70,10 +70,20 @@ public final class Outbox {
         var sent = 0
         var rejected: [String] = []
         var refs: [String] = []
+        var ids: [String: String] = [:]          // ref → server id an earlier item returned
         while let it = queue.first {
-            let body = (try? JSONSerialization.jsonObject(with: it.body)) as? [String: Any] ?? [:]
+            var body = (try? JSONSerialization.jsonObject(with: it.body)) as? [String: Any] ?? [:]
+            // A value "$ref:<ref>" means "the id the item with that ref got
+            // back" (a done on a task added offline). No id came back → drop
+            // the key and let the server match by content.
+            for (k, v) in body {
+                guard let s = v as? String, s.hasPrefix("$ref:") else { continue }
+                if let id = ids[String(s.dropFirst(5))], !id.isEmpty { body[k] = id } else { body.removeValue(forKey: k) }
+            }
             switch await api.post(it.url, body) {
-            case .ok: sent += 1
+            case .ok(let j):
+                sent += 1
+                if let r = it.ref { ids[r] = j.string("id") }
             case .error(let m):
                 if Outbox.isOffline(m) || m == "timed out" { save(queue); return (sent, rejected, refs) }
                 rejected.append("\(it.label): \(m)")

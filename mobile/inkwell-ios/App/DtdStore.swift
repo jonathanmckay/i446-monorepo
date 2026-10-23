@@ -181,12 +181,13 @@ final class DtdStore: ObservableObject {
         summary.points += t.points ?? 0
         summary.done += 1
         Platform.haptic(.commit)
-        // A task added offline has no Todoist id yet: complete it by content
-        // (did-fast matches the task its queued add creates just before).
+        // A task added offline has no Todoist id yet: its done carries a
+        // "$ref:" the outbox swaps for the id its queued add gets back.
         var body = Bodies.done(t, value: value)
-        if t.isLocal { body.removeValue(forKey: "id"); body["content"] = t.raw }
+        if t.isLocal { body["id"] = "$ref:add:" + t.id; body["content"] = t.raw }
         Task {
-            let r = await send("/api/done", body)
+            // A local task's done always rides the queue (behind its add).
+            let r = t.isLocal ? ApiResult.error("offline") : await send("/api/done", body)
             inFlight.remove(t.id)
             switch r {
             case .ok(let j):
@@ -198,7 +199,7 @@ final class DtdStore: ObservableObject {
                 toast.show(msg)
             case .error(let m) where queueIfOffline(m, path: "/api/done", body: body, label: "done \(t.title)",
                                                      ref: "hide:" + t.id):
-                break
+                if NetWatch.shared.online { await flushOutbox() }
             case .error(let m):
                 summary.points -= t.points ?? 0
                 summary.done -= 1

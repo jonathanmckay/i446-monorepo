@@ -314,7 +314,8 @@ final class StubNet: URLProtocol {
         StubNet.seen.append((request.url?.path ?? "", body))
         let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: #"{"ok":true}"#.data(using: .utf8)!)
+        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"# : #"{"ok":true}"#
+        client?.urlProtocol(self, didLoad: reply.data(using: .utf8)!)
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
@@ -329,7 +330,8 @@ do {
     // and a done on the task just added (content-only, no Todoist id yet).
     ob.enqueue(url: "http://ix/api/add", body: ["content": "buy milk (5) [2]"], label: "add", ref: "add:local-1")
     ob.enqueue(url: "http://ix/api/done", body: ["id": "T1", "content": "hiit (20) [10]"], label: "done T1", ref: "hide:T1")
-    ob.enqueue(url: "http://ix/api/done", body: ["content": "buy milk (5) [2]"], label: "done local", ref: "hide:local-1")
+    ob.enqueue(url: "http://ix/api/done", body: ["id": "$ref:add:local-1", "content": "buy milk (5) [2]"],
+               label: "done local", ref: "hide:local-1")
 
     let sema = DispatchSemaphore(value: 0)
     var offlineRun: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
@@ -352,7 +354,7 @@ do {
     eq(ob.count, 0, "queue empty after sync")
     eq(StubNet.seen.map(\.path), ["/api/add", "/api/done", "/api/done"], "replayed in order")
     eq(StubNet.seen[1].body["id"] as? String, "T1", "offline done keeps its task id")
-    check(StubNet.seen[2].body["id"] == nil, "local task's done goes by content (no fake id)")
+    eq(StubNet.seen[2].body["id"] as? String, "NEW9", "local task's done gets the id its add returned")
     eq(onlineRun.refs, ["add:local-1", "hide:T1", "hide:local-1"], "refs returned so the UI retires local rows")
     ob.clear()
 }
