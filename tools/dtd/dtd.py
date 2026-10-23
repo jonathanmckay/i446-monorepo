@@ -558,6 +558,11 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
                + flt(zerog) + flt(critical + rest))
     seen = set()
     out = []
+    # One running row per timer (2026-10-23: "the recurrance should not also
+    # have an abacus"): an id match is exact; only with no id does the name
+    # match apply, and then to the first visible card only — the recurring
+    # parent and its same-named one-off copy both lit up before.
+    run_taken = False
     for t in ordered:
         tid = t.get("id")
         if not t.get("content") or tid in seen:
@@ -582,6 +587,11 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         if sched_dt is not None and sched_dt > _now():
             continue
         raw = t["content"]
+        if running_id:
+            is_running = tid is not None and str(tid) == running_id
+        else:
+            is_running = bool(running_clean and strip_ann(raw).lower() == running_clean and not run_taken)
+            run_taken = run_taken or is_running
         display = t.get("short") or raw
         title = strip_ann(display) or raw
         est, pts = parse_est(raw)
@@ -604,8 +614,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "agent": tid is not None and str(tid) in agent_ids,
             "agentPane": agent_pane.get(str(tid), "") if tid is not None else "",
             "agentDone": tid is not None and str(tid) in agent_done,
-            "running": bool(tid is not None and running_id and str(tid) == running_id)
-                       or bool(running_clean and strip_ann(raw).lower() == running_clean),
+            "running": is_running,
             # Survey card (2026-10-22): the form Enter opens in terminal dtd
             # (dtd_forms.CARD_FORMS), "" for a plain task; the phone opens
             # GET /api/form for these instead of starting a timer.
