@@ -267,6 +267,27 @@ do {
           "selection replace → plain newline")
 }
 
+// headings and pipe tables (Inkwell renderer + live editor styling)
+do {
+    eq(MarkdownLine.headingLevel("# We are XBOX"), 1, "h1")
+    eq(MarkdownLine.headingLevel("### Further details"), 3, "h3")
+    eq(MarkdownLine.headingLevel("  ## indented"), 2, "leading spaces allowed")
+    eq(MarkdownLine.headingLevel("##"), 2, "empty heading still a heading")
+    check(MarkdownLine.headingLevel("#tag in prose") == nil, "#tag is not a heading")
+    check(MarkdownLine.headingLevel("####### seven") == nil, "seven hashes is not a heading")
+    check(MarkdownLine.headingLevel("plain") == nil, "plain line")
+
+    check(MarkdownLine.isTableRow("| a | b |"), "piped row")
+    check(MarkdownLine.isTableRow("|a|b"), "no trailing pipe still a row")
+    check(!MarkdownLine.isTableRow("a | b"), "prose with a pipe is not a table")
+    check(!MarkdownLine.isTableRow("|"), "lone pipe is not a row")
+    check(MarkdownLine.isTableSeparator("|---|:--:| --: |"), "separator row")
+    check(!MarkdownLine.isTableSeparator("| a | --- |"), "content row is not a separator")
+    eq(MarkdownLine.tableCells("| a | **b** |  |"), ["a", "**b**", ""], "cells trimmed, empty cell kept")
+    eq(MarkdownLine.tableCells(#"| x \| y | z |"#), ["x | y", "z"], "escaped pipe stays in the cell")
+    eq(MarkdownLine.alignments("|:--|:-:|--:|---|"), [.leading, .center, .trailing, .leading], "alignments")
+}
+
 // Round 3 (2026-10-22): survey forms, janus preview points, offline outbox.
 do {
     let f = Parsers.form(JSON.parse(#"{"ok":true,"form":"0s","title":"daily review","fields":[{"key":"title","label":"title","type":"text"},{"key":"mood","label":"mood","type":"scale","min":1,"max":7,"value":"5"}]}"#.data(using: .utf8)!)!)
