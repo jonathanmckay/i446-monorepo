@@ -7,8 +7,10 @@ line shows a spinner; when the turn ends the task looks normal again.
 
 Store: ~/vault/z_ibx/agent-claims/ (Syncthing carries it to Ix, where dtd runs)
   <task_id>.json          {task_id, task, session, host, cwd, claimed_at}
-  <task_id>.state         "working <epoch>" | "idle <epoch>"
-  by-session/<session>    the task_id this session holds (one task per session)
+  <task_id>.state         "working <epoch>" | "idle <epoch>" | "released <epoch>" | "done <epoch>"
+  by-session/<session>    the task_id(s) this session holds, one per line (a
+                          plain claim holds one; `claim --also` adds more,
+                          2026-10-22, for work fanned out to subagents)
   panes.json              {session: n} the session's cmux number (dtd 1, janus 2,
                           Claude panes 3+), written by cs.py's cmux_panes() on
                           every prompt/stop via the session-title hook; load()
@@ -22,6 +24,9 @@ Usage:
   agent_claims.py claim <query>   fuzzy-match a task in the dtd cache, claim it
   agent_claims.py hook            UserPromptSubmit fast path for `/d <task>: ...`
   agent_claims.py new <task>      create a today task and claim it
+  agent_claims.py claim --also <query>   claim another task WITHOUT releasing this session's others
+  agent_claims.py done [<query>]  the agent thinks it's finished: ✅ on the left in dtd
+                                  (default: every task this session holds), until JM completes it
   agent_claims.py release         hand this session's task back (stays at the top of dtd, 🕐)
   agent_claims.py list            JSON of claims (+ derived working flag)
 """
@@ -58,26 +63,59 @@ def set_state(task_id: str, state: str, now: float | None = None,
     _write(root / f"{task_id}.state", f"{state} {int(now or time.time())}\n")
 
 
-def release(session: str, root: Path = CLAIMS_DIR, now: float | None = None) -> str | None:
-    """Hand the task back to JM: the session index goes, the claim record
-    stays as 'released' so dtd keeps the row at the top (see RELEASED_TTL)."""
-    idx = root / "by-session" / session
+def held(session: str, root: Path = CLAIMS_DIR) -> list[str]:
+    """Task ids this session holds (the by-session index, one per line)."""
     try:
-        tid = idx.read_text().strip()
+        return [l.strip() for l in (root / "by-session" / session).read_text().splitlines() if l.strip()]
     except OSError:
-        return None
-    if (root / f"{tid}.json").exists():
-        set_state(tid, "released", now, root)
+        return []
+
+
+def _set_held(session: str, ids: list[str], root: Path) -> None:
+    idx = root / "by-session" / session
+    if ids:
+        _write(idx, "".join(i + "\n" for i in dict.fromkeys(ids)))
     else:
         try:
-            (root / f"{tid}.state").unlink()
+            idx.unlink()
         except OSError:
             pass
-    try:
-        idx.unlink()
-    except OSError:
-        pass
-    return tid
+
+
+def release(session: str, root: Path = CLAIMS_DIR, now: float | None = None) -> str | None:
+    """Hand the task(s) back to JM: the session index goes, each claim record
+    stays as 'released' so dtd keeps the row at the top (see RELEASED_TTL).
+    Returns the first id released."""
+    ids = held(session, root)
+    if not ids:
+        return None
+    for tid in ids:
+        if (root / f"{tid}.json").exists():
+            set_state(tid, "released", now, root)
+        else:
+            try:
+                (root / f"{tid}.state").unlink()
+            except OSError:
+                pass
+    _set_held(session, [], root)
+    return ids[0]
+
+
+def mark_done(session: str, ids: list[str] | None = None, root: Path = CLAIMS_DIR,
+              now: float | None = None) -> list[str]:
+    """The agent believes the task is finished (2026-10-22: "if the agent or
+    subagent thinks it is done with a claimed task, it should put a checkmark
+    emoji on the left"). State 'done' → dtd draws ✅ on the left and keeps the
+    row in the claimed tier until JM completes it (his ⌥↵ is the real close;
+    pruned after RELEASED_TTL like a release). The id leaves the session index
+    so later turns' hooks don't flip it back to working/idle."""
+    mine = held(session, root)
+    targets = ids if ids else mine
+    for tid in targets:
+        if (root / f"{tid}.json").exists():
+            set_state(tid, "done", now, root)
+    _set_held(session, [i for i in mine if i not in targets], root)
+    return targets
 
 
 def _forget(tid: str, root: Path) -> None:
@@ -89,16 +127,19 @@ def _forget(tid: str, root: Path) -> None:
 
 
 def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
-          now: float | None = None) -> dict:
-    """One task per session: an earlier claim by this session is released."""
-    release(session, root)
+          now: float | None = None, also: bool = False) -> dict:
+    """One task per session: an earlier claim by this session is released —
+    unless `also` (2026-10-22: one session fanning several tasks out to
+    subagents), which adds this task to the ones the session already holds."""
+    if not also:
+        release(session, root)
     tid = str(task["id"])
     rec = {"task_id": tid, "task": task.get("content", ""), "session": session,
            "host": socket.gethostname().split(".")[0], "cwd": os.getcwd(),
            "claimed_at": int(now or time.time())}
     _write(root / f"{tid}.json", json.dumps(rec, ensure_ascii=False) + "\n")
     set_state(tid, "working", now, root)   # /claim itself runs mid-turn
-    _write(root / "by-session" / session, tid + "\n")
+    _set_held(session, (held(session, root) if also else []) + [tid], root)
     return rec
 
 
@@ -133,13 +174,14 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
             state, ts = s, int(t)
         except (OSError, ValueError):
             pass
-        if state == "released" and now - ts > RELEASED_TTL:
+        if state in ("released", "done") and now - ts > RELEASED_TTL:
             _forget(tid, root)   # kept its top slot for a day; JM never closed it
             continue
         rec["state"] = state
         rec["working"] = state == "working" and now - ts < STALE_SECS
         # A released claim's session is gone or elsewhere: no pane number.
-        rec["pane"] = None if state == "released" else panes.get(str(rec.get("session", "")))
+        rec["done"] = state == "done"
+        rec["pane"] = None if state in ("released", "done") else panes.get(str(rec.get("session", "")))
         out[tid] = rec
     return out
 
@@ -295,8 +337,8 @@ def set_value(session: str, n: int, root: Path | None = None) -> str:
     bare [200] got logged as +200 immediately)."""
     root = root or CLAIMS_DIR
     try:
-        tid = (root / "by-session" / session).read_text().strip()
-    except OSError:
+        tid = held(session, root)[0]
+    except IndexError:
         return ""   # no claim: leave the prompt to the model
     import subprocess
     lib = str(Path.home() / "i446-monorepo" / "lib")
@@ -432,6 +474,25 @@ def main(argv: list[str]) -> int:
         print(json.dumps({"ok": True, "released": release(session)}))
         push()
         return 0
+    also = False
+    if cmd == "claim" and rest.startswith("--also "):
+        also, rest = True, rest[len("--also "):].strip()
+    if cmd == "done":
+        ids = None
+        if rest:
+            if rest in load():
+                ids = [rest]
+            else:
+                df = _did()
+                c = candidates(rest, all_tasks(df.load_task_queue()), df)
+                if len(c) != 1:
+                    print(json.dumps({"ok": False, "error": f"{len(c)} tasks match {rest!r}"}, ensure_ascii=False))
+                    return 2
+                ids = [str(c[0]["id"])]
+        done = mark_done(session, ids)
+        push()
+        print(json.dumps({"ok": True, "done": done}))
+        return 0
     if cmd == "new" and rest:
         rec = claim(new_task(rest), session)
         push()
@@ -451,7 +512,7 @@ def main(argv: list[str]) -> int:
             {"id": t["id"], "task": t.get("content", "")} for t in cands[:5]]},
             ensure_ascii=False))
         return 3
-    rec = claim(cands[0], session)
+    rec = claim(cands[0], session, also=also)
     push()
     print(json.dumps({"ok": True, **rec}, ensure_ascii=False))
     return 0

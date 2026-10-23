@@ -14,14 +14,16 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public let scheduledTime: Date?   // Todoist due datetime when the task carries a time-of-day → hidden until it arrives (later-today defer)
     public let agent: Bool            // a Claude session is mid-turn on it (/claim) → 😈, grey
     public let running: Bool          // its Toggl timer is the live one (dtd Enter / janus /d) → ▶
+    public let agentDone: Bool        // the claiming agent thinks it's finished → ✅ on the left (2026-10-22)
     public let form: String           // survey card (0s, 1s, xk887, …): opens a form instead of a timer; "" = none
 
     public init(id: String, raw: String, title: String, est: Int?, points: Int?, color: String,
                 domain: String, recurring: Bool, variablePrompt: Bool, scheduledTime: Date? = nil,
-                agent: Bool = false, running: Bool = false, form: String = "") {
+                agent: Bool = false, running: Bool = false, form: String = "", agentDone: Bool = false) {
         self.id = id; self.raw = raw; self.title = title; self.est = est; self.points = points
         self.color = color; self.domain = domain; self.recurring = recurring; self.variablePrompt = variablePrompt
         self.scheduledTime = scheduledTime; self.agent = agent; self.running = running; self.form = form
+        self.agentDone = agentDone
     }
 
     /// A task is "active" when it's the live timer (▶) or a Claude session has
@@ -33,7 +35,7 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public func withRunning(_ v: Bool) -> DtdTask {
         DtdTask(id: id, raw: raw, title: title, est: est, points: points, color: color,
                 domain: domain, recurring: recurring, variablePrompt: variablePrompt,
-                scheduledTime: scheduledTime, agent: agent, running: v, form: form)
+                scheduledTime: scheduledTime, agent: agent, running: v, form: form, agentDone: agentDone)
     }
 
     /// True when the task is deferred to later TODAY: it has a time-of-day and
@@ -77,7 +79,7 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
 
     /// Row prefix, same order as the web page: ▶ running · 😈 agent · ↻ recurring.
     public var prefix: String {
-        (running ? "▶ " : "") + (agent ? "😈 " : "") + (recurring ? "↻ " : "")
+        (agentDone ? "✅ " : "") + (running ? "▶ " : "") + (agent ? "😈 " : "") + (recurring ? "↻ " : "")
     }
 
     /// Right-justified "(time) [value]" like the terminal and the web.

@@ -66,25 +66,28 @@ if [[ -n "$sid" ]]; then
   esac
 fi
 [[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0
-tid="$(<"$D/by-session/$sid")"
-tid="${tid//[[:space:]]/}"
-[[ -n "$tid" ]] || exit 0
+# One id per line (2026-10-22: `claim --also` lets a session hold several
+# tasks it fanned out to subagents); every held task follows the session.
+tids=(${(f)"$(<"$D/by-session/$sid")"})
+tids=(${tids//[[:space:]]/})
+tids=(${tids:#})
+(( ${#tids} )) || exit 0
 state=""
 case "$1" in
   working|subagent-start|subagent-stop) state=working ;;
   idle) [[ -n "$(_live_agents)" ]] && state=working || state=idle ;;
+  release) state=released ;;
 esac
 case "$1" in
-  working|idle|subagent-start|subagent-stop)
-    print -r -- "$state $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
-      && mv -f "$D/$tid.state.tmp" "$D/$tid.state" 2>/dev/null ;;
-  release)
-    # SessionEnd: hand the task back but keep it at the TOP of dtd (2026-10-21):
-    # the record stays, state 'released' (agent_claims.release does the same;
-    # load() prunes it after RELEASED_TTL). Only the session index goes.
-    print -r -- "released $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
-      && mv -f "$D/$tid.state.tmp" "$D/$tid.state" 2>/dev/null
-    rm -f "$D/by-session/$sid" "$A" 2>/dev/null ;;
+  working|idle|subagent-start|subagent-stop|release)
+    # release = SessionEnd: hand the tasks back but keep them at the TOP of dtd
+    # (2026-10-21): records stay, state 'released' (agent_claims.release does
+    # the same; load() prunes after RELEASED_TTL). Only the session index goes.
+    for tid in "${tids[@]}"; do
+      print -r -- "$state $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
+        && mv -f "$D/$tid.state.tmp" "$D/$tid.state" 2>/dev/null
+    done
+    [[ "$1" == release ]] && rm -f "$D/by-session/$sid" "$A" 2>/dev/null ;;
 esac
 # Mirror to Ix right away (Syncthing is ~1 min); detached so the hook returns now.
 "$HOME/i446-monorepo/scripts/agent-claims-push.sh" &!

@@ -884,10 +884,47 @@ class Form:
             f.insert(key)
         return None
 
+    def _swallow_csi(self, scr) -> None:
+        """Drop the rest of a control sequence whose ESC [ was just read: its
+        parameter bytes up to the final byte (@..~), plus the three raw bytes
+        a legacy X10 mouse report (ESC [ M b x y) carries after its M.
+        keypad() already decoded every sequence curses knows (arrows, F-keys),
+        so what reaches here is a mouse report or other noise, never input."""
+        scr.nodelay(True)
+        try:
+            seq = ""
+            for _ in range(32):
+                try:
+                    ch = scr.get_wch()
+                except curses.error:
+                    break
+                if not isinstance(ch, str):
+                    break
+                seq += ch
+                if "@" <= ch <= "~":
+                    break
+            if seq == "M":
+                for _ in range(3):
+                    try:
+                        scr.get_wch()
+                    except curses.error:
+                        break
+        finally:
+            scr.nodelay(False)
+            scr.timeout(60)
+
     def run(self, scr) -> int:
         curses.raw()
         curses.noecho()
         scr.keypad(True)
+        # Mouse reporting off (bug 2026-10-22): fzf leaves it on when it hands
+        # the tty to this form, so every move/click arrived as ESC [ < b;x;y M
+        # and got typed into the focused field. dtd's edit script turns it
+        # back on for fzf after the form exits.
+        try:
+            os.write(sys.stdout.fileno(), b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l")
+        except OSError:
+            pass
         # Repaint cells, never shift them with insert/delete line or char ops:
         # the link rows carry OSC 8 hyperlinks written behind curses' back
         # (_hyperlink), and a shifted block would drag stale links along.
@@ -911,6 +948,11 @@ class Form:
                 if self._fetched is not None:
                     self.draw(scr)
                 continue
+            if key == curses.KEY_MOUSE:
+                # terminfo's kmous (ESC [ < on xterm-style terminals) let curses
+                # consume the report's prefix; its b;x;y + M/m follow as chars
+                self._swallow_csi(scr)
+                continue
             act = self.handle(key)
             if act == "esc":
                 # a lone Esc cancels; Esc + key within the escdelay window is
@@ -924,6 +966,9 @@ class Form:
                 scr.timeout(60)
                 if nxt is None:
                     act = "cancel"
+                elif nxt == "[":
+                    self._swallow_csi(scr)     # a mouse report, not alt-[
+                    act = None
                 elif nxt in ("\x7f", "\x08", curses.KEY_BACKSPACE):
                     self.focus.delete_word()
                     act = None

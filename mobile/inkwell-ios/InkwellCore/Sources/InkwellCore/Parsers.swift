@@ -18,7 +18,8 @@ public enum Parsers {
                 scheduledTime: DtdTask.parseScheduled(t.string("scheduled")),
                 agent: t.bool("agent"),
                 running: t.bool("running"),
-                form: t.string("form"))
+                form: t.string("form"),
+                agentDone: t.bool("agentDone"))
         }
     }
 

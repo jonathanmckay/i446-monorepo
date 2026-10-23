@@ -13,6 +13,8 @@ user-invocable: true
   token becomes its label), then claims it, so work that isn't in dtd yet
   still shows up there as underway.
 - `/d off` releases.
+- `/d done` marks every task this session holds as agent-finished (✅ on the
+  left in dtd); see "When you think the claimed work is done" below.
 - **Bare `/d`** (2026-10-19) attaches this session to the task it is *already*
   working on. The hook leaves a `[claim hook] bare /d ...` line listing the
   surfaced dtd tasks with ids. Then:
@@ -54,3 +56,18 @@ still without logging.
 Then: with a `<request>` after the colon, confirm in one line
 (`😈 claimed: <task>`) and do the request as if the user had typed it alone.
 Without one, just the confirmation line.
+
+## When you think the claimed work is done (2026-10-22)
+
+As soon as you (or a subagent you launched) believe a claimed task is finished,
+mark it so dtd shows ✅ on the left of the card until JM verifies and completes it:
+
+```bash
+python3 ~/i446-monorepo/tools/did/agent_claims.py done            # every task this session holds
+python3 ~/i446-monorepo/tools/did/agent_claims.py done <task id>  # just one
+```
+
+Never complete the Todoist task yourself; ✅ means "agent thinks it's done",
+JM's ⌥↵ is the real close. Fanning work out to subagents? Claim each task they
+own with `agent_claims.py claim --also "<task>"` (keeps this session's other
+claims) and mark each `done` when its agent reports back finished.
