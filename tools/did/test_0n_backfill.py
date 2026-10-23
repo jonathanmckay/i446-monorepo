@@ -140,3 +140,55 @@ def test_script_writes_over_blank_or_zero_only(zb):
     s = zb.build_script(7, 9, 25, 1, do_write=True)
     assert '(pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0"' in s
     assert "SKIPPED" in s
+
+
+# --- 2026-10-22: stalled recalc measured {}, "reverted" while the cell stayed 1 ---
+
+def test_remeasure_uses_calculate_full_and_rereads_the_post_image(zb):
+    s = zb.build_remeasure_script(6, 3)
+    assert "calculate full" in s
+    assert s.index("calculate full") < s.index('"POST"')
+    assert "set value" not in s and "clear contents" not in s      # read-only besides the recalc
+
+
+def test_mismatch_triggers_remeasure_before_any_revert():
+    src = (_HERE / "0n-backfill.py").read_text()
+    i = src.index('deltas = compute_deltas(r["PRE"], r["POST"])')
+    block = src[i:i + 1600]
+    assert block.index("build_remeasure_script") < block.index("revert_or_die")
+
+
+@pytest.mark.parametrize("out,pre,ok", [
+    ("REVERTED\t", "", True), ("REVERTED\t0.0", "", True),
+    ("REVERTED\t1.0", "", False),                 # the 10/22 failure: still marked
+    ("REVERTED\t2.0", "2", True), ("", "", False),  # no report at all = not landed
+])
+def test_revert_landed(zb, out, pre, ok):
+    assert zb.revert_landed(out, pre) is ok
+
+
+def test_failed_revert_is_reported_not_claimed(zb, monkeypatch):
+    class R:  # ix_run timed out, as with Excel wedged
+        returncode, stdout, stderr = 3, "", "ix unreachable (timeout)"
+    monkeypatch.setattr(zb, "ix_run", lambda *a, **k: R())
+    with pytest.raises(SystemExit) as e:
+        zb.revert_or_die(30, 155, "", "measured 0分 change {} != expected 15", "6/3")
+    msg = str(e.value)
+    assert "REVERT DID NOT LAND" in msg and "--move-only" in msg and "0n write reverted" not in msg
+
+
+def test_landed_revert_says_so(zb, monkeypatch):
+    class R:
+        returncode, stdout, stderr = 0, "REVERTED\t", ""
+    monkeypatch.setattr(zb, "ix_run", lambda *a, **k: R())
+    with pytest.raises(SystemExit) as e:
+        zb.revert_or_die(30, 155, "", "x", "6/3")
+    assert "0n write reverted, nothing moved" in str(e.value)
+
+
+def test_main_never_reads_stdin():
+    """Run inside `while read d`, a child (save_and_refresh's ssh) ate the
+    loop's input and dates were skipped; main points fd 0 at /dev/null."""
+    src = (_HERE / "0n-backfill.py").read_text()
+    body = src[src.index("def main() -> int:"):]
+    assert "os.dup2(os.open(os.devnull, os.O_RDONLY), 0)" in body[:600]

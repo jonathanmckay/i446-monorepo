@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from datetime import date, datetime, timedelta
@@ -260,7 +261,27 @@ def build_script(habit_col: int, month: int, day: int, value, do_write: bool) ->
 end tell'''
 
 
+def build_remeasure_script(month: int, day: int) -> str:
+    """`calculate full`, then the 0分 post-image again (2026-10-22: with Excel's
+    dependency recalc stalled, a plain `calculate` left 0分 unchanged, so 45
+    marks measured {} and were 'reverted'; only `calculate full` recalculates
+    through a stall)."""
+    return f'''tell application "Microsoft Excel"
+    set wb to workbook "{WORKBOOK}"
+    set wf to sheet "0分" of wb
+    set out to ""
+{_row_lookup("fRow", "wf", 2, month, day)}
+    if fRow = 0 then return "ERROR: date {month}/{day} not found in 0分"
+    calculate full
+{_fen_read_block("POST")}
+    return out
+end tell'''
+
+
 def build_revert_script(habit_col: int, n_row: int, pre_raw: str) -> str:
+    """Restore the 0n cell and REPORT what it holds afterwards, so a revert
+    that did not land is caught instead of claimed (2026-10-22: the message
+    said 'reverted' while the cell stayed 1)."""
     if pre_raw == "":
         restore = f"clear contents cell {habit_col} of row {n_row} of ws"
     else:
@@ -269,8 +290,31 @@ def build_revert_script(habit_col: int, n_row: int, pre_raw: str) -> str:
     set ws to sheet "0n" of workbook "{WORKBOOK}"
     {restore}
     calculate
-    return "reverted"
+    set rv to value of cell {habit_col} of row {n_row} of ws
+    if rv is missing value then set rv to ""
+    return "REVERTED" & (character id 9) & (rv as text)
 end tell'''
+
+
+def revert_landed(stdout: str, pre_raw: str) -> bool:
+    """True when the revert script reports the cell back at its pre-value."""
+    for line in stdout.splitlines():
+        parts = line.split("\t")
+        if parts[0] == "REVERTED":
+            now = parts[1].strip() if len(parts) > 1 else ""
+            if pre_raw in ("", "0", "0.0"):
+                return now in ("", "0", "0.0")
+            return parse_num(now) == parse_num(pre_raw)
+    return False
+
+
+def revert_or_die(habit_col: int, n_row: int, pre_raw: str, why: str, where: str) -> None:
+    res = ix_run(build_revert_script(habit_col, n_row, pre_raw), timeout=30.0)
+    if res.returncode == 0 and revert_landed(res.stdout, pre_raw):
+        raise SystemExit(f"ERROR: {why}; 0n write reverted, nothing moved")
+    raise SystemExit(f"ERROR: {why}; REVERT DID NOT LAND ({(res.stderr or res.stdout).strip()[:160]}): "
+                     f"0n!{col_letter(habit_col)} on {where} may still hold the mark and its points "
+                     "sit on that day. Check the cell; if it is marked, rerun with --move-only.")
 
 
 def parse_script_output(stdout: str) -> dict:
@@ -314,6 +358,12 @@ def resolve_habit(df, habit: str) -> tuple[str, int]:
 
 
 def main() -> int:
+    # Never read stdin (2026-10-22: run inside `while read d; do ... done`, a
+    # child here ate the loop's input and dates were silently skipped).
+    try:
+        os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    except OSError:
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("habit")
     ap.add_argument("date")
@@ -367,7 +417,8 @@ def main() -> int:
 
     if weight <= 0:
         if do_write and pre0n == "":  # already written: revert, nothing to move anyway
-            ix_run(build_revert_script(col, r["n_row"], pre0n), timeout=30.0)
+            revert_or_die(col, r["n_row"], pre0n,
+                          f"{key!r} has no row-2 weight ({weight}); nothing to move", past_md)
         raise SystemExit(f"ERROR: {key!r} has no row-2 weight ({weight}); nothing to move")
 
     # 2. plan the move
@@ -397,10 +448,17 @@ def main() -> int:
         deltas = compute_deltas(r["PRE"], r["POST"])
         expected = weight * value
         if not deltas_match_expected(deltas, expected, col):
-            ix_run(build_revert_script(col, r["n_row"], pre0n), timeout=30.0)
-            raise SystemExit("ERROR: measured 0分 change "
-                             f"{ {FEN_NAMES[c]: v for c, v in deltas.items()} } != expected "
-                             f"{expected} for {key}; 0n write reverted, nothing moved")
+            # A stalled dependency recalc reads as "no change": force a full
+            # recalc and measure once more before calling it a mismatch.
+            rm = ix_run(build_remeasure_script(target.month, target.day), timeout=90.0)
+            if rm.returncode == 0 and not rm.stdout.startswith("ERROR"):
+                deltas = compute_deltas(r["PRE"], parse_script_output(rm.stdout)["POST"])
+                out["recalc"] = "calculate full (plain calculate showed no matching change)"
+        if not deltas_match_expected(deltas, expected, col):
+            revert_or_die(col, r["n_row"], pre0n,
+                          "measured 0分 change "
+                          f"{ {FEN_NAMES[c]: v for c, v in deltas.items()} } != expected "
+                          f"{expected} for {key}", past_md)
         out["basis"] = "measured 0分 delta"
         out["post_0n"] = r.get("POST0N", "")
 
