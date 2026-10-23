@@ -2440,6 +2440,18 @@ started_lines = []   # A2: JM started it today, timer moved on, not done
 normal_lines = []
 skipped_lines = []
 
+# One running row per timer (2026-10-23: 'when recurring task in dtd gets
+# marked with an abacus, the recurrance should not also have an abacus').
+# With no task id on the timer, the name match lit every same-named card:
+# the recurring parent and its one-off copy ('give kids allowance' x2). The
+# card Entered today wins; otherwise the first visible match does.
+_run_pref = None
+_run_taken = [False]
+if not running_id and running_clean:
+    _run_pref = next((str(t.get('id', '')) for t in unique
+                      if strip_ann(t['content']).lower() == running_clean
+                      and str(t.get('id', '')) in started_at), None)
+
 for t in unique:
     raw = t['content']
     clean = strip_ann(raw).lower()
@@ -2575,8 +2587,11 @@ for t in unique:
     dom_tag = ''
     if running_id:
         is_running = str(t.get('id', '')) == running_id
+    elif _run_pref:
+        is_running = str(t.get('id', '')) == _run_pref
     else:
-        is_running = bool(running_clean and clean == running_clean)
+        is_running = bool(running_clean and clean == running_clean and not _run_taken[0])
+        _run_taken[0] = _run_taken[0] or is_running
     # In-progress tiers (2026-10-11), all printed at the TOP of the list in
     # this order (2026-10-13); see the print loop below:
     #   A  JM's own running timer: spinner Nm, domain color (2026-10-16: 'when
