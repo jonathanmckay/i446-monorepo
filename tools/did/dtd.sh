@@ -2622,8 +2622,9 @@ for t in unique:
         color = AGENT_GREY
     elif str(t.get('id', '')) in _done_ids:
         # Agent thinks it's finished (2026-10-22): ✅ on the far left, still
-        # in the claimed tier until JM completes it with ⌥↵.
-        prefix = '✅ ' + prefix
+        # in the claimed tier until JM completes it with ⌥↵. The session's
+        # pane number leads it, '6✅', like '6😈' while it worked.
+        prefix = _pane + '✅ ' + prefix
     elif is_claimed:
         prefix = '🧮 ' + _pane + '🕐 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so

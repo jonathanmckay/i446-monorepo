@@ -74,3 +74,35 @@ def test_tmux_map_follows_one_nested_attach(cs, monkeypatch):
     monkeypatch.setattr(cs.subprocess, 'run', run)
     m = {e['tmux']: e for e in cs.tmux_map({})}
     assert m['cc-2043']['sid'] == SID_A and m['cc-2043']['surface'] == 'S8'
+
+
+def test_surface_record_beats_a_forks_argv(cs, tmp_path, monkeypatch):
+    """2026-10-22: a forked session runs as `claude --resume <parent> --fork-session`, so argv
+    named the parent; the tab got no number and its claims a bare 😈. The tab's hook records its
+    real session id, which wins when it is newer than the claude process."""
+    import os
+    import time as _t
+    monkeypatch.setattr(cs, 'SURFACE_SESSIONS', tmp_path)
+    (tmp_path / 'SURF-FORK').write_text('24eb03f3-f7eb-4173-a25b-4cf0a1e9c2d6\n')
+    (tmp_path / 'SURF-OLD').write_text('cccccccc-0000-0000-0000-000000000000\n')
+    os.utime(tmp_path / 'SURF-OLD', (_t.time() - 7200, _t.time() - 7200))   # older than its process
+    ps = '  111 01:00:00\n  222 10:00\n'                                       # both started within 1h
+
+    def run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 0, stdout=ps, stderr='')
+    monkeypatch.setattr(cs.subprocess, 'run', run)
+    sid_of = {'SURF-FORK': SID_A, 'SURF-OLD': SID_B}
+    cs._apply_surface_records(sid_of, {'SURF-FORK': 111, 'SURF-OLD': 222})
+    assert sid_of == {'SURF-FORK': '24eb03f3-f7eb-4173-a25b-4cf0a1e9c2d6', 'SURF-OLD': SID_B}
+
+
+def test_etime_parsing(cs):
+    assert cs._etime_secs('05') == 5 and cs._etime_secs('10:00') == 600
+    assert cs._etime_secs('01:00:00') == 3600 and cs._etime_secs('2-00:00:01') == 172801
+
+
+def test_session_title_hook_records_the_surface_session():
+    src = (Path.home() / 'i446-monorepo' / 'scripts' / 'session-title.sh').read_text()
+    i = src.index('surface-sessions')
+    assert i < src.index('[ -n "$tp" ] && [ -f "$tp" ] || exit 0')   # recorded before any early exit
+    assert 'surf=${CMUX_SURFACE_ID:-$CMUX_PANEL_ID}' in src
