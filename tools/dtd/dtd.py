@@ -493,7 +493,6 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         return []
 
     today = _today().isoformat()
-    tomorrow = (_today() + _dt.timedelta(days=1)).isoformat()
 
     def sec(key, bound):
         return [t for t in d.get(key, []) if isinstance(t, dict)
@@ -506,7 +505,8 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     rituals = [t for t in today_tasks if has(t, "-1neon")]
     neg1g = [t for t in today_tasks if has(t, "#-1g") and not has(t, "-1neon")]
     _deferred_ids = _deferred_habit_ids()
-    zeroneon = [t for t in sec("0neon", tomorrow) + sec("夜neon", tomorrow)
+    # Match the CLI's date cutoff, including deferred one-off habit copies.
+    zeroneon = [t for t in sec("0neon", today) + sec("夜neon", today)
                 if t.get("id") not in _deferred_ids]
     oneneon = sec("1neon", today)
     zerog = [t for t in today_tasks
@@ -580,15 +580,6 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         # and is never hidden here; a timed due already past today still shows.
         sched_dt = _parse_scheduled(t.get("due_datetime") or "")
         if sched_dt is not None and sched_dt > _now():
-            continue
-        # Cross-machine "done today": a recurring daily habit whose due date has
-        # advanced past today was completed today (each /close bumps it +1 day).
-        # The 0neon/夜neon sections are bounded to due<=tomorrow (to survive a
-        # drift), so these completed-and-advanced habits would otherwise linger.
-        # completed-today.json is machine-local and is stale on this host when the
-        # completion happened on the desktop (Straylight), so it can't hide them;
-        # the Todoist due date carried in the cache is the durable signal.
-        if t.get("recurring") and t.get("due") and t["due"] > today:
             continue
         raw = t["content"]
         display = t.get("short") or raw

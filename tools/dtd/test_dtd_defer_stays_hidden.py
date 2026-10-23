@@ -58,3 +58,16 @@ def test_habit_deferred_on_other_host_is_hidden(tmp_path):
     assert [t["id"] for t in dtd.build_tasks()] == ["h1"]
     (dtd.MIRROR_DIR / f"habits-deferred-straylight-refit-{TODAY}.ids").write_text("h1\n")
     assert dtd.build_tasks() == []
+
+
+def test_future_dated_habit_copy_is_hidden_like_the_cli(tmp_path):
+    """2026-10-22: a 0neon/夜neon habit due tomorrow (a delayed one-off copy,
+    or a recurring habit already closed today) showed on the phone because
+    build_tasks bounded those sections to due<=tomorrow while the CLI uses
+    due<=today."""
+    future = _task("f1", "xk26 (15) [10]", TOMORROW, labels=["0neon"])
+    night = _task("n1", "夜 read (20) [5]", TOMORROW, recurring=True, labels=["夜neon"])
+    due = _task("d1", "0l (10) [5]", TODAY, recurring=True, labels=["0neon"])
+    _setup(tmp_path, {"updated": dt.datetime.now().isoformat(),
+                      "0neon": [future, due], "夜neon": [night], "today": []})
+    assert [t["id"] for t in dtd.build_tasks()] == ["d1"]
