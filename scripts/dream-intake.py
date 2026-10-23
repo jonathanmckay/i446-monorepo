@@ -1049,6 +1049,43 @@ def _annual_goals_4g_vault_fallback(err):
     return out
 
 
+@source("weekly_goals_1g", "this week's 1g goals from the g245 2g+1g narrative (the authoritative mirror; the Neon 1g tab is a stale template)")
+def _weekly_goals_1g(today=None, root=None):
+    """Return the current week's block (and next week's, if set) from
+    vault/g245/5e2/<YYYY.MM> 2g+1g-narrative.md. Week headers look like
+    `- **Oct 18 – Oct 24** —`. Without this, every Dream run spent a subagent
+    rediscovering the goals (v163 needed 3 subagents to resolve one bullet)."""
+    today = today or datetime.date.today()
+    root = Path(root) if root else Path.home() / "vault" / "g245" / "5e2"
+    hdr = re.compile(r"^\s*- \*\*([A-Z][a-z]{2}) (\d{1,2}) [–-] ([A-Z][a-z]{2}) (\d{1,2})\*\*")
+    weeks = []
+    for f in sorted(root.glob("*2g+1g-narrative.md"))[-2:]:
+        year = int(f.name[:4])
+        cur = None
+        for line in f.read_text().splitlines():
+            m = hdr.match(line)
+            if m:
+                try:
+                    start = datetime.datetime.strptime(f"{m[1]} {m[2]} {year}", "%b %d %Y").date()
+                    end = datetime.datetime.strptime(f"{m[3]} {m[4]} {year}", "%b %d %Y").date()
+                except ValueError:
+                    cur = None
+                    continue
+                if end < start:  # week crosses New Year
+                    end = end.replace(year=year + 1)
+                cur = {"start": start.isoformat(), "end": end.isoformat(), "lines": [], "file": f.name}
+                weeks.append(cur)
+            elif line.startswith("#"):
+                cur = None
+            elif cur is not None and line.strip() and line.strip() != "-":
+                cur["lines"].append(line.rstrip())
+    iso = today.isoformat()
+    current = next((w for w in weeks if w["start"] <= iso <= w["end"]), None)
+    nxt = next((w for w in weeks if w["start"] > iso), None)
+    return {"current": current, "next": nxt,
+            "next_is_empty": nxt is not None and not nxt["lines"]}
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
