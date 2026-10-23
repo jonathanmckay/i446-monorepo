@@ -280,6 +280,43 @@ end tell
     return osascript(script)
 
 
+def recalc_guard() -> str:
+    """Catch Excel's dependency recalculation stalling (2026-10-22): from ~14:17
+    to 19:47 every write landed in its own cell (0分!R climbed 454 → 661) but
+    nothing downstream recalculated, so Σ (D) sat at 1099 while P:Y summed to
+    1382, Janus showed no points after 申, and the 18:00 block lock recorded 酉
+    as an empty block. `calculate` did nothing; `calculate full` fixed it.
+    D is =SUM(P:Y) by definition, so today's D disagreeing with the live sum
+    is a cheap, exact stall signal. Returns 'ok', 'skip', or 'STALE d s'."""
+    now = datetime.datetime.now()
+    row = lookup_row_cached("0分", f"{now.month}/{now.day}")
+    if not row:
+        return "skip"
+    script = f'''
+tell application "Microsoft Excel"
+    set ws to sheet "0分" of workbook "{WORKBOOK}"
+    if (formula of cell "D{row}" of ws) is not "=SUM(P{row}:Y{row})" then return "skip"
+    set d to value of cell "D{row}" of ws
+    set vals to value of range "P{row}:Y{row}" of ws
+    set row1 to item 1 of vals
+    set s to 0
+    -- indexed, not `repeat with v in`: that yields references and `v as real` fails
+    repeat with i from 1 to count of row1
+        try
+            set s to s + ((item i of row1) as real)
+        end try
+    end repeat
+    if (d - s) > 0.5 or (s - d) > 0.5 then
+        calculate full
+        return "STALE " & (d as string) & " " & (s as string)
+    end if
+    return "ok"
+end tell
+'''
+    rc, out, err = osascript(script)
+    return out.strip() if rc == 0 else f"error {err.strip()[:120]}"
+
+
 def save_loop() -> None:
     """Background watchdog, started as a daemon thread from main(). Forces an
     explicit save every SAVE_INTERVAL seconds instead of trusting AutoSave."""
@@ -298,6 +335,12 @@ def save_loop() -> None:
                     ping_macro()
                 except Exception as e:
                     sys.stderr.write(f"ping_macro: {e}\n")
+                try:
+                    g = recalc_guard()
+                    if g.startswith("STALE"):
+                        sys.stderr.write(f"recalc_guard: Σ stale, ran calculate full ({g})\n")
+                except Exception as e:
+                    sys.stderr.write(f"recalc_guard: {e!r}\n")
             if rc != 0:
                 sys.stderr.write(f"save_loop: save failed: {err}\n")
         except Exception as e:
