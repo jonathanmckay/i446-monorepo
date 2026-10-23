@@ -90,7 +90,8 @@ struct DtdSplitSheet: View {
                     Button("split") {
                         let p = Int(pts.trimmingCharacters(in: .whitespaces))
                         let m = Int(mins.trimmingCharacters(in: .whitespaces))
-                        guard p != nil || m != nil else { Toaster.shared.show("pts or min done required"); return }
+                        // The server (split-fast, like the terminal form) needs pts done.
+                        guard p != nil else { Toaster.shared.show("pts done required"); return }
                         onSplit(p, m, name.trimmingCharacters(in: .whitespaces), keep)
                         dismiss()
                     }
@@ -150,9 +151,11 @@ struct DtdFormSheet: View {
         case "multiline":
             TextField(f.label, text: binding(f.key), axis: .vertical).lineLimit(2...8)
         case "int":
+            // numbersAndPunctuation, not numberPad: some 0s numbers (x̄ mean)
+            // take decimals and the server accepts them.
             TextField(f.label, text: binding(f.key))
                 #if os(iOS)
-                .keyboardType(.numberPad)
+                .keyboardType(.numbersAndPunctuation)
                 #endif
         case "choice":
             Picker(f.label, selection: binding(f.key)) {
