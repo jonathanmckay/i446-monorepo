@@ -1,14 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "1500分": {
-      "todoist_id": "6hqFXQhCP87MwVfR",
-      "minutes": 80
-    },
     "75分 hcbp": {
       "todoist_id": "6hqFXQg7xh5GPQR2",
       "minutes": 30
     }
   },
-  "last_sync": "2026-10-23T20:00:04.257347-07:00"
+  "last_sync": "2026-10-23T22:00:01.336733-07:00"
 }
