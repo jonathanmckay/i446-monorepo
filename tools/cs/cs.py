@@ -247,6 +247,10 @@ def fuzzy(query, r):
         text = text.lower()
         if not text:
             continue
+        if field == 'custom' and text.endswith('⑂'):
+            # `cs fork` names its copy "<title> ⑂" as a custom title: left at 3.0 every fork would
+            # outrank its own original (an ai title, 2.0) on the next search for the same words
+            weight = 1.95
         if q in text:                       # whole phrase present: top score for this field
             best = max(best, weight + 0.3)
             continue
@@ -717,7 +721,10 @@ HOST_CODES = {'ix': 'ix', 'straylight': 'sl', 'imago-c': 'im'}
 
 
 def host_of(r):
-    """2-char code of the machine the session last launched from; '' before host tracking."""
+    """2-char code of the machine the session last launched from; '' before host tracking.
+    A row found on a peer shows '@' + that peer's code: its transcript is over there."""
+    if r.get('peer'):
+        return '@' + HOST_CODES.get(r['peer'], r['peer'][:2])
     try:
         h = (HOSTS / r['id']).read_text().strip().lower()
     except OSError:
@@ -747,8 +754,8 @@ def claims_of(r):
     return '▸ ' + ' · '.join(reversed(c)) if c else ''
 
 
-def cmd_ls(idx, query, show_all, long=False):
-    rows = rank(idx, query) if query else sorted(((0, r['mtime'], p, r) for p, r in idx.items()), key=lambda h: h[1], reverse=True)
+def cmd_ls(idx, query, show_all, long=False, remote=True):
+    rows = federated(idx, query, remote=remote) if query else sorted(((0, r['mtime'], p, r) for p, r in idx.items()), key=lambda h: h[1], reverse=True)
     if not show_all and not query:
         rows = rows[:LS_LIMIT]
     width = shutil.get_terminal_size((160, 40)).columns
@@ -767,8 +774,9 @@ def cmd_ls(idx, query, show_all, long=False):
     for _, mt, p, r in rows:
         t = title_of(r)
         mark = mark_of(r)
-        num = f"{nums[r['id']]:>2}" if r['id'] in nums else '  '
-        host = f'{host_of(r):<2}'
+        n = nums.get(r['id']) or r.get('num')   # a peer's row carries the number from its own cmux
+        num = f"{n:>2}" if n else '  '
+        host = f'{host_of(r):<3}'
         if long:
             cwd = r['cwd'].replace(str(Path.home()), '~')
             line = f"{num} {age(mt):>4} {host}  {mark} {t[:48]:<48}  {cwd[:34]:<34}  {r['id']}  {claims_of(r)}"
