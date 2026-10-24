@@ -109,6 +109,17 @@ _dtd_tz_refresh() {
 # silently dropped. The unique suffix isolates each launch; the $$ prefix lets
 # the sweep below reclaim files left by dead shells.
 DTD_ID="$$-$(date +%s)-$RANDOM"
+# Ctrl-Z can't freeze dtd (2026-10-24, "dtd cli just exited on its own"):
+# ^Z is dtd's UNDO key, but any moment the tty is in cooked mode (a value
+# prompt, the edit form, every `stty sane` between screens) the kernel turned
+# it into SIGTSTP, the whole dtd job stopped and the shell came back: dtd
+# looked like it quit. The stopped copy kept its fzf holding /dev/tty, and the
+# next launch in that tab ran beside it (found: a dtd stopped since 06:26 under
+# the session that died rc=2 at 09:21). So the tty has NO suspend character
+# for dtd's lifetime (every `stty sane` below re-applies `susp undef`); inside
+# fzf ^Z still arrives as a key and runs undo. A `trap '' TSTP` doesn't work:
+# zsh resets job-control signals to default in its children. Restored on exit.
+stty susp undef < /dev/tty 2>/dev/null
 # Reclaim temp files from dtd launches whose owning shell is gone. mtime >1h so
 # a detached did-fast/defer child of a just-exited run is never cut off.
 for _f in /tmp/dtd-<->-*(Nmh+1); do
@@ -846,7 +857,7 @@ _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}
 id="\$1"; form="\$2"; shift 2
 HDR="$DTD_HDR"
 export DTD_HDR_FILE="\$HDR"   # forms that finish in the background report here
-stty sane < /dev/tty 2>/dev/null
+stty sane susp undef < /dev/tty 2>/dev/null
 printf "\033[2J\033[H⏳ \${form:t}…" > /dev/tty
 # Timer start runs in the BACKGROUND (2026-10-18: "flashes through a bunch of
 # screens and is not fast" -- its two serial Toggl HTTP calls held a blank
@@ -1000,7 +1011,7 @@ if [[ -n "\$_ip" && -r /dev/tty ]]; then
   # prompt was invisible and the user pressed ⌃⏎ blind (bug 2026-07-21). Clear
   # to home so the question is the only thing visible, and force sane tty modes
   # so Enter always terminates the read.
-  stty sane < /dev/tty 2>/dev/null
+  stty sane susp undef < /dev/tty 2>/dev/null
   printf '\033[2J\033[H→ %s: ' "\$_ip" > /dev/tty
   read _iv < /dev/tty
   # Digits only: a blind ⌃⏎ (ESC CR) lands a literal ESC byte in the answer,
@@ -1312,7 +1323,7 @@ elif [[ -n "\${DTD_DEFER_PROMPT:-}" && -r /dev/tty ]]; then
   # screen, and I can't navigate items in the fzf", 2026-09-03). Clear to
   # home so the question is the only thing visible, and force sane tty
   # modes so Enter always terminates the read.
-  stty sane < /dev/tty 2>/dev/null
+  stty sane susp undef < /dev/tty 2>/dev/null
   printf "\033[2J\033[H\nDefer '%s' by N days / YYYY-MM-DD (blank or 0 = next occurrence if recurring, no copy created)> " "\$label" > /dev/tty
   print -- "\$EPOCHREALTIME\tdefer-prompt\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
   read days < /dev/tty
@@ -1752,7 +1763,7 @@ print -- "\$EPOCHREALTIME\tedit-start\t\$1" >> "\$TIMING" 2>/dev/null
 # navigate items in the fzf", 2026-09-03). Clear to home so the question is
 # the only thing visible, and force sane tty modes so Enter always
 # terminates the read.
-stty sane < /dev/tty 2>/dev/null
+stty sane susp undef < /dev/tty 2>/dev/null
 stty intr undef quit undef < /dev/tty 2>/dev/null  # sane reset intr; keep ^C a byte (see top)
 printf "\033[2J\033[H⏳" > /dev/tty
 # ctrl-o and ctrl-p both open this screen (2026-10-11: "ideally ctrl+g and
@@ -4255,5 +4266,6 @@ kill "$TALLY_PID" 2>/dev/null
 # $DTD_PUSHED.log deliberately NOT removed here (matches $DTD_SKIPPED's
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
+stty susp '^Z' < /dev/tty 2>/dev/null   # give ^Z back to the shell (see DTD_ID)
 rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
 rm -rf "$DTD_RESOLVED_DIR" 2>/dev/null
