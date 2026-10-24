@@ -22,10 +22,12 @@ section, ctrl-o on the remainder; ^P / ^O jump between them. Enter / Tab
 move on (Enter in notes = newline), Enter on the last field or ^S saves,
 Esc / ^C / ^Q cancel.
 
-Bonus and do-date (2026-10-22, "-1g goals"): a task with {N} gets a bonus
-field beside pts done and a {N} bonus field in the remainder; with no {N}
-neither appears. Bonus done reduces the remainder's bonus exactly like pts
-done reduces [N]. The remainder's do-date shows the task's due date and
+Bonus and do-date (2026-10-22, "-1g goals"): every task has a {N} bonus
+field in the remainder (since 2026-10-24; blank when the task has none, and
+typing a number adds {N}); a task that already has {N} also gets a bonus
+field beside pts done. Bonus done reduces the remainder's bonus exactly like
+pts done reduces [N]. Option+←/→ moves by word; the cursor opens at the start
+of the name (2026-10-24). The remainder's do-date shows the task's due date and
 follows to today once anything is done (2026-10-22: it used to jump to
 tomorrow, and the remainder vanished from dtd) (typed: ISO, M/D, M.D, today,
 tmrw, mon..sun, +N). "keep remainder" (default checked) unchecked means
@@ -420,6 +422,24 @@ class Field:
         self.cur = s
         self.touched = True
 
+    def word_left(self) -> None:
+        """Option+← (2026-10-24): to the start of this or the previous word."""
+        i = self.cur
+        while i > 0 and self.text[i - 1] in " \t\n":
+            i -= 1
+        while i > 0 and self.text[i - 1] not in " \t\n":
+            i -= 1
+        self.cur = i
+
+    def word_right(self) -> None:
+        """Option+→: to the end of this or the next word."""
+        i, n = self.cur, len(self.text)
+        while i < n and self.text[i] in " \t\n":
+            i += 1
+        while i < n and self.text[i] not in " \t\n":
+            i += 1
+        self.cur = i
+
     def delete_word(self) -> None:
         i = self.cur
         while i > 0 and self.text[i - 1] in " \t":
@@ -475,7 +495,9 @@ class Form:
             Field("name", "name", pre["name"], rows=2),
             Field("time", "(N) min", pre["time"], width=6),
             Field("points", "[N] pts", pre["points"], width=6),
-            *([Field("bonus", "{N} bonus", pre["bonus"], width=6)] if pre["has_bonus"] else []),
+            # On every task (2026-10-24: "add a field for bonus points (usually
+            # blank) to all tasks"); blank stays blank, a typed N adds {N}.
+            Field("bonus", "{N} bonus", pre["bonus"], width=6),
             Field("due", "do-date", pre["due"], width=12),
             Field("keep", "keep remainder", "x", check=True),
             # common
@@ -484,6 +506,8 @@ class Form:
             Field("domain", "project", pre["domain"], width=10),
         ]
         self.by = {f.key: f for f in self.fields}
+        # Cursor at the START of the name (2026-10-24): edits usually begin there.
+        self.by["name"].cur = self.by["done_name"].cur = 0
         # ctrl-p lands on the done section; ctrl-o / ctrl-g on the remainder
         self.focus = self.by["done_name"] if focus == "split" else self.by["name"]
         self._thread: threading.Thread | None = None
@@ -527,7 +551,7 @@ class Form:
         pts, mins = remainder(self.pre["points"], self.pre["time"],
                               self.by["done_pts"].text, self.by["done_min"].text)
         follow = [("points", pts), ("time", mins)]
-        if "bonus" in self.by:
+        if "done_bonus" in self.by:   # only a task that already has {N} can split it
             follow.append(("bonus", remainder_of(self.pre["bonus"], self.by["done_bonus"].text)))
         # the do-date: the task's own due date, today once anything is done
         # (the remainder stays in dtd; type a date to push it)
@@ -884,7 +908,14 @@ class Form:
             f.insert(key)
         return None
 
-    def _swallow_csi(self, scr) -> None:
+    # Option/Alt+arrow as raw CSI (ESC [ 1;3D, 1;9D for Meta) when terminfo
+    # has no key for it, and the curses key names when it does (2026-10-24).
+    WORD_LEFT_CSI = ("1;3D", "1;9D")
+    WORD_RIGHT_CSI = ("1;3C", "1;9C")
+    WORD_LEFT_KEYS = (b"kLFT3", b"kLFT9")
+    WORD_RIGHT_KEYS = (b"kRIT3", b"kRIT9")
+
+    def _swallow_csi(self, scr) -> str:
         """Drop the rest of a control sequence whose ESC [ was just read: its
         parameter bytes up to the final byte (@..~), plus the three raw bytes
         a legacy X10 mouse report (ESC [ M b x y) carries after its M.
@@ -909,6 +940,7 @@ class Form:
                         scr.get_wch()
                     except curses.error:
                         break
+            return seq
         finally:
             scr.nodelay(False)
             scr.timeout(60)
@@ -953,6 +985,15 @@ class Form:
                 # consume the report's prefix; its b;x;y + M/m follow as chars
                 self._swallow_csi(scr)
                 continue
+            if isinstance(key, int):
+                try:
+                    kname = curses.keyname(key)
+                except (ValueError, curses.error):
+                    kname = b""
+                if kname in self.WORD_LEFT_KEYS or kname in self.WORD_RIGHT_KEYS:
+                    (self.focus.word_left if kname in self.WORD_LEFT_KEYS else self.focus.word_right)()
+                    self.draw(scr)
+                    continue
             act = self.handle(key)
             if act == "esc":
                 # a lone Esc cancels; Esc + key within the escdelay window is
@@ -967,7 +1008,15 @@ class Form:
                 if nxt is None:
                     act = "cancel"
                 elif nxt == "[":
-                    self._swallow_csi(scr)     # a mouse report, not alt-[
+                    seq = self._swallow_csi(scr)   # a mouse report or an Alt-arrow
+                    if seq in self.WORD_LEFT_CSI:
+                        self.focus.word_left()
+                    elif seq in self.WORD_RIGHT_CSI:
+                        self.focus.word_right()
+                    act = None
+                elif nxt in ("b", "f"):
+                    # Option-as-Meta (macOS Terminal, many terminals): ESC b / ESC f
+                    (self.focus.word_left if nxt == "b" else self.focus.word_right)()
                     act = None
                 elif nxt in ("\x7f", "\x08", curses.KEY_BACKSPACE):
                     self.focus.delete_word()

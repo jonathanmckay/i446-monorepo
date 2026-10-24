@@ -239,9 +239,12 @@ BONUS = "ship the -1g memo for the whole org (30) [20] {10}"
 
 
 def test_pty_bonus_only_shows_with_curly_and_drives_its_remainder(tmp_path):
-    # no {N}: neither bonus field is drawn
+    # no {N}: the remainder's {N} bonus field is drawn (blank, on every task
+    # since 2026-10-24) but the done section's "bonus" (bonus done) is not
     rc, _, _, _, screen = _run(tmp_path, "\x1b")
-    assert rc == 2 and "bonus" not in screen and "do-date" in screen and "keep remainder" in screen
+    assert rc == 2 and "{N} bonus" in screen and "do-date" in screen and "keep remainder" in screen
+    done_row = next(l for l in screen.splitlines() if "min done" in l)
+    assert "bonus" not in done_row
     # {N}: done → min 20, pts 15, bonus 4; the remainder's {N} follows to 6 and
     # the do-date to today (the remainder stays in dtd)
     rc, out, _, _, screen = _run(tmp_path / "b", "\t20\t15\t4\x13", focus="split", content=BONUS)
@@ -256,8 +259,9 @@ def test_pty_bonus_only_shows_with_curly_and_drives_its_remainder(tmp_path):
 
 
 def test_pty_unchecking_keep_remainder_is_partial_credit(tmp_path):
-    # pts done 15, ^O to the remainder, Tab ×4 → keep, space unchecks, ^S
-    rc, out, _, _, screen = _run(tmp_path, "\t\t15\x0f\t\t\t\t \x13", focus="split")
+    # pts done 15, ^O to the remainder, Tab ×5 → keep (name, min, pts, bonus,
+    # do-date, keep), space unchecks, ^S
+    rc, out, _, _, screen = _run(tmp_path, "\t\t15\x0f\t\t\t\t\t \x13", focus="split")
     assert rc == 0, screen[-300:]
     j = json.loads(out.read_text())
     assert j["split"]["keep"] is False and j["split"]["pts"] == 15
@@ -265,7 +269,7 @@ def test_pty_unchecking_keep_remainder_is_partial_credit(tmp_path):
 
 def test_pty_typed_do_date_is_saved_as_iso(tmp_path):
     import datetime as dt
-    rc, out, _, _, _ = _run(tmp_path, "\t\t15\x0f\t\t\t\x15+2\x13", focus="split")
+    rc, out, _, _, _ = _run(tmp_path, "\t\t15\x0f\t\t\t\t\x15+2\x13", focus="split")
     assert rc == 0
     j = json.loads(out.read_text())
     assert j["due"] == (dt.date.today() + dt.timedelta(days=2)).isoformat()
@@ -288,3 +292,28 @@ def test_pty_mouse_reports_never_type_into_a_field(tmp_path):
     j = json.loads(out.read_text())
     assert j["name"] == "write the quarterly planning memo for the whole org", j["name"]
     assert "<0;" not in screen and "<35;" not in screen
+
+
+
+# ── 2026-10-24: cursor at the start, Option+arrow by word, bonus on every task ──
+
+def test_pty_cursor_opens_at_the_start_of_the_name(tmp_path):
+    rc, out, _, _, _ = _run(tmp_path, "X\x13")
+    assert rc == 0
+    assert json.loads(out.read_text())["name"] == "Xwrite the quarterly planning memo for the whole org"
+
+
+@pytest.mark.parametrize("left,right", [("\x1bb", "\x1bf"), ("\x1b[1;3D", "\x1b[1;3C")])
+def test_pty_option_arrow_moves_by_word(tmp_path, left, right):
+    # from the start: → twice lands after "the", ← once back before "the"
+    rc, out, _, _, screen = _run(tmp_path, [right, right, left, "Z", "\x13"])
+    assert rc == 0, screen[-300:]
+    assert json.loads(out.read_text())["name"] == "write Zthe quarterly planning memo for the whole org"
+
+
+def test_pty_bonus_can_be_added_to_a_task_without_one(tmp_path):
+    # remainder name → Tab (min) → Tab (pts) → Tab ({N} bonus): type 5, save
+    rc, out, _, _, screen = _run(tmp_path, "\t\t\t5\x13")
+    assert rc == 0, screen[-300:]
+    j = json.loads(out.read_text())
+    assert j["bonus"] == "5" and j["split"] is None
