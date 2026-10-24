@@ -47,7 +47,7 @@ parsing and writing.
 
 ## Files
 
-- Log: `~/vault/xk87/xk23 学习 McKay Curriculum/cais-attendance.md` (one row per event)
+- Log: `~/vault/xk87/xk23-mckay-curriculum/cais-attendance.md` (one row per event)
 - Summary: the `<!-- attendance:start -->…<!-- attendance:end -->` block in
   `independence-agency-enterprise.md` under `### Morning Routine`
 - Unlisted school days are on-time arrivals; Veracross only records exceptions.

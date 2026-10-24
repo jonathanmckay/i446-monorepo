@@ -11,7 +11,7 @@ vocabulary**, with **one illustration per page**, assembled as an Obsidian doc t
 read aloud, exported to PDF, and logged to a cumulative reader tracker. Images
 come from the OpenAI Images API.
 
-Companion to the agency/curriculum work in `xk23 学习 McKay Curriculum/`.
+Companion to the agency/curriculum work in `xk23-mckay-curriculum/`.
 
 ## Two modes
 
@@ -20,8 +20,8 @@ Companion to the agency/curriculum work in `xk23 学习 McKay Curriculum/`.
 | Language | Simplified **Chinese** | **English phonics** |
 | Protagonist | **波波 = Lemmee**, the YooHoo ring-tailed lemur (silver-grey fur, white face, big green eyes, black-and-white ringed tail) | **Bobo = YooHoo** the bushbaby (white/grey fur, big blue eyes, **rainbow-striped tail**) |
 | Level | ~150 distinct characters (see envelope) | **Bob Books**: CVC words + a few pre-primer sight words; rhyming families (-un, -op, -at) |
-| Tracker / spine | `中文 reader tracker.md` | `English reader tracker (Ren).md` |
-| Folder | `Theo PK3 Curriculum →08 2025/<slug>/` | `Ren PK2 Curriculum →09 2025/<slug>/` |
+| Tracker / spine | `xk23-chinese-reader-tracker.md` | `xk23-english-reader-tracker.md` |
+| Folder | `Theo PK3 Curriculum →08 2025/<slug>/` | `ren-pk2-2025-09/<slug>/` |
 
 Pick the mode from the request ("for Ren" → English/Bobo; default → Chinese/Theo).
 The two Bobos are **different characters** — never mix the lemur and the bushbaby.
@@ -97,7 +97,7 @@ are integers; if not, ask the user to reformat.
 - Keep sentences short (3–8 characters typical for low counts). Simple narrative
   arc: setup → adventure → friend/turn → resolution → warm ending.
 - If a canonical list of Theo's known characters exists (read
-  `xk23 学习 McKay Curriculum/中文 reader tracker.md` — every character under "New
+  `xk23-mckay-curriculum/xk23-chinese-reader-tracker.md` — every character under "New
   characters by book" is already introduced), prefer it over raw frequency: lean
   on already-introduced characters and add only a modest set of new ones.
 - After drafting, **list the unique characters used and the count**, and confirm
@@ -130,7 +130,7 @@ intentionally minimal and decodable, not "natural."
 
 **Ren mode (English phonics):** instead of the above, write `length` very short
 sentences (3–6 words, one per page) at **Bob Books level**. Read
-`English reader tracker (Ren).md` first and keep words within its **Known-word
+`xk23-english-reader-tracker.md` first and keep words within its **Known-word
 spine** (Bob Books Set 1 corpus), adding only a few deliberate new words — ideally
 from the *next* CVC family she's working on (-un, -op, -et, etc.). No digraphs,
 blends, or CVCe yet. Non-decodable names (Bobo, Vader) go in a "Tricky words"
@@ -138,7 +138,7 @@ glossary. After drafting, list the words used and flag any beyond the spine.
 
 ### 4. Create the book folder + markdown
 - Slug = ASCII-safe short name (e.g. `bobo-xwing`); title may be Chinese.
-- Folder: `~/vault/xk87/xk23 学习 McKay Curriculum/readers/<slug>/`
+- Folder: `~/vault/xk87/xk23-mckay-curriculum/readers/<slug>/`
 - Write `<slug>.md`:
   ```
   # <中文标题>
@@ -199,7 +199,7 @@ open "<book folder>/<slug>.pdf"
 `make_pdf.py` is pure Pillow and uses a macOS CJK font, so the Chinese renders.
 
 ### 9. Update the tracker
-Append the book to `xk23 学习 McKay Curriculum/中文 reader tracker.md`:
+Append the book to `xk23-mckay-curriculum/xk23-chinese-reader-tracker.md`:
 - Reading log row: book #, title, page count, **characters read** (count every
   Chinese-character occurrence in the captions), and the new running total.
 - A "New characters by book" subsection listing the characters this book
@@ -227,6 +227,6 @@ paths to the `.md` and `.pdf`, and total cost (`length × per-image price`).
   `high` quality helps a little. Offer to regenerate any off-model page.
 - **Series reuse:** for sequel Bobo books, reuse the exact Bobo (Lemmee the
   ring-tailed lemur) description so the whole shelf looks like one series.
-- Existing example to match: `xk23 学习 McKay Curriculum/Theo PK3 Curriculum →08
+- Existing example to match: `xk23-mckay-curriculum/Theo PK3 Curriculum →08
   2025/波波和X-Wing/` (14 pages, ~150-char vocab, 5-word 生词 glossary, medium
   quality, with `波波和X-Wing.pdf`).

@@ -23,7 +23,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-CURR = Path.home() / "vault" / "xk87" / "xk23 学习 McKay Curriculum"
+CURR = Path.home() / "vault" / "xk87" / "xk23-mckay-curriculum"
 LOG = CURR / "cais-attendance.md"
 DOC = CURR / "independence-agency-enterprise.md"
 START, END = "<!-- attendance:start -->", "<!-- attendance:end -->"
