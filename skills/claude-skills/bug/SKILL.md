@@ -62,14 +62,34 @@ Open (or create) the test file for the affected module. Add a focused test that:
 
 ### Step 5: Run the tests
 
-Run the test file to confirm the new test passes and no existing tests broke:
+Run **only the affected test file**, not the whole suite, and bound it — a
+full-repo `pytest` or one hanging test (network, server spin-up) blows the
+Bash 120s limit and surfaces as "/bug timed out when finishing":
 
 ```bash
-python3 -m pytest <test_file> -v
+python3 -m pytest <test_file> -q --timeout=60 2>/dev/null || python3 -m pytest <test_file> -q
 ```
+
+(The `--timeout` flag needs `pytest-timeout`; the `||` falls back if it isn't
+installed. If you must run a broader check, pass the Bash tool an explicit
+`timeout` and `run_in_background` rather than blocking the turn.)
 
 Report: what was broken, what line was changed, and that tests pass.
 
 ### Step 6: Restart process (if process name was given)
 
-If a process name was provided, restart it now that the fix is verified.
+Restart it now that the fix is verified — **non-blocking**. The timeout people
+hit at finish is almost always a foreground service start that never returns
+(`python3 server.py` holds the Bash call open until the 120s limit).
+
+- A **launchd** service (dtd, janus, dashboard, …): `launchctl kickstart -k
+  gui/$(id -u)/<label>` — returns immediately. Find the label with
+  `launchctl list | grep <name>`.
+- A **cmux-pane** process (ibx0, …): `cmux respawn-pane --surface
+  surface:<N> --command "<restart_command>"`.
+- Anything else: background it (`nohup <cmd> >/tmp/<name>.log 2>&1 &`), never
+  foreground. Verify it came up with a quick bounded `curl`/`pgrep`; do **not**
+  wait on the process itself.
+
+If cmux isn't available or the surface/label is unknown, tell the user to
+restart manually rather than blocking.

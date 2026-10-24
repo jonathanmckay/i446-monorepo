@@ -11,6 +11,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 _SPEC = importlib.util.spec_from_file_location("dtd_defer", Path(__file__).parent / "dtd.py")
 dtd = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(dtd)
@@ -60,14 +62,36 @@ def test_habit_deferred_on_other_host_is_hidden(tmp_path):
     assert dtd.build_tasks() == []
 
 
-def test_future_dated_habit_copy_is_hidden_like_the_cli(tmp_path):
-    """2026-10-22: a 0neon/夜neon habit due tomorrow (a delayed one-off copy,
-    or a recurring habit already closed today) showed on the phone because
-    build_tasks bounded those sections to due<=tomorrow while the CLI uses
-    due<=today."""
-    future = _task("f1", "xk26 (15) [10]", TOMORROW, labels=["0neon"])
-    night = _task("n1", "夜 read (20) [5]", TOMORROW, recurring=True, labels=["夜neon"])
-    due = _task("d1", "0l (10) [5]", TODAY, recurring=True, labels=["0neon"])
-    _setup(tmp_path, {"updated": dt.datetime.now().isoformat(),
-                      "0neon": [future, due], "夜neon": [night], "today": []})
-    assert [t["id"] for t in dtd.build_tasks()] == ["d1"]
+@pytest.mark.parametrize("section", ["0neon", "夜neon"])
+@pytest.mark.parametrize("recurring", [False, True])
+def test_daily_tasks_api_uses_same_due_date_cutoff_as_cli(tmp_path, monkeypatch, section, recurring):
+    now = dt.datetime.combine(dt.date.fromisoformat(TODAY), dt.time(12), dt.timezone.utc)
+    monkeypatch.setattr(dtd, "_now", lambda: now)
+    monkeypatch.setattr(dtd, "day_summary", lambda force=False: {"points": 0, "done": 0})
+    yesterday = (now.date() - dt.timedelta(days=1)).isoformat()
+    tasks = [
+        _task("overdue", "overdue habit copy", yesterday, recurring=recurring, labels=[section]),
+        _task("today", "today's habit copy", TODAY, recurring=recurring, labels=[section]),
+        _task("tomorrow", "delayed habit copy", TOMORROW, recurring=recurring, labels=[section]),
+    ]
+    _setup(tmp_path, {section: tasks})
+
+    response = dtd.app.test_client().get("/api/tasks")
+
+    assert response.status_code == 200
+    assert response.json["ok"]
+    assert {t["id"] for t in response.json["tasks"]} == {"overdue", "today"}
+
+
+@pytest.mark.parametrize("section", ["0neon", "夜neon"])
+def test_deferred_daily_copy_returns_only_when_its_due_date_arrives(tmp_path, monkeypatch, section):
+    clock = [dt.datetime.combine(dt.date.fromisoformat(TODAY), dt.time(12), dt.timezone.utc)]
+    monkeypatch.setattr(dtd, "_now", lambda: clock[0])
+    _setup(tmp_path, {section: [
+        _task("copy", "deferred habit copy", TOMORROW, labels=[section]),
+    ]})
+
+    assert dtd.build_tasks() == []
+
+    clock[0] += dt.timedelta(days=1)
+    assert [t["id"] for t in dtd.build_tasks()] == ["copy"]
