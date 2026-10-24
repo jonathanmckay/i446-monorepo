@@ -21,7 +21,7 @@ Companion to the agency/curriculum work in `xk23-mckay-curriculum/`.
 | Protagonist | **波波 = Lemmee**, the YooHoo ring-tailed lemur (silver-grey fur, white face, big green eyes, black-and-white ringed tail) | **Bobo = YooHoo** the bushbaby (white/grey fur, big blue eyes, **rainbow-striped tail**) |
 | Level | ~150 distinct characters (see envelope) | **Bob Books**: CVC words + a few pre-primer sight words; rhyming families (-un, -op, -at) |
 | Tracker / spine | `xk23-chinese-reader-tracker.md` | `xk23-english-reader-tracker.md` |
-| Folder | `Theo PK3 Curriculum →08 2025/<slug>/` | `ren-pk2-2025-09/<slug>/` |
+| Folder | current Theo grade folder, e.g. `theo-pk3-2025-08/<slug>/` | current Ren grade folder, e.g. `ren-pk2-2025-09/<slug>/` |
 
 Pick the mode from the request ("for Ren" → English/Bobo; default → Chinese/Theo).
 The two Bobos are **different characters** — never mix the lemur and the bushbaby.
@@ -137,10 +137,24 @@ blends, or CVCe yet. Non-decodable names (Bobo, Vader) go in a "Tricky words"
 glossary. After drafting, list the words used and flag any beyond the spine.
 
 ### 4. Create the book folder + markdown
-- Slug = ASCII-safe short name (e.g. `bobo-xwing`); title may be Chinese.
-- Folder: `~/vault/xk87/xk23-mckay-curriculum/readers/<slug>/`
-- Write `<slug>.md`:
+- Slug = ASCII kebab-case short name (e.g. `bobo-xwing`), never Chinese; the
+  Chinese title goes in the H1 and in `aliases:`.
+- Folder: the target kid's **current grade folder** under
+  `~/vault/xk87/xk23-mckay-curriculum/`, i.e. the newest `<kid>-<level>-YYYY-MM/`
+  folder by its YYYY-MM suffix (`theo-pk3-2025-08/`, `ren-pk2-2025-09/`). Resolve
+  it with the script, never by hand; it also returns the tracker path:
+  ```bash
+  python3 ~/.claude/skills/picturebook/book_dir.py <theo|ren> <slug> --mkdir
+  # -> {"book_dir", "md", "pdf", "tracker", "grade_dir"}
   ```
+  Never create a `readers/` folder. If no grade folder exists for the kid, stop
+  and ask which one to create.
+- Write `<slug>.md` (frontmatter alias, no `title:`, so the H1 is the only title):
+  ```
+  ---
+  aliases:
+    - "<中文标题>"
+  ---
   # <中文标题>
 
   *A first reader for Theo — ~<vocab_count>-character vocabulary. Read aloud, one picture per sentence.*
@@ -199,7 +213,12 @@ open "<book folder>/<slug>.pdf"
 `make_pdf.py` is pure Pillow and uses a macOS CJK font, so the Chinese renders.
 
 ### 9. Update the tracker
-Append the book to `xk23-mckay-curriculum/xk23-chinese-reader-tracker.md`:
+Use the `tracker` path from `book_dir.py` (Theo:
+`xk23-mckay-curriculum/xk23-chinese-reader-tracker.md`; Ren:
+`xk23-mckay-curriculum/xk23-english-reader-tracker.md`, same steps with words instead
+of characters: reading-log row with words read + running total, and the new CVC
+words / tricky words this book adds to the known-word spine).
+For Theo, append the book to the Chinese tracker:
 - Reading log row: book #, title, page count, **characters read** (count every
   Chinese-character occurrence in the captions), and the new running total.
 - A "New characters by book" subsection listing the characters this book
@@ -227,6 +246,6 @@ paths to the `.md` and `.pdf`, and total cost (`length × per-image price`).
   `high` quality helps a little. Offer to regenerate any off-model page.
 - **Series reuse:** for sequel Bobo books, reuse the exact Bobo (Lemmee the
   ring-tailed lemur) description so the whole shelf looks like one series.
-- Existing example to match: `xk23-mckay-curriculum/Theo PK3 Curriculum →08
-  2025/波波和X-Wing/` (14 pages, ~150-char vocab, 5-word 生词 glossary, medium
-  quality, with `波波和X-Wing.pdf`).
+- Existing example to match: `xk23-mckay-curriculum/theo-pk3-2025-08/bobo-xwing/`
+  (波波和 X-Wing: 14 pages, ~150-char vocab, 5-word 生词 glossary, medium
+  quality, with `bobo-xwing.pdf`). Ren: `ren-pk2-2025-09/bobo-and-vader/`.
