@@ -36,6 +36,15 @@ TS=$(date '+%Y-%m-%d %H:%M:%S')
 
 cd "$REPO_DIR" || { echo "[$TS] ERROR: cd $REPO_DIR failed"; exit 1; }
 
+# Branch guard (2026-10-24, same incident as git-autopush.sh's): commit and
+# push nothing unless ~/vault is on main; raise a critical alert + dtd card.
+VAULT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$VAULT_BRANCH" != "${AUTOPUSH_EXPECT_BRANCH:-main}" ]; then
+    echo "[$TS] ERROR: vault on branch '$VAULT_BRANCH', expected '${AUTOPUSH_EXPECT_BRANCH:-main}' -- not committing or pushing"
+    python3 "$HOME/i446-monorepo/scripts/autopush_branch_alert.py" "$REPO_DIR" "$VAULT_BRANCH" "${AUTOPUSH_EXPECT_BRANCH:-main}" || true
+    exit 2
+fi
+
 git add -A
 
 # Never commit a file GitHub will reject (hard limit 100 MB). On 2026-10-11

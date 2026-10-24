@@ -8,10 +8,24 @@ TS=$(date '+%Y-%m-%d %H:%M:%S')
 
 cd "$REPO_DIR" || { echo "[$TS] ERROR: cd $REPO_DIR failed"; exit 1; }
 
+# Branch guard (2026-10-24): a session ran `git checkout -b ios-nits-2026-10-22`
+# in the shared monorepo checkout and this script, pushing "the current branch",
+# followed it for two days (173 snapshots never reached wip). On the wrong
+# branch, commit and push NOTHING and raise a critical alert + dtd card;
+# switching back stays a human decision (the branch may hold real work).
+# Expected branch: $AUTOPUSH_EXPECT_BRANCH, else wip for the monorepo itself;
+# other repos run unguarded unless the env var is set.
+EXPECT="${AUTOPUSH_EXPECT_BRANCH:-}"
+[ -z "$EXPECT" ] && [ "$REPO_DIR" = "$HOME/i446-monorepo" ] && EXPECT=wip
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ -n "$EXPECT" ] && [ "$BRANCH" != "$EXPECT" ]; then
+    echo "[$TS] ERROR: on branch '$BRANCH', expected '$EXPECT' -- not committing or pushing"
+    python3 "$(dirname "$0")/autopush_branch_alert.py" "$REPO_DIR" "$BRANCH" "$EXPECT" || true
+    exit 2
+fi
+
 # Stage all changes
 git add -A
-
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # If nothing to commit, log and exit -- UNLESS earlier commits never reached
 # origin. A failed pull/push leaves the branch ahead of origin; this early
 # exit used to skip the sync step entirely on every later "no changes" run,
