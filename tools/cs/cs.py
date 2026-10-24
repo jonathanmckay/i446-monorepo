@@ -25,6 +25,15 @@
                                names are fuzzy or current numbers; unnamed panes follow by position)
   cs retitle                   rename every pane's cmux tab to 'N · title' (dtd 1, janus 2, Claude 3+)
                                (the session-title hook calls this on start/prompt/stop)
+  cs hits <query>              JSON ranked matches on this host only (what peers ask for)
+
+Every host: ls/fork/open with a query also search the other Macs (PEERS: ix, straylight; CS_PEERS
+overrides) over ssh and merge by score; their rows show host '@sl' / '@ix' and that Mac's pane
+number. Forking a match from another Mac copies its transcript here first; `open` refuses (two
+copies of one id would diverge). id/tmux stay on this Mac unless given --everywhere; --local
+turns peers off. A peer that does not answer is skipped for 60 s. Inside a Claude session
+($CLAUDE_CODE_SESSION_ID) the session itself never matches its own words, only its id.
+
 Options: --from ix   resolve on another host and copy the transcript here first
          --cd        chdir to the session's original cwd before launching
          --pick      always open the fzf picker, even when the query is unambiguous
@@ -788,7 +797,96 @@ def cmd_ls(idx, query, show_all, long=False, remote=True):
 TITLE_MIN = 1.4   # fuzzy() score reachable only via a title or a claimed task, never via the first prompt alone
 
 
-def resolve(idx, query, force_pick=False, no_pick=False, title_only=False):
+PEERS = ('ix', 'straylight')   # ssh aliases of the Macs that keep their own ~/.claude/projects
+PEER_DOWN = STATE / 'peer-down'   # <host> touched when its ssh failed; skipped for PEER_DOWN_TTL s
+PEER_DOWN_TTL = 60
+HITS_MAX = 20
+
+
+def self_host():
+    import socket
+    return socket.gethostname().split('.')[0].lower()
+
+
+def peers():
+    """The other Macs to search (CS_PEERS=a,b overrides; empty = none). Straylight's hostname is
+    Straylight-Refit, hence startswith."""
+    env = os.environ.get('CS_PEERS')
+    hosts = [h.strip() for h in env.split(',')] if env is not None else list(PEERS)
+    me = self_host()
+    return [h for h in hosts if h and not me.startswith(h.lower())]
+
+
+def hits_json(idx, query):
+    """`cs hits`: this host's ranked matches as JSON for a peer's federated search. Records keep
+    the index's fields (so title_of/mark_of/claims_of work over there) plus score and pane number."""
+    nums = cmux_numbers()
+    return [{**r, 'score': s, 'num': nums.get(r['id'])} for s, _, _, r in rank(idx, query)[:HITS_MAX]]
+
+
+def remote_hits(query):
+    """{host: [record, ...]} from every reachable peer's `cs hits`, asked in parallel. A peer that
+    fails is noted on stderr and skipped for a minute, so a sleeping Mac costs one ConnectTimeout,
+    not one per search."""
+    import shlex
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(h):
+        down = PEER_DOWN / h
+        try:
+            if time.time() - down.stat().st_mtime < PEER_DOWN_TTL:
+                return h, None
+        except OSError:
+            pass
+        try:
+            r = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2', h,
+                                'python3 ~/i446-monorepo/tools/cs/cs.py hits ' + shlex.quote(query)],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                return h, json.loads(r.stdout)
+        except Exception:
+            pass
+        try:
+            PEER_DOWN.mkdir(parents=True, exist_ok=True)
+            down.touch()
+        except OSError:
+            pass
+        return h, None
+
+    hs = peers()
+    if not hs:
+        return {}
+    with ThreadPoolExecutor(len(hs)) as ex:
+        res = dict(ex.map(one, hs))
+    for h, rows in res.items():
+        if rows is None:
+            print(f'cs: {h} did not answer; its sessions were not searched', file=sys.stderr)
+    return {h: rows for h, rows in res.items() if rows}
+
+
+def federated(idx, query, title_only=False, remote=True):
+    """rank() over this host plus every peer (2026-10-24: /fork run on ix could not see the
+    straylight session it named, and fell back to matching its own '/fork …' first prompt).
+    Rows from a peer carry rec['peer']. A session on both hosts (one was copied by a fork)
+    keeps the newer copy. With remote, the asking Claude session is dropped unless named by id."""
+    hits = rank(idx, query)
+    if remote:
+        for host, rows in remote_hits(query).items():
+            for rec in rows:
+                hits.append((rec['score'], rec['mtime'], f'{host}:{rec["id"]}', {**rec, 'peer': host}))
+    me = os.environ.get('CLAUDE_CODE_SESSION_ID', '') if remote else ''
+    best = {}
+    for h in hits:
+        sid = h[3]['id']
+        if me and sid == me and h[0] < 4.0:
+            continue
+        if sid not in best or h[1] > best[sid][1]:
+            best[sid] = h
+    out = sorted(best.values(), key=lambda h: (h[0], h[1]), reverse=True)
+    return [h for h in out if h[0] >= TITLE_MIN] if title_only else out
+
+
+def resolve(idx, query, force_pick=False, no_pick=False, title_only=False, remote=False):
     if query.strip().isdigit() and len(query.strip()) <= 2:
         n = int(query)
         for sid, k in cmux_numbers().items():
@@ -800,15 +898,14 @@ def resolve(idx, query, force_pick=False, no_pick=False, title_only=False):
             sys.exit(f'cs: pane {n} is a new Claude session with no transcript yet; nothing to fork or resume')
         if 0 < n < CLAUDE_FIRST:
             sys.exit(f'cs: pane {n} is {TOOL_PANES[n - 1]}, not a Claude session (Claude panes start at {CLAUDE_FIRST})')
-        sys.exit(f'cs: no Claude pane numbered {n} in this cmux workspace (see `cs ls`)')
+        hint = '' if shutil.which('cmux') else f'; pane numbers belong to the Mac running cmux, not {self_host()}: use a title or id'
+        sys.exit(f'cs: no Claude pane numbered {n} in this cmux workspace (see `cs ls`){hint}')
     if force_pick or not query:
         r = pick(idx, query)
         if r is None:
             sys.exit('cs: nothing picked' if query or shutil.which('fzf') else 'cs: need a title query (fzf not installed)')
         return r
-    hits = rank(idx, query)
-    if title_only:
-        hits = [h for h in hits if h[0] >= TITLE_MIN]
+    hits = federated(idx, query, title_only, remote)
     if not hits:
         sys.exit(f'cs: no session {"title " if title_only else ""}matches {query!r}')
     ambiguous = len(hits) > 1 and abs(hits[1][0] - hits[0][0]) < 1e-9
@@ -820,6 +917,8 @@ def resolve(idx, query, force_pick=False, no_pick=False, title_only=False):
     if ambiguous:
         others = ', '.join(title_of(h[3])[:30] for h in hits[1:4])
         print(f"cs: picked newest of {len(hits)} matches: {title_of(best)!r} (others: {others})", file=sys.stderr)
+    if best.get('peer'):
+        print(f"cs: {title_of(best)!r} is on {best['peer']}", file=sys.stderr)
     return best
 
 
@@ -847,6 +946,8 @@ def main(argv):
     title_only = '--title' in argv; argv = [a for a in argv if a != '--title']
     latest = '--latest' in argv; argv = [a for a in argv if a != '--latest']
     not_live = '--not-live' in argv; argv = [a for a in argv if a != '--not-live']
+    local = '--local' in argv; argv = [a for a in argv if a != '--local']
+    everywhere = '--everywhere' in argv; argv = [a for a in argv if a != '--everywhere']
     host = None
     if '--from' in argv:
         i = argv.index('--from'); host = argv[i + 1]; del argv[i:i + 2]
@@ -862,8 +963,13 @@ def main(argv):
     if cmd == 'retitle':
         return cmd_retitle()
     idx = load_index(full)
+    # Peers are searched by ls/fork/open with a query; id/tmux only with --everywhere, so cc's
+    # `cs id --title` / `cs id -l` (which compare hosts themselves) keep meaning "this Mac".
+    remote = not local and (cmd in ('ls', 'fork', 'open') or everywhere)
     if cmd == 'ls':
-        return cmd_ls(idx, query, show_all, long)
+        return cmd_ls(idx, query, show_all, long, remote)
+    if cmd == 'hits':
+        print(json.dumps(hits_json(idx, query))); return
     if cmd == 'tmux-map':
         print(json.dumps(tmux_map(idx))); return
     if cmd == 'order':
@@ -889,14 +995,25 @@ def main(argv):
             sys.exit('cs: no session that is not already open')
         r = max(pool, key=lambda v: (v.get('last_user') or 0.0, v['mtime']))
     else:
-        r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick, title_only)
+        r = remote_fetch(host, query) if host else resolve(idx, query, force_pick, no_pick, title_only, remote)
+    peer = r.get('peer')
+    if peer and cmd == 'open':
+        # resuming a copy here would grow two diverging transcripts under one id
+        sys.exit(f"cs: {title_of(r)!r} lives on {peer}; open it there, or fork it here (cs fork {r['id'][:8]})")
+    if peer and cmd == 'fork':
+        r = remote_fetch(peer, r['id'])   # copies (and refreshes) the transcript into ~/.claude/projects
+        do_cd = True                      # resume looks the id up under the project dir of the cwd
+        if not (r['cwd'] and os.path.isdir(r['cwd'])):
+            print(f"cs: {r['cwd'] or 'its cwd'} does not exist here; claude may not find the session", file=sys.stderr)
     if cmd == 'tmux':
         t = tmux_session_of(r['id'])
         if not t:
             sys.exit(1)
         print(t); return
     if cmd == 'id':
-        if want_path:
+        if peer:
+            print(r['id'] if not long else f"{r['id']}\t{title_of(r)}\t@{peer}\t{r.get('last_user') or 0.0:.0f}")
+        elif want_path:
             print(next(p for p, v in idx.items() if v['id'] == r['id']))
         elif long:
             live = r['id'] in cmux_numbers() or bool(re.search(
