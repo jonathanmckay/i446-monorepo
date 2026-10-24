@@ -246,3 +246,33 @@ def test_timer_path_threshold_below_minimum_skips(df):
     r = res[0]
     assert r.step == "skipped"
     assert "12m" in r.error
+
+
+# ── 一起饭: base in the 1n+ cell, minutes direct to the day (2026-10-24, JM) ──
+
+def test_yiqifan_cell_gets_the_base_and_the_day_still_gets_base_plus_minutes(df):
+    r = _route_one(df, "一起饭 30")
+    assert r.step == "1n" and r.is_variable_1n
+    assert r.write_value == 15            # the 1n+ week cell: +15, not +30 minutes
+    assert r.variable_value == 45         # the day's total is unchanged: 15 + 30
+
+
+def test_other_variable_habits_still_record_minutes_in_the_cell(df):
+    assert _route_one(df, "AoS 45").write_value == 45
+    assert _route_one(df, "业写 60").write_value == 60
+
+
+def test_day_append_is_written_as_two_terms_and_timer_path_agrees():
+    src = (_HERE / "did-fast.py").read_text()
+    assert 'BASE_IN_CELL_1N = {"一起饭"}' in src
+    assert 'r.fen_expr = f"+{_base}+{r.fen_points - _base}"' in src
+    assert "fen_appends.append((r.fen_col, r.fen_expr or r.fen_points))" in src
+    i = src.index("def apply_timer_minutes") if "def apply_timer_minutes" in src else src.index("Threshold (长) habits append POINTS")
+    assert "if resolved in BASE_IN_CELL_1N:" in src[i:i + 4000]
+
+
+def test_run_py_fast_path_matches():
+    src = (_HERE / "run.py").read_text()
+    assert '_BASE_IN_CELL_1N = {"一起饭"}' in src
+    assert "cell_add = _VARIABLE_1N_BASES[name] if name in _BASE_IN_CELL_1N else minutes" in src
+    assert 'f"+{base}+{points - base}" if name in _BASE_IN_CELL_1N and points > base > 0' in src

@@ -151,6 +151,12 @@ VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
 # Keys are header_normalize()d (lowercase).
 VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
 VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
+# Habits whose 1n+ week cell records the BASE points per occurrence, not the
+# minutes (2026-10-24, JM: "if I do /did on 一起饭 I want 15分 to go to the 1n
+# ... and then the number of minutes goes direct on the day in the xk87
+# general column"). The day still gets base + minutes, written as two terms
+# ("+15+30") so the 0分 formula shows which part came from the 1n habit.
+BASE_IN_CELL_1N = {"一起饭"}
 # Default points when completed with no minutes at all (falls back to base).
 VARIABLE_1N_DEFAULTS: dict[str, int] = {}
 # 长 ("long") habits: duration-based with a MINIMUM THRESHOLD (2026-07-30).
@@ -1269,6 +1275,9 @@ class RouteResult:
     cumulative_increment: int = 0
     is_variable_1n: bool = False
     variable_value: Optional[int] = None
+    # Ready-made 0分 append string ("+15+30") that replaces "+fen_points"
+    # (BASE_IN_CELL_1N habits); the total is still fen_points.
+    fen_expr: Optional[str] = None
     error: Optional[str] = None
     # Set on a 0n result synthesized by synth_kid_time_writes: the name of
     # the task (card / ad-hoc item) whose minutes this write carries.
@@ -1633,11 +1642,16 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                                or VARIABLE_1N_BASES.get(resolved_1n) or None)
                 if var_val and item.bonus_points:
                     var_val += item.bonus_points
+            if resolved_1n in BASE_IN_CELL_1N:
+                cell_value = VARIABLE_1N_BASES[resolved_1n]   # the 15, not the minutes
+            elif threshold:
+                # threshold habits append POINTS to the week cell, not minutes
+                cell_value = var_val or 1
+            else:
+                cell_value = cell_minutes if is_var else 1
             r = RouteResult(item=item, step="1n", col_letter=col_letter,
                             fen_col=fen_col,
-                            # threshold habits append POINTS to the week cell,
-                            # not minutes (the one exception to the redesign)
-                            write_value=(var_val or 1) if threshold else (cell_minutes if is_var else 1),
+                            write_value=cell_value,
                             is_cumulative_1n=is_cumul,
                             cumulative_increment=CUMULATIVE_1N.get(resolved_1n, 0),
                             is_variable_1n=is_var,
@@ -2368,8 +2382,12 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
                 continue
             r.variable_value = (variable_1n_points(resolved, mins)
                                 + (r.item.bonus_points or 0))
-            # Threshold (长) habits append POINTS to the week cell, not minutes
-            r.write_value = (r.variable_value or 1) if resolved in THRESHOLD_1N else mins
+            # Threshold (长) habits append POINTS to the week cell, not
+            # minutes; BASE_IN_CELL_1N habits append their base points.
+            if resolved in BASE_IN_CELL_1N:
+                r.write_value = VARIABLE_1N_BASES[resolved]
+            else:
+                r.write_value = (r.variable_value or 1) if resolved in THRESHOLD_1N else mins
             r.item.time_value = mins
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
@@ -3630,6 +3648,11 @@ def main():
                 # credit the computed points (0 -> nothing) and never
                 # reference the cell (bug 2026-10-03, "+'1n+'!AF5").
                 r.fen_points = r.item.points_override or r.variable_value or 0
+                _res = header_normalize(ONENEON_ALIASES.get(r.item.name.lower(), r.item.name.lower()))
+                _base = VARIABLE_1N_BASES.get(_res, 0)
+                if (_res in BASE_IN_CELL_1N and not r.item.points_override
+                        and r.fen_points > _base > 0):
+                    r.fen_expr = f"+{_base}+{r.fen_points - _base}"
             elif r.item.points_override:
                 r.fen_points = r.item.points_override
             elif r.col_letter:
@@ -3665,7 +3688,7 @@ def main():
         if (not is_hcbi_habit and not is_hcbi_domain and not is_0n_domain
                 and r.fen_col and _fen_pts_ok(r)
                 and not (r.step == "1n" and not r.is_variable_1n)):
-            fen_appends.append((r.fen_col, r.fen_points))
+            fen_appends.append((r.fen_col, r.fen_expr or r.fen_points))
             fen_names.append(r.item.name)
             fen_idem.append(_idem_key("0fen", r, target_date, r.fen_col))
         # {N} curly points → 0分 column Q (0g bonus)

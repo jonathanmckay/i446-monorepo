@@ -27,7 +27,7 @@ Check the input (case-insensitive, after stripping `(N)`, `[N]`, `@tag` annotati
 |------|------------|------|-----------------|
 | xk20s | +5 | 1 pt/min | `xk20` (0n col AJ) |
 | xk22s | +5 | 1 pt/min | `xk22` (0n col AK) |
-| 一起饭 | +15 | 1 pt/min | `一起饭` (1n+ → 0分 col X, xk87) |
+| 一起饭 | 0 (did-fast adds its base 15) | 1 pt/min | `一起饭` (1n+ cell +15, 0分 col X `+15+min`, xk87) |
 
 Match → Variable mode. No match → Task mode.
 
@@ -76,7 +76,7 @@ Match → Variable mode. No match → Task mode.
      "project": "<toggl project code>"
    }
    ```
-   For start-bonus tasks set `start_bonus` from the table (5/5/15) and `points_task` to the route column; for all other variable tasks `start_bonus` is 0 and `points_task` equals the resolved name.
+   For start-bonus tasks set `start_bonus` from the table (5/5/0; 一起饭's 15 is added by did-fast, so a bonus here would count it twice, fixed 2026-10-24) and `points_task` to the route column; for all other variable tasks `start_bonus` is 0 and `points_task` equals the resolved name.
 
 6. **Update tg cache** at `~/.claude/skills/tg/cache.json`:
    ```json

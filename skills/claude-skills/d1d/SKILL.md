@@ -47,7 +47,7 @@ When `/did` is called with **no arguments**:
 2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Parse the stop output to extract duration in minutes.
 3. **Check for /do session.** Read `~/.claude/skills/do/active.json`. If it exists and is valid:
    - The task is a variable-point activity started by `/do`.
-   - Points = duration (minutes) from step 2 **+ `start_bonus`** from active.json (0 or absent for plain variable tasks; 5 for xk20s/xk22s, 15 for 一起饭).
+   - Points = duration (minutes) from step 2 **+ `start_bonus`** from active.json (0 or absent for plain variable tasks and 一起饭, whose base 15 did-fast adds itself; 5 for xk20s/xk22s).
    - Run `python3 $DID_FAST "<points_task> <points>"` where `points_task` comes from `active.json` (fall back to `task` for old sessions without the field).
    - After success, delete `active.json` to clear the session.
    - Done (do NOT use the raw timer description as input).
@@ -65,7 +65,7 @@ This lets the user finish a task in a single flow: `/did` → stop timer → mar
 
 **Cumulative columns:** `问学` — add to existing value instead of overwriting.
 
-**Cumulative 1n+ habits:** `一起饭` — routes to Step 1n but adds +30 per occurrence (not the row 3 value). Uses the cumulative variant of the 1n+ write template.
+**一起饭** (2026-10-24) — routes to Step 1n: each meal adds **+15** to its 1n+ week cell, and today's 0分 xk column gets `+15+<minutes>` (did-fast `BASE_IN_CELL_1N`).
 
 **@project override:** `@code` token → set `projectOverride`, strip from item.
 
@@ -131,9 +131,9 @@ No 0₦ or Todoist match. Number = **points** not minutes.
 Matches 1n+ sheet header. Do NOT write to 0₦.
 
 1. Find column + week row (M.W = month.ceil(day/7)). Read points from row 3. Write points to cell. Use "1n+ write" template.
-   - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template). Fixed increments: `一起饭` = 30.
+   - **一起饭**: the week cell gets **+15** per meal; the day gets `+15+<minutes>` in the xk column.
    - **Variable 1n+ habits** (`s897`, `family`/`家`, `relax`, `s+hcbp`): Instead of reading row 3, **add the user-provided value** (trailing number or `[N]`) to the existing cell value. These are input-based tasks where points = minutes. If no value provided, the task needs a value (from `/do` timer or explicit input). Write points directly to 0分 (not as cell reference) to avoid over-counting on repeated weekly use.
-2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分 (non-variable tasks only). Map column via `g245/1-neon-meta.md`. Use "1n+ to 0分" template. For 一起饭 → 0分 column AG (xk). For variable tasks, append `+N` directly to 0分 instead.
+2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分 (non-variable tasks only). Map column via `g245/1-neon-meta.md`. Use "1n+ to 0分" template. For 一起饭 → 0分 column X (xk), as `+15+<minutes>`. For variable tasks, append `+N` directly to 0分 instead.
 3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1-2).
 
 **1n+ aliases:** `家` → `family`, `relax` → `relax {60}`

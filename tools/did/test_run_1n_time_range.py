@@ -67,8 +67,9 @@ def test_yiqifan_domain_is_nuclear_family_not_extended():
 
 
 def test_run_1n_time_range_drives_minutes_not_default_one():
-    """一起饭 is cumulative_increment=30: the week cell accumulates real
-    minutes (old + this session's length), not old + 1."""
+    """The typed range's 16 minutes are the session length, not a default 1.
+    Since 2026-10-24 一起饭's week cell takes the base 15 per meal and the
+    minutes go straight to the day, so the range shows up in the 0分 append."""
     d = _route_for("一起饭")
     assert d["step"] == "1n+" and d["cumulative_increment"] == 30
     fake = _FakeExcel(read_value="10")
@@ -85,7 +86,9 @@ def test_run_1n_time_range_drives_minutes_not_default_one():
     assert len(fake.writes) == 1
     sheet, col, kw = fake.writes[0]
     assert sheet == "1n+" and col == "AC"
-    assert kw["value"] == "26", "old(10) + 16m from the typed range, not old(10) + default 1"
+    assert kw["value"] == "25", "week cell: old(10) + the base 15 (BASE_IN_CELL_1N)"
+    [(fsheet, fcol, fkw)] = fake.appends
+    assert fsheet == "0分" and fkw["value"] == "+15+16", "16m from the typed range, not a default 1"
 
 
 def test_run_1n_time_range_creates_toggl_entry():
@@ -119,8 +122,8 @@ def test_run_1n_explicit_minutes_still_wins_over_time_range():
          patch.object(run, "_fire_refresh"), \
          patch.object(run.subprocess, "run"):
         run.run_1n(d, "8/11", time_range=("0830", "0846"), explicit_minutes=99)
-    sheet, col, kw = fake.writes[0]
-    assert kw["value"] == "99", "explicit minutes must still outrank a typed time range"
+    [(fsheet, fcol, fkw)] = fake.appends
+    assert fkw["value"] == "+15+99", "explicit minutes must still outrank a typed time range"
 
 
 def test_main_passes_time_range_into_run_1n():

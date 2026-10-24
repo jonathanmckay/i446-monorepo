@@ -80,10 +80,10 @@ def test_1n_variable_backfilled_with_bonus(df):
     r = _mk(df, "一起饭", "1n", variable_value=30, bonus_points=15)
     df.apply_timer_minutes([r], {"description": "一起饭", "minutes": 25})
     # 一起饭 rate formula is "15+1/m" (2026-07-25 restructure): base 15
-    # + 25 min + 15 typed bonus. The week CELL takes the raw minutes
-    # (write_value, 2026-07-27 redesign).
+    # + 25 min + 15 typed bonus. The week CELL takes the base 15 per meal
+    # (BASE_IN_CELL_1N, 2026-10-24); the minutes reach the day via 0分.
     assert r.variable_value == 55
-    assert r.write_value == 25
+    assert r.write_value == 15
     assert r.item.time_value == 25
 
 

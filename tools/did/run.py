@@ -77,6 +77,9 @@ _MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
 # registry's flat cumulative_increment.
 _VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
 _VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
+# Mirrors did-fast.py's BASE_IN_CELL_1N (2026-10-24): the week cell gets the
+# base points per occurrence, the day gets base + minutes as "+15+30".
+_BASE_IN_CELL_1N = {"一起饭"}
 
 TIME_RANGE_RE = re.compile(r"\b(\d{4})-(\d{4})\b")
 PAST_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2})\s*$")
@@ -676,7 +679,8 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
             old = int(float(cur.get("value", 0) or 0))
         except (TypeError, ValueError):
             old = 0
-        excel.write("1n+", col, row=week_row, value=str(old + minutes))
+        cell_add = _VARIABLE_1N_BASES[name] if name in _BASE_IN_CELL_1N else minutes
+        excel.write("1n+", col, row=week_row, value=str(old + cell_add))
         if name in _VARIABLE_1N_BASES or name in _VARIABLE_1N_RATES:
             base = _VARIABLE_1N_BASES.get(name, 0)
             rate = _VARIABLE_1N_RATES.get(name, 1.0)
@@ -705,7 +709,10 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
 
     # Append the points to today's 0分 domain column
     if fen_col and points:
-        excel.append("0分", fen_col, date=target_date, value=f"+{points}", src=f"1n {name}")
+        base = _VARIABLE_1N_BASES.get(name, 0)
+        value = (f"+{base}+{points - base}" if name in _BASE_IN_CELL_1N and points > base > 0
+                 else f"+{points}")
+        excel.append("0分", fen_col, date=target_date, value=value, src=f"1n {name}")
 
     # Toggl entry if time range (same as run_0n)
     if time_range and toggl.get("desc"):
@@ -721,7 +728,9 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
 
     _append_completed(name, closed_id)
     _fire_refresh()
-    print(f"  ✓ {name} → 1n+!{col}{week_row} = {minutes}m, 0分!{fen_col} +{points}"
+    cell_note = (f"+{_VARIABLE_1N_BASES[name]} ({minutes}m to the day)" if inc and name in _BASE_IN_CELL_1N
+                 else f"{minutes}m")
+    print(f"  ✓ {name} → 1n+!{col}{week_row} = {cell_note}, 0分!{fen_col} +{points}"
           + (" + todoist closed" if closed else ""))
     return 0
 

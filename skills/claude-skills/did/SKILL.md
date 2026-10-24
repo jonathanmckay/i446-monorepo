@@ -65,7 +65,7 @@ When `/did` is called with **no arguments**:
 2. **Stop the Toggl timer** via `python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py stop`. Update the tg cache (`running: null`). Parse the stop output to extract duration in minutes. If the stopped entry carried an explicit value tag (`#-1`/`#-2`/`#-3`), `stop_timer` has already credited its minutes to that tag's 0n column (媒分; see `mcp/toggl_server/tag_credits.py`, 2026-09-16) and the output carries a `Credited: #-2 +29m → 0n` line — echo it in the confirmation, do not credit again. Apply the d359 bump (Step C) to the stopped entry's tags, same logic as `/tg stop`, scan for `d359/<slug>` and update `last_contact` in the matching d359 file.
 3. **Check for /do session.** Read `~/.claude/skills/do/active.json`. If it exists and is valid:
    - The task is a variable-point activity started by `/do`.
-   - Points = duration (minutes) from step 2 **+ `start_bonus`** from active.json (0 or absent for plain variable tasks; 5 for xk20s/xk22s, 15 for 一起饭).
+   - Points = duration (minutes) from step 2 **+ `start_bonus`** from active.json (0 or absent for plain variable tasks and 一起饭, whose base 15 did-fast adds itself; 5 for xk20s/xk22s).
    - Route as `/did <points_task> <points>` where `points_task` comes from `active.json` (fall back to `task` for old sessions without the field).
    - After success, delete `active.json` to clear the session.
    - Done (do NOT use the raw timer description as input).
@@ -109,7 +109,7 @@ commas are fine as long as every item is in this form.
 
 **Cumulative columns:** `问学` — add to existing value instead of overwriting.
 
-**Cumulative 1n+ habits:** `一起饭` — routes to Step 1n but adds +30 per occurrence (not the row 3 value). Uses the cumulative variant of the 1n+ write template.
+**一起饭** (2026-10-24) — routes to Step 1n: each meal adds **+15** to its 1n+ week cell, and today's 0分 xk column gets base + minutes written as two terms (`+15+30`), so the 15 flows to the day from the 1n habit and the minutes land on the day directly. `did-fast.py` `BASE_IN_CELL_1N` / `run.py` `_BASE_IN_CELL_1N`.
 
 **@project override:** `@code` token → set `projectOverride`, strip from item.
 
@@ -238,8 +238,8 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
    - Do NOT use "which Sunday of the calendar month" (`(sunday.day - 1) // 7 + 1`) and do NOT use `ceil(day/7)`. The calendar count silently drifts one row after any non-quarter-end month with 5 Sundays (2026-10-01 bug: every 1n+ write from Aug 30 landed one week early).
 
    Read points from row 3. Write points to cell. Use "1n+ write" template.
-   - **Cumulative 1n+ habits** (e.g. `一起饭`): Instead of writing the row 3 value, **add the fixed increment** to the existing cell value (use the cumulative variant of the 1n+ write template — read old value, add increment, write sum). Fixed increments: `一起饭` = 30.
-2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`, resolved through `cols.domain_col("0分", domain)` (not a hardcoded letter). For 一起饭 → domain xk87/xk88 → 0分 column X (xk).
+   - **一起饭**: the week cell gets **+15** per meal (not the minutes); the day gets `+15+<minutes>` in the xk column (see Parsing above).
+2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`, resolved through `cols.domain_col("0分", domain)` (not a hardcoded letter). For 一起饭 → domain xk87/xk88 → 0分 column X (xk), as `+15+<minutes>`.
 3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1–2).
 
 ## Step 6b: Posthoc Habit
