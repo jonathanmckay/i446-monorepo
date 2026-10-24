@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-24T10:18:56.702175-07:00"
+  "tasks": {
+    "75 分 hcbp": {
+      "todoist_id": "6hqW33g5CFH8x8P2",
+      "minutes": 35
+    },
+    "go to the ocean": {
+      "todoist_id": "6hqW33fXGhqrf8fR",
+      "minutes": 30
+    },
+    "2h ic": {
+      "todoist_id": "6hqW33hfPcGxQ3mR",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-10-24T10:21:35.075505-07:00"
 }
