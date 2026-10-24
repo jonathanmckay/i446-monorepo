@@ -228,6 +228,29 @@ def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
     return 1 if failed else 0
 
 
+def _zerog_sync() -> subprocess.CompletedProcess:
+    """Run 0g-sync where the goals were just written. It reads build-order.md
+    from disk, and the goals were appended on IX; run here (Straylight) it read
+    the local copy before Syncthing delivered them, logged "Found 0 unchecked
+    tasks in 0₲", created no Todoist tasks, and still reported "todoist
+    synced" (bug 2026-10-24: 0g goals never appeared in dtd). Off ix it runs
+    over ssh against ix's copy; on ix, locally. Same token handling as the
+    cron: TODOIST_API_KEY from the env, else lib/todoist's token file."""
+    if _on_ix():
+        env = dict(os.environ)
+        if "TODOIST_API_KEY" not in env:
+            try:
+                env["TODOIST_API_KEY"] = TODOIST_TOKEN_FILE.read_text().strip()
+            except OSError:
+                pass
+        return subprocess.run([sys.executable, str(ZEROG_SYNC), "sync"],
+                              capture_output=True, text=True, timeout=120, env=env)
+    remote = ('TODOIST_API_KEY="${TODOIST_API_KEY:-$(cat ~/.config/todoist/token)}" '
+              'python3 ~/i446-monorepo/scripts/0g-sync.py sync')
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "ix", remote],
+                          capture_output=True, text=True, timeout=150)
+
+
 def save_daily(lines: list[str], *, dry_run: bool = False, out=sys.stdout) -> int:
     goals = plan_daily(lines)
     if not goals:
@@ -258,14 +281,7 @@ def save_daily(lines: list[str], *, dry_run: bool = False, out=sys.stdout) -> in
     # would let its cron re-create any goal completed before the next sync
     # adopts it. The cron passes TODOIST_API_KEY explicitly; hand it the same
     # token lib/todoist uses when the env/Keychain doesn't have one.
-    env = dict(os.environ)
-    if "TODOIST_API_KEY" not in env:
-        try:
-            env["TODOIST_API_KEY"] = TODOIST_TOKEN_FILE.read_text().strip()
-        except OSError:
-            pass
-    r = subprocess.run([sys.executable, str(ZEROG_SYNC), "sync"],
-                       capture_output=True, text=True, timeout=120, env=env)
+    r = _zerog_sync()
     if r.returncode != 0:
         msgs.append(f"0g-sync FAILED rc={r.returncode}: {(r.stderr or r.stdout).strip()[-160:]}")
     else:

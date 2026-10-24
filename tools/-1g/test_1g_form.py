@@ -176,6 +176,7 @@ def test_plan_daily_converts_square_to_brace_and_defaults_15(form):
 
 
 def test_save_daily_appends_0g_logs_syncs_and_marks_habit(form, monkeypatch):
+    monkeypatch.setattr(form, "_on_ix", lambda: True)
     appended, ran = [], []
     monkeypatch.setattr(form, "_append_on_ix",
                         lambda b, g, daily=False: (appended.append((b, g, daily)) or g))
@@ -191,6 +192,7 @@ def test_save_daily_appends_0g_logs_syncs_and_marks_habit(form, monkeypatch):
 
 
 def test_save_daily_all_duplicates_skips_log_but_still_closes_card(form, monkeypatch):
+    monkeypatch.setattr(form, "_on_ix", lambda: True)
     ran = []
     monkeypatch.setattr(form, "_append_on_ix", lambda b, g, daily=False: [])
     monkeypatch.setattr(form.subprocess, "run", lambda cmd, **kw: (ran.append(cmd), _RC())[1])
@@ -228,3 +230,18 @@ def test_main_daily_routes_to_save_daily(form, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["-1g-form.py", "--daily"])
     assert form.main() == 0
     assert called["lines"] == ["walk", "", ""]
+
+
+def test_save_daily_off_ix_runs_0g_sync_on_ix(form, monkeypatch):
+    """Regression 2026-10-24: run on Straylight, 0g-sync read the LOCAL
+    build-order before Syncthing delivered the goals just appended on ix,
+    created no Todoist tasks, and still said "todoist synced" -- so the 0g
+    goals never showed in dtd. Off ix the sync must run on ix."""
+    monkeypatch.setattr(form, "_on_ix", lambda: False)
+    monkeypatch.setattr(form, "_append_on_ix", lambda b, g, daily=False: g)
+    ran = []
+    monkeypatch.setattr(form.subprocess, "run", lambda cmd, **kw: (ran.append(cmd), _RC())[1])
+    assert form.save_daily(["go to the ocean {30}"], out=io.StringIO()) == 0
+    sync = [c for c in ran if any("0g-sync.py" in str(x) for x in c)]
+    assert len(sync) == 1 and sync[0][0] == "ssh" and "ix" in sync[0]
+    assert sync[0][-1].endswith("0g-sync.py sync")
