@@ -823,3 +823,32 @@ def test_placeholder_prefill_round_trips_through_parse_edit_text():
     mod = _load_tui()
     body, code, time_range, tags = mod._parse_edit_text("0740-0836 fix bike @家")
     assert (body, code, time_range, tags) == ("fix bike", "家", ("0740", "0836"), [])
+
+
+def test_open_ended_edit_of_the_running_entry_rejects_a_past_day():
+    """Bug 2026-10-24 ("nothing from janus made it to toggl from the last 40
+    minutes"): in yesterday's view, "2112-" on the RUNNING timer retimed it to
+    21:12 last night → now, and trim_range deleted everything in between
+    (sleep, wake up, ibx, vibing, -1g, 0t). The completed-entry re-open path
+    already refused a past day; the running entry has to as well."""
+    mod = _load_tui()
+    today = _armed_completed_entry(mod)
+    mod.STATE.entries[0]["running"] = True
+    mod.STATE.current = {"id": 7}
+    mod.STATE.edit_target = {"ids": [7], "date": (today - dtm.timedelta(days=1)).date(),
+                             "contiguous": True}
+    mod.input_buffer.text = "write 2112-"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert "has to start today" in mod.STATE.flash, mod.STATE.flash
+    assert not mod.STATE.flash.startswith("$ edit"), "the edit (and its trim) must not run"
+    assert mod.input_buffer.text == "write 2112-", "rejects must restore the typed text"
+
+
+def test_closed_range_on_a_past_day_still_allowed():
+    mod = _load_tui()
+    today = _armed_completed_entry(mod)
+    mod.STATE.edit_target = {"ids": [7], "date": (today - dtm.timedelta(days=1)).date(),
+                             "contiguous": True}
+    mod.input_buffer.text = "write 2112-2132"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.flash.startswith("$ edit write 2112-2132"), mod.STATE.flash

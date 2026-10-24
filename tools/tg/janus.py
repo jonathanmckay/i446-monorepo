@@ -6521,6 +6521,16 @@ def _on_enter(event):
             if _hhmm_to_dt(edit_date, time_range[0]) > dt.datetime.now(_tz()):
                 _reject("open-ended start must be in the past")
                 return
+        # The same past-day rule for the RUNNING entry (bug 2026-10-24: in
+        # yesterday's view, "2112-" on the running timer made it run from
+        # 21:12 last night to now, crossing midnight, and the MECE trim below
+        # deleted every entry in between, a whole night and morning). An
+        # open-ended time runs to now, so it has to start today.
+        if (time_range and time_range[1] is None and not reopen
+                and edit_date != dt.datetime.now(_tz()).date()):
+            _reject("an open-ended time runs to now, so it has to start today; "
+                    "give a past day's entry an end time (HHMM-HHMM)")
+            return
         fields = {}
         if desc:
             fields["description"] = desc
