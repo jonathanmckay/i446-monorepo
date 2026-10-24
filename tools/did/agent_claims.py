@@ -227,10 +227,33 @@ def all_tasks(tq: dict) -> list[dict]:
     return out
 
 
+DTD_ORDER_FILE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "jm" / "dtd-order.json"
+ROW_MAX_AGE = 6 * 3600   # an older render is not what JM is looking at
+
+
+def row_task_id(n: int, path: Path = DTD_ORDER_FILE, now: float | None = None) -> str | None:
+    """Task id on row n of dtd's latest render (1 = top), or None. The list
+    generator writes the order on every render (2026-10-24), so "/d 5" means
+    whatever row 5 shows now, not anything stored on the task."""
+    try:
+        d = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    ids = d.get("ids") or []
+    if (now or time.time()) - float(d.get("ts", 0)) > ROW_MAX_AGE or not 1 <= n <= len(ids):
+        return None
+    return str(ids[n - 1]) or None
+
+
 def candidates(query: str, tasks: list[dict], df) -> list[dict]:
-    """Ranked matches: exact id, then substring of the cleaned name, then
-    did-fast's word-overlap matcher."""
+    """Ranked matches: a dtd row number, exact id, then substring of the
+    cleaned name, then did-fast's word-overlap matcher."""
     q = query.strip().lower()
+    if q.isdigit() and len(q) <= 3:
+        tid = row_task_id(int(q))
+        hit = [t for t in tasks if str(t["id"]) == tid] if tid else []
+        if hit:
+            return hit
     for t in tasks:
         if str(t["id"]).lower() == q:
             return [t]

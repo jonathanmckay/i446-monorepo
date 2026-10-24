@@ -1915,6 +1915,11 @@ cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
 skipped_file = sys.argv[6] if len(sys.argv) > 6 else ''
 timer_file = sys.argv[7] if len(sys.argv) > 7 else ''
 cols = int(cols)
+# Row numbers (2026-10-24: "add a display number to every line in dtd so I
+# can reference it from elsewhere"): every row is printed as "NNN " + row, so
+# rows are right-justified 4 columns narrower to keep the estimates aligned.
+ROWNUM_W = 4
+cols = max(20, cols - ROWNUM_W)
 
 with open(cache_file) as f:
     d = json.load(f)
@@ -2698,8 +2703,11 @@ for t in unique:
 # N done / N left header.
 _active = running_lines + [l for _, l in sorted(started_lines, key=lambda x: -x[0])]
 _claims = working_lines + claimed_lines
-for l in _active + _claims + normal_lines + skipped_lines:
-    print(l)
+# Display position, not anything about the task: 1 = top of the unfiltered
+# list. The same order goes to ~/.local/state/jm/dtd-order.json below, so a
+# Claude session can say "/d 5" and mean row 5 (agent_claims.candidates).
+for _rn, l in enumerate(_active + _claims + normal_lines + skipped_lines, 1):
+    print(f'\x1b[2m{_rn:>3}\x1b[0m ' + l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
 # order, written only when that order changes, so the report can tell what
 # was on screen when each key was pressed and how far down it was.
@@ -2710,6 +2718,10 @@ try:
         _op = _os.environ.get('DTD_ORDER', '')
         if _op:
             open(_op + '.tmp', 'w').write(chr(10).join(_order) + chr(10)); _os.replace(_op + '.tmp', _op)
+            # Shared, stable copy for Claude sessions: row N = ids[N-1].
+            _so = _os.path.join(_os.environ.get('XDG_STATE_HOME') or _os.path.expanduser('~/.local/state'), 'jm', 'dtd-order.json')
+            open(_so + '.tmp', 'w').write(json.dumps({'ts': time.time(), 'dtd_id': _sid, 'ids': _order}))
+            _os.replace(_so + '.tmp', _so)
         _top = ','.join(_order[:15])
         _lr = '/tmp/dtd-' + _sid + '.lastrender'
         try:
