@@ -16,6 +16,7 @@ generator prefers an id match when present, falling back to the old
 name-only match only for a timer file written before this fix.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -79,7 +80,7 @@ def _run_listgen(tmp, cache_obj, timer_content):
          "2026-07-19", "120", skipped, timer, view],
         capture_output=True, text=True)
     assert r.returncode == 0, f"list-gen crashed: {r.stderr}"
-    return r.stdout
+    return re.sub(r"^\x1b\[2m *\d+\x1b\[0m ", "", r.stdout, flags=re.M)  # drop the row number (2026-10-24)
 
 
 CACHE = {

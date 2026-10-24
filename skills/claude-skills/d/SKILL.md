@@ -9,6 +9,9 @@ user-invocable: true
 - `/d <task>[: request]` claims the matching dtd task; if NOTHING matches it
   creates `<task>` in Todoist (due today) and claims that (default since
   2026-10-06).
+- `/d <N>[: request]` (2026-10-24) claims the task on dtd row N: the dim number
+  dtd prints at the left of every row, in display order (latest render, read
+  from `~/.local/state/jm/dtd-order.json`). `/claim <N>` and `done <N>` take it too.
 - `/d new <task>[: request]` always creates `<task>` in Todoist (due today; an `@code`
   token becomes its label), then claims it, so work that isn't in dtd yet
   still shows up there as underway.

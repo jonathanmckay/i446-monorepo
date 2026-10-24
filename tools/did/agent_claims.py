@@ -250,10 +250,10 @@ def candidates(query: str, tasks: list[dict], df) -> list[dict]:
     cleaned name, then did-fast's word-overlap matcher."""
     q = query.strip().lower()
     if q.isdigit() and len(q) <= 3:
+        # A row number never falls through to name matching: "5" would
+        # otherwise fuzzy-match whatever task happens to contain a 5.
         tid = row_task_id(int(q))
-        hit = [t for t in tasks if str(t["id"]) == tid] if tid else []
-        if hit:
-            return hit
+        return [t for t in tasks if str(t["id"]) == tid] if tid else []
     for t in tasks:
         if str(t["id"]).lower() == q:
             return [t]
@@ -472,6 +472,10 @@ def hook(payload: str) -> str:
         return bare_d_line(all_tasks(tq), df, tq)
     explicit_new = query.lower().startswith("new ")
     cands = [] if explicit_new else candidates(query, all_tasks(df.load_task_queue()), df)
+    if not explicit_new and not cands and query.isdigit() and len(query) <= 3:
+        # "/d 5" with no row 5 in a fresh render: never create a task named "5".
+        return (f"[claim hook] no dtd row {query} in the latest render (dtd closed, "
+                "or the list is shorter); nothing claimed.")
     if explicit_new or not cands:
         # No dtd match = new work: create it and claim (default since
         # 2026-10-06, "that should be the default behavior"). `/d new` stays

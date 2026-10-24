@@ -1915,8 +1915,8 @@ cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
 skipped_file = sys.argv[6] if len(sys.argv) > 6 else ''
 timer_file = sys.argv[7] if len(sys.argv) > 7 else ''
 cols = int(cols)
-# Row numbers (2026-10-24: "add a display number to every line in dtd so I
-# can reference it from elsewhere"): every row is printed as "NNN " + row, so
+# Row numbers (2026-10-24: 'add a display number to every line in dtd so I
+# can reference it from elsewhere'): every row is printed as 'NNN ' + row, so
 # rows are right-justified 4 columns narrower to keep the estimates aligned.
 ROWNUM_W = 4
 cols = max(20, cols - ROWNUM_W)
@@ -2705,7 +2705,7 @@ _active = running_lines + [l for _, l in sorted(started_lines, key=lambda x: -x[
 _claims = working_lines + claimed_lines
 # Display position, not anything about the task: 1 = top of the unfiltered
 # list. The same order goes to ~/.local/state/jm/dtd-order.json below, so a
-# Claude session can say "/d 5" and mean row 5 (agent_claims.candidates).
+# Claude session can say '/d 5' and mean row 5 (agent_claims.candidates).
 for _rn, l in enumerate(_active + _claims + normal_lines + skipped_lines, 1):
     print(f'\x1b[2m{_rn:>3}\x1b[0m ' + l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen

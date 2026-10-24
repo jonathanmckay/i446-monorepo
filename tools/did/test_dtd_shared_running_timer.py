@@ -61,7 +61,7 @@ def _run(timer_id, timer_name, observation, started=()):
         r = subprocess.run([sys.executable, str(tmp / "lg.py"), *args],
                            capture_output=True, text=True, env=env)
         assert r.returncode == 0, r.stderr
-        return r.stdout
+        return re.sub(r"^\x1b\[2m *\d+\x1b\[0m ", "", r.stdout, flags=re.M)  # drop the row number (2026-10-24)
 
 
 def _row(out, tid):

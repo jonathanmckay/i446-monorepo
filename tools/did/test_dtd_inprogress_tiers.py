@@ -13,6 +13,7 @@ Runs the real list-gen payload with HOME pointed at a temp dir whose
 agent-claims store holds one idle and one working claim.
 """
 import json
+import re
 import os
 import subprocess
 import sys
@@ -77,7 +78,7 @@ def _run(timer_id: str, started=(), skipped="", rc_state="working") -> str:
         r = subprocess.run([sys.executable, str(tmp / "lg.py"), *args],
                            capture_output=True, text=True, env=env)
         assert r.returncode == 0, r.stderr
-        return r.stdout
+        return re.sub(r"^\x1b\[2m *\d+\x1b\[0m ", "", r.stdout, flags=re.M)  # drop the row number (2026-10-24)
 
 
 def _ids(out: str) -> list[str]:
