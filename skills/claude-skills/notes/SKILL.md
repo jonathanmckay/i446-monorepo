@@ -95,7 +95,7 @@ Read the frontmatter templates from `h335/d358-d359-meta.md`.
 
 1. **Parse the title.** Split on `iw01`. Whatever sits *before* `iw01` (e.g. `## Growth Org Thoughts`) is content-prefix to keep. Whatever sits *after* `iw01 ->` (e.g. `put in xbox`) is the destination description — never written to disk.
 2. **Resolve the destination** from the description. Treat it as a fuzzy lookup against vault filenames/folders, in this order:
-   - Search `~/vault/` for an exact filename match (e.g. "eternal day" → `g245/Eternal Day.md`) — case-insensitive, ignores `.md`.
+   - Search `~/vault/` for an exact filename match (e.g. "eternal day" → `g245/5e0/5e0-eternal-day.md`) — case-insensitive, ignores `.md`.
    - If multiple files match, prefer ones in the user's most-edited domain folders (g245/, h335/, m5x2/, hcmp/, s897/, xk87/) over archive-y locations (`hcmp/o314/YYYY/` per-entry files, `z_*` inbox).
    - Look for a folder of that name and use its folder note (`<folder>/<folder>.md`).
    - If still ambiguous, ask the user before writing.

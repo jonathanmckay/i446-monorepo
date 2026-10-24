@@ -1,7 +1,7 @@
 # prof — Professionalism daemon
 
 Scores work meetings against the 7-rule professionalism system in
-`vault/s897/professionalism-分.md`. Target: 90% of meetings score ≥ 0.
+`vault/s897/s897-professionalism-fen.md`. Target: 90% of meetings score ≥ 0.
 
 ## Architecture (v1, runs on straylight)
 

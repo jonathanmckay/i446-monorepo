@@ -46,7 +46,7 @@ EXCLUDE_PREFIXES = (
     "g245/archive", "g245/5e-1",   # build-order daily archives (one folder per day by design)
     "d357",                        # janus meeting recordings, one folder per week by design
     # Confirmed exceptions (JM, 2026-09-27): two-doc folders accepted as-is.
-    "g245/Zenstoic path", "g245/n156/rob",
+    "g245/zenstoic-path", "g245/n156/rob",
     "h335/m5x2/fund-iii/condo-conversion-masterdoc",   # masterdoc + sub-docs, keep
     "hcmp/moral-audits",                                # /moralaudit adds a dated file each quarter
     "h335/i9/xbox/decks",                              # deck build scripts + templates, not docs

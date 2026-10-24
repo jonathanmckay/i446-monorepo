@@ -13,7 +13,7 @@ plan shorter than 4 days).
 
 ## Inputs (read all three before drafting)
 
-1. **Principles** — `~/vault/hcbi/hcbc/2026-eating-narrative-May-w4.md`
+1. **Principles** — `~/vault/hcbi/hcbc/hcbc-2026-05-w4-eating-narrative.md`
    (or its successor; the newest `*eating-narrative*` file). Non-negotiables:
    - Sugary drinks are work fuel, budgeted (6/week), not sins.
    - Caffeine is rationed: ~3 caffeine days per 7 (scale to plan length),
@@ -32,7 +32,7 @@ plan shorter than 4 days).
      where actuals diverged repeatedly, plan the actual (it's the revealed
      preference) or name the deviation deliberately.
    - The current table format and goal-line phrasing.
-2b. **Household defaults** — `~/vault/hcbi/hcbc/家-meal-system.md`. The
+2b. **Household defaults** — `~/vault/hcbi/hcbc/hcbc-meal-system.md`. The
    standing week fixes JM's weekday breakfast (the yogurt-bowl default), the
    weekend breakfasts he cooks, his ordered weekday lunch, and which dinners
    Ashan cooks vs. eating out. Plan JM's Morning/Lunch/Late rows inside that
