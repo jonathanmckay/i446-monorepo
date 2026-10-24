@@ -4070,6 +4070,19 @@ def main():
     completed_ids = {id_to_name[tid]: tid
                      for tid, (ok, _err) in close_results.items()
                      if ok and tid in id_to_name}
+    # A closed task's agent claim goes with it (2026-10-24): a repeating card
+    # keeps its id, so a leftover released/done claim showed on the next day's
+    # card as if an agent were still on it.
+    try:
+        _acs = importlib.util.spec_from_file_location(
+            "agent_claims_for_close", Path(__file__).resolve().parent / "agent_claims.py")
+        _ac = importlib.util.module_from_spec(_acs)
+        _acs.loader.exec_module(_ac)
+        for _tid, (_ok, _err) in close_results.items():
+            if _ok:
+                _ac.clear_task(str(_tid))
+    except Exception:
+        pass
     # A past-day write is not a TODAY completion: recording it here would
     # hide today's same-named dtd card and block today's real close.
     if completed_names and not past_target:
