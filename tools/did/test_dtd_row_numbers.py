@@ -79,6 +79,6 @@ def test_an_unresolvable_row_number_never_matches_by_name(tmp_path, monkeypatch)
 def test_hook_does_not_create_a_task_named_after_a_number():
     src = (HERE / "agent_claims.py").read_text()
     i = src.index("explicit_new = query.lower().startswith(\"new \")")
-    block = src[i:i + 700]
+    block = src[i:i + 2000]
     assert block.index("query.isdigit() and len(query) <= 3") < block.index("task = new_task(name)")
     assert "nothing claimed" in block
