@@ -206,7 +206,15 @@ _ARABIC_RE = re.compile(r"[؀-ۿ]")
 _CJK_RE = re.compile(r"[一-鿿]")
 _CODE_RE = re.compile(r"^[a-z]+\d+[a-z0-9+]*$|^\d+[a-z]+$")   # h335, m5x2, 0g: codes, not words
 _TITLE_RE = re.compile("^title:\\s*[\"']?(.*?)[\"']?\\s*$", re.M)
-STYLE_RULES = ("filename", "arabic", "translated", "long")
+STYLE_RULES = ("filename", "date", "arabic", "translated", "long")
+# Dates in filenames are YYYY-MM-DD (periods YYYY-MM, YYYY-qN) (2026-10-24).
+# Flags the shapes old imports produced: 20180731, 2-92018 / 2-9-2018, 2022q1,
+# and month-first periods (08-2024).
+_BAD_DATE_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:[0-2]\d|3[01])(?!\d)"
+                          r"|(?<!\d)\d{1,2}-\d{1,2}-?(?:19|20)\d{2}(?!\d)"
+                          r"|(?<!\d)(?:19|20)\d{2}q[1-4]"
+                          r"|(?<![\d-])(?:0[1-9]|1[0-2])-(?:19|20)\d{2}(?!\d)"   # 08-2024 (MM-YYYY)
+                          r"|(?<!\d)(?<!\d-)(?:0[1-9]|1[0-2])-(?:19|20)\d{2}(?!\d)")
 
 
 def _latin_words(title: str) -> list[str]:
@@ -236,6 +244,8 @@ def scan_style(vault: Path = VAULT) -> dict[str, list[tuple[str, str]]]:
             title = m.group(1).strip() if m else ""
             if not _KEBAB_RE.match(f[:-3]) and f not in STYLE_FILENAME_OK:
                 out["filename"].append((r, title))
+            if _BAD_DATE_RE.search(f[:-3]):
+                out["date"].append((r, title))
             if _ARABIC_RE.search(title):
                 out["arabic"].append((r, title))
             elif _CJK_RE.search(title) and len(_latin_words(title)) >= 2:
@@ -243,6 +253,23 @@ def scan_style(vault: Path = VAULT) -> dict[str, list[tuple[str, str]]]:
             if len(title) > STYLE_TITLE_MAX:
                 out["long"].append((r, title))
     return out
+
+
+ROOT_FILES_OK = {"CLAUDE.md"}   # plus dotfiles (git, Syncthing, Obsidian config)
+
+
+def check_root(vault: Path | None = None) -> Finding:
+    """Vault root holds only folders, CLAUDE.md and dotfiles (style guide
+    2026-10-24: notes belong in their domain, junk in the trash). The 10-24
+    cleanup found 10 Syncthing conflict copies of an old log (658 MB), empty
+    stub notes, a probe file and two real notes stranded at the top."""
+    vault = vault or VAULT
+    stray = sorted(e.name for e in vault.iterdir()
+                   if e.is_file() and not e.name.startswith(".") and e.name not in ROOT_FILES_OK)
+    if not stray:
+        return Finding("vault-root", "ok", "only folders and CLAUDE.md at the top level")
+    return Finding("vault-root", "warn", f"{len(stray)} stray file(s) at the vault root: move notes to their "
+                   "domain, trash the rest", stray[:20], review=True)
 
 
 def check_style() -> Finding:
@@ -714,7 +741,7 @@ def check_neon_rules(now: dt.datetime) -> Finding:
 # ---------------------------------------------------------------------------
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
-    for fn in (check_singletons, check_duplicate_notes, check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
+    for fn in (check_singletons, check_duplicate_notes, check_root, check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
                check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now)):
         try:
