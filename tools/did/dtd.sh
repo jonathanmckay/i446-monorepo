@@ -2263,6 +2263,15 @@ try:
     _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
     import agent_claims as _ac
     _claims = _ac.load()
+    # A repeating card keeps its id across days, so a claim set before today's
+    # local midnight belongs to an earlier occurrence (2026-10-24: notes showed
+    # yesterday's released claim as 🧮 🕐). did-fast clears claims on close;
+    # this covers cards closed elsewhere (the Todoist app).
+    _midnight = time.mktime(time.strptime(today, '%Y-%m-%d'))
+    _recur_ids = {str(_t.get('id')) for _sec in d.values() if isinstance(_sec, list)
+                  for _t in _sec if isinstance(_t, dict) and _t.get('recurring')}
+    _claims = {i: r for i, r in _claims.items()
+               if not (i in _recur_ids and r.get('state_ts', 0) < _midnight)}
     _agent_ids = {i for i, r in _claims.items() if r['working']}
     _claim_ids = set(_claims.keys())
     _done_ids = {i for i, r in _claims.items() if r.get('done')}

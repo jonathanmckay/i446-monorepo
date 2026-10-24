@@ -54,3 +54,35 @@ def test_done_claim_keeps_its_session_pane_number(tmp_path):
 def test_dtd_draws_the_pane_number_before_the_done_check():
     dtd = (Path(__file__).parent / "dtd.sh").read_text()
     assert "prefix = _pane + '✅ ' + prefix" in dtd
+
+
+# ── 2026-10-24: "notes had the abacus as if I'm working on it, but it was long since stale" ──
+
+def test_clear_task_drops_the_claim_whatever_its_state(tmp_path):
+    ac.claim({"id": "n", "content": "notes"}, "S", tmp_path)
+    ac.release("S", tmp_path)                       # released claims normally linger a day
+    assert ac.load(tmp_path)["n"]["state"] == "released"
+    assert ac.clear_task("n", tmp_path) is True
+    assert "n" not in ac.load(tmp_path)
+    assert ac.clear_task("n", tmp_path) is False    # no claim: harmless
+
+
+def test_load_reports_when_the_state_was_set(tmp_path):
+    ac.claim({"id": "n", "content": "notes"}, "S", tmp_path, now=1792767000)
+    assert ac.load(tmp_path, now=1792767100)["n"]["state_ts"] == 1792767000
+
+
+def test_did_fast_clears_the_claim_of_every_task_it_closes():
+    src = (Path(__file__).parent / "did-fast.py").read_text()
+    i = src.index("completed_ids = {id_to_name[tid]: tid")
+    block = src[i:i + 1200]
+    assert "_ac.clear_task(str(_tid))" in block and "if _ok:" in block
+
+
+def test_dtd_ignores_a_repeating_cards_claim_from_before_today():
+    dtd = (Path(__file__).parent / "dtd.sh").read_text()
+    i = dtd.index("_claims = _ac.load()")
+    block = dtd[i:i + 900]
+    assert "_midnight = time.mktime(time.strptime(today, '%Y-%m-%d'))" in block
+    assert "if not (i in _recur_ids and r.get('state_ts', 0) < _midnight)" in block
+    assert block.index("_recur_ids") < block.index("_agent_ids = ")   # filtered before any set is built

@@ -118,6 +118,18 @@ def mark_done(session: str, ids: list[str] | None = None, root: Path = CLAIMS_DI
     return targets
 
 
+def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
+    """The task was completed (did-fast closed it): drop its claim, whatever its
+    state. JM's close is the real close, so nothing about the claim is left to
+    show. Without this a REPEATING card kept its id, and the next day's card
+    inherited yesterday's released claim as 🧮 🕐 (2026-10-24: "notes had the
+    abacus as if I'm working on it, but it was long since stale"). Returns
+    whether a claim existed."""
+    existed = (root / f"{tid}.json").exists()
+    _forget(str(tid), root)
+    return existed
+
+
 def _forget(tid: str, root: Path) -> None:
     for p in (root / f"{tid}.json", root / f"{tid}.state"):
         try:
@@ -178,6 +190,7 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
             _forget(tid, root)   # kept its top slot for a day; JM never closed it
             continue
         rec["state"] = state
+        rec["state_ts"] = ts
         rec["working"] = state == "working" and now - ts < STALE_SECS
         # A released claim's session is gone or elsewhere: no pane number. A
         # done one keeps it while its session is still numbered, so dtd draws
