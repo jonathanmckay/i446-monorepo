@@ -48,8 +48,10 @@
 # "fixed" 2026-08-10 without addressing root cause, recurred for
 # Jul19-Jul25, fixed again 2026-08-17 by widening this window + adding the
 # --force sweep below).
-10 5 * * * python3 $HOME/i446-monorepo/tools/personal-dashboard/backfill_toggl_cache.py --days 45 >> $HOME/i446-monorepo/tools/personal-dashboard/.backfill-toggl.log 2>&1
-15 5 * * 0 python3 $HOME/i446-monorepo/tools/personal-dashboard/backfill_toggl_cache.py --days 90 --force >> $HOME/i446-monorepo/tools/personal-dashboard/.backfill-toggl.log 2>&1
+# toggl_db replaced backfill_toggl_cache.py (synced from the live crontab 2026-10-24, /1-i446 #11)
+10 5 * * * (python3 $HOME/i446-monorepo/tools/toggl-db/toggl_db.py sync --days 14 --export && python3 $HOME/i446-monorepo/tools/toggl-db/toggl_db.py verify --days 7) >> $HOME/i446-monorepo/tools/toggl-db/.toggl-db.log 2>&1 || $HOME/bin/cron-alert.sh toggl_db sync_or_verify_failed "nightly toggl_db sync/verify exited non-zero (see tools/toggl-db/.toggl-db.log)"
+15 5 * * 0 python3 $HOME/i446-monorepo/tools/toggl-db/toggl_db.py sync --days 120 --export >> $HOME/i446-monorepo/tools/toggl-db/.toggl-db.log 2>&1 || $HOME/bin/cron-alert.sh toggl_db weekly_sweep_failed "Sunday 120-day toggl_db sweep failed"
+20 5 1 * * python3 $HOME/i446-monorepo/tools/toggl-db/toggl_db.py sync --days 400 --export >> $HOME/i446-monorepo/tools/toggl-db/.toggl-db.log 2>&1 || $HOME/bin/cron-alert.sh toggl_db monthly_sweep_failed "1st-of-month 400-day toggl_db sweep failed"
 # 1-i446: weekly vault-health review → z_meta report + 😈 Todoist review task (singletons, syncthing, git autopush, backups, alerts)
 40 4 * * 6 python3 $HOME/i446-monorepo/tools/vault/vault_health.py >> $HOME/i446-monorepo/tools/vault/.1-i446.log 2>&1
 # neon-reconcile: twice-daily Neon ledger reconcile (was live on Ix but missing here)
