@@ -8298,5 +8298,75 @@
     "unit": "K303",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-24",
+    "effective": "2026-12-31",
+    "kind": "ntv",
+    "unit_id": "1005",
+    "prop": "kn47 K2",
+    "unit": "A206",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-24",
+    "effective": "2026-10-31",
+    "kind": "leased",
+    "unit_id": "347",
+    "prop": "k104- LeFevre",
+    "unit": "101-3",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-24",
+    "effective": "2026-10-24",
+    "kind": "movein",
+    "unit_id": "1034",
+    "prop": "kn47 K2",
+    "unit": "C203",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-24",
+    "effective": "2026-10-24",
+    "kind": "movein",
+    "unit_id": "1205",
+    "prop": "tc68",
+    "unit": "B56",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-24",
+    "effective": "2026-11-23",
+    "kind": "ntv",
+    "unit_id": "1380",
+    "prop": "c702",
+    "unit": "G102",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-24",
+    "effective": "2027-01-31",
+    "kind": "ntv",
+    "unit_id": "774",
+    "prop": "rl21",
+    "unit": "20",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-10-24",
+    "effective": "2026-10-28",
+    "kind": "leased",
+    "unit_id": "329",
+    "prop": "k104- LeFevre",
+    "unit": "509-1",
+    "tenant": null,
+    "baseline": false
   }
 ]
