@@ -489,10 +489,12 @@ def check_skills_backup(now: dt.datetime) -> Finding:
 def check_perm_sync(now: dt.datetime) -> Finding:
     # claude-perm-sync.py (launchd on Ix, hourly) merges Claude permission
     # allowlists ix<->straylight and stamps this file only on full success.
-    stamp = Path.home() / ".claude" / "perm-sync-last-success"
-    if not stamp.exists():
-        return Finding("perm-sync", "warn", "no last-success stamp — claude-perm-sync has never completed here", review=True)
-    age_h = (now.timestamp() - float(stamp.read_text().strip())) / 3600
+    # The job runs on Ix, so only Ix has the stamp; off Ix, read Ix's
+    # (2026-10-24: Straylight runs warned "never completed" every week).
+    raw = ix("cat ~/.claude/perm-sync-last-success 2>/dev/null", 20).strip()
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", raw):
+        return Finding("perm-sync", "warn", "no last-success stamp on Ix — claude-perm-sync has never completed", review=True)
+    age_h = (now.timestamp() - float(raw)) / 3600
     if age_h > 48:
         return Finding("perm-sync", "warn", f"last successful ix<->straylight permission sync {age_h:.0f}h ago "
                        "(hourly launchd job; is straylight offline or ssh broken?)", review=True)

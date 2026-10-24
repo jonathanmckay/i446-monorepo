@@ -349,7 +349,7 @@ SKILL_CLAIMS = {
     "1i9": "1 i9", "1m5x2": "1 m5x2", "xk887": "1 xk88", "1-1n": "1 -1n", "1-2g": "1 -2g",
     "f695": "1 f695", "2n": "2n checksum", "3s": "3s", "moralaudit": "moral audit",
     "2026-4g-checkin": "4g checkin", "1-i446": "1 i446", "1hcme": "1 hcme",
-    "1f693": "1 f693", "ibxi9": "ibx i9",
+    "1f693": "1 f693", "ibxi9": "ibx i9", "ibxm5x2": "ibx m5x2",
 }
 # Skills whose flow closes the card and then releases the claim itself.
 # (/xk887's survey closes '1 xk88' from its own cmux tab after the skill's
