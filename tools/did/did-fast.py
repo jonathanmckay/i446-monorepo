@@ -274,7 +274,11 @@ RATE_ANNOT_RE = re.compile(r"\s*\[[0-9.+]*/m\]")
 ONENEON_TO_0FEN: dict[str, str] = {
     "1s": "T", "1g": "T", "1 hpm": "R", "s+hcbp": "W",
     "1 f692": "Z", "1 f693": "R", "1 m7": "R", "1 i9": "R",
-    "1 -2g": "T", "1 vm+li+msgr": "R", "1 -1n": "P",
+    # 1 -1n was "P" until 2026-10-25: P is the -1₦ ritual column, which the
+    # build-order daemon's block-turnover reconcile REWRITES every block from
+    # ritual scores, so the weekly card's +15 vanished at the next turnover
+    # (10-19: appended 07:16, wiped 08:00). Weekly g245 reviews credit T.
+    "1 -2g": "T", "1 vm+li+msgr": "R", "1 -1n": "T",
     "1 f694": "S", "1 xk88": "Y", "1 xk87": "X",
     "1 xk87 wknd": "X", "1 s897": "Y", "1 hcbc": "W", "1 hcme": "V",
     "一起饭": "X", "family": "X", "s897": "Y",

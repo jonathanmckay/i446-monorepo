@@ -54,7 +54,7 @@ def test_parse_week_unknown_label(ob):
 
 @pytest.mark.parametrize("key,col", [
     ("1 2g", "T"),      # header '1 -2g' normalized; raw-keyed map missed it
-    ("1 1n", "P"),      # header '1 -1n'
+    ("1 1n", "T"),      # header '1 -1n' (was P until 2026-10-25: P is reconciled)
     ("1 xk88", "Y"),
     ("1 m5x2", "S"),    # generic '1 <domain>' fallback
     ("family", "X"),
@@ -89,3 +89,14 @@ def test_did_fast_hyphenated_header_reaches_0fen(df):
     res = df.route_items([item], headers, tq)
     one_n = [r for r in res if r.step == "1n"]
     assert one_n and one_n[0].fen_col == "T"
+
+
+def test_weekly_cards_never_credit_reconciled_p_column():
+    """0分!P is rebuilt by the build-order daemon's -1n reconcile every block;
+    a weekly card credited there is silently erased (1 -1n, 2026-10-19)."""
+    import pathlib, re
+    text = pathlib.Path(__file__).with_name("did-fast.py").read_text()
+    start = text.index("ONENEON_TO_0FEN: dict[str, str] = {")
+    block = text[start:text.index("\n}\n", start)]
+    assert re.search(r'"1 -1n": "T"', block)
+    assert not re.search(r':\s*"P"', block)
