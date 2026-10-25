@@ -82,6 +82,7 @@ def relogin() -> int:
             print("CODE_SENT", flush=True)  # nothing to wait on; keep the protocol uniform
             sys.stdin.readline()  # drain in case a caller still sends one
 
+        ls._skip_passkey_prompt(page)  # "add a Passkey" nag parks a finished login
         ok = "login" not in page.url.lower() and "authenticate" not in page.url.lower()
         if ok:
             print(f"LOGIN_OK {page.url}", flush=True)

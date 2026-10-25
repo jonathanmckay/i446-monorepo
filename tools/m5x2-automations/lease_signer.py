@@ -98,10 +98,39 @@ def _login_if_needed(page) -> bool:
             if btn.is_visible(timeout=1000):
                 btn.click()
                 _wait(page, 5000)
+                _skip_passkey_prompt(page)
                 return True
         except Exception:
             continue
 
+    return False
+
+
+def _skip_passkey_prompt(page) -> bool:
+    """Dismiss AppFolio's post-login "add a Passkey" interstitial.
+
+    Since 2026-10 Keycloak can land a finished login on
+    login-actions/required-action?execution=webauthn-register-one-click; the
+    session is valid but parked there until "Remind Me Later" is clicked
+    (relogin hit it live 2026-10-25 and reported LOGIN_FAILED).
+    Returns True if it clicked through.
+    """
+    if "webauthn-register" not in page.url.lower():
+        try:
+            if not page.get_by_text("Remind Me Later").first.is_visible(timeout=1000):
+                return False
+        except Exception:
+            return False
+    for sel in ('button:has-text("Remind Me Later")', 'a:has-text("Remind Me Later")',
+                'input[value="Remind Me Later"]', 'text=Remind Me Later'):
+        try:
+            el = page.locator(sel).first
+            if el.is_visible(timeout=1000):
+                el.click()
+                _wait(page, 5000)
+                return True
+        except Exception:
+            continue
     return False
 
 
