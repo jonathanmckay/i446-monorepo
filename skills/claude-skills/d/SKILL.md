@@ -60,6 +60,15 @@ Then: with a `<request>` after the colon, confirm in one line
 (`😈 claimed: <task>`) and do the request as if the user had typed it alone.
 Without one, just the confirmation line.
 
+## Turn notes (2026-10-25)
+
+Automatic, nothing to do: when a turn ends while this session holds a claim,
+the Stop hook posts a two-sentence first-person summary of the turn as a
+`😈 ...` Todoist comment on each held task (and on any task the turn marked
+`done`), so JM sees what happened in dtd's details screen. Write final replies
+that say concretely what changed and where it stands; that text is the
+summary's main source.
+
 ## When you think the claimed work is done (2026-10-22)
 
 As soon as you (or a subagent you launched) believe a claimed task is finished,
