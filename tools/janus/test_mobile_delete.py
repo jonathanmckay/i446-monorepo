@@ -47,3 +47,41 @@ def test_delete_missing_entry_and_missing_id(jm, monkeypatch):
     assert not c.post("/api/delete", json={"id": "7"}).get_json()["ok"]
     assert c.post("/api/delete", json={}).status_code == 400
     assert deleted == []
+
+
+# ── calendar events (2026-10-25: "swipe left on calendar events as well to
+# delete them"): Google-hosted → API delete + hide; Outlook → hide only.
+def _ev_setup(m, tmp_path, monkeypatch):
+    monkeypatch.setattr(m, "HIDDEN_EVENTS", tmp_path / "hidden.json")
+    calls = []
+    class G:
+        @staticmethod
+        def delete_event(cal, eid): calls.append((cal, eid))
+    monkeypatch.setattr(m, "gcal_client", G)
+    return m, calls
+
+
+def test_delete_google_event_calls_api_and_hides(jm, tmp_path, monkeypatch):
+    m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    r = m.delete_calendar_event("Standup", "2026-10-25T09:00:00-07:00", "2026-10-25T09:30:00-07:00",
+                                "abc", "jm@m5c7.com")
+    assert r == {"ok": True, "mode": "deleted"} and calls == [("jm@m5c7.com", "abc")]
+    assert ("standup", "2026-10-25T09:00:00-07:00", "2026-10-25T09:30:00-07:00") in m._hidden_event_keys()
+
+
+def test_delete_outlook_event_only_hides(jm, tmp_path, monkeypatch):
+    m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    r = m.delete_calendar_event("1:1", "2026-10-25T10:00:00-07:00", "2026-10-25T10:30:00-07:00",
+                                "x", "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com")
+    assert r["mode"] == "hidden" and calls == []
+
+
+def test_hidden_events_are_filtered_from_the_timeline(jm, tmp_path, monkeypatch):
+    import datetime as dt
+    m, _ = _ev_setup(jm, tmp_path, monkeypatch)
+    tz = m._tz()
+    s = dt.datetime(2026, 10, 25, 9, 0, tzinfo=tz); e = s + dt.timedelta(minutes=30)
+    raw = [{"title": "Standup", "start_dt": s, "end_dt": e}]
+    assert len(m._filter_events(raw, [])) == 1
+    m.delete_calendar_event("Standup", s.isoformat(), e.isoformat())
+    assert m._filter_events(raw, []) == []

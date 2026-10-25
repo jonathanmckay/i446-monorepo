@@ -37,4 +37,9 @@ public enum Bodies {
         ["id": id, "desc": desc, "start": start, "end": end, "project": project]
     }
     public static func split(id: String, mode: String) -> [String: Any] { ["id": id, "mode": mode] }
+    /// /api/delete-event: Google-hosted → deleted from the calendar; Outlook → hidden.
+    public static func deleteEvent(_ r: TimelineRow) -> [String: Any] {
+        ["title": r.rawTitle.isEmpty ? r.title : r.rawTitle, "start_iso": r.startIso, "end_iso": r.endIso,
+         "event_id": r.eventId, "calendar_id": r.calendarId]
+    }
 }

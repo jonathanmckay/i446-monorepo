@@ -163,6 +163,10 @@ public struct TimelineRow: Equatable, Hashable {
     public var started: Bool = false
     public var startIso: String = ""
     public var endIso: String = ""
+    // event delete (2026-10-25): the calendar's own title + Google ids
+    public var rawTitle: String = ""
+    public var eventId: String = ""
+    public var calendarId: String = ""
 
     public init(type: String) { self.type = type }
 
@@ -187,7 +191,7 @@ public struct TimelineRow: Equatable, Hashable {
     }
     /// Left-swipe (edit/split) is for Toggl entries only — a gap or calendar
     /// event isn't a Toggl entry yet.
-    public var canSwipeLeft: Bool { isEntry }
+    public var canSwipeLeft: Bool { isEntry || isEvent }
 
     /// What the right-swipe backing says it will do — the web's swipe label.
     public var rightLabel: String {

@@ -295,6 +295,13 @@ final class JanusStore: ObservableObject {
     /// the terminal janus's ^X does for running ones. Online only: a queued
     /// delete replayed later could hit an entry edited in the meantime.
     func delete(_ r: TimelineRow) {
+        if r.isEvent {
+            // Calendar event (2026-10-25): Google-hosted ones are deleted from the
+            // calendar, Outlook ones hidden from janus (read-only from here).
+            act("/api/delete-event", Bodies.deleteEvent(r)) { d in
+                (d.string("mode") == "deleted" ? "deleted from calendar: " : "hidden: ") + r.title + " ✓" }
+            return
+        }
         act("/api/delete", ["id": r.id]) { _ in "deleted " + r.desc + " ✓" }
     }
 
