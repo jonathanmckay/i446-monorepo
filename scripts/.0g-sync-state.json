@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "make meaningful progress on either dash or p&l": {
-      "todoist_id": "6hqjV83fGF4gQhFR",
-      "minutes": 50
-    },
     "reflect on how to make my re time more useful": {
       "todoist_id": "6hqjV85j8Vrr432R",
       "minutes": 40
@@ -14,5 +10,5 @@
       "minutes": 40
     }
   },
-  "last_sync": "2026-10-25T08:00:03.157573-07:00"
+  "last_sync": "2026-10-25T10:00:02.529908-07:00"
 }
