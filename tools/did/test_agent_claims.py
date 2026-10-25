@@ -561,3 +561,58 @@ def test_clear_task_clears_remote_copy_too(tmp_path):
     ac.claim(TASK, "ST", root=remote, now=1000)
     assert ac.clear_task("T1", tmp_path)
     assert ac.load(tmp_path, now=1010) == {}
+
+
+# --- turn notes (2026-10-25) ------------------------------------------------
+def _transcript(tmp_path, entries):
+    p = tmp_path / "t.jsonl"
+    p.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    return p
+
+
+def test_turn_text_takes_last_real_prompt_and_replies(tmp_path):
+    t = _transcript(tmp_path, [
+        {"type": "user", "message": {"content": "old prompt"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "old reply"}]}},
+        {"type": "user", "message": {"content": "fix the stale list"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"description": "Run tests"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Fixed it."}]}},
+    ])
+    prompt, reply, tools = ac.turn_text(t)
+    assert prompt == "fix the stale list" and reply == "Fixed it." and tools == ["Bash: Run tests"]
+
+
+def test_note_turn_posts_demon_summary_on_held_and_just_done_tasks(tmp_path):
+    ac.claim(TASK, "S1", root=tmp_path, now=1000)
+    ac.claim({"id": "T2", "content": "other"}, "S1", root=tmp_path, now=1000, also=True)
+    ac.mark_done("S1", ["T2"], root=tmp_path)   # left the index, still gets this turn's note
+    t = _transcript(tmp_path, [
+        {"type": "user", "message": {"content": "do it"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}},
+    ])
+    posted, prompts = [], []
+    got = ac.note_turn(json.dumps({"session_id": "S1", "transcript_path": str(t)}), root=tmp_path,
+                       post=lambda tid, c: posted.append((tid, c)),
+                       summarizer=lambda p: prompts.append(p) or "I did X. Next is Y.")
+    assert got == ["T1", "T2"]
+    assert posted == [("T1", "😈 I did X. Next is Y."), ("T2", "😈 I did X. Next is Y.")]
+    assert "source logging" in prompts[0] and "two sentences" in prompts[0]
+    # The done queue is consumed: the next turn notes only what is still held.
+    assert ac.note_turn(json.dumps({"session_id": "S1", "transcript_path": str(t)}), root=tmp_path,
+                        post=lambda *a: None, summarizer=lambda p: "x") == ["T1"]
+
+
+def test_note_turn_skips_unclaimed_sessions_and_stop_hook_loops(tmp_path):
+    boom = lambda *a: (_ for _ in ()).throw(AssertionError("must not run"))
+    assert ac.note_turn(json.dumps({"session_id": "nobody"}), root=tmp_path, post=boom, summarizer=boom) == []
+    ac.claim(TASK, "S1", root=tmp_path, now=1000)
+    assert ac.note_turn(json.dumps({"session_id": "S1", "stop_hook_active": True}),
+                        root=tmp_path, post=boom, summarizer=boom) == []
+
+
+def test_stop_hook_launches_note_only_for_claimed_sessions():
+    src = HOOK.read_text()
+    assert 'agent_claims.py" note' in src and "DTD_NOTE_CHILD" in src
+    assert src.index('agent_claims.py" note') < src.index('[[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0')

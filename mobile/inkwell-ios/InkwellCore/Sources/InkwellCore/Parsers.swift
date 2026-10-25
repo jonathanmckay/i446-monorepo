@@ -65,6 +65,9 @@ public enum Parsers {
             row.started = r.bool("started")
             row.startIso = r.string("start_iso")
             row.endIso = r.string("end_iso")
+            row.rawTitle = r.string("raw_title")
+            row.eventId = r.string("event_id")
+            row.calendarId = r.string("calendar_id")
             return row
         }
         return Timeline(rows: rows, trackedMin: json.int("tracked_min"), points: json.intOrNil("points"),

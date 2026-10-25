@@ -330,7 +330,9 @@ def detail_lines(bundle: dict | None, project: str | None) -> list[tuple[str, st
     if meta:
         rows.append(("dim", " · ".join(meta)))
     kept = [c for c in (bundle.get("comments") or []) if not (c.get("content") or "").startswith("dtd-short:")]
-    for c in kept[:3]:
+    # Newest three, oldest first (2026-10-25): agent 😈 turn notes pile up
+    # per turn, and the first three would hide the latest.
+    for c in kept[-3:]:
         body = _MD_LINK.sub(lambda m: m.group(1) or m.group(2), (c.get("content") or "").strip())
         rows.append(("dim", f"{(c.get('posted_at') or '')[:10]} {body.splitlines()[0] if body else ''}"))
     if len(kept) > 3:

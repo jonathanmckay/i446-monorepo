@@ -72,7 +72,11 @@ struct JanusView: View {
                             // server refuses anyway). Tint, not .destructive role: that
                             // role animates the row away before the confirm.
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                if store.viewingToday && r.canSwipeLeft && !r.isLocal && !r.isPending {
+                                if store.viewingToday && r.isEvent {
+                                    // Calendar event (2026-10-25): delete only.
+                                    Button { deleteTarget = r } label: { Label("delete", systemImage: "trash") }
+                                        .tint(.red)
+                                } else if store.viewingToday && r.canSwipeLeft && !r.isLocal && !r.isPending {
                                     if !r.running {
                                         Button { store.resume(r) } label: { Label("resume", systemImage: "play.fill") }
                                             .tint(.blue)
@@ -128,11 +132,16 @@ struct JanusView: View {
             FillSheet(gap: t.gap) { desc, start, end, project in
                 store.fill(desc: desc, start: start, end: end, project: project) }
         }
-        .confirmationDialog("delete this Toggl entry?", isPresented: isPresented($deleteTarget),
+        .confirmationDialog(deleteTarget?.isEvent == true ? "delete this calendar event?" : "delete this Toggl entry?",
+                            isPresented: isPresented($deleteTarget),
                             titleVisibility: .visible, presenting: deleteTarget) { r in
             Button("delete", role: .destructive) { store.delete(r) }
             Button("cancel", role: .cancel) {}
-        } message: { r in Text("\(r.start)–\(r.end) " + r.desc) }
+        } message: { r in
+            Text("\(r.start)–\(r.end) " + (r.isEvent ? r.title + (r.eventId.isEmpty || r.calendarId.hasSuffix("@import.calendar.google.com")
+                                                          ? " · Outlook: hidden from janus only" : " · removed from Google Calendar")
+                                               : r.desc))
+        }
         .sheet(item: $editTarget) { r in
             EditSheet(row: r, loadCodes: { await store.projectCodes() },
                       onSave: { d, s, e, p in store.edit(r, desc: d, start: s, end: e, project: p) },

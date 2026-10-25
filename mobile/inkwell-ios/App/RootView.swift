@@ -4,7 +4,8 @@ import InkwellCore
 /// One source tree, three apps (XcodeGen targets, 2026-10-19):
 ///   dtd      → APP_DTD      task list only
 ///   janus    → APP_JANUS    timeline only
-///   Inkwell  → (default)    vault + dashboard
+///   jmdash   → APP_DASH     the dashboard (its own app since 2026-10-25)
+///   Inkwell  → (default)    vault only (no tab bar since 2026-10-25)
 /// The surface is chosen at compile time via SWIFT_ACTIVE_COMPILATION_CONDITIONS,
 /// so each app ships only its own screen while sharing stores, settings, toast.
 struct RootView: View {
@@ -17,9 +18,8 @@ struct RootView: View {
     @StateObject private var dtd = DtdStore()
     #elseif APP_JANUS
     @StateObject private var janus = JanusStore()
+    #elseif APP_DASH
     #else
-    enum Tab: Hashable { case vault, dash }
-    @State private var tab: Tab = .vault
     @ObservedObject private var vault = VaultTabStore.shared
     #endif
 
@@ -54,18 +54,18 @@ struct RootView: View {
     private func reloadAll() { janus.reload() }
     private func refreshAll() { janus.refreshIfStale(); Task { await janus.flushOutbox() } }
     private func cameOnline() { Task { await janus.load() } }
+    #elseif APP_DASH
+    // JM Dash (2026-10-25: "split out JM Dash to be its own app ... remove the
+    // toggle at the bottom"): the dashboard web view alone.
+    private var surface: some View { DashboardView(onSettings: { showSettings = true }) }
+    private var bottomPad: CGFloat { 16 }
+    private func reloadAll() {}
+    private func refreshAll() {}
+    private func cameOnline() {}
     #else
-    private var surface: some View {
-        TabView(selection: $tab) {
-            VaultView(store: vault, onSettings: { showSettings = true })
-                .tabItem { Label("vault", systemImage: "books.vertical") }
-                .tag(Tab.vault)
-            DashboardView(onSettings: { showSettings = true })
-                .tabItem { Label("dash", systemImage: "chart.bar") }
-                .tag(Tab.dash)
-        }
-    }
-    private var bottomPad: CGFloat { 56 }
+    // Inkwell is the vault alone now; the dashboard moved to JM Dash.
+    private var surface: some View { VaultView(store: vault, onSettings: { showSettings = true }) }
+    private var bottomPad: CGFloat { 16 }
     private func reloadAll() { vault.fetchLanding(VaultView.landing); vault.runSync(force: true) }
     private func refreshAll() { vault.fetchLanding(VaultView.landing); vault.syncIfStale() }
     private func cameOnline() { vault.syncIfStale() }

@@ -29,6 +29,8 @@ Usage:
                                   (default: every task this session holds), until JM completes it
   agent_claims.py release         hand this session's task back (stays at the top of dtd, 🕐)
   agent_claims.py list            JSON of claims (+ derived working flag)
+  agent_claims.py note            Stop hook: post a two-sentence 😈 summary of the turn
+                                  as a Todoist comment on each task the session holds
 """
 from __future__ import annotations
 
@@ -126,6 +128,14 @@ def mark_done(session: str, ids: list[str] | None = None, root: Path = CLAIMS_DI
         if (root / f"{tid}.json").exists():
             set_state(tid, "done", now, root)
     _set_held(session, [i for i in mine if i not in targets], root)
+    # The turn that finishes a task is the one most worth a note, but the id
+    # just left the session index; queue it so this turn's Stop still notes it.
+    pend = root / "by-session" / f"{session}.note"
+    try:
+        old = pend.read_text().split()
+    except OSError:
+        old = []
+    _write(pend, "".join(i + "\n" for i in dict.fromkeys(old + list(targets))))
     return targets
 
 
@@ -226,6 +236,148 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
 
 def working_ids(root: Path = CLAIMS_DIR, now: float | None = None) -> set[str]:
     return {tid for tid, r in load(root, now).items() if r["working"]}
+
+
+# --- turn notes (2026-10-25) -----------------------------------------------
+# "when the agent finishes a turn on a claimed task, give a two sentence
+# summary from the perspective of the LLM (with demon icon) in task notes, so I
+# have more context." The Stop hook runs `note` detached; it reads the turn out
+# of the transcript, has Haiku write two first-person sentences, and posts them
+# as a Todoist comment ("notes" in Todoist's API) prefixed 😈. dtd's details
+# screen shows the newest comments.
+NOTE_PREFIX = "😈 "
+NOTE_KEY_FILE = Path.home() / ".config" / "anthropic" / "key"
+NOTE_MODEL = "claude-haiku-4-5-20251001"
+NOTE_MAX_CHARS = 6000   # of turn text handed to the summarizer
+
+
+def _text_of(content) -> str:
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text", "") for b in content or []
+                     if isinstance(b, dict) and b.get("type") == "text")
+
+
+def turn_text(transcript: Path) -> tuple[str, str, list[str]]:
+    """(prompt, reply, tools) for the last turn: the last real user prompt,
+    every assistant text block after it, and the tools it called."""
+    try:
+        lines = transcript.read_text(errors="replace").splitlines()
+    except OSError:
+        return "", "", []
+    entries = []
+    for l in lines:
+        try:
+            e = json.loads(l)
+        except ValueError:
+            continue
+        if e.get("type") in ("user", "assistant") and not e.get("isSidechain"):
+            entries.append(e)
+    start = None
+    for i in range(len(entries) - 1, -1, -1):
+        e = entries[i]
+        c = (e.get("message") or {}).get("content")
+        if e["type"] == "user" and not e.get("isMeta") and (
+                isinstance(c, str) or any(isinstance(b, dict) and b.get("type") == "text" for b in c or [])):
+            start = i
+            break
+    if start is None:
+        return "", "", []
+    prompt = _text_of(entries[start]["message"]["content"]).strip()
+    reply, tools = [], []
+    for e in entries[start + 1:]:
+        if e["type"] != "assistant":
+            continue
+        for b in (e.get("message") or {}).get("content") or []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text" and b.get("text", "").strip():
+                reply.append(b["text"].strip())
+            elif b.get("type") == "tool_use":
+                inp = b.get("input") or {}
+                hint = inp.get("description") or inp.get("file_path") or ""
+                tools.append(f"{b.get('name')}: {hint}"[:120])
+    return prompt, "\n\n".join(reply), tools
+
+
+def note_prompt(task: str, prompt: str, reply: str, tools: list[str]) -> str:
+    body = (f"User's request:\n{prompt[:1500]}\n\nTools used:\n" + "\n".join(tools[-40:])
+            + f"\n\nYour final reply:\n{reply}")[:NOTE_MAX_CHARS]
+    return ("You are the AI coding agent that just finished a turn of work on the task "
+            f"\"{task}\". Write exactly two sentences, first person (\"I ...\"), "
+            "saying what you did and where it stands (done, blocked, or what is next). "
+            "Concrete: name files, numbers or outcomes. No preamble, no quotes, under 60 words.\n\n"
+            + body)
+
+
+def summarize(text: str) -> str | None:
+    """Haiku via the API (~1s), else `claude -p --model haiku` (thread_translator's pattern)."""
+    out = None
+    try:
+        import anthropic
+        resp = anthropic.Anthropic(api_key=NOTE_KEY_FILE.read_text().strip()).messages.create(
+            model=NOTE_MODEL, max_tokens=200, messages=[{"role": "user", "content": text}])
+        out = resp.content[0].text
+    except Exception:  # noqa: BLE001
+        import shutil
+        import subprocess
+        cli = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+        try:
+            r = subprocess.run([cli, "-p", "--model", "haiku", text], capture_output=True,
+                               text=True, timeout=120, cwd="/tmp",
+                               env={**os.environ, "DTD_NOTE_CHILD": "1"})
+            out = r.stdout if r.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired):
+            out = None
+    out = " ".join((out or "").split()).strip().strip('"')
+    if not out or "Not logged in" in out:
+        return None
+    return out
+
+
+def note_targets(session: str, root: Path = CLAIMS_DIR) -> list[str]:
+    """Held tasks plus any this turn marked done; consumes the done queue."""
+    pend = root / "by-session" / f"{session}.note"
+    try:
+        queued = pend.read_text().split()
+        pend.unlink()
+    except OSError:
+        queued = []
+    return list(dict.fromkeys(held(session, root) + queued))
+
+
+def note_turn(payload: str, root: Path = CLAIMS_DIR, post=None, summarizer=summarize) -> list[str]:
+    try:
+        j = json.loads(payload or "{}")
+    except ValueError:
+        return []
+    session = j.get("session_id") or ""
+    if not session or j.get("stop_hook_active"):
+        return []
+    tids = note_targets(session, root)
+    if not tids:
+        return []
+    prompt, reply, tools = turn_text(Path(j.get("transcript_path") or "/nonexistent"))
+    reply = (j.get("last_assistant_message") or "").strip() if not reply else reply
+    if not reply and not tools:
+        return []
+    if post is None:
+        sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+        import todoist
+        post = todoist.add_comment
+    claims = load(root)
+    posted = []
+    for tid in tids:
+        task = (claims.get(tid) or {}).get("task", "")
+        s = summarizer(note_prompt(task, prompt, reply, tools))
+        if not s:
+            continue
+        try:
+            post(tid, NOTE_PREFIX + s)
+            posted.append(tid)
+        except Exception:  # noqa: BLE001
+            pass
+    return posted
 
 
 # --- task matching ---------------------------------------------------------
@@ -528,6 +680,9 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 1
     cmd, rest = argv[0], " ".join(argv[1:]).strip()
+    if cmd == "note":
+        note_turn(sys.stdin.read())
+        return 0
     if cmd == "hook":
         out = hook(sys.stdin.read())
         if out:

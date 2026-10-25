@@ -65,6 +65,14 @@ if [[ -n "$sid" ]]; then
       if [[ -n "$live" ]]; then print -r -- "$live" > "$A" 2>/dev/null; else rm -f "$A" 2>/dev/null; fi ;;
   esac
 fi
+# Stop on a claimed task: a 😈 two-sentence summary of the turn goes onto the
+# task as a Todoist comment (agent_claims.note_turn, 2026-10-25). Detached;
+# `.note` queues ids the turn marked done (they already left the index).
+# DTD_NOTE_CHILD: the summarizer's own `claude -p` must not note itself.
+if [[ "$1" == idle && -n "$sid" && -z "$DTD_NOTE_CHILD" \
+      && ( -s "$D/by-session/$sid" || -f "$D/by-session/$sid.note" ) ]]; then
+  print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" note >/dev/null 2>&1 &!
+fi
 [[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0
 # One id per line (2026-10-22: `claim --also` lets a session hold several
 # tasks it fanned out to subagents); every held task follows the session.

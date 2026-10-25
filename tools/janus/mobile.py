@@ -529,15 +529,68 @@ def _fetch_calendar_raw(day_start: _dt.datetime, day_end: _dt.datetime) -> list[
     return deduped
 
 
+# Deleted/hidden calendar events (2026-10-25: "I should be able to swipe left
+# on calendar events as well to delete them"). Same store and key as the
+# terminal janus (tools/tg/janus.py HIDDEN_EVENTS / _hidden_event_key), so a
+# hide from either surface hides it on both: (title lower, start iso, end iso).
+HIDDEN_EVENTS = Path.home() / ".local/state/jm/janus-hidden-events.json"
+HIDDEN_EVENTS_KEEP_DAYS = 30
+
+
+def _hidden_event_keys() -> set:
+    try:
+        data = json.loads(HIDDEN_EVENTS.read_text())
+    except (OSError, ValueError):
+        return set()
+    return {tuple(k) for k in data.get("hidden", []) if isinstance(k, list) and len(k) == 3}
+
+
+def _event_key(title: str, start_iso: str, end_iso: str) -> tuple:
+    return ((title or "").strip().lower(), start_iso, end_iso)
+
+
+def _hide_event_key(key: tuple) -> None:
+    keys = _hidden_event_keys() | {key}
+    cutoff = (_dt.datetime.now(_tz()).date() - _dt.timedelta(days=HIDDEN_EVENTS_KEEP_DAYS)).isoformat()
+    keep = [list(k) for k in sorted(keys) if k[1] >= cutoff]
+    HIDDEN_EVENTS.parent.mkdir(parents=True, exist_ok=True)
+    HIDDEN_EVENTS.write_text(json.dumps({"hidden": keep}))
+
+
+def delete_calendar_event(title: str, start_iso: str, end_iso: str,
+                          event_id: str = "", calendar_id: str = "") -> dict:
+    """Swipe-left delete on an event row. Google-hosted events (an id and a
+    calendar that isn't the read-only Outlook ICS import) are deleted from the
+    calendar via the API, sendUpdates='none' like the terminal's ^X; Outlook
+    rows can't be deleted from here, so they're hidden from janus only. Either
+    way the hide key is written, so the row leaves at once even while the
+    calendar fetch is cached and a mirrored copy can't resurface it."""
+    if not title or not start_iso or not end_iso:
+        return {"ok": False, "error": "title, start_iso, end_iso required"}
+    mode = "hidden"
+    if event_id and calendar_id and not calendar_id.endswith("@import.calendar.google.com") \
+            and gcal_client is not None:
+        try:
+            gcal_client.delete_event(calendar_id, event_id)
+            mode = "deleted"
+        except Exception as e:  # noqa: BLE001 -- fall back to the local hide
+            print(f"WARN delete_event {event_id}: {e}", file=sys.stderr)
+    _hide_event_key(_event_key(title, start_iso, end_iso))
+    return {"ok": True, "mode": mode}
+
+
 def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
     """Raw calendar events → ones actually worth showing as a convertible
     row: not all-day, not transparent ("free" holds), not already
     covered/tracked by a real Toggl entry. Pure — no I/O — so it's testable
     without touching the calendar sources at all."""
     now = _dt.datetime.now(_tz())
+    hidden = _hidden_event_keys()
     out = []
     for ev in raw:
         if ev.get("all_day") or ev.get("transparency") == "transparent":
+            continue
+        if _event_key(ev.get("title") or "", ev["start_dt"].isoformat(), ev["end_dt"].isoformat()) in hidden:
             continue
         if _event_covered(ev, entries) or _event_tracked(ev, entries):
             continue
@@ -548,6 +601,8 @@ def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
             "code": code, "color": COLORS.get(code, DEFAULT_COLOR),
             "is_past": ev["end_dt"] <= now,
             "started": ev["start_dt"] <= now,
+            "raw_title": ev.get("title") or "",
+            "event_id": ev.get("id") or "", "calendar_id": ev.get("calendar_id") or "",
         })
     return out
 
@@ -815,6 +870,9 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
                          "is_past": ev["is_past"], "started": ev["started"],
                          "start_iso": ev["start_dt"].isoformat(),
                          "end_iso": ev["end_dt"].isoformat(),
+                         # swipe-left delete (2026-10-25): what /api/delete-event needs
+                         "raw_title": ev.get("raw_title", ev["title"]),
+                         "event_id": ev.get("event_id", ""), "calendar_id": ev.get("calendar_id", ""),
                          # convert_event's credit: 25m → 30, 50m → 60 (2026-10-22)
                          "preview_points": _resolvable_points(ev["title"], known_habits)
                          or meeting_points(mins)})
@@ -1741,6 +1799,15 @@ def api_edit():
               f"project={b.get('project')!r}: {r.get('error')}",
               file=sys.stderr, flush=True)
     return jsonify(r)
+
+
+@app.route("/api/delete-event", methods=["POST"])
+def api_delete_event():
+    b = request.get_json(force=True, silent=True) or {}
+    r = delete_calendar_event((b.get("title") or "").strip(), b.get("start_iso") or "",
+                              b.get("end_iso") or "", str(b.get("event_id") or ""),
+                              str(b.get("calendar_id") or ""))
+    return jsonify(r), (200 if r.get("ok") else 400)
 
 
 @app.route("/api/split", methods=["POST"])

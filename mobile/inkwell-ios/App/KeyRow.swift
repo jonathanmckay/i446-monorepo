@@ -23,6 +23,12 @@ struct KeyRow: View {
     /// Hide the keyboard. Default resigns the first responder; EntryBar
     /// passes its FocusState so SwiftUI's focus stays truthful.
     var onHide: (() -> Void)? = nil
+    /// Inside the system keyboard toolbar (sheets): no background of our own.
+    /// iOS already draws the toolbar as a grey rounded box, and our full-width
+    /// dark fill showed as a black rectangle spilling outside it (2026-10-25:
+    /// "renders weird (black rectangle outside the grey box with rounded
+    /// corners)"). The entry bars keep the fill; they sit on the app's canvas.
+    var bare: Bool = false
 
     struct Key: Hashable {
         let label: String
@@ -64,10 +70,10 @@ struct KeyRow: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 8).padding(.vertical, 4)
+            .padding(.horizontal, bare ? 2 : 8).padding(.vertical, bare ? 0 : 4)
         }
         .frame(maxWidth: .infinity)
-        .background(Theme.bg.opacity(0.96))
+        .background(bare ? Color.clear : Theme.bg.opacity(0.96))
     }
 
     #if canImport(UIKit)
@@ -137,7 +143,7 @@ extension View {
     /// this; see EntryBar for why.)
     func keyRowToolbar() -> some View {
         #if os(iOS)
-        return self.toolbar { ToolbarItem(placement: .keyboard) { KeyRow() } }
+        return self.toolbar { ToolbarItem(placement: .keyboard) { KeyRow(bare: true) } }
         #else
         return self
         #endif
