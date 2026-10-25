@@ -1152,6 +1152,36 @@ def split_entry(entry_id: str, mode: str) -> dict:
     return {"ok": True, "chunk_minutes": chunk}
 
 
+def delete_entry(entry_id: str) -> dict:
+    """Delete a Toggl entry (2026-10-25, iOS janus left-swipe 🗑; the
+    terminal janus's ^X on a tracked entry). Same guards as ^X plus the
+    mobile ones: a running timer is refused ("stop it first", as ^X does);
+    an already-logged entry is refused because its 分 stay credited in Neon
+    and the ledger would keep pointing at a vanished id (credit with no
+    time behind it); a cross-midnight entry is refused like split/edit,
+    since a delete would silently take yesterday's half with it. Not
+    logged ⇒ nothing in the ledger, so no ledger write is needed."""
+    e = _get_entry(entry_id)
+    if not e:
+        return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
+    if (e.get("duration") or 0) < 0 or not e.get("stop"):
+        return {"ok": False, "error": "can't delete a running timer — stop it first"}
+    today = _dt.datetime.now(_tz()).date()
+    if str(entry_id) in _ledger(today):
+        return {"ok": False, "error": "already logged — can't delete a logged entry"}
+    try:
+        if _parse_iso(e["start"]).date() != today or _parse_iso(e["stop"]).date() != today:
+            return {"ok": False, "error": "cross-midnight entry — delete from desktop"}
+    except Exception:
+        return {"ok": False, "error": "unreadable entry times — delete from desktop"}
+    try:
+        if not toggl_api.delete_entry(e.get("id")):
+            return {"ok": False, "error": "toggl refused the delete"}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)[:200]}
+    return {"ok": True, "desc": e.get("description") or ""}
+
+
 _DF_MOD = None  # lazy did-fast module (for habit-name lookups only)
 
 
@@ -1719,6 +1749,14 @@ def api_split():
     if not b.get("id") or b.get("mode") not in ("top", "bottom"):
         return jsonify({"ok": False, "error": "id+mode(top|bottom) required"}), 400
     return jsonify(split_entry(str(b["id"]), b["mode"]))
+
+
+@app.route("/api/delete", methods=["POST"])
+def api_delete():
+    b = request.get_json(force=True, silent=True) or {}
+    if not b.get("id"):
+        return jsonify({"ok": False, "error": "id required"}), 400
+    return jsonify(delete_entry(str(b["id"])))
 
 
 @app.route("/api/convert-event", methods=["POST"])

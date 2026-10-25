@@ -4,8 +4,8 @@ import InkwellCore
 /// janus: today's timeline (Toggl entries, gaps, calendar events, 地支
 /// dividers). Leading swipe: entry → log 分, running → stop+log, event →
 /// convert to a Toggl entry, gap → fill dialog. Trailing swipe on an entry →
-/// edit/split. Every action reloads the whole timeline (no optimism — the
-/// server owns the ledger that says what is already logged).
+/// edit/split · delete. Every action reloads the whole timeline (no optimism
+/// on 分 — the server owns the ledger; a started timer is shown at once).
 @MainActor
 final class JanusStore: ObservableObject {
     @Published private(set) var rows: [TimelineRow] = []
@@ -153,6 +153,7 @@ final class JanusStore: ObservableObject {
 
     // ── leading-swipe commits ────────────────────────────────────────────
     func onRight(_ r: TimelineRow) {
+        if r.isPending { toast.show("starting… one sec"); return }
         if r.isEvent {
             act("/api/convert-event", Bodies.convertEvent(r)) { d in
                 d.string("mode") == "logged" ? "+\(r.minutes)m → \(d.string("step", "neon")) ✓" : "tracking started ✓" }
@@ -183,8 +184,12 @@ final class JanusStore: ObservableObject {
     /// applies its effect to the visible rows. Haptics: a light tick when the
     /// swipe fires, a success buzz once the server has registered it
     /// (round 3 #2: "give haptic feedback when registered").
+    /// `onOk` runs on success *before* the reload, for effects the user should
+    /// see at once (2026-10-25: a just-started timer fills the timer card
+    /// immediately instead of after the up-to-15 s full timeline fetch).
     func act(_ path: String, _ body: [String: Any], offline: String? = nil, queuedBody: [String: Any]? = nil,
-             optimistic: (() -> Void)? = nil, toastText: @escaping (JSON) -> String) {
+             optimistic: (() -> Void)? = nil, onOk: ((JSON) -> Void)? = nil,
+             toastText: @escaping (JSON) -> String) {
         guard !busy else { return }
         busy = true
         Platform.haptic(.commit)
@@ -194,7 +199,7 @@ final class JanusStore: ObservableObject {
                 : .error("offline")   // known offline: queue now, don't wait on a timeout
             busy = false
             switch r {
-            case .ok(let j): Platform.haptic(.success); toast.show(toastText(j)); await load()
+            case .ok(let j): Platform.haptic(.success); toast.show(toastText(j)); onOk?(j); await load()
             case .error(let m) where offline != nil && Outbox.isOffline(m):
                 outbox.enqueue(url: base + path, body: queuedBody ?? body, label: offline!)
                 pending = outbox.count
@@ -240,7 +245,11 @@ final class JanusStore: ObservableObject {
         if !NetWatch.shared.online, let (desc, at) = Self.parseStart(t, now: Date()) {
             startOffline(desc: desc, project: "", at: at); return
         }
-        act("/api/run", ["text": t], offline: t, queuedBody: ["text": Self.pinStart(t, now: Date())]) { d in d.string("msg", "ok ✓") }
+        let started = Self.optimisticStart(t, now: Date())
+        act("/api/run", ["text": t], offline: t, queuedBody: ["text": Self.pinStart(t, now: Date())],
+            onOk: { [weak self] _ in
+                if let (desc, project, at) = started { self?.showStarted(desc: desc, project: project, at: at) }
+            }) { d in d.string("msg", "ok ✓") }
     }
 
     func fill(desc: String, start: String, end: String, project: String = "") {
@@ -250,7 +259,13 @@ final class JanusStore: ObservableObject {
         // A closed range is replay-safe; an ongoing start-now is not (its
         // start is fixed in the body, but a duplicate would start twice).
         act("/api/fill", Bodies.fill(desc: desc, start: start, end: end, project: project),
-            offline: end.isEmpty ? nil : "fill \(desc)") { d in
+            offline: end.isEmpty ? nil : "fill \(desc)",
+            onOk: { [weak self] d in
+                guard end.isEmpty, d.bool("running") else { return }
+                let p = d.string("project")
+                self?.showStarted(desc: Self.stripAt(desc).0, project: p.isEmpty ? project : p,
+                                  at: Self.todayAt(start) ?? Date())
+            }) { d in
             d.bool("running") ? "▶ started" + (d.string("project").isEmpty ? "" : " → " + d.string("project")) + " ✓" : "saved ✓" }
     }
     func edit(_ r: TimelineRow, desc: String, start: String, end: String, project: String) {
@@ -268,11 +283,59 @@ final class JanusStore: ObservableObject {
         if !NetWatch.shared.online { startOffline(desc: r.desc, project: r.project, at: Date()); return }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let now = f.string(from: Date())
-        act("/api/fill", Bodies.fill(desc: r.desc, start: now, end: "", project: r.project)) { _ in
+        act("/api/fill", Bodies.fill(desc: r.desc, start: now, end: "", project: r.project),
+            onOk: { [weak self] _ in self?.showStarted(desc: r.desc, project: r.project, at: Date()) }) { _ in
             "▶ resumed" + (r.project.isEmpty ? "" : " → " + r.project) + " ✓" }
     }
     func split(_ r: TimelineRow, mode: String) {
         act("/api/split", Bodies.split(id: r.id, mode: mode)) { _ in mode == "top" ? "split ▲ ✓" : "split ▼ ✓" }
+    }
+    /// Delete a Toggl entry (2026-10-25, left-swipe 🗑 after a confirm). The
+    /// server refuses running / already-logged / cross-midnight entries, as
+    /// the terminal janus's ^X does for running ones. Online only: a queued
+    /// delete replayed later could hit an entry edited in the meantime.
+    func delete(_ r: TimelineRow) {
+        act("/api/delete", ["id": r.id]) { _ in "deleted " + r.desc + " ✓" }
+    }
+
+    // ── optimistic start (2026-10-25: "when new time entry created, if it is
+    // current it needs to immediately propagate to the current entry box") ──
+    /// A typed command that plainly starts a timer → (desc, project, start).
+    /// Same shape parseStart accepts, minus what tg-fast reads differently:
+    /// "stop", and any 3-4 digit run (a trailing start time; mobile.py's
+    /// _is_plain_switch uses the same test). /d and batches reconcile on reload.
+    static func optimisticStart(_ t: String, now: Date) -> (String, String, Date)? {
+        guard let (raw, at) = parseStart(t, now: now) else { return nil }
+        let (desc, project) = stripAt(raw)
+        if desc.isEmpty || desc.lowercased() == "stop" || desc.hasSuffix(" /d") { return nil }
+        if desc.range(of: #"\d{3,4}"#, options: .regularExpression) != nil { return nil }
+        return (desc, project, at)
+    }
+    /// "coffee @epcn" → ("coffee", "epcn"). The server resolves the code; this
+    /// only feeds the placeholder row.
+    static func stripAt(_ t: String) -> (String, String) {
+        var project = ""
+        let words = t.split(separator: " ").filter { w in
+            if w.hasPrefix("@") && w.count > 1 { project = String(w.dropFirst()); return false }
+            return true
+        }
+        return (words.joined(separator: " "), project)
+    }
+    /// Put the just-started timer on screen now: the previous running row
+    /// stops at `at`, a placeholder running row (id "pending-…", inert until
+    /// the reload swaps in the real Toggl entry) makes `running` non-nil.
+    func showStarted(desc: String, project: String, at: Date) {
+        let now = Self.hhmm(at)
+        var out = rows.map { x -> TimelineRow in
+            guard x.running else { return x }
+            var y = x; y.running = false; y.end = now; return y
+        }
+        var r = TimelineRow(type: "entry")
+        r.id = "pending-" + UUID().uuidString; r.desc = desc; r.project = project
+        r.color = rows.last { $0.isEntry && $0.project == project && !$0.color.isEmpty }?.color ?? ""
+        r.start = now; r.end = "now"; r.running = true
+        out.append(r)
+        rows = out
     }
 
     func projectCodes() async -> [String] {

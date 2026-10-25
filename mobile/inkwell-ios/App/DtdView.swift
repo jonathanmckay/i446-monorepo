@@ -194,8 +194,9 @@ private struct ValuePrompt: ViewModifier {
             Button("done") { store.complete(t, value: text) }
             Button("skip") { store.complete(t, value: "") }
             Button("cancel", role: .cancel) {}
-        } message: { _ in
-            Text("value?")
+        } message: { t in
+            // The server's own question ("CPAP quality (1-3)", "xk22 minutes (Ren)"), 2026-10-25.
+            Text(t.variableLabel.isEmpty ? "value?" : t.variableLabel)
         }
     }
 }

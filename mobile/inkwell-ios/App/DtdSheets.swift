@@ -40,6 +40,10 @@ struct DtdEditSheet: View {
             }
             .font(Theme.mono)
             .navigationTitle("edit")
+            // Coding keys on the details page too (2026-10-25: "details page
+            // needs extra keys"): the shared KeyRow, inserting at the caret
+            // of whichever field (name / notes / ...) is being typed in.
+            .keyRowToolbar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -84,6 +88,7 @@ struct DtdSplitSheet: View {
             }
             .font(Theme.mono)
             .navigationTitle("✂ " + task.title)
+            .keyRowToolbar()   // same KeyRow as the edit sheet (2026-10-25)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -127,6 +132,7 @@ struct DtdFormSheet: View {
             }
             .font(Theme.mono)
             .navigationTitle(form.title)
+            .keyRowToolbar()   // same KeyRow as the edit sheet (2026-10-25)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

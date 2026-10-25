@@ -50,8 +50,10 @@ retry toast; `/api/done` is idempotent by id, so a retry can never double-credit
 **janus** — swipe right: plain entry → log 分 (full swipe allowed; the server
 ledger makes it idempotent), running entry → stop + log, calendar event →
 convert to a Toggl entry, gap → fill sheet (all three reveal-then-tap). Swipe
-left on an entry → edit (desc/time/project) or split top/bottom. Already-logged
-rows are inert. Header **+** starts something "now".
+left on an entry: full swipe → resume; reveal → edit · split (one sheet:
+desc/time/project + split ▲/▼) · delete (confirmed; not running/logged).
+Already-logged rows are inert on the right. A started timer shows in the timer
+card at once (placeholder until the reload). Rows show 分 only when recorded. Header **+** starts something "now".
 
 Header: 分 total for the tab, then the endpoint or the last error on the
 second line (a wedged tailnet must not look like an empty day).

@@ -192,6 +192,20 @@ def spec(form: str, today: _dt.date | None = None) -> dict | None:
     return None
 
 
+# Cards the form leaves open (2026-10-25): 1s runs --no-mark and moralaudit
+# never closes; 0s closes 0l only when "points checked" is 1. Every other form
+# closes its card, so dtd hides it the moment the form is posted instead of
+# after the up-to-50 s Excel write (6hqjQRh6rQfHwGMc).
+KEEPS_CARD = {"1s", "moralaudit"}
+CLOSES_IF = {"0s": {"points_checked": "1"}}
+
+
+def closes_card(form: str, values: dict) -> bool:
+    if form in KEEPS_CARD:
+        return False
+    return all(str(values.get(k) or "").strip() == want for k, want in CLOSES_IF.get(form, {}).items())
+
+
 def validate(form: str, values: dict) -> str | None:
     """None when `values` may be submitted, else the reason (HTTP 400)."""
     sp = spec(form)

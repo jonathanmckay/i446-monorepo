@@ -215,6 +215,34 @@ def parse_est(content: str) -> tuple[str, int]:
     pts = int(vm.group(1)) if vm else (int(bm.group(1)) if bm else 0)
     return " ".join(toks), pts
 
+def ritual_points(raw: str, cfg: dict | None = None) -> int | None:
+    """分 a -1neon ritual card (`😈 -1g`, `😈 s سمش`, …) earns, from
+    config/block-rituals.json — the same table did-fast's run_ritual credits.
+    The daemon creates these cards with no [N], so parse_est read 0 and the
+    phone/web showed "0 分" on the -1 tier (2026-10-25, 6hqjQRhQGH98vw36).
+    None for anything that isn't a ritual card name."""
+    try:
+        import neon_blocks as nb
+        cfg = cfg or nb.load_config()
+        tag = nb.ritual_card_tag(raw, cfg)
+        if tag is None:
+            return None
+        return next((int(r["points"]) for r in cfg["rituals"] if r["tag"] == tag), None)
+    except Exception:
+        return None
+
+def card_points(raw: str, labels: list | None = None, cfg: dict | None = None) -> tuple[str, int]:
+    """parse_est, plus the ritual table for an un-annotated -1neon card: an
+    explicit [N]/{N} on the card still wins, and the est string gains the
+    "[N]" so the web row's meta column shows it too (2026-10-25)."""
+    est, pts = parse_est(raw)
+    if not _VAL.search(raw) and not _BONUS.search(raw) \
+            and (labels is None or "-1neon" in labels):
+        rp = ritual_points(raw, cfg)
+        if rp:
+            est, pts = (est + " [%d]" % rp).strip(), rp
+    return est, pts
+
 # Ritual cards (label '-1neon') carry no domain label of their own — resolve
 # their color from the ritual tag in the name instead. Mirrors dtd.sh's own
 # RITUAL_DOMAIN (tools/did/dtd.sh:1120,1352-1355) exactly.
@@ -516,7 +544,13 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     rest = sorted([t for t in today_tasks if not placed(t)],
                   key=lambda t: _prank(t.get("priority")))
     completed_ids = _completed_ids()
+    form_hidden = _form_hidden_ids(d.get("updated", ""))
     snoozed_ids = _snoozed_ids()
+    try:  # ritual 分 table, read once per list (card_points)
+        import neon_blocks as _nb
+        _ritual_cfg = _nb.load_config()
+    except Exception:
+        _ritual_cfg = None
     # Block labels (地支 glyph from /todo, 2026-07-27): hidden until that
     # block's hour arrives — mirrors the desktop dtd list generator.
     block_hours = BLOCK_HOURS
@@ -570,6 +604,8 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         seen.add(tid)
         if tid is not None and str(tid) in completed_ids:
             continue
+        if tid is not None and str(tid) in form_hidden:
+            continue
         # Block-snoozed (ctrl-v in desktop dtd): hidden until the chosen
         # block's hour arrives — same file/semantics as terminal dtd.
         if tid is not None and str(tid) in snoozed_ids:
@@ -594,7 +630,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             run_taken = run_taken or is_running
         display = t.get("short") or raw
         title = strip_ann(display) or raw
-        est, pts = parse_est(raw)
+        est, pts = card_points(raw, t.get("labels", []), _ritual_cfg)
         color, dom = color_of(t.get("labels", []), raw)
         out.append({
             "id": tid,
@@ -942,6 +978,52 @@ FORM_WAIT = 50
 _FORM_LOCK = threading.Lock()
 _FORM_BUSY: set = set()          # task ids with a submit in flight
 _FORM_DONE: dict = {}            # task id -> (date, message): retried POST = no second write
+# Form-closed cards hidden from /api/tasks from the moment the POST is accepted
+# (2026-10-25, 6hqjQRh6rQfHwGMc: "after form filled the task needs to
+# disappear faster"). task id -> [date, finished_at|None]: hidden while the
+# writer runs, then until a cache refresh newer than its finish lands (the
+# form's own did-fast close is what really drops it). A failed writer unhides.
+_FORM_HIDDEN: dict = {}
+
+
+def _form_hide(task_id: str) -> None:
+    with _FORM_LOCK:
+        _FORM_HIDDEN[task_id] = [_today().isoformat(), None]
+
+
+def _form_settle(task_id: str, ok: bool) -> None:
+    with _FORM_LOCK:
+        if not ok:
+            _FORM_HIDDEN.pop(task_id, None)
+        elif task_id in _FORM_HIDDEN:
+            _FORM_HIDDEN[task_id][1] = time.time()
+
+
+def _form_hidden_ids(cache_updated: str = "") -> set:
+    try:
+        upd = _dt.datetime.fromisoformat(cache_updated).timestamp()
+    except (TypeError, ValueError):
+        upd = 0.0
+    today = _today().isoformat()
+    with _FORM_LOCK:
+        return {i for i, (day, fin) in _FORM_HIDDEN.items()
+                if day == today and (fin is None or upd <= fin)}
+
+
+def _form_watch(task_id: str, proc, rf: Path) -> None:
+    """Past FORM_WAIT the POST has answered "pending"; settle the hide (and
+    the retry guard) when the detached writer really finishes, so a failed
+    write brings the card back instead of losing it for the day."""
+    try:
+        proc.wait()
+        ok = bool(json.loads(rf.read_text()).get("ok"))
+    except Exception:
+        ok = False
+    if not ok:
+        _FORM_DONE.pop(task_id, None)
+    _form_settle(task_id, ok)
+    if ok and _refresh_lock.acquire(blocking=False):
+        threading.Thread(target=_run_refresh_subprocess, daemon=True).start()
 
 
 def form_get(task_id: str) -> dict:
@@ -950,7 +1032,10 @@ def form_get(task_id: str) -> dict:
     sp = dtd_forms.spec(form, _today()) if form else None
     if not sp:
         return {"ok": False, "form": None}
-    return {"ok": True, **sp}
+    # keepsCard / closesIf tell the phone whether saving removes the row at
+    # once (dtd_forms.closes_card is the server's own copy of the rule).
+    return {"ok": True, **sp, "keepsCard": form in dtd_forms.KEEPS_CARD,
+            "closesIf": dtd_forms.CLOSES_IF.get(form, {})}
 
 
 def form_submit(task_id: str, form: str, values: dict) -> tuple[dict, int]:
@@ -976,6 +1061,10 @@ def form_submit(task_id: str, form: str, values: dict) -> tuple[dict, int]:
         if task_id in _FORM_BUSY:
             return {"ok": False, "error": "already saving this form"}, 409
         _FORM_BUSY.add(task_id)
+    closes = dtd_forms.closes_card(form, vals)
+    if closes:
+        _form_hide(task_id)
+    settled = False
     try:
         stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         d = FORMS_TMP / f"{stamp}-{form.strip('-')}-{task_id}"
@@ -991,6 +1080,8 @@ def form_submit(task_id: str, form: str, values: dict) -> tuple[dict, int]:
         except subprocess.TimeoutExpired:
             msg = f"{form}: still saving in the background (log {d}/log.txt)"
             _FORM_DONE[task_id] = (today, form, msg)
+            settled = True  # the watcher owns the hide from here
+            threading.Thread(target=_form_watch, args=(task_id, proc, rf), daemon=True).start()
             return {"ok": True, "pending": True, "message": msg}, 200
         try:
             res = json.loads(rf.read_text())
@@ -999,11 +1090,14 @@ def form_submit(task_id: str, form: str, values: dict) -> tuple[dict, int]:
         if not res.get("ok"):
             return {"ok": False, "error": res.get("error") or "form failed"}, 200
         _FORM_DONE[task_id] = (today, form, res.get("message", ""))
+        _form_settle(task_id, True); settled = True
         # the form's own close refreshed the cache; pull it in for the reload
         if _refresh_lock.acquire(blocking=False):
             threading.Thread(target=_run_refresh_subprocess, daemon=True).start()
         return {"ok": True, "message": res.get("message", "")}, 200
     finally:
+        if closes and not settled:
+            _form_settle(task_id, False)  # failed or raised: the card comes back
         with _FORM_LOCK:
             _FORM_BUSY.discard(task_id)
 
@@ -1333,9 +1427,9 @@ def api_done():
         # native client's retry) must not run did-fast twice — the second
         # run would credit Neon again. Same shape the first answer had.
         return jsonify({"ok": True, "already": True, "closed": True,
-                        "points": parse_est(content)[1]})
+                        "points": card_points(content)[1]})
     res = complete(content, body.get("id"))
-    res["points"] = parse_est(content)[1]
+    res["points"] = card_points(content)[1]
     return jsonify(res)
 
 @app.route("/api/start", methods=["POST"])

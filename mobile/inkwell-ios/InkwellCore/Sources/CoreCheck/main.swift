@@ -65,6 +65,31 @@ do {
     eq(ts[3].est, 12, "raw (N) recovers est for domains without a default")
 }
 
+// variable_prompt_is_the_server_label (2026-10-25: cpap never asked). dtd.py
+// sends the prompt TEXT or null, not a Bool; ritual cards now carry 分.
+do {
+    let vj = """
+    {"ok": true, "tasks": [
+      {"id": "c", "raw": "cpap (1) [3]", "title": "cpap", "est": "(1) [3]", "points": 3,
+       "domain": "hcb", "variablePrompt": "CPAP quality (1-3)"},
+      {"id": "x", "raw": "xk22 (20)", "title": "xk22", "points": 0, "variablePrompt": "xk22 minutes (Ren)"},
+      {"id": "p", "raw": "plain [5]", "title": "plain", "points": 5, "variablePrompt": null},
+      {"id": "r", "raw": "😈 -1ibx", "title": "😈 -1ibx", "est": "[3]", "points": 3, "variablePrompt": null}
+    ]}
+    """
+    let ts = Parsers.tasks(JSON.parse(vj)!)
+    check(ts[0].variablePrompt && ts[1].variablePrompt, "label string → prompts")
+    eq(ts[0].variableLabel, "CPAP quality (1-3)", "label kept for the alert")
+    check(!ts[2].variablePrompt && ts[2].variableLabel.isEmpty, "null → no prompt")
+    eq(ts[3].meta, "[3]", "ritual card shows its points")
+    let f = Parsers.form(JSON.parse(#"{"ok":true,"form":"0s","title":"0s","fields":[],"keepsCard":false,"closesIf":{"points_checked":"1"}}"#.data(using: .utf8)!)!)!
+    check(f.closesCard(["points_checked": "1"]) && !f.closesCard(["points_checked": "0"]), "0s closes only when checked")
+    let k = Parsers.form(JSON.parse(#"{"ok":true,"form":"1s","title":"1s","fields":[],"keepsCard":true,"closesIf":{}}"#.data(using: .utf8)!)!)!
+    check(!k.closesCard([:]), "1s keeps its card")
+    let old = Parsers.form(JSON.parse(#"{"ok":true,"form":"1hcb","title":"1 hcb","fields":[]}"#.data(using: .utf8)!)!)!
+    check(old.closesCard([:]), "no hint (older server) → closes")
+}
+
 // hides_tasks_deferred_to_later_today (bug 2026-10-22: later-today rows showed now)
 do {
     let f = DateFormatter()
@@ -140,7 +165,7 @@ do {
     eq(entry.displayTitle, "✓ 0g", "logged prefix")
     let running = tl.rows[3]
     check(running.canSwipeRight, "running can swipe right")
-    eq(running.rightLabel, "done 20分", "running label")
+    eq(running.rightLabel, "done (stop + log)", "running label: no 分 estimate")
     eq(running.tags, ["-2"], "tags")
     eq(running.displayTitle, "▶ vibing  #-2", "running title")
     eq(running.displayMeta, "14:52", "running meta: start only")
@@ -300,9 +325,11 @@ do {
     let tl = Parsers.timeline(JSON.parse(#"{"date":"2026-10-22","rows":[{"type":"entry","id":"1","start":"15:05","end":"15:30","minutes":25,"desc":"XTECH Huddle","logged":false,"points":null,"preview_points":30}]}"#.data(using: .utf8)!)!)
     let r = tl.rows[0]
     eq(r.previewPoints, 30, "preview points parsed")
-    eq(r.rightLabel, "log 30分", "swipe label shows the 分 a log credits")
+    eq(r.rightLabel, "log 分", "swipe label carries no 分 estimate (2026-10-25)")
     eq(r.displayMeta, "15:05", "start time only")
-    eq(r.rightMeta, "25m · ~30分", "preview marked with ~")
+    eq(r.rightMeta, "25m", "no ~preview 分 in the right column (2026-10-25)")
+    var pend = TimelineRow(type: "entry"); pend.id = "pending-x"
+    check(pend.isPending && !pend.isLocal && !r.isPending, "optimistic start row is pending, not local")
 
     check(Outbox.isOffline("offline") && Outbox.isOffline("unreachable (tailnet down?)"), "offline errors queue")
     check(!Outbox.isOffline("timed out") && !Outbox.isOffline("HTTP 500"), "timeouts/server errors don't queue")

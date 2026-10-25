@@ -14,13 +14,21 @@ public enum Parsers {
                 color: t.string("color", "#e6e6e0"),
                 domain: t.string("domain"),
                 recurring: t.bool("recurring"),
-                variablePrompt: t.bool("variablePrompt"),
+                // The server sends the prompt LABEL ("CPAP quality (1-3)") or
+                // null, never a Bool; t.bool read the label as NSString.boolValue
+                // = false, so no card ever asked its value (2026-10-25: cpap).
+                variablePrompt: !variableLabel(t).isEmpty || (t["variablePrompt"].raw as? Bool ?? false),
                 scheduledTime: DtdTask.parseScheduled(t.string("scheduled")),
                 agent: t.bool("agent"),
                 running: t.bool("running"),
                 form: t.string("form"),
-                agentDone: t.bool("agentDone"))
+                agentDone: t.bool("agentDone"),
+                variableLabel: variableLabel(t))
         }
+    }
+
+    private static func variableLabel(_ t: JSON) -> String {
+        ((t["variablePrompt"].raw as? String) ?? "").trimmingCharacters(in: .whitespaces)
     }
 
     public static func summary(_ json: JSON) -> DtdSummary {
@@ -76,6 +84,8 @@ public enum Parsers {
                           min: f.intOrNil("min"), max: f.intOrNil("max"),
                           value: f.string("value"), help: f.string("help"))
         }
-        return DtdForm(name: name, title: json.string("title", name), fields: fields)
+        let cond = (json["closesIf"].raw as? [String: Any] ?? [:]).mapValues { JSON($0).string }
+        return DtdForm(name: name, title: json.string("title", name), fields: fields,
+                       keepsCard: json.bool("keepsCard"), closesIf: cond)
     }
 }
