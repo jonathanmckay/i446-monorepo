@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-25T06:00:03.976298-07:00"
+  "tasks": {
+    "make meaningful progress on either dash or p&l": {
+      "todoist_id": "6hqjV83fGF4gQhFR",
+      "minutes": 50
+    },
+    "reflect on how to make my re time more useful": {
+      "todoist_id": "6hqjV85j8Vrr432R",
+      "minutes": 40
+    },
+    "120分 hcbp": {
+      "todoist_id": "6hqjV86R7MCQwJM2",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-10-25T08:00:03.157573-07:00"
 }
