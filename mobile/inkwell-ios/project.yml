@@ -78,11 +78,33 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mckay.janus
         PRODUCT_NAME: janus
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: APP_JANUS $(inherited)
+  jmdash:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: ["Vault*.swift"]
+      - path: Icons/jmdash.xcassets
+    dependencies:
+      - package: InkwellCore
+        product: InkwellCore
+    info:
+      path: App/Info-jmdash.plist
+      properties:
+        <<: *info
+        CFBundleDisplayName: JM Dash
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mckay.jmdash
+        PRODUCT_NAME: jmdash
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: APP_DASH $(inherited)
+
   Inkwell:
     type: application
     platform: iOS
     sources:
       - path: App
+        excludes: ["DashboardView.swift"]
       - path: Icons/inkwell.xcassets
     dependencies:
       - package: InkwellCore
