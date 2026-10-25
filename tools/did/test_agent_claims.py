@@ -509,3 +509,55 @@ def test_subagent_hooks_are_registered_in_claude_settings():
     for ev, mode in (("SubagentStart", "subagent-start"), ("SubagentStop", "subagent-stop")):
         cmds = [h.get("command", "") for g in hooks.get(ev, []) for h in g.get("hooks", [])]
         assert any(f"agent-claim-hook.sh {mode}" in c for c in cmds), ev
+
+
+# --- per-host mirror (2026-10-25) -------------------------------------------
+# "you ran /notes but didn't claim the task from dtd": an Ix session claimed the
+# notes card at 07:03:34; at 07:03:45 a Straylight session's hook pushed its
+# store with `rsync --delete` into Ix's root and wiped it. Other hosts now
+# mirror into remote/<host>/ and every reader merges.
+PUSH = HERE.parent.parent / "scripts" / "agent-claims-push.sh"
+
+
+def test_push_mirrors_into_remote_host_dir_never_ix_root(tmp_path):
+    home = tmp_path / "home"
+    (home / "vault/z_ibx/agent-claims").mkdir(parents=True)
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    log = tmp_path / "rsync.args"
+    (bin_ / "rsync").write_text(f'#!/bin/sh\nfor a in "$@"; do echo "$a"; done > {log}\n')
+    (bin_ / "hostname").write_text("#!/bin/sh\necho Straylight-Refit\n")
+    for f in ("rsync", "hostname"):
+        (bin_ / f).chmod(0o755)
+    env = {**os.environ, "HOME": str(home), "PATH": f"{bin_}:{os.environ['PATH']}"}
+    subprocess.run(["zsh", str(PUSH)], env=env, check=True, timeout=10)
+    args = log.read_text().split("\n")
+    assert "--delete" in args
+    assert args[-2] == "ix:vault/z_ibx/agent-claims/remote/straylight-refit/"
+    assert "--exclude=/remote/" in args
+
+
+def test_load_merges_remote_host_dirs(tmp_path):
+    ac.claim(TASK, "IX", root=tmp_path, now=1000)
+    remote = tmp_path / "remote" / "straylight-refit"
+    ac.claim({"id": "T2", "content": "janus ios"}, "ST", root=remote, now=1000)
+    (remote / "panes.json").write_text('{"ST": 3}')
+    got = ac.load(tmp_path, now=1010)
+    assert got["T1"]["working"] and got["T2"]["working"]
+    assert got["T2"]["pane"] == 3
+
+
+def test_same_card_on_two_hosts_newer_state_wins(tmp_path):
+    remote = tmp_path / "remote" / "straylight-refit"
+    ac.claim(TASK, "ST", root=remote, now=1000)
+    ac.set_state("T1", "idle", now=1005, root=remote)
+    ac.claim(TASK, "IX", root=tmp_path, now=1020)
+    got = ac.load(tmp_path, now=1030)
+    assert got["T1"]["session"] == "IX" and got["T1"]["working"]
+
+
+def test_clear_task_clears_remote_copy_too(tmp_path):
+    remote = tmp_path / "remote" / "straylight-refit"
+    ac.claim(TASK, "ST", root=remote, now=1000)
+    assert ac.clear_task("T1", tmp_path)
+    assert ac.load(tmp_path, now=1010) == {}

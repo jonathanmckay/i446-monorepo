@@ -3860,13 +3860,15 @@ TALLY_PID=$!
   last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
   last_day="$(date +%Y-%m-%d)"
   while [[ -f "$DTD_PORT" ]]; do
+    # Claims live in the root and in remote/<host>/ (each other host's mirror,
+    # 2026-10-25), so both the mtime watch and the working glob cover both.
     # Wake within 0.5s of a claim change (fractional mtime: two writes in one
     # second still differ), and keep cycling every 0.5s while any claim is
     # working so its spinner glyph animates; otherwise the usual 2s cadence.
     for _acw in 1 2 3 4; do
       sleep 0.5
-      [[ "$(stat -f %Fm "$HOME/vault/z_ibx/agent-claims" 2>/dev/null)" != "${last_ac:-}" ]] && break
-      _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
+      [[ "$(stat -f %Fm "$HOME"/vault/z_ibx/agent-claims{,/remote/*(N/)} 2>/dev/null)" != "${last_ac:-}" ]] && break
+      _acs=("$HOME"/vault/z_ibx/agent-claims/{,remote/*/}*.state(N))
       (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && break
       # JM's own timer running: 1s cadence so the top row's glyph moves (2026-10-16).
       (( _acw >= 2 )) && [[ -s "$DTD_TIMER" ]] && break
@@ -3922,7 +3924,7 @@ TALLY_PID=$!
     # re-greys / un-greys. (Not `touch $CACHE`: that would make a stale task
     # cache look fresh to did-fast.)
     ac_reload=""
-    cur_ac=$(stat -f %Fm "$HOME/vault/z_ibx/agent-claims" 2>/dev/null)
+    cur_ac=$(stat -f %Fm "$HOME"/vault/z_ibx/agent-claims{,/remote/*(N/)} 2>/dev/null)
     if [[ -n "$cur_ac" && "$cur_ac" != "${last_ac:-}" ]]; then
       [[ -n "${last_ac:-}" ]] && ac_reload=1
       last_ac="$cur_ac"
@@ -3936,7 +3938,7 @@ TALLY_PID=$!
         ( "$HOME/.local/bin/cs" retitle </dev/null >/dev/null 2>&1 & )
       fi
     fi
-    _acs=("$HOME"/vault/z_ibx/agent-claims/*.state(N))
+    _acs=("$HOME"/vault/z_ibx/agent-claims/{,remote/*/}*.state(N))
     (( ${#_acs} )) && grep -qs '^working' "${_acs[@]}" </dev/null && ac_reload=1
     [[ -s "$DTD_TIMER" ]] && ac_reload=1   # running timer: re-render so its spinner advances
     # Schedule screen open (ctrl-d/v/k armed): hold every reload. The spinner/

@@ -7,7 +7,7 @@ DTD = (Path(__file__).parent / "dtd.sh").read_text()
 
 
 def test_claims_change_triggers_detached_throttled_retitle():
-    i = DTD.index('cur_ac=$(stat -f %Fm "$HOME/vault/z_ibx/agent-claims"')
+    i = DTD.index('cur_ac=$(stat -f %Fm "$HOME"/vault/z_ibx/agent-claims{,/remote/*(N/)}')
     block = DTD[i:i + 1500]
     assert '( "$HOME/.local/bin/cs" retitle </dev/null >/dev/null 2>&1 & )' in block
     assert "(( EPOCHSECONDS - ${last_retitle:-0} >= 10 ))" in block

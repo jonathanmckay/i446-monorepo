@@ -50,6 +50,17 @@ STALE_SECS = 3600
 RELEASED_TTL = 86400
 
 
+def _dirs(root: Path) -> list[Path]:
+    """The store's root (claims made on this host) plus remote/<host>/, where
+    each other host mirrors its own store (scripts/agent-claims-push.sh). The
+    push used to rsync --delete into the root and wiped Ix-local claims on
+    every Straylight hook fire (2026-10-25); now every reader merges these."""
+    try:
+        return [root] + sorted(d for d in (root / "remote").iterdir() if d.is_dir())
+    except OSError:
+        return [root]
+
+
 # --- store ---------------------------------------------------------------
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,8 +136,10 @@ def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
     inherited yesterday's released claim as 🧮 🕐 (2026-10-24: "notes had the
     abacus as if I'm working on it, but it was long since stale"). Returns
     whether a claim existed."""
-    existed = (root / f"{tid}.json").exists()
-    _forget(str(tid), root)
+    existed = False
+    for d in _dirs(root):
+        existed |= (d / f"{tid}.json").exists()
+        _forget(str(tid), d)
     return existed
 
 
@@ -156,12 +169,17 @@ def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
 
 
 def pane_numbers(root: Path = CLAIMS_DIR) -> dict[str, int]:
-    """session -> cmux pane number, from panes.json (empty when cs never wrote it)."""
-    try:
-        d = json.loads((root / "panes.json").read_text())
-        return {str(k): int(v) for k, v in d.items()} if isinstance(d, dict) else {}
-    except (OSError, ValueError, TypeError):
-        return {}
+    """session -> cmux pane number, from panes.json (empty when cs never wrote it).
+    A remote host's map wins: cmux runs there, so its map is the live one."""
+    out: dict[str, int] = {}
+    for root_dir in _dirs(root):
+        try:
+            d = json.loads((root_dir / "panes.json").read_text())
+            if isinstance(d, dict):
+                out.update({str(k): int(v) for k, v in d.items()})
+        except (OSError, ValueError, TypeError):
+            pass
+    return out
 
 
 def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
@@ -169,12 +187,15 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
     session's cmux number, or None when unknown)."""
     now = now or time.time()
     out: dict[str, dict] = {}
-    try:
-        files = [f for f in root.glob("*.json") if f.name != "panes.json"]
-    except OSError:
-        return out
+    files = []
+    for d in _dirs(root):
+        try:
+            files += [f for f in d.glob("*.json") if f.name != "panes.json"]
+        except OSError:
+            pass
     panes = pane_numbers(root)
     for f in files:
+        here = f.parent
         try:
             rec = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -182,13 +203,15 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
         tid = str(rec.get("task_id") or f.stem)
         state, ts = "idle", 0
         try:
-            s, t = (root / f"{tid}.state").read_text().split()[:2]
+            s, t = (here / f"{tid}.state").read_text().split()[:2]
             state, ts = s, int(t)
         except (OSError, ValueError):
             pass
         if state in ("released", "done") and now - ts > RELEASED_TTL:
-            _forget(tid, root)   # kept its top slot for a day; JM never closed it
+            _forget(tid, here)   # kept its top slot for a day; JM never closed it
             continue
+        if tid in out and out[tid]["state_ts"] >= ts:
+            continue   # the same card claimed on two hosts: the newer state wins
         rec["state"] = state
         rec["state_ts"] = ts
         rec["working"] = state == "working" and now - ts < STALE_SECS
