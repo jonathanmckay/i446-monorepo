@@ -16,14 +16,16 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public let running: Bool          // its Toggl timer is the live one (dtd Enter / janus /d) → ▶
     public let agentDone: Bool        // the claiming agent thinks it's finished → ✅ on the left (2026-10-22)
     public let form: String           // survey card (0s, 1s, xk887, …): opens a form instead of a timer; "" = none
+    public let variableLabel: String  // the server's prompt text ("CPAP quality (1-3)"), "" if none (2026-10-25)
 
     public init(id: String, raw: String, title: String, est: Int?, points: Int?, color: String,
                 domain: String, recurring: Bool, variablePrompt: Bool, scheduledTime: Date? = nil,
-                agent: Bool = false, running: Bool = false, form: String = "", agentDone: Bool = false) {
+                agent: Bool = false, running: Bool = false, form: String = "", agentDone: Bool = false,
+                variableLabel: String = "") {
         self.id = id; self.raw = raw; self.title = title; self.est = est; self.points = points
         self.color = color; self.domain = domain; self.recurring = recurring; self.variablePrompt = variablePrompt
         self.scheduledTime = scheduledTime; self.agent = agent; self.running = running; self.form = form
-        self.agentDone = agentDone
+        self.agentDone = agentDone; self.variableLabel = variableLabel
     }
 
     /// A task is "active" when it's the live timer (▶) or a Claude session has
@@ -38,7 +40,8 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public func withRunning(_ v: Bool) -> DtdTask {
         DtdTask(id: id, raw: raw, title: title, est: est, points: points, color: color,
                 domain: domain, recurring: recurring, variablePrompt: variablePrompt,
-                scheduledTime: scheduledTime, agent: agent, running: v, form: form, agentDone: agentDone)
+                scheduledTime: scheduledTime, agent: agent, running: v, form: form, agentDone: agentDone,
+                variableLabel: variableLabel)
     }
 
     /// True when the task is deferred to later TODAY: it has a time-of-day and
@@ -152,7 +155,7 @@ public struct TimelineRow: Equatable, Hashable {
     public var logged: Bool = false
     public var points: Int? = nil
     /// What a log would credit (server `preview_points`, incl. the 25→30
-    /// meeting rounding) for an entry/event not yet logged; nil if unknown.
+    /// meeting rounding); parsed but no longer shown (2026-10-25).
     public var previewPoints: Int? = nil
     // event
     public var title: String = ""
@@ -166,6 +169,9 @@ public struct TimelineRow: Equatable, Hashable {
     public var isEntry: Bool { type == "entry" }
     /// A timer started on the phone while offline (id "local-…"), not in Toggl yet.
     public var isLocal: Bool { id.hasPrefix("local-") }
+    /// The optimistic just-started timer (2026-10-25), shown until the reload
+    /// brings the real Toggl entry; it has no id the server knows, so inert.
+    public var isPending: Bool { id.hasPrefix("pending-") }
     public var isGap: Bool { type == "gap" }
     public var isEvent: Bool { type == "event" }
     public var isDivider: Bool { type == "divider" }
@@ -187,8 +193,9 @@ public struct TimelineRow: Equatable, Hashable {
     public var rightLabel: String {
         if isEvent { return isPast ? "log 分 (\(minutes)m)" : (started ? "resume tracking" : "start tracking") }
         if isGap { return "fill" }
-        if running { return shownPoints.map { "done \($0)分" } ?? "done (stop + log)" }
-        return shownPoints.map { "log \($0)分" } ?? "log \(minutes)m"
+        // No 分 estimate on the label (2026-10-25: "should not have estimate
+        // of fen"); the server still resolves the credit when it fires.
+        return running ? "done (stop + log)" : "log 分"
     }
 
     /// Display line, as the Android adapter renders it.
@@ -199,18 +206,14 @@ public struct TimelineRow: Equatable, Hashable {
         let t = tags.isEmpty ? "" : "  #" + tags.joined(separator: " #")
         return prefix + desc + t
     }
-    /// Logged points, else the preview of what a log would credit.
-    public var shownPoints: Int? { points ?? previewPoints }
-
     /// Left column: start time only (2026-10-22, janus note: "time should
     /// just show start time only"); the end is the next row's start.
     public var displayMeta: String { start }
 
-    /// Right-justified column: duration and points ("25m · 30分"). A
-    /// preview (not yet logged) reads "~30分" so it can't pass for credit.
+    /// Right-justified column: duration, plus "N分" only when points were
+    /// recorded with a task (`points`); no "~N分" preview (2026-10-25).
     public var rightMeta: String {
-        let pts: String? = points.map { "\($0)分" } ?? previewPoints.map { "~\($0)分" }
-        return (["\(minutes)m"] + [pts].compactMap { $0 }).joined(separator: " · ")
+        (["\(minutes)m"] + [points.map { "\($0)分" }].compactMap { $0 }).joined(separator: " · ")
     }
 }
 
@@ -253,7 +256,19 @@ public struct DtdForm: Identifiable, Equatable {
     public let name: String
     public let title: String
     public let fields: [Field]
-    public init(name: String, title: String, fields: [Field]) {
+    /// Server's close rule (2026-10-25): 1s / moralaudit keep their card;
+    /// 0s closes 0l only when closesIf (points_checked = 1) holds.
+    public let keepsCard: Bool
+    public let closesIf: [String: String]
+    public init(name: String, title: String, fields: [Field], keepsCard: Bool = false,
+                closesIf: [String: String] = [:]) {
         self.name = name; self.title = title; self.fields = fields
+        self.keepsCard = keepsCard; self.closesIf = closesIf
+    }
+
+    /// Saving with these answers closes the card → the row may leave at once.
+    public func closesCard(_ values: [String: String]) -> Bool {
+        !keepsCard && closesIf.allSatisfy { k, want in
+            (values[k] ?? "").trimmingCharacters(in: .whitespaces) == want }
     }
 }

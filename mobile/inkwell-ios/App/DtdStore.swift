@@ -367,10 +367,38 @@ extension DtdStore {
         }
     }
 
+    /// A form that closes its card (all but 1s / moralaudit / 0s unchecked)
+    /// takes the row off at once like complete() does, instead of after the
+    /// up-to-50 s Excel write (2026-10-25, 6hqjQRh6rQfHwGMc); the server hides
+    /// it from /api/tasks from the same moment. Failure → row back + retry.
     func submitForm(_ t: DtdTask, _ f: DtdForm, values: [String: String]) {
         Platform.haptic(.commit)
-        post("/api/form", ["id": t.id, "form": f.name, "values": values],
-             ok: { j in j.string("message", "✓ \(f.title)") }, fail: "form not saved")
+        let body: [String: Any] = ["id": t.id, "form": f.name, "values": values]
+        guard f.closesCard(values), let pos = index(of: t), !inFlight.contains(t.id) else {
+            post("/api/form", body, ok: { j in j.string("message", "✓ \(f.title)") }, fail: "form not saved")
+            return
+        }
+        inFlight.insert(t.id)
+        removeRow(at: pos)
+        summary.done += 1
+        Task {
+            let r = await Platform.keepAlive { await api.post(base + "/api/form", body) }
+            inFlight.remove(t.id)
+            switch r {
+            case .ok(let j):
+                Platform.haptic(.success)
+                toast.show(j.bool("pending") ? "✓ \(f.title) · saving in background" : j.string("message", "✓ \(f.title)"))
+            case .error(let m):
+                formFailed(t, f, values, at: pos, m)
+            }
+        }
+    }
+
+    private func formFailed(_ t: DtdTask, _ f: DtdForm, _ values: [String: String], at pos: Int, _ m: String) {
+        summary.done -= 1
+        restoreRow(t, at: pos)
+        Platform.haptic(.failure)
+        toast.show("form not saved: \(m)", retry: { [weak self] in self?.submitForm(t, f, values: values) })
     }
 
     private func post(_ path: String, _ body: [String: Any], ok: @escaping (JSON) -> String, fail: String) {

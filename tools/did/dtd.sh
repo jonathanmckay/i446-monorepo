@@ -3741,6 +3741,18 @@ if [[ "\$1" == footer ]]; then
   exit 0
 fi
 ws=""; [[ -r "$DTD_HDR" ]] && ws="\$(<"$DTD_HDR")"; ws="\${ws//\$'\n'/ }"
+# Stale-list warning (2026-10-25: "I thought I marked lock down #data channel
+# done but I see it today"): dtd opens instantly on the saved task cache and
+# refreshes in the background, so after a laptop wake it showed last night's
+# list, with a task completed in the Todoist app since, for ~3 minutes. The
+# refresh daemon keeps the live cache under ~3 min old; older than
+# DTD_CACHE_MAX_AGE means the list on screen may be out of date. Builtins only
+# (zstat/strftime): this runs on every keystroke.
+zstat -A _cs +mtime "$CACHE" 2>/dev/null; cache_m=\${_cs[1]:-0}
+if (( cache_m > 0 && EPOCHSECONDS - cache_m > $DTD_CACHE_MAX_AGE )); then
+  strftime -s _ct '%H:%M' \$cache_m
+  printf '\033[33m⏳ list from %s, refreshing (ctrl-r)\033[0m   ' "\$_ct"
+fi
 printf '%s   %s' "\$ws" "\$DTD_KEYS"
 print -- "\$EPOCHREALTIME\thdr-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 HDRGENEOF

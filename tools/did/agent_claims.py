@@ -362,6 +362,7 @@ SKILL_NO_CLAIM = {
     "mealplan": "only the planning half of '1 groceries'",
     "ibx0": "closes 8 inbox cards; a session holds one claim",
     "ate": "/早餐 already covers the 早餐 card",
+    "inkwelltodo": "files and claims one task per note item itself",
 }
 SKILL_RE = __import__("re").compile(
     r"^\s*/(" + "|".join(map(__import__("re").escape, SKILL_CLAIMS)) + r")(?:\s.*)?$", __import__("re").S)

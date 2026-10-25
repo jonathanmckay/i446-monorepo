@@ -7,7 +7,7 @@ struct JanusView: View {
 
     @State private var fillTarget: FillTarget? = nil
     @State private var editTarget: TimelineRow? = nil
-    @State private var splitTarget: TimelineRow? = nil
+    @State private var deleteTarget: TimelineRow? = nil
 
     /// A gap to fill, or "start now" from the header's +.
     struct FillTarget: Identifiable {
@@ -65,17 +65,24 @@ struct JanusView: View {
                                 }
                             }
                             // Swipe left all the way = resume (a fresh timer, same desc +
-                            // project); half way reveals the options: edit, split.
+                            // project); half way reveals the options (2026-10-25: "add
+                            // delete on swipe left, combine split and edit buttons"):
+                            // edit (the sheet carries split ▲/▼) · delete (confirmed;
+                            // not for a running or already-logged entry, which the
+                            // server refuses anyway). Tint, not .destructive role: that
+                            // role animates the row away before the confirm.
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                if store.viewingToday && r.canSwipeLeft && !r.isLocal {
+                                if store.viewingToday && r.canSwipeLeft && !r.isLocal && !r.isPending {
                                     if !r.running {
                                         Button { store.resume(r) } label: { Label("resume", systemImage: "play.fill") }
                                             .tint(.blue)
                                     }
-                                    Button { editTarget = r } label: { Label("edit", systemImage: "pencil") }
+                                    Button { editTarget = r } label: { Label("edit · split", systemImage: "pencil") }
                                         .tint(Theme.edit)
-                                    Button { splitTarget = r } label: { Label("split", systemImage: "scissors") }
-                                        .tint(.orange)
+                                    if !r.running && !r.logged {
+                                        Button { deleteTarget = r } label: { Label("delete", systemImage: "trash") }
+                                            .tint(.red)
+                                    }
                                 }
                             }
                             .disabled(store.busy)
@@ -100,7 +107,7 @@ struct JanusView: View {
             if store.viewingToday {
                 VStack(spacing: 0) {
                     if let r = store.running {
-                        CurrentTimerCard(row: r, busy: store.busy,
+                        CurrentTimerCard(row: r, busy: store.busy || r.isPending,
                                          onDone: { t in store.onRight(t) }, onEdit: { t in editTarget = t })
                     }
                     // Command bar + "start now" at the bottom right (2026-10-20).
@@ -121,10 +128,9 @@ struct JanusView: View {
             FillSheet(gap: t.gap) { desc, start, end, project in
                 store.fill(desc: desc, start: start, end: end, project: project) }
         }
-        .confirmationDialog("split", isPresented: isPresented($splitTarget), titleVisibility: .visible,
-                            presenting: splitTarget) { r in
-            Button("split ▲ (keep top)") { store.split(r, mode: "top") }
-            Button("split ▼ (keep bottom)") { store.split(r, mode: "bottom") }
+        .confirmationDialog("delete this Toggl entry?", isPresented: isPresented($deleteTarget),
+                            titleVisibility: .visible, presenting: deleteTarget) { r in
+            Button("delete", role: .destructive) { store.delete(r) }
             Button("cancel", role: .cancel) {}
         } message: { r in Text("\(r.start)–\(r.end) " + r.desc) }
         .sheet(item: $editTarget) { r in
@@ -257,6 +263,10 @@ struct FillSheet: View {
             }
             .font(Theme.mono)
             .navigationTitle(gap.map { "fill \($0.start)–\($0.end)" } ?? "start now")
+            // Shared KeyRow (2026-10-25) as a sheet keyboard toolbar: inside
+            // this NavigationStack it is the keyboard accessory, so the Form
+            // scrolls the focused field above it rather than under it.
+            .keyRowToolbar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -325,6 +335,7 @@ struct EditSheet: View {
             }
             .font(Theme.mono)
             .navigationTitle("edit \(row.start)–\(row.end)")
+            .keyRowToolbar()   // same KeyRow as the fill sheet (2026-10-25)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
