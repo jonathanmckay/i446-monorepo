@@ -46,7 +46,7 @@ JM can't say either).
 
 ### Step 3: Write verdicts
 
-Write `/tmp/1g-verdicts.json` (`doc` from Step 1, one entry per goal with its
+Write `/tmp/1g-verdicts.json` (`doc` from Step 1 and a `verdicts` list, one entry per goal with its
 `text` and `line_no` copied verbatim, the final `status` emoji and a short
 `note` with the numbers, e.g. "729分 of 600分 (122%)") and apply:
 
