@@ -15,9 +15,16 @@ final class JanusStore: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var busy = false   // one action at a time; did-fast writes aren't idempotent
     /// 0 = today, -1 = yesterday, … (≤0). The back/forward day view (the CLI's
-    /// ctrl+/ / ctrl+=). A past day is read-only: the write endpoints all
-    /// target today on the server, so the view hides the swipes and bottom bar.
+    /// ctrl+/ / ctrl+=). Rows on a past day swipe too (2026-10-26): each write
+    /// carries the viewed date (see `dated`); the bottom bar (timer + command
+    /// bar) still hides there, since both act on today.
     @Published private(set) var dayOffset = 0
+    /// Bumped whenever the list should snap back to its default position, the
+    /// last completed entry (2026-10-26: on open / day switch / refresh, and
+    /// after a time is set). The view scrolls on change; the passive poll
+    /// never bumps it, so it can't yank the list out from under a scroll.
+    @Published private(set) var scrollTick = 0
+    private var wantsDefaultScroll = true
 
     private let api = Api()
     private let outbox = Outbox("janus")
@@ -49,7 +56,7 @@ final class JanusStore: ObservableObject {
     /// The live Toggl entry, if any (the top card + what the command bar acts on).
     var running: TimelineRow? { rows.first { $0.running } }
 
-    /// A past day is read-only. Keyed off dayOffset (authoritative on the
+    /// Today vs a past day (no bottom bar there). Keyed off dayOffset (authoritative on the
     /// client) so the view gates immediately on a tap, before the fetch lands.
     var viewingToday: Bool { dayOffset == 0 }
 
@@ -62,9 +69,27 @@ final class JanusStore: ObservableObject {
         return "◀ " + outF.string(from: date)
     }
 
-    func prevDay() { dayOffset -= 1; Task { await load() } }
-    func nextDay() { guard dayOffset < 0 else { return }; dayOffset += 1; Task { await load() } }
-    func goToday() { guard dayOffset != 0 else { return }; dayOffset = 0; Task { await load() } }
+    func prevDay() { dayOffset -= 1; wantsDefaultScroll = true; Task { await load() } }
+    func nextDay() { guard dayOffset < 0 else { return }; dayOffset += 1; wantsDefaultScroll = true; Task { await load() } }
+    func goToday() { guard dayOffset != 0 else { return }; dayOffset = 0; wantsDefaultScroll = true; Task { await load() } }
+
+    /// The default list position: the most recent completed entry (not the
+    /// running timer, not a gap); else the last row. Index into `rows`.
+    var defaultScrollIndex: Int? {
+        rows.lastIndex { $0.isEntry && !$0.running && !$0.isPending } ?? (rows.isEmpty ? nil : rows.count - 1)
+    }
+    /// Snap to the default position on the next published rows.
+    func requestDefaultScroll() { wantsDefaultScroll = true }
+    private func publishScrollIfWanted() { if wantsDefaultScroll { scrollTick += 1 } }
+
+    /// A write against a past-day row names that day (2026-10-26: "should be
+    /// able to swipe on previous days tasks"); the server logs it with the
+    /// day's M/D + --past-ok and looks the Toggl entry up around that date.
+    /// Today's writes stay date-less (server default = today).
+    func dated(_ b: [String: Any]) -> [String: Any] {
+        guard let t = timeline, !t.isToday, !t.date.isEmpty else { return b }
+        var out = b; out["date"] = t.date; return out
+    }
 
     /// The ISO date a given offset should resolve to, computed client-side so
     /// load() can tell a cold/day-switched view (wants the fast lite paint)
@@ -86,7 +111,7 @@ final class JanusStore: ObservableObject {
         return ""
     }
 
-    func reload() { Task { await load() } }
+    func reload() { wantsDefaultScroll = true; Task { await load() } }
     /// Same rule as DtdStore: a failed or never-done load retries at once on
     /// foreground; a good one only when stale.
     func refreshIfStale() {
@@ -132,6 +157,7 @@ final class JanusStore: ObservableObject {
             if case .ok(let j) = await api.get(base + "/api/timeline?" + liteQ) {
                 if seq == loadSeq {
                     let t = Parsers.timeline(j); timeline = t; rows = overlay(t.rows)
+                    publishScrollIfWanted()
                 }
             }
         }
@@ -142,6 +168,7 @@ final class JanusStore: ObservableObject {
             loadedOnce = true; lastError = nil; loadedAt = Date()
             let t = Parsers.timeline(j)
             timeline = t; rows = overlay(t.rows)
+            publishScrollIfWanted(); wantsDefaultScroll = false
             // Only today's payload is restored on next launch (see init); never
             // cache a past-day view under the "janus" key.
             if t.isToday { PayloadCache.save("janus", j) }
@@ -155,12 +182,15 @@ final class JanusStore: ObservableObject {
     func onRight(_ r: TimelineRow) {
         if r.isPending { toast.show("starting… one sec"); return }
         if r.isEvent {
-            act("/api/convert-event", Bodies.convertEvent(r)) { d in
-                d.string("mode") == "logged" ? "+\(r.minutes)m → \(d.string("step", "neon")) ✓" : "tracking started ✓" }
+            act("/api/convert-event", dated(Bodies.convertEvent(r))) { d in
+                d.string("mode") == "logged"
+                    ? Self.loggedToast(d, fallback: "+\(r.minutes)m → \(d.string("step", "neon"))")
+                    : "tracking started ✓" }
         } else if r.running && (r.isLocal || !NetWatch.shared.online) {
             stopOffline(r)
         } else if r.running {
-            act("/api/done-current", Bodies.doneCurrent(r)) { d in "stopped + logged → \(d.string("step", "neon")) ✓" }
+            act("/api/done-current", Bodies.doneCurrent(r)) { d in
+                "stopped + " + Self.loggedToast(d, fallback: "logged → \(d.string("step", "neon"))") }
         } else if r.isLocal {
             // Its Toggl entry doesn't exist yet; logging now and again after
             // sync would credit twice.
@@ -168,13 +198,21 @@ final class JanusStore: ObservableObject {
         } else if r.logged {
             toast.show("already logged")
         } else {
-            act("/api/log", Bodies.log(r), offline: "log \(r.desc)", optimistic: { [weak self] in
+            act("/api/log", dated(Bodies.log(r)), offline: "log \(r.desc)", optimistic: { [weak self] in
                 self?.markLogged(r) }) { d in
                 if d.bool("already") { return "already logged" }
                 let extra = d.strings("tag_steps").joined(separator: ", ")
-                return "+\(r.minutes)m → \(d.string("step", "neon"))" + (extra.isEmpty ? "" : " + \(extra)") + " ✓"
+                return Self.loggedToast(d, fallback: "+\(r.minutes)m → \(d.string("step", "neon"))"
+                                        + (extra.isEmpty ? "" : " + \(extra)"))
             }
         }
+    }
+
+    /// "logged: +12 hcb · +5 0g ✓" from the server's per-column credits
+    /// (2026-10-26: "a toast saying what points went where"); an older
+    /// server without `credits` gets the step-based fallback.
+    static func loggedToast(_ d: JSON, fallback: String) -> String {
+        (Parsers.creditsSummary(d).map { "logged: " + $0 } ?? fallback) + " ✓"
     }
 
     /// One POST, then a full reload. `needs_agent` is the server saying it
@@ -247,6 +285,7 @@ final class JanusStore: ObservableObject {
             startOffline(desc: desc, project: "", at: at); return
         }
         let started = Self.optimisticStart(t, now: Date())
+        requestDefaultScroll()   // a new time resets the list (2026-10-26)
         act("/api/run", ["text": t], offline: t, queuedBody: ["text": Self.pinStart(t, now: Date())],
             onOk: { [weak self] _ in
                 if let (desc, project, at) = started { self?.showStarted(desc: desc, project: project, at: at) }
@@ -259,7 +298,8 @@ final class JanusStore: ObservableObject {
         }
         // A closed range is replay-safe; an ongoing start-now is not (its
         // start is fixed in the body, but a duplicate would start twice).
-        act("/api/fill", Bodies.fill(desc: desc, start: start, end: end, project: project),
+        requestDefaultScroll()
+        act("/api/fill", dated(Bodies.fill(desc: desc, start: start, end: end, project: project)),
             offline: end.isEmpty ? nil : "fill \(desc)",
             onOk: { [weak self] d in
                 guard end.isEmpty, d.bool("running") else { return }
@@ -270,7 +310,8 @@ final class JanusStore: ObservableObject {
             d.bool("running") ? "▶ started" + (d.string("project").isEmpty ? "" : " → " + d.string("project")) + " ✓" : "saved ✓" }
     }
     func edit(_ r: TimelineRow, desc: String, start: String, end: String, project: String) {
-        act("/api/edit", Bodies.edit(id: r.id, desc: desc, start: start, end: end, project: project),
+        if start != r.start || end != (r.running ? "" : r.end) { requestDefaultScroll() }
+        act("/api/edit", dated(Bodies.edit(id: r.id, desc: desc, start: start, end: end, project: project)),
             offline: "edit \(desc)") { _ in "edited ✓" }
     }
     /// Resume an entry (janus full left-swipe): start a fresh ongoing Toggl
@@ -284,12 +325,18 @@ final class JanusStore: ObservableObject {
         if !NetWatch.shared.online { startOffline(desc: r.desc, project: r.project, at: Date()); return }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let now = f.string(from: Date())
+        requestDefaultScroll()
+        // Resumed from a past day: the new timer runs today, so go there.
         act("/api/fill", Bodies.fill(desc: r.desc, start: now, end: "", project: r.project),
-            onOk: { [weak self] _ in self?.showStarted(desc: r.desc, project: r.project, at: Date()) }) { _ in
+            onOk: { [weak self] _ in
+                guard let self else { return }
+                if self.dayOffset != 0 { self.dayOffset = 0; return }
+                self.showStarted(desc: r.desc, project: r.project, at: Date()) }) { _ in
             "▶ resumed" + (r.project.isEmpty ? "" : " → " + r.project) + " ✓" }
     }
     func split(_ r: TimelineRow, mode: String) {
-        act("/api/split", Bodies.split(id: r.id, mode: mode)) { _ in mode == "top" ? "split ▲ ✓" : "split ▼ ✓" }
+        requestDefaultScroll()
+        act("/api/split", dated(Bodies.split(id: r.id, mode: mode))) { _ in mode == "top" ? "split ▲ ✓" : "split ▼ ✓" }
     }
     /// Delete a Toggl entry (2026-10-25, left-swipe 🗑 after a confirm). The
     /// server refuses running / already-logged / cross-midnight entries, as
@@ -299,11 +346,11 @@ final class JanusStore: ObservableObject {
         if r.isEvent {
             // Calendar event (2026-10-25): Google-hosted ones are deleted from the
             // calendar, Outlook ones hidden from janus (read-only from here).
-            act("/api/delete-event", Bodies.deleteEvent(r)) { d in
+            act("/api/delete-event", dated(Bodies.deleteEvent(r))) { d in
                 (d.string("mode") == "deleted" ? "deleted from calendar: " : "hidden: ") + r.title + " ✓" }
             return
         }
-        act("/api/delete", ["id": r.id]) { _ in "deleted " + r.desc + " ✓" }
+        act("/api/delete", dated(["id": r.id])) { _ in "deleted " + r.desc + " ✓" }
     }
 
     // ── optimistic start (2026-10-25: "when new time entry created, if it is

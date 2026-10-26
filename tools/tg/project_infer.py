@@ -165,14 +165,32 @@ def _api_key() -> str | None:
         return os.environ.get("ANTHROPIC_API_KEY")
 
 
+SERVER_PY = Path(__file__).resolve().parent.parent.parent / "mcp/toggl_server/server.py"
+
+
+def _code_hints() -> dict:
+    """{code: "media & consumption: news, podcasts, ..."} parsed from the toggl
+    MCP server's instructions (the one existing description of each code).
+    Text-parsed, not imported: server.py pulls in FastMCP."""
+    try:
+        return {m.group(1): m.group(2).strip() for m in re.finditer(
+            r"^- (\S+) — (.+)$", SERVER_PY.read_text(), re.M)}
+    except OSError:
+        return {}
+
+
 def _prompt(desc: str, codes: list[str], examples: dict) -> str:
+    hints = _code_hints()
     lines = []
     for c in codes:
         ex = examples.get(c) or []
-        lines.append(f"{c}: " + ("; ".join(ex) if ex else "(no recent examples)"))
+        hint = f" [{hints[c]}]" if c in hints else ""
+        lines.append(f"{c}{hint}: " + ("; ".join(ex) if ex else "(no recent examples)"))
     return (
-        "You classify a time-tracker entry into one project code. Codes, each "
-        "with recent example entries:\n" + "\n".join(lines) +
+        "You classify a time-tracker entry into one project code. Each code has "
+        "an optional [description] and the user's most frequent recent entries "
+        "for it (the examples reflect actual usage; trust them over the "
+        "description):\n" + "\n".join(lines) +
         f"\n\nEntry: {desc}\n\n"
         "Answer with exactly one code from the list, or none if no code clearly "
         "fits. Output only the code or none."
@@ -190,7 +208,9 @@ def from_haiku(desc: str, valid: set, examples: dict,
         if not key:
             return ""
         body = json.dumps({
-            "model": MODEL, "max_tokens": 10,
+            # thinking off: Haiku 5.5 otherwise spends max_tokens on an empty
+            # thinking block and returns no text at all.
+            "model": MODEL, "max_tokens": 10, "thinking": {"type": "disabled"},
             "messages": [{"role": "user", "content": _prompt(desc, codes, examples)}],
         }).encode()
         if post is None:

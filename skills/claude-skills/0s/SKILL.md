@@ -20,7 +20,7 @@ row (**today**, by default; col D).
 |-------|-----|-------|-----|
 | Title of the Day | E | ⌈ ceiling | P |
 | Who did I notice | F | ⌊ floor | Q |
-| What am I thankful for? | G | x̄ mean | R |
+| Gratitude of the moment | G | x̄ mean | R |
 | Biggest win today | H | Proud of (others) | S |
 | Learning for tomorrow | I | Learnings (others) | T |
 | 霓虹 (num) | K | ⌈ ceiling (others) | V |

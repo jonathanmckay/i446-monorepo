@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-26T06:00:02.122143-07:00"
+  "tasks": {
+    "be social": {
+      "todoist_id": "6hqxgmwfHJG9XV42",
+      "minutes": 30
+    },
+    "get first pass through dashboards done": {
+      "todoist_id": "6hqxgp4P45gVvHM2",
+      "minutes": 40
+    },
+    "continue progress with data dris": {
+      "todoist_id": "6hqxgp5Cjjm3rh9R",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-10-26T06:10:15.403067-07:00"
 }

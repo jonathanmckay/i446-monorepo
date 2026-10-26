@@ -784,7 +784,18 @@ def _guess_project_code(raw: str) -> str:
         pm = _TG_MOD._ONE_PREFIX.match(key)
         if pm and pm.group(1) in _TG_MOD.DOMAINS:
             return pm.group(1)
-        return _TG_MOD._search_task_cache(raw or "", _known_project_codes()) or ""
+        hit = _TG_MOD._search_task_cache(raw or "", _known_project_codes())
+        if hit:
+            return hit
+        # tg-fast's history tier (cached map only: no sqlite rebuild, no Haiku
+        # on the paint path); the Haiku tier lands when /current catches up.
+        if os.environ.get("TG_NO_INFER"):
+            return ""
+        if str(Path(TG_FAST).parent) not in sys.path:
+            sys.path.insert(0, str(Path(TG_FAST).parent))
+        import project_infer  # noqa: PLC0415
+        return project_infer.from_history(
+            key, project_infer.load_map(rebuild=False), _known_project_codes()) or ""
     except Exception:  # noqa: BLE001 -- inference is a nicety, never a blocker
         return ""
 

@@ -45,13 +45,16 @@ SHEET = "0s897"
 # here before 2026-08-11 (an ix-osa hiccup meant an unhandled RuntimeError
 # and the user's typed answers were just gone). Same shape as xk887's.
 RECOVERY_DIR = Path.home() / ".cache/0s-recovery"
+# --detach (dtd, 2026-10-26): the form exits right after Save and a detached
+# child does the writes, logging here and reporting into dtd's header.
+LOG = Path.home() / ".cache/0s-save.log"
 _writer = BackgroundWriter(recovery_dir=RECOVERY_DIR)
 
 # (key, label, column, target, kind)   kind: text | textml (multiline) | num
 FIELDS = [
     ("title",        "Title of the Day",            "E", "today",    "text"),
     ("notice",       "Who did I notice",            "F", "today",    "text"),
-    ("thankful",     "What am I thankful for?",     "G", "today",    "textml"),
+    ("thankful",     "Gratitude of the moment",     "G", "today",    "textml"),
     ("win",          "Biggest win today",           "H", "today",    "textml"),
     ("learn",        "Learning for tomorrow",       "I", "today",    "text"),
     ("neon",         "霓虹",                         "K", "today",    "num"),
@@ -184,6 +187,16 @@ def daemon_writes(answers: dict) -> tuple[list, list]:
     return today, tomorrow
 
 
+WRITE_CHUNK = 4
+
+
+def _batch_write_retry(items: list, date: str, src: str) -> dict:
+    r = neon_excel.batch_write(SHEET, items, date=date, src=src, fallback=False)
+    if not r.get("ok") and "timeout" in str(r.get("error", "")):
+        r = neon_excel.batch_write(SHEET, items, date=date, src=src, fallback=False)
+    return r
+
+
 def write_answers_daemon(answers: dict, target: _dt.date) -> str | None:
     """Through the excel-http daemon (Neon-off-Excel step 2c, 2026-10-19):
     one /batch_write per row, M/D/YY so 0s897!B's two Januaries can't
@@ -192,16 +205,19 @@ def write_answers_daemon(answers: dict, target: _dt.date) -> str | None:
     today, tomorrow = daemon_writes(answers)
     src = "0s %s" % target.isoformat()
     wrote, rows = 0, {}
-    if today:
-        r = neon_excel.batch_write(SHEET, today, date=_mdy(target), src=src, fallback=False)
+    # In chunks, each retried once on a timeout (2026-10-26): a slow Excel
+    # took 7-17s per few cells, so one 17-cell batch overran the daemon's
+    # osascript limit and the whole save failed. Writes are plain sets, so a
+    # retry after a timed-out chunk is harmless.
+    for i in range(0, len(today), WRITE_CHUNK):
+        r = _batch_write_retry(today[i:i + WRITE_CHUNK], _mdy(target), src)
         if not r.get("ok"):
             if r.get("fallback"):
                 return None
             raise RuntimeError("0s897 write failed: %s" % (r.get("error") or r))
         wrote += len(r.get("results") or []); rows["todayRow"] = r.get("row")
     if tomorrow:
-        r = neon_excel.batch_write(SHEET, tomorrow, date=_mdy(target + _dt.timedelta(days=1)),
-                                   src=src, fallback=False)
+        r = _batch_write_retry(tomorrow, _mdy(target + _dt.timedelta(days=1)), src)
         if r.get("ok"):
             wrote += len(r.get("results") or []); rows["tomRow"] = r.get("row")
         elif r.get("fallback"):
@@ -329,18 +345,52 @@ def run_form(target: _dt.date) -> dict | None:
     return {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
 
 
+def _hdr(msg: str) -> None:
+    """Show `msg` in dtd's header line when launched from dtd (DTD_HDR_FILE)."""
+    hdr = os.environ.get("DTD_HDR_FILE")
+    if hdr:
+        try:
+            Path(hdr).write_text(msg + "\n")
+        except OSError:
+            pass
+
+
+def detach(answers: dict, target: _dt.date) -> None:
+    """Save in a detached child and return at once (user report 2026-10-26:
+    "when I save 0s, can we do that in the background and get back to dtd
+    faster? This time it either hung or took > 10 seconds"). The child is
+    this script with --from-json; a failed write still lands in RECOVERY_DIR
+    and the header says so."""
+    import tempfile
+    fd, name = tempfile.mkstemp(prefix="0s-answers-", suffix=".json")
+    os.close(fd)
+    Path(name).write_text(json.dumps(answers, ensure_ascii=False))
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG, "ab") as log:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), target.isoformat(),
+                          "--from-json", name, "--unlink-json", "--report-hdr"],
+                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+    _hdr("0s saving in the background …")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("date", nargs="?",
                      help="YYYY-MM-DD, YYYY.MM.DD, or MM.DD.YYYY (default: yesterday)")
     ap.add_argument("--from-json", help="write answers from a JSON file instead of the form")
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
+    ap.add_argument("--detach", action="store_true",
+                    help="after the form, save in a detached child and exit at once (dtd)")
+    ap.add_argument("--unlink-json", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--report-hdr", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     target = _review_date(args.date)  # default: yesterday (accrual/retrospective)
 
     if args.from_json:
         answers = json.loads(Path(args.from_json).read_text())
+        if args.unlink_json:
+            Path(args.from_json).unlink(missing_ok=True)
     elif args.print_script:
         answers = {}  # empty demo
     else:
@@ -362,6 +412,10 @@ def main() -> int:
     # The Excel write runs over ssh to Ix and can take many seconds; after the
     # full-screen form restores the shell, silence here reads as a frozen
     # terminal (user report 2026-07-25). Say what's happening, immediately.
+    if args.detach and not args.from_json:
+        detach(answers, target)
+        print("0s → saving in the background (log: %s)" % LOG)
+        return 0
     print("0s → writing %d fields to Neon %s (%s) …" % (filled, SHEET, target),
           flush=True)
 
@@ -414,6 +468,11 @@ def main() -> int:
         _writer.queue(_mark_0l, tag="0l")
 
     all_ok = _writer.drain()
+    if args.report_hdr:
+        failed = [(t, rec) for t, ok, _m, rec in _writer.last_results if not ok]
+        _hdr("0s ✓ saved %s" % target if not failed else
+             "0s ✗ save FAILED (%s)%s" % (", ".join(t for t, _ in failed),
+                                          "".join(" answers in %s" % r for _, r in failed if r)))
     return 0 if all_ok else 1
 
 

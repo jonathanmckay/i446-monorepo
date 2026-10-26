@@ -18,29 +18,43 @@ struct JanusView: View {
     @State private var cmd = ""
     @FocusState private var cmdFocused: Bool
 
+    private func scrollToDefault(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard let i = store.defaultScrollIndex else { return }
+        // Next runloop: the List must have laid out the just-published rows.
+        DispatchQueue.main.async {
+            if animated { withAnimation { proxy.scrollTo(i, anchor: .center) } }
+            else { proxy.scrollTo(i, anchor: .center) }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(title: store.title, status: store.status, onLongPress: onSettings,
                        onRetry: { store.reload() })
             // Back/forward day navigation (2026-10-22): ‹ steps to earlier days
             // (the CLI's ctrl+/), › returns toward today (ctrl+=), disabled on
-            // today. A past day shows its date + a "today" jump and is read-only.
-            HStack(spacing: 14) {
-                Button { store.prevDay() } label: { Image(systemName: "chevron.left") }
+            // today. A past day shows its date + a "today" jump; its rows swipe
+            // like today's (2026-10-26), only the bottom bar hides.
+            // Each control is a ≥44×44 pt hit area (2026-10-26: "tap target to
+            // previous days is too small"); the glyphs stay the same size, and
+            // the bar's own padding shrinks to absorb the taller targets.
+            HStack(spacing: 0) {
+                Button { store.prevDay() } label: { Image(systemName: "chevron.left").dayNavTarget() }
                     .buttonStyle(.plain)
                 if !store.viewingToday {
                     Text(store.dayLabel).foregroundStyle(Theme.accent)
-                    Button { store.goToday() } label: { Text("today") }.buttonStyle(.plain)
+                    Button { store.goToday() } label: { Text("today").dayNavTarget() }.buttonStyle(.plain)
                 }
                 Spacer()
-                Button { store.nextDay() } label: { Image(systemName: "chevron.right") }
+                Button { store.nextDay() } label: { Image(systemName: "chevron.right").dayNavTarget() }
                     .buttonStyle(.plain)
                     .disabled(store.viewingToday)
                     .opacity(store.viewingToday ? 0.3 : 1)
             }
             .font(Theme.monoSmall).foregroundStyle(Theme.dim)
-            .padding(.horizontal, 16).padding(.vertical, 5)
+            .padding(.horizontal, 2)
             .background(Theme.bg)
+            ScrollViewReader { proxy in
             List {
                 ForEach(Array(store.rows.enumerated()), id: \.offset) { _, r in
                     if r.isDivider {
@@ -55,9 +69,10 @@ struct JanusView: View {
                             // label shows the 分 it will credit, and a success haptic lands
                             // once the server registers it. /api/log is idempotent by the
                             // server ledger; done-current/convert are guarded in-flight.
-                            // A past-day view is read-only (writes target today server-side).
+                            // Past days swipe too (2026-10-26): writes carry the viewed
+                            // date; an event there only logs (is_past), never starts.
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                if store.viewingToday && r.canSwipeRight {
+                                if r.canSwipeRight && (store.viewingToday || !r.isEvent || r.isPast) {
                                     Button {
                                         if r.isGap { fillTarget = FillTarget(gap: r) } else { store.onRight(r) }
                                     } label: { Label(r.rightLabel, systemImage: r.isGap ? "plus" : "checkmark") }
@@ -72,11 +87,11 @@ struct JanusView: View {
                             // server refuses anyway). Tint, not .destructive role: that
                             // role animates the row away before the confirm.
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                if store.viewingToday && r.isEvent {
+                                if r.isEvent {
                                     // Calendar event (2026-10-25): delete only.
                                     Button { deleteTarget = r } label: { Label("delete", systemImage: "trash") }
                                         .tint(.red)
-                                } else if store.viewingToday && r.canSwipeLeft && !r.isLocal && !r.isPending {
+                                } else if r.canSwipeLeft && !r.isLocal && !r.isPending {
                                     if !r.running {
                                         Button { store.resume(r) } label: { Label("resume", systemImage: "play.fill") }
                                             .tint(.blue)
@@ -100,7 +115,13 @@ struct JanusView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Theme.bg)
-            .refreshable { await store.load() }
+            .refreshable { store.requestDefaultScroll(); await store.load() }
+            // Default position = the last completed entry (2026-10-26), on
+            // open (cached paint included), day switch, refresh, and after a
+            // new time is set; the store bumps scrollTick for each.
+            .onAppear { scrollToDefault(proxy, animated: false) }
+            .onChange(of: store.scrollTick) { _, _ in scrollToDefault(proxy, animated: true) }
+            }
         }
         .background(Theme.bg)
         .safeAreaInset(edge: .bottom) {
@@ -210,6 +231,10 @@ struct CurrentTimerCard: View {
 extension TimelineRow: Identifiable {}
 
 extension View {
+    /// A day-nav control's hit area: at least 44×44 pt, all of it tappable.
+    func dayNavTarget() -> some View {
+        frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+    }
     @ViewBuilder func sheetMedium() -> some View {
         #if os(iOS)
         self.presentationDetents([.medium])

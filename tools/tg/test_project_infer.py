@@ -92,6 +92,7 @@ def test_haiku(monkeypatch):
 
     assert pi.from_haiku("spin class", VALID, {"hcbp": ["hiit"]}, post=post) == "hcbp"
     assert seen["body"]["model"] == "claude-haiku-5-5"
+    assert seen["body"]["thinking"] == {"type": "disabled"}
     assert seen["timeout"] <= 3.0
     prompt = seen["body"]["messages"][0]["content"]
     assert "hcbp: hiit" in prompt and "睡觉" not in prompt
@@ -180,3 +181,23 @@ def test_tg_no_infer_env_disables_real_inference(monkeypatch):
     monkeypatch.setenv("TG_NO_INFER", "1")
     monkeypatch.setattr(mod, "_project_from_task_cache", lambda raw: "")
     assert mod.resolve("spin class", infer=True)[1] == ""
+
+
+def test_janus_optimistic_guess_uses_cached_history_only(monkeypatch):
+    spec = importlib.util.spec_from_file_location("janus_infer_t", HERE / "janus.py")
+    janus = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(janus)
+    monkeypatch.delenv("TG_NO_INFER", raising=False)
+    monkeypatch.setattr(janus, "_known_project_codes", lambda: VALID)
+    seen = {}
+
+    def fake_load(valid=None, rebuild=True):
+        seen["rebuild"] = rebuild
+        return {"exact": {"spin class": ["hcbp", 5, 5]}}
+    monkeypatch.setattr(pi, "load_map", fake_load)
+    monkeypatch.setattr(pi, "from_haiku", lambda *a, **k: pytest.fail("haiku on paint path"))
+    janus._guess_project_code("lego")      # loads the tg-fast tables
+    monkeypatch.setattr(janus._TG_MOD, "_search_task_cache", lambda raw, valid: "")
+    assert janus._guess_project_code("spin class") == "hcbp"
+    assert seen["rebuild"] is False
+    assert janus._guess_project_code("spin class @i9") == "i9"
