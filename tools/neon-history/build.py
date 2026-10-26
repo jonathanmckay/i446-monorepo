@@ -6,7 +6,7 @@ WHAT
     Neon分v12.2.xlsx), copies each to a scratch dir first (originals are never
     opened by Excel or written), and loads them into
 
-        ~/vault/g245/neon-history/neon-history.sqlite
+        ~/vault/z_asts/g245--neon-history--neon-history.sqlite
 
     The live workbook is pulled read-only from Ix with scp (the Straylight
     OneDrive mirror can lag days); --no-ix uses the local mirror instead.
@@ -17,7 +17,7 @@ WHAT
 USAGE
     python3 ~/i446-monorepo/tools/neon-history/build.py            # build
     python3 ~/i446-monorepo/tools/neon-history/build.py --list     # show sources
-    sqlite3 ~/vault/g245/neon-history/neon-history.sqlite \
+    sqlite3 ~/vault/z_asts/g245--neon-history--neon-history.sqlite \
         "select * from daily where date >= '2026-03-01' limit 5"
 
 TABLES
@@ -33,6 +33,8 @@ TABLES
 
 VIEWS
     canon_obs   obs restricted to the canonical version for each date.
+    toggl_daily Toggl per-day cross-check (wake time, night sleep, 04-10 minutes
+                by project group); source_version='toggl' in obs, 2018 onward.
     daily       one row per date: total, b1..b9, morning, blocks_ok,
                 n_time, allclr_time, sleep_min, habits_done, habits_avail.
 
@@ -89,7 +91,7 @@ ODP = HOME / "Library/CloudStorage/OneDrive-Personal/vault-excel"
 ARCH = ODP / "z_archive"
 OLD = ARCH / "Old + Documents"
 QUIP = ARCH / "Old Neon (2017-2023)"
-DB = Path(os.environ.get("NEON_HISTORY_DB", HOME / "vault/g245/neon-history/neon-history.sqlite"))
+DB = Path(os.environ.get("NEON_HISTORY_DB", HOME / "vault/z_asts/g245--neon-history--neon-history.sqlite"))
 
 # (source_version, candidate paths, era, role, note). First existing path wins.
 SOURCES = [
@@ -363,6 +365,74 @@ def parse_quip(path: Path, version: str, log):
         log(f"  {version}/{ws.title}: {len(dow_rows)} days, weekday check {ok}/{tot}, {n} cells")
     wb.close()
 
+# ---------------------------------------------------------------- Toggl
+TOGGL_DB = HOME / "vault/i156/toggl.sqlite"
+TOGGL_GROUPS = {
+    "work": {"i9", "m5x2", "infra", "i444", "i447", "g245", "epcn", "n156", "qz12", "h335",
+             "m828", "q5n7", "f8"},
+    "family": {"xk87", "xk88", "家", "s897"},
+    "health": {"hcb", "hcbp", "hci"},
+    "mind": {"hcm"},
+    "media": {"hcmc", "hcmc2"},
+    "sleep": {"睡觉"},
+}
+MORNING = (4, 10)  # 卯+辰+巳
+
+
+def load_toggl(con, log):
+    """Per-day Toggl aggregates as source_version='toggl' (independent of Neon's
+    own bookkeeping, so usable as a cross-check across eras):
+      tg_am_<group>_min   minutes 04:00-10:00 by project group
+      tg_am_tracked_min   all tracked minutes 04:00-10:00
+      tg_wake             HHMM of the last 睡觉 entry ending 03:00-12:00
+      tg_night_sleep_min  睡觉 minutes between D-1 18:00 and D 12:00
+    Wall-clock times are taken as recorded (travel time zones not normalised)."""
+    if not TOGGL_DB.exists():
+        log("toggl: missing")
+        return
+    src = sqlite3.connect(f"file:{TOGGL_DB}?mode=ro", uri=True)
+    grp = {p: g for g, ps in TOGGL_GROUPS.items() for p in ps}
+    agg = {}
+    for start, stop, project in src.execute(
+            "SELECT start, stop, project FROM entries WHERE stop IS NOT NULL"):
+        try:
+            a = dt.datetime.fromisoformat(start[:19])
+            b = dt.datetime.fromisoformat(stop[:19])
+        except ValueError:
+            continue
+        if b <= a or (b - a).days > 1:
+            continue
+        g = grp.get(project, "other")
+        day = a.date()
+        while day <= b.date():
+            w0 = dt.datetime.combine(day, dt.time(MORNING[0]))
+            w1 = dt.datetime.combine(day, dt.time(MORNING[1]))
+            ov = (min(b, w1) - max(a, w0)).total_seconds() / 60
+            if ov > 0:
+                k = day.isoformat()
+                agg[(k, f"tg_am_{g}_min")] = agg.get((k, f"tg_am_{g}_min"), 0) + ov
+                agg[(k, "tg_am_tracked_min")] = agg.get((k, "tg_am_tracked_min"), 0) + ov
+            if g == "sleep" and b.date() == day and 3 <= b.hour < 12:
+                    k = (day.isoformat(), "tg_wake")
+                    agg[k] = max(agg.get(k, 0), b.hour * 100 + b.minute)
+            day += dt.timedelta(days=1)
+        if g == "sleep":  # night ending on day D = D-1 18:00 .. D 12:00
+            for day in {a.date(), a.date() + dt.timedelta(days=1)}:
+                n0 = dt.datetime.combine(day - dt.timedelta(days=1), dt.time(18))
+                n1 = dt.datetime.combine(day, dt.time(12))
+                ov2 = (min(b, n1) - max(a, n0)).total_seconds() / 60
+                if ov2 > 0:
+                    k = (day.isoformat(), "tg_night_sleep_min")
+                    agg[k] = agg.get(k, 0) + ov2
+    src.close()
+    con.executemany("INSERT OR REPLACE INTO obs VALUES (?,?,?,?,0)",
+                    [(d, "toggl", m, v) for (d, m), v in agg.items()])
+    ds = sorted({d for d, _ in agg})
+    con.execute("INSERT INTO sources VALUES (?,?,?,?,?,?,?,?)",
+                ("toggl", str(TOGGL_DB), "toggl", "aux", ds[0], ds[-1], len(ds),
+                 "Toggl time entries, aggregated per day"))
+    log(f"toggl: {len(agg)} obs, {len(ds)} days {ds[0]}..{ds[-1]}")
+
 
 # ---------------------------------------------------------------- build
 SCHEMA = """
@@ -371,7 +441,6 @@ CREATE TABLE sources(source_version TEXT PRIMARY KEY, path TEXT, era TEXT, role 
 CREATE TABLE obs(date TEXT NOT NULL, source_version TEXT NOT NULL, metric TEXT NOT NULL,
   value REAL, derived INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(date, source_version, metric)) WITHOUT ROWID;
-CREATE INDEX obs_metric ON obs(metric, date);
 CREATE TABLE canon(date TEXT PRIMARY KEY, source_version TEXT NOT NULL);
 CREATE TABLE domain_map(header TEXT PRIMARY KEY, grp TEXT NOT NULL);
 CREATE VIEW canon_obs AS
@@ -382,6 +451,18 @@ CREATE VIEW block_quality AS
     SUM(CASE WHEN metric IN ('b1','b2','b3','b4','b5','b6','b7','b8')
              AND derived = 0 AND value > 1 THEN 1 ELSE 0 END) AS typed_blocks
   FROM canon_obs GROUP BY date;
+CREATE VIEW toggl_daily AS
+  SELECT date,
+    MAX(CASE WHEN metric='tg_wake' THEN value END) AS wake_hhmm,
+    MAX(CASE WHEN metric='tg_night_sleep_min' THEN value END) AS night_sleep_min,
+    MAX(CASE WHEN metric='tg_am_tracked_min' THEN value END) AS am_tracked_min,
+    MAX(CASE WHEN metric='tg_am_work_min' THEN value END) AS am_work_min,
+    MAX(CASE WHEN metric='tg_am_family_min' THEN value END) AS am_family_min,
+    MAX(CASE WHEN metric='tg_am_sleep_min' THEN value END) AS am_sleep_min,
+    MAX(CASE WHEN metric='tg_am_mind_min' THEN value END) AS am_mind_min,
+    MAX(CASE WHEN metric='tg_am_health_min' THEN value END) AS am_health_min,
+    MAX(CASE WHEN metric='tg_am_media_min' THEN value END) AS am_media_min
+  FROM obs WHERE source_version = 'toggl' GROUP BY date;
 CREATE VIEW daily AS
   SELECT c.date, c.source_version,
     MAX(CASE WHEN metric='total' THEN value END) AS total,
@@ -477,9 +558,11 @@ def build(verbose=True, live: Path | None = None, from_ix: bool = True):
             rank = PRECEDENCE.get(v, 100 - QUIP_ORDER.get(v, 0))  # later Quip file wins
             if d not in canon or rank < canon[d][1]:
                 canon[d] = (v, rank)
+        load_toggl(con, log)
         con.executemany("INSERT INTO canon VALUES (?,?)",
                         [(d, v) for d, (v, _) in sorted(canon.items())])
         con.commit()
+        con.execute("VACUUM")
     finally:
         con.close()
         shutil.rmtree(tmpdir, ignore_errors=True)
