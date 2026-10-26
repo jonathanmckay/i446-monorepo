@@ -60,6 +60,7 @@ public enum Parsers {
             row.logged = r.bool("logged")
             row.points = r.intOrNil("points")
             row.previewPoints = r.intOrNil("preview_points")
+            row.loggedPoints = r.intOrNil("logged_points")
             row.title = r.string("title")
             row.isPast = r.bool("is_past")
             row.started = r.bool("started")
@@ -76,6 +77,17 @@ public enum Parsers {
     }
 
     public static func projectCodes(_ json: JSON) -> [String] { json.strings("codes") }
+
+    /// A log response's `credits` → "+12 hcb · +5 0g" (2026-10-26: "a toast
+    /// saying what points went where"); nil when the server listed none.
+    public static func creditsSummary(_ json: JSON) -> String? {
+        let parts = json.objects("credits").compactMap { c -> String? in
+            let col = c.string("col")
+            guard !col.isEmpty, let p = c.intOrNil("points") else { return nil }
+            return (p >= 0 ? "+\(p)" : "\(p)") + " " + col
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     /// GET /api/form → the card's form, or nil when it has none ({form: null}).
     public static func form(_ json: JSON) -> DtdForm? {

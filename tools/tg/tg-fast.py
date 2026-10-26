@@ -268,8 +268,24 @@ def _strip_tag_tokens(s: str) -> str:
     return re.sub(r'\s*(?:#-?\w+|@\w+)', '', s).strip()
 
 
-def resolve(raw: str):
-    """Return (description, project, tags)."""
+_INFERRED = ""  # project the last infer=True resolve() guessed (for the output line)
+
+
+def _infer_project(desc: str) -> str:
+    """History map, then Haiku (tools/tg/project_infer.py). "" on any miss."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import project_infer  # noqa: PLC0415
+        proj, _src = project_infer.infer(desc, _get_toggl_projects())
+        return proj
+    except Exception:  # noqa: BLE001 -- inference never blocks an entry
+        return ""
+
+
+def resolve(raw: str, infer: bool = False):
+    """Return (description, project, tags). infer=True (new entries only, via
+    _process_entry) asks project_infer when nothing else gave a project."""
+    global _INFERRED
     desc = raw.strip()
     project = ""
     tags = []
@@ -311,6 +327,12 @@ def resolve(raw: str):
     if not project and not override:
         project = _project_from_task_cache(raw)
 
+    # Still nothing: infer from Toggl history, then Haiku (task 6hqxfpPgRG33qM9c).
+    inferred = False
+    if infer and not project and not override and desc:
+        project = _infer_project(desc)
+        inferred = bool(project)
+
     # hcmc entries whose description STARTS with "review" are review/critique
     # work, not consumption -- route them to hcmr instead (2026-07-31 user
     # request). Only when hcmc was inferred, never when the user explicitly
@@ -319,6 +341,8 @@ def resolve(raw: str):
     if not override and project == "hcmc" and desc_words and desc_words[0].lower() == "review":
         project = "hcmr"
 
+    if inferred:
+        _INFERRED = project
     return desc, project, tags
 
 
@@ -547,6 +571,18 @@ def main():
 
 
 def _process_entry(raw: str) -> str:
+    """_process_entry_inner plus an "→ code (inferred)" note on the last
+    output line when the project was inferred (the CLI and the phone toast
+    both show the last line)."""
+    global _INFERRED
+    _INFERRED = ""
+    out = _process_entry_inner(raw)
+    if _INFERRED and out and not out.startswith("err"):
+        out = f"{out} → {_INFERRED} (inferred)"
+    return out
+
+
+def _process_entry_inner(raw: str) -> str:
     """Resolve and create/start a single timer entry; return the CLI output line."""
     # Peel off a trailing @project override BEFORE range detection. Every
     # range regex below anchors the range to the very start or very end of
@@ -576,14 +612,14 @@ def _process_entry(raw: str) -> str:
                 e = e[:2] + ":" + e[2:]
             if ":" in s and ":" in e:
                 desc_part = (range_match_start.group(3).strip() + project_suffix).strip()
-                desc, project, tags = resolve(desc_part)
+                desc, project, tags = resolve(desc_part, infer=True)
                 return cmd_create_range(desc or _strip_tag_tokens(desc_part),
                                         project, tags, s, e)
     if range_match:
         start_t = _norm_time(range_match.group(1))
         end_t = _norm_time(range_match.group(2))
         desc_part = (raw[:range_match.start()].strip() + project_suffix).strip()
-        desc, project, tags = resolve(desc_part)
+        desc, project, tags = resolve(desc_part, infer=True)
         return cmd_create_range(desc or _strip_tag_tokens(desc_part),
                                 project, tags, start_t, end_t)
 
@@ -598,7 +634,7 @@ def _process_entry(raw: str) -> str:
         n = int(duration_match.group(1))
         desc_part = (raw[:duration_match.start()].strip() + project_suffix).strip()
         if 1 <= n <= 99 and desc_part:
-            desc, project, tags = resolve(desc_part)
+            desc, project, tags = resolve(desc_part, infer=True)
             now_dt = datetime.now(_tz())
             start_dt = now_dt - timedelta(minutes=n)
             return cmd_create_range(desc or _strip_tag_tokens(desc_part), project, tags,
@@ -632,7 +668,7 @@ def _process_entry(raw: str) -> str:
         h, m = int(backtime[:2]), int(backtime[2:])
         if 0 <= h <= 23 and 0 <= m <= 59:
             rest = backdate_match.group(2)
-            desc, project, tags = resolve(rest)
+            desc, project, tags = resolve(rest, infer=True)
             return cmd_backdated(backtime, desc, project, tags)
 
     # Check for backdated start: "desc HHMM" (time at end). Also "desc HHMM-"
@@ -646,11 +682,11 @@ def _process_entry(raw: str) -> str:
         h, m = int(backtime[:2]), int(backtime[2:])
         if 0 <= h <= 23 and 0 <= m <= 59:
             rest = (raw[:backdate_end_match.start()] + raw[backdate_end_match.end():]).strip()
-            desc, project, tags = resolve(rest)
+            desc, project, tags = resolve(rest, infer=True)
             return cmd_backdated(backtime, desc, project, tags)
 
     # Default: start timer
-    desc, project, tags = resolve(raw)
+    desc, project, tags = resolve(raw, infer=True)
     return cmd_start(desc, project, tags)
 
 

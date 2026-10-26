@@ -407,4 +407,17 @@ do {
     ob.clear()
 }
 
+// janus logged rows show 分 credited; log toast lists where it went (2026-10-26)
+do {
+    let tl = Parsers.timeline(JSON.parse(#"{"date":"2026-10-26","rows":[{"type":"entry","id":"1","start":"09:00","end":"09:40","minutes":40,"desc":"gym","logged":true,"points":null,"logged_points":17},{"type":"entry","id":"2","start":"09:40","end":"10:00","minutes":20,"desc":"x","logged":true,"points":null},{"type":"entry","id":"3","start":"10:00","end":"10:30","minutes":30,"desc":"y","logged":false,"points":25}]}"#)!)
+    eq(tl.rows[0].loggedPoints, 17, "logged_points parsed")
+    eq(tl.rows[0].rightMeta, "17分", "logged row: 分 instead of duration")
+    eq(tl.rows[1].rightMeta, "20m", "logged without a number keeps duration")
+    eq(tl.rows[2].rightMeta, "30m · 25分", "unlogged row keeps duration")
+    eq(Parsers.creditsSummary(JSON.parse(#"{"ok":true,"credits":[{"col":"hcb","points":12},{"col":"0g","points":5}]}"#)!),
+       "+12 hcb · +5 0g", "credits toast text")
+    check(Parsers.creditsSummary(JSON.parse(#"{"ok":true,"credits":[]}"#)!) == nil, "no credits → nil")
+    check(Parsers.creditsSummary(JSON.parse(#"{"ok":true}"#)!) == nil, "old server → nil")
+}
+
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }

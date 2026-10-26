@@ -314,6 +314,98 @@ def _ledger_add(day: _dt.date, entry_id: str, note: str) -> None:
     tmp.replace(_ledger_path(day))
 
 
+def _points_path(day: _dt.date) -> Path:
+    return STATE_DIR / f"janus-mobile-points-{day.isoformat()}.json"
+
+
+def _logged_points(day: _dt.date) -> dict:
+    """Sidecar to the ledger (2026-10-26, iOS "once it is logged the right
+    should show number of points"): entry id → {"points": Σ分 credited,
+    "credits": [{"col", "points"}]}. Kept apart from the ledger so its
+    id → note format (membership checks everywhere) stays untouched."""
+    try:
+        return json.loads(_points_path(day).read_text())
+    except Exception:
+        return {}
+
+
+def _logged_points_add(day: _dt.date, entry_id: str, points: int | None,
+                       credits: list[dict]) -> None:
+    d = _logged_points(day)
+    d[str(entry_id)] = {"points": points, "credits": credits}
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _points_path(day).with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False))
+    tmp.replace(_points_path(day))
+
+
+# 0分 column letter → the domain name the toast shows ("+12 hcb · +5 0g").
+# Same letters as did-fast's LABEL_TO_0FEN; names as the dashboard's FEN_COLS.
+FEN_COL_LABELS = {"P": "-1n", "Q": "0g", "R": "i9", "S": "m5x2", "T": "个",
+                  "U": "hcmc", "V": "hcm", "W": "hcb", "X": "xk", "Y": "s897"}
+
+
+def _credits(data: dict | None) -> list[dict]:
+    """Where did-fast says the 分 went, merged per column, in order:
+    [{"col": "hcb", "points": 12}, {"col": "0g", "points": 5}]. Reads the
+    per-result "0fen" (0分 append), "curly_q" ({N} → 0g), "hcbi" (hcbp pts /
+    hcbi-habit minutes, both summed into 0分!W) and, for a bare 0₦ habit
+    whose credit is Excel's own formula, the habit's rate points (or its
+    written value) under the habit's name."""
+    out: dict[str, int] = {}
+
+    def add(col: str, pts) -> None:
+        try:
+            n = int(pts)
+        except (TypeError, ValueError):
+            return
+        if n:
+            out[col] = out.get(col, 0) + n
+
+    for r in (data or {}).get("results") or []:
+        if not isinstance(r, dict):
+            continue
+        got = False
+        fen = r.get("0fen")
+        if isinstance(fen, dict):
+            col = str(fen.get("col") or "")
+            add(FEN_COL_LABELS.get(col, col), (fen.get("points") or 0) + (fen.get("bonus") or 0))
+            got = True
+        if r.get("curly_q"):
+            add("0g", r["curly_q"])
+            got = True
+        hc = r.get("hcbi")
+        if isinstance(hc, dict) and not got:
+            if hc.get("pts") is not None:
+                add("hcb", hc["pts"]); got = True
+            elif hc.get("mins") is not None:
+                add("hcb", hc["mins"]); got = True
+        if not got and r.get("step") == "0n" and r.get("value") is not None:
+            name = str(r.get("name") or "0n")
+            v = r.get("value")
+            try:
+                rate = _habit_rate_points(name, int(v))
+            except Exception:
+                rate = None
+            add(name, rate if rate is not None else v)
+    return [{"col": c, "points": p} for c, p in out.items()]
+
+
+def _credited_total(credits: list[dict], fallback: int | None) -> int | None:
+    return sum(c["points"] for c in credits) if credits else fallback
+
+
+def _parse_day(s) -> _dt.date | None:
+    """The client's "date" (YYYY-MM-DD) on a past-day write; None = today."""
+    if not s:
+        return None
+    try:
+        d = _dt.date.fromisoformat(str(s)[:10])
+    except ValueError:
+        return None
+    return None if d >= _dt.datetime.now(_tz()).date() else d
+
+
 def _parse_iso(s: str) -> _dt.datetime:
     return _dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(_tz())
 
@@ -775,6 +867,7 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     else:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
     logged = _ledger(today)
+    logged_pts = _logged_points(today)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     # The timeline's "live edge": gaps and dividers run to now on today, but a
@@ -857,10 +950,16 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
             # (2026-10-22): resolved [N] > habit rate > 25→30/50→60 meeting >
             # minutes. None once logged.
             r = rows[-1]
-            r["preview_points"] = None if r["logged"] else next(
-                v for v in (r["points"], r["rate_points"],
-                            _speedy_meeting_pts(e["desc"], mins, day=today), mins)
-                if v is not None)
+            would = next(v for v in (r["points"], r["rate_points"],
+                                     _speedy_meeting_pts(e["desc"], mins, day=today), mins)
+                         if v is not None)
+            r["preview_points"] = None if r["logged"] else would
+            # 分 actually credited, for the logged row's right column
+            # (2026-10-26): the sidecar's did-fast total, else (an entry
+            # logged before the sidecar existed) what the log would credit.
+            if r["logged"]:
+                lp = (logged_pts.get(str(e["id"])) or {}).get("points")
+                r["logged_points"] = lp if lp is not None else would
         else:  # event
             ev = it["data"]
             mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
@@ -953,7 +1052,10 @@ def _hhmm_parts(s: str) -> tuple[int, int]:
 
 
 def fill_gap(desc: str, start_hhmm: str, end_hhmm: str,
-             tags: list[str] | None = None, project: str = "") -> dict:
+             tags: list[str] | None = None, project: str = "",
+             day: _dt.date | None = None) -> dict:
+    """`day` (2026-10-26): a gap on a past-day view fills that day; only a
+    closed range — a running timer can't start in the past."""
     m = _AT.search(desc)
     code = project or (m.group(1) if m else "")
     desc_clean = _AT.sub("", desc).strip()
@@ -963,13 +1065,15 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str,
         if pid is None:
             return {"ok": False, "error": f"unknown project @{project or m.group(1)}"}
     tags = _parse_tags(tags or [])
-    today = _dt.datetime.now(_tz()).date()
+    today = day or _dt.datetime.now(_tz()).date()
 
     # No end time -> start a live, still-running Toggl timer instead of a
     # fixed completed block. This is the "start task now" path (the add-entry
     # dialog defaults here); filling a specific timeline gap always supplies
     # both times and is unaffected.
     if not end_hhmm or end_hhmm == "now":
+        if day is not None:
+            return {"ok": False, "error": "past day — give an end time"}
         if not start_hhmm or start_hhmm == "now":
             start_iso = None  # let Toggl stamp "now" server-side
         else:
@@ -1010,14 +1114,15 @@ def _toggl_iso(d: _dt.datetime) -> str:
     return d.replace(microsecond=0).isoformat()
 
 
-def _get_entry(entry_id: str) -> dict | None:
+def _get_entry(entry_id: str, day: _dt.date | None = None) -> dict | None:
     """True (un-clipped) entry from Toggl by id — the timeline's own rows are
     clipped to [midnight, now] for display (see _fetch_today), so any mutation
     must re-fetch the real record rather than trust a client-submitted HH:MM
     built from a clipped row (bug 2026-08-06: a 睡觉 entry starting 23:30
     yesterday displays as start=00:00 today; blindly resubmitting that would
-    silently delete the real overnight minutes)."""
-    today = _dt.datetime.now(_tz()).date()
+    silently delete the real overnight minutes). `day` widens the search
+    window around a past day (2026-10-26, swipes on previous days)."""
+    today = day or _dt.datetime.now(_tz()).date()
     entries = toggl_api.get_entries(
         start_date=(today - _dt.timedelta(days=1)).isoformat(),
         end_date=(today + _dt.timedelta(days=2)).isoformat()) or []
@@ -1067,17 +1172,19 @@ def _would_touch_logged(entry_id: str, start_dt: _dt.datetime, end_dt: _dt.datet
 
 
 def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
-               project_code: str, tags: list[str] | None = None) -> dict:
-    """Edit description/project/time. Time changes go through the same
+               project_code: str, tags: list[str] | None = None,
+               day: _dt.date | None = None) -> dict:
+    """Edit description/project/time. `day` = a past-day view's date
+    (2026-10-26): the entry and any retime must lie on that day. Time changes go through the same
     trim_range() MECE-keeping path the desktop TUI uses. Guards (2026-08-06
     review): refuses to touch a cross-midnight entry's clipped time (can't
     safely reconstruct which calendar day a bare HH:MM belongs to), refuses
     to retime an already-logged entry, and refuses a retime that would bump
     trim_range into deleting/shrinking a DIFFERENT already-logged entry."""
-    e = _get_entry(entry_id)
+    e = _get_entry(entry_id, day)
     if not e:
         return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
-    today = _dt.datetime.now(_tz()).date()
+    today = day or _dt.datetime.now(_tz()).date()
     true_start = _parse_iso(e["start"])
     running = (e.get("duration") or 0) < 0 or not e.get("stop")
     true_end = None if running else _parse_iso(e["stop"])
@@ -1162,7 +1269,7 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
         return {"ok": False, "error": str(ex)[:200]}
 
 
-def split_entry(entry_id: str, mode: str) -> dict:
+def split_entry(entry_id: str, mode: str, day: _dt.date | None = None) -> dict:
     """Split into a fixed chunk (see _split_chunk_minutes) + remainder.
     `mode="top"` carves the chunk off the START; `mode="bottom"` carves it
     off the END. Id-ownership always follows the EARLIER piece (matches the
@@ -1174,13 +1281,13 @@ def split_entry(entry_id: str, mode: str) -> dict:
     lost chunk of time."""
     if mode not in ("top", "bottom"):
         return {"ok": False, "error": "bad mode"}
-    e = _get_entry(entry_id)
+    e = _get_entry(entry_id, day)
     if not e:
         return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
     running = (e.get("duration") or 0) < 0 or not e.get("stop")
     if running:
         return {"ok": False, "error": "still running — stop it first"}
-    today = _dt.datetime.now(_tz()).date()
+    today = day or _dt.datetime.now(_tz()).date()
     start = _parse_iso(e["start"])
     end = _parse_iso(e["stop"])
     if start.date() != today or end.date() != today:
@@ -1210,7 +1317,7 @@ def split_entry(entry_id: str, mode: str) -> dict:
     return {"ok": True, "chunk_minutes": chunk}
 
 
-def delete_entry(entry_id: str) -> dict:
+def delete_entry(entry_id: str, day: _dt.date | None = None) -> dict:
     """Delete a Toggl entry (2026-10-25, iOS janus left-swipe 🗑; the
     terminal janus's ^X on a tracked entry). Same guards as ^X plus the
     mobile ones: a running timer is refused ("stop it first", as ^X does);
@@ -1218,13 +1325,14 @@ def delete_entry(entry_id: str) -> dict:
     and the ledger would keep pointing at a vanished id (credit with no
     time behind it); a cross-midnight entry is refused like split/edit,
     since a delete would silently take yesterday's half with it. Not
-    logged ⇒ nothing in the ledger, so no ledger write is needed."""
-    e = _get_entry(entry_id)
+    logged ⇒ nothing in the ledger, so no ledger write is needed. `day` =
+    a past-day view's date (2026-10-26): the entry must lie on that day."""
+    e = _get_entry(entry_id, day)
     if not e:
         return {"ok": False, "error": "entry not found (may have changed elsewhere)"}
     if (e.get("duration") or 0) < 0 or not e.get("stop"):
         return {"ok": False, "error": "can't delete a running timer — stop it first"}
-    today = _dt.datetime.now(_tz()).date()
+    today = day or _dt.datetime.now(_tz()).date()
     if str(entry_id) in _ledger(today):
         return {"ok": False, "error": "already logged — can't delete a logged entry"}
     try:
@@ -1307,12 +1415,15 @@ def habit_tags(tags: list[str]) -> list[str]:
         return []
 
 
-def _run_did_fast(text: str) -> dict:
+def _run_did_fast(text: str, flags: tuple[str, ...] = ()) -> dict:
     """Shell did-fast.py and parse its JSON-in-stdout result. Shared by
     log_entry, convert_event (past-event branch) and done_current — all
-    three just build a different did-fast command string."""
+    three just build a different did-fast command string. `flags` go before
+    the text (did-fast's trailing-date parse reads the last token), e.g.
+    --past-ok for a past-day write, as the desktop janus's _did_argv does.
+    "credits" (2026-10-26) is where the 分 went, for the phone's toast."""
     try:
-        proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
+        proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), *flags, text],
                               capture_output=True, text=True, timeout=90)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "did-fast timeout"}
@@ -1333,13 +1444,17 @@ def _run_did_fast(text: str) -> dict:
     needs_agent = bool(data and data.get("agent_needed"))
     ok = proc.returncode == 0 and step is not None
     return {"ok": ok, "step": step, "tag_steps": tag_steps,
+            "credits": _credits(data) if ok else [],
             "needs_agent": needs_agent,
             "stderr_tail": proc.stderr.strip()[-200:]}
 
 
 def log_entry(entry_id: str, desc: str, minutes: int, project: str,
-              tags: list[str] | None = None) -> dict:
-    today = _dt.datetime.now(_tz()).date()
+              tags: list[str] | None = None, day: _dt.date | None = None) -> dict:
+    """`day` (2026-10-26, swipes on previous days): a past-day entry logs
+    with the viewed M/D appended and --past-ok, so the 分 land on THAT day
+    (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
+    today = day or _dt.datetime.now(_tz()).date()
     if str(entry_id) in _ledger(today):
         return {"ok": True, "already": True}
     # A dtd-started task carries its OWN point value (e.g. [30]), which is
@@ -1366,12 +1481,18 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     extra = habit_tags(tags or [])
     for t in extra:
         text += f", {t} {minutes}"
-    r = _run_did_fast(text)
+    flags: tuple[str, ...] = ()
+    if day is not None:
+        text += f" {day.month}/{day.day}"
+        flags = ("--past-ok",)
+    r = _run_did_fast(text, flags)
     if r["ok"]:
         note = f"{desc} {pts if pts is not None else minutes} → {r['step']}"
         if r["tag_steps"]:
             note += " + " + ", ".join(r["tag_steps"])
         _ledger_add(today, entry_id, note)
+        r["points"] = _credited_total(r.get("credits") or [], pts if pts is not None else minutes)
+        _logged_points_add(today, entry_id, r["points"], r.get("credits") or [])
     return r
 
 
@@ -1385,7 +1506,8 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
 _INFLIGHT: set[str] = set()
 
 
-def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: bool) -> dict:
+def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: bool,
+                  day: _dt.date | None = None) -> dict:
     """Convert a calendar event into Toggl — mirrors tools/tg/janus.py's
     _convert_selected_event. An ALREADY-ENDED event backfills as a
     completed Toggl entry AND grants its points in one did-fast call (its
@@ -1411,9 +1533,16 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
             sp = _speedy_meeting_pts(title, _hhmm_span_min(start_dt, end_dt), is_meeting=True)
             if sp is not None and _resolvable_points(title) is None:
                 text += f" [{sp}]"
-            r = _run_did_fast(text)
+            flags: tuple[str, ...] = ()
+            if day is not None:  # past-day view (2026-10-26): credit that day
+                text += f" {day.month}/{day.day}"
+                flags = ("--past-ok",)
+            r = _run_did_fast(text, flags)
             return {"ok": r["ok"], "mode": "logged", "step": r.get("step"),
+                    "credits": r.get("credits") or [],
                     "needs_agent": r.get("needs_agent"), "stderr_tail": r.get("stderr_tail")}
+        if day is not None:
+            return {"ok": False, "error": "past day — only an ended event can be logged"}
         now = _dt.datetime.now(_tz())
         text = (f"{start_dt:%H%M} {title}{suffix}" if start_dt <= now
                else f"{title}{suffix}")
@@ -1472,6 +1601,9 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
         if r["ok"]:
             _ledger_add(_dt.datetime.now(_tz()).date(), entry_id,
                        f"{desc} done {start:%H%M}-{now:%H%M} → {r['step']}")
+            r["points"] = _credited_total(r.get("credits") or [], pts)
+            _logged_points_add(_dt.datetime.now(_tz()).date(), entry_id, r["points"],
+                               r.get("credits") or [])
         return r
     finally:
         _INFLIGHT.discard(key)
@@ -1768,7 +1900,8 @@ def api_fill():
     if not desc:
         return jsonify({"ok": False, "error": "no description"}), 400
     return jsonify(fill_gap(desc, b.get("start") or "", b.get("end") or "",
-                            tags=b.get("tags") or [], project=(b.get("project") or "").strip()))
+                            tags=b.get("tags") or [], project=(b.get("project") or "").strip(),
+                            day=_parse_day(b.get("date"))))
 
 
 @app.route("/api/log", methods=["POST"])
@@ -1778,7 +1911,7 @@ def api_log():
         return jsonify({"ok": False, "error": "id+desc required"}), 400
     return jsonify(log_entry(str(b["id"]), b["desc"].strip(),
                              int(b.get("minutes") or 0), (b.get("project") or "").strip(),
-                             tags=b.get("tags") or []))
+                             tags=b.get("tags") or [], day=_parse_day(b.get("date"))))
 
 
 @app.route("/api/edit", methods=["POST"])
@@ -1789,7 +1922,7 @@ def api_edit():
     r = edit_entry(str(b["id"]), b.get("desc") or "",
                    (b.get("start") or "").strip(), (b.get("end") or "").strip(),
                    (b.get("project") or "").strip(),
-                   tags=b.get("tags") if "tags" in b else None)
+                   tags=b.get("tags") if "tags" in b else None, day=_parse_day(b.get("date")))
     if not r.get("ok"):
         # A refused edit only ever surfaced as a phone toast, which is gone
         # by the time anyone asks "what did it say?" (2026-09-24). One line
@@ -1815,7 +1948,7 @@ def api_split():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id") or b.get("mode") not in ("top", "bottom"):
         return jsonify({"ok": False, "error": "id+mode(top|bottom) required"}), 400
-    return jsonify(split_entry(str(b["id"]), b["mode"]))
+    return jsonify(split_entry(str(b["id"]), b["mode"], day=_parse_day(b.get("date"))))
 
 
 @app.route("/api/delete", methods=["POST"])
@@ -1823,7 +1956,7 @@ def api_delete():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id"):
         return jsonify({"ok": False, "error": "id required"}), 400
-    return jsonify(delete_entry(str(b["id"])))
+    return jsonify(delete_entry(str(b["id"]), day=_parse_day(b.get("date"))))
 
 
 @app.route("/api/convert-event", methods=["POST"])
@@ -1832,7 +1965,8 @@ def api_convert_event():
     if not b.get("title") or not b.get("start_iso") or not b.get("end_iso"):
         return jsonify({"ok": False, "error": "title+start_iso+end_iso required"}), 400
     return jsonify(convert_event(b["title"], b["start_iso"], b["end_iso"],
-                                 (b.get("code") or "").strip(), bool(b.get("is_past"))))
+                                 (b.get("code") or "").strip(), bool(b.get("is_past")),
+                                 day=_parse_day(b.get("date"))))
 
 
 @app.route("/api/done-current", methods=["POST"])

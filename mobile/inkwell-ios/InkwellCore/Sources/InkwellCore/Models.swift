@@ -157,6 +157,8 @@ public struct TimelineRow: Equatable, Hashable {
     /// What a log would credit (server `preview_points`, incl. the 25→30
     /// meeting rounding); parsed but no longer shown (2026-10-25).
     public var previewPoints: Int? = nil
+    /// 分 actually credited once logged (server `logged_points`, 2026-10-26).
+    public var loggedPoints: Int? = nil
     // event
     public var title: String = ""
     public var isPast: Bool = false
@@ -216,8 +218,12 @@ public struct TimelineRow: Equatable, Hashable {
 
     /// Right-justified column: duration, plus "N分" only when points were
     /// recorded with a task (`points`); no "~N分" preview (2026-10-25).
+    /// A logged entry shows only the 分 it credited (2026-10-26: "once it is
+    /// logged the right should show number of points rather than the amount
+    /// of time"); duration again if the server knows no number for it.
     public var rightMeta: String {
-        (["\(minutes)m"] + [points.map { "\($0)分" }].compactMap { $0 }).joined(separator: " · ")
+        if isEntry && logged && !running, let p = loggedPoints ?? points { return "\(p)分" }
+        return (["\(minutes)m"] + [points.map { "\($0)分" }].compactMap { $0 }).joined(separator: " · ")
     }
 }
 
