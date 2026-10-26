@@ -75,6 +75,7 @@ MAX_RUNTIME = 6 * 3600  # insurance ceiling: force-exit regardless of the
 # fzf renders ANSI in the footer even without --ansi (man fzf, FOOTER).
 PROJECT_COLORS = {
     "g245": "#00e676",   # Matrix
+    "h335": "#00e676",   # Matrix, same as g245 (JM 2026-10-26)
     "epcn": "#00bfa5",   # Miami Vice
     "s897": "#1b5e20",   # Emerald Shadow
     "hcmc2": "#ffd600",  # Lightning
@@ -121,6 +122,7 @@ def project_ansi(code: str) -> str:
 # fzf renders ANSI in the footer even without --ansi (man fzf, FOOTER).
 PROJECT_COLORS = {
     "g245": "#00e676",   # Matrix
+    "h335": "#00e676",   # Matrix, same as g245 (JM 2026-10-26)
     "epcn": "#00bfa5",   # Miami Vice
     "s897": "#1b5e20",   # Emerald Shadow
     "hcmc2": "#ffd600",  # Lightning

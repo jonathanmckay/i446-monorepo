@@ -327,6 +327,8 @@ LABEL_TO_0FEN = {
     "i9": "R", "i447": "R", "f693": "R", "f694": "R",
     "m5x2": "S",
     "g245": "T", "infra": "T", "cc": "T",
+    # h335 (career) credits 个 (JM 2026-10-26: "note that it maps to 个 in neon").
+    "h335": "T",
     # m828 (non-profit) had no column: @m828 items fell to needs_agent and
     # dtd web silently dropped them. Credited to 个 (user choice 2026-10-05).
     "m828": "T",

@@ -328,6 +328,7 @@ except Exception:
 # Neon palette → vault/i447/neon-color-pallette.md
 PROJECT_COLORS = {
     "g245": "#00e676",   # Matrix
+    "h335": "#00e676",   # Matrix, same as g245 (JM 2026-10-26; credits 个 in neon)
     "epcn": "#00bfa5",   # Miami Vice
     "s897": "#1b5e20",   # Emerald Shadow
     "hcmc2": "#ffd600",  # Lightning

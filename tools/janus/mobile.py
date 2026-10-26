@@ -140,7 +140,7 @@ EVENT_KEYWORDS = [
 
 # Neon domain palette — mirrors tools/dtd/dtd.py / tools/did/dtd.sh COLORS.
 COLORS = {
-    "g245": "#00e676", "epcn": "#00bfa5", "s897": "#1b5e20", "hcmc2": "#ffd600",
+    "g245": "#00e676", "h335": "#00e676", "epcn": "#00bfa5", "s897": "#1b5e20", "hcmc2": "#ffd600",
     "xk87": "#fd6c1d", "xk88": "#e65100", "hci": "#63ede0", "i9": "#2979ff",
     "n156": "#1249b4", "hcmc": "#0d3b66", "m5x2": "#d50032", "m828": "#9b0023",
     "hcb": "#f81d78",

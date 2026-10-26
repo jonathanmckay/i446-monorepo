@@ -2061,6 +2061,7 @@ except Exception: pass
 # Neon color palette (label → ANSI 256-color)
 COLORS = {
     'g245': '\033[38;2;0;230;118m',    'epcn': '\033[38;2;0;191;165m',
+    'h335': '\033[38;2;0;230;118m',    # same as g245 (JM 2026-10-26)
     's897': '\033[38;2;27;94;32m',     'hcmc2': '\033[38;2;255;214;0m',
     'xk87': '\033[38;2;253;108;29m',   'xk88': '\033[38;2;230;81;0m',
     'xk20': '\033[38;2;255;145;0m',    'xk22': '\033[38;2;255;171;64m',
@@ -2936,7 +2937,7 @@ if [[ -s "$DTD_BLOCKPICK" ]]; then
   exit 0
 fi
 case "\$q" in
-  g245|epcn|s897|hcmc2|xk87|xk88|xk20|xk22|hci|i9|n156|hcmc|m5x2|m828|hcb|hcbp|infra|i444|i447|hcm|hcmp|hcmr|家|睡觉)
+  g245|h335|epcn|s897|hcmc2|xk87|xk88|xk20|xk22|hci|i9|n156|hcmc|m5x2|m828|hcb|hcbp|infra|i444|i447|hcm|hcmp|hcmr|家|睡觉)
     ;;
   *)
     exit 0 ;;
@@ -3347,7 +3348,7 @@ try:
     _df = importlib.util.module_from_spec(_spec); _sys.modules['did_fast_split'] = _df; _spec.loader.exec_module(_df)
     domains = set(_df.LABEL_TO_0FEN) - {'0g'}
 except Exception:
-    domains = {'i9','i447','f693','f694','m5x2','m828','g245','infra','cc','hcmc','hcm','hci','hcb','hcbp','xk87','xk88','xk20','xk22','s897'}
+    domains = {'i9','i447','f693','f694','m5x2','m828','g245','h335','infra','cc','hcmc','hcm','hci','hcb','hcbp','xk87','xk88','xk20','xk22','s897'}
 label_arg = ''
 for l in labels:
     if l in domains:
