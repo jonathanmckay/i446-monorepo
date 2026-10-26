@@ -1674,7 +1674,7 @@ elif [[ -n "\$id" ]]; then
     | sub(" [0-9]{1,2}\\\\.[0-9]{1,2}\$"; "")' "${DTD_CACHE_FILE:-/dev/null}" 2>/dev/null)
   _form=""
   case "\$_clean" in
-    0l)                               _form="$HOME/i446-monorepo/tools/0s/0s.py" ;;
+    0l)                               _form="$HOME/i446-monorepo/tools/0s/0s.py --detach" ;;
     1s)                               _form="$HOME/i446-monorepo/tools/1s/1s-survey.py --no-mark" ;;
     "1 xk88"|"1 xk87"|"1 xk87 wknd")  _form="$HOME/i446-monorepo/tools/xk887/xk887-survey.py" ;;
     "moral audit"|moralaudit)         _form="$HOME/i446-monorepo/tools/moralaudit/moralaudit.py" ;;

@@ -244,3 +244,64 @@ def test_row_lookup_is_one_range_read_not_a_per_row_loop():
     assert 'range ("B" & r)' not in script and "repeat with r from 3 to 600" not in script
     assert 'if bv = "10/13/26" then set todayRow to i + 2' in script
     assert 'if bv = "10/14/26" then set tomRow to i + 2' in script
+
+
+# ── 2026-10-26: "save 0s in the background ... it hung or took > 10 seconds" ──
+# A slow Excel took 7-17s per few cells, so one 17-cell batch overran the
+# excel-http osascript limit (osascript_timeout) and the whole save failed.
+
+FULL = {"title": "t", "notice": "n", "thankful": "g", "win": "w", "learn": "l", "neon": "1", "help": "1",
+        "body": "6", "bodynotes": "b", "ceil1": "8", "floor1": "6", "mean": "7", "proud_others": "p",
+        "learn_others": "o", "ceil2": "8", "floor2": "6", "motivation": "7"}
+
+
+def test_daemon_write_goes_in_chunks_and_retries_a_timeout(monkeypatch):
+    calls = []
+
+    def fake(sheet, items, date, src, fallback):
+        calls.append((date, [w["col"] for w in items]))
+        if len(calls) == 1:
+            return {"ok": False, "error": "osascript_timeout"}   # first chunk times out once
+        return {"ok": True, "row": 10, "results": items}
+
+    monkeypatch.setattr(z.neon_excel, "batch_write", fake)
+    out = z.write_answers_daemon(FULL, dt.date(2026, 10, 25))
+    today_calls = [c for c in calls if c[0] == "10/25/26"]
+    assert all(len(cols) <= z.WRITE_CHUNK for _, cols in today_calls)
+    assert today_calls[0][1] == today_calls[1][1]                 # the timed-out chunk was retried
+    assert "wrote=17" in out
+
+
+def test_daemon_write_still_fails_after_a_second_timeout(monkeypatch):
+    monkeypatch.setattr(z.neon_excel, "batch_write",
+                        lambda *a, **k: {"ok": False, "error": "osascript_timeout"})
+    try:
+        z.write_answers_daemon(FULL, dt.date(2026, 10, 25))
+    except RuntimeError as e:
+        assert "osascript_timeout" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_detach_spawns_a_background_child_and_tells_dtd(monkeypatch, tmp_path):
+    spawned = {}
+
+    class P:
+        def __init__(self, cmd, **kw):
+            spawned["cmd"], spawned["kw"] = cmd, kw
+
+    hdr = tmp_path / "hdr"
+    monkeypatch.setenv("DTD_HDR_FILE", str(hdr))
+    monkeypatch.setattr(z, "LOG", tmp_path / "0s.log")
+    monkeypatch.setattr(z.subprocess, "Popen", P)
+    z.detach({"title": "t"}, dt.date(2026, 10, 25))
+    cmd = spawned["cmd"]
+    assert "--from-json" in cmd and "--unlink-json" in cmd and "--report-hdr" in cmd and "2026-10-25" in cmd
+    assert spawned["kw"]["start_new_session"] is True
+    assert "background" in hdr.read_text()
+    Path(cmd[cmd.index("--from-json") + 1]).unlink()
+
+
+def test_dtd_opens_0s_with_detach():
+    src = (Path(__file__).parent.parent / "did" / "dtd.sh").read_text()
+    assert 'tools/0s/0s.py --detach"' in src
