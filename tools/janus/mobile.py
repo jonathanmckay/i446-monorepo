@@ -1008,6 +1008,10 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
             # logged before the sidecar existed) what the log would credit.
             if r["logged"]:
                 lp = (logged_pts.get(str(e["id"])) or {}).get("points")
+                # No sidecar (logged before it existed): a habit's real 分 is
+                # its 0n weight, not minutes (0g logged 07:09 showed "1").
+                if lp is None:
+                    lp = dtd_done.get(_k)
                 r["logged_points"] = lp if lp is not None else would
         else:  # event
             ev = it["data"]
