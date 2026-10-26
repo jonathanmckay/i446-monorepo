@@ -176,3 +176,31 @@ def test_parse_day(jm):
     assert jm._parse_day(None) is None and jm._parse_day("junk") is None
     assert jm._parse_day(today.isoformat()) is None
     assert jm._parse_day((today - dt.timedelta(days=1)).isoformat()) == today - dt.timedelta(days=1)
+
+
+def test_task_done_in_dtd_marks_its_timer_entry_logged_with_points(tmp_path, monkeypatch):
+    """JM 2026-10-26: set 0g in the timer, mark it done in dtd → janus shows
+    the entry as logged with its 分 on the right, not minutes."""
+    import datetime as _dt, json
+    import mobile as m
+    today = _dt.datetime.now(m._tz()).date()
+    ct = tmp_path / "completed-today.json"
+    ct.write_text(json.dumps({"date": today.isoformat(), "names": ["0g", "write memo"],
+                              "points": {"write memo": 30}}))
+    monkeypatch.setattr(m, "COMPLETED_TODAY", ct)
+    import neon.rates as nr
+    monkeypatch.setattr(nr, "zero_n_done_points", lambda h: 17 if h == "0g" else None)
+    assert m._dtd_done_points(today) == {"0g": 17, "write memo": 30}
+    monkeypatch.setattr(m, "_dtd_done_points", lambda d: {"0g": 17})
+    t0 = _dt.datetime.combine(today, _dt.time(0, 5), m._tz())
+    def ent(i, mins):
+        s = t0 + _dt.timedelta(minutes=i * 20)
+        return {"id": i, "desc": "0g", "project": "g245", "color": "#fff", "tags": [],
+                "start": s, "end": s + _dt.timedelta(minutes=mins), "running": False}
+    monkeypatch.setattr(m, "_fetch_today", lambda *a, **k: [ent(1, 5), ent(2, 4)])
+    monkeypatch.setattr(m, "_ledger", lambda d: {})
+    monkeypatch.setattr(m, "_logged_points", lambda d: {})
+    tl = m.build_timeline(lite=True)
+    rows = {r["id"]: r for r in tl["rows"] if r.get("type") == "entry"}
+    assert rows[2]["logged"] and rows[2]["logged_points"] == 17 and rows[2]["done_in"] == "dtd"
+    assert not rows[1]["logged"]   # only the latest same-name entry is claimed

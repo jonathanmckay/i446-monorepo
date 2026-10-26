@@ -5663,9 +5663,16 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
                 # absence as "confirmed worth 0 分" and _entry_dur_display
                 # showed a false "[0]" on every plain habit completion (bug
                 # 2026-08-11: "everything I've done in 辰 shows [0]").
-                # Missing-from-points means "unknown", not "zero" — treat it
-                # as unrecorded so the caller falls back to duration.
-                return False, 0
+                # Missing-from-points means "unknown", not "zero". A plain
+                # 0₦ habit's real credit is its 0n row-2 weight (2026-10-26:
+                # 0g closed in dtd should show its 分, not minutes); anything
+                # else stays unrecorded so the caller falls back to duration.
+                try:
+                    from neon.rates import zero_n_done_points
+                    hp = zero_n_done_points(n)
+                except Exception:
+                    hp = None
+                return (True, hp) if hp else (False, 0)
             pts = points_map.get(n, 0)
             return True, int(pts) if isinstance(pts, (int, float)) else 0
     return False, 0
