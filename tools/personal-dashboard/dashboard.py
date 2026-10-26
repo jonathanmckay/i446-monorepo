@@ -2064,8 +2064,22 @@ def api_data():
     return jsonify(cached)
 
 
+# Today's 0分 total, kept warm by _warm_loop (2026-10-25): the live xlwings
+# read takes ~1s, so the page never waits on it. 90s TTL: the warmer refreshes
+# it every 60s, so a request only builds it itself when the warmer isn't running.
+_POINTS_TODAY_CACHE: dict = {"payload": None, "ts": 0.0}
+_POINTS_TODAY_TTL = 90.0
+
+
 @app.route("/api/points-today")
 def api_points_today():
+    c = _POINTS_TODAY_CACHE
+    if c["payload"] is None or time.time() - c["ts"] >= _POINTS_TODAY_TTL:
+        c["payload"], c["ts"] = _build_points_today(), time.time()
+    return jsonify(c["payload"])
+
+
+def _build_points_today() -> dict:
     """Live read of 0分 column D for today's row (today's #points total)."""
     today = date.today()
     try:
@@ -2089,13 +2103,13 @@ def api_points_today():
                 target_row = i + 3
                 break
         if target_row is None:
-            return jsonify({"value": None})
+            return {"value": None}
         v = ws.range(f"D{target_row}").value
         if isinstance(v, (int, float)):
-            return jsonify({"value": round(float(v), 1)})
-        return jsonify({"value": None})
+            return {"value": round(float(v), 1)}
+        return {"value": None}
     except Exception as e:
-        return jsonify({"value": None, "error": str(e)})
+        return {"value": None, "error": str(e)}
 
 
 @app.route("/api/chart-granular")
@@ -2118,6 +2132,7 @@ def api_refresh():
         _WEEKLY_CACHE["ts"] = 0.0
     with _GRANULAR_LOCK:
         _GRANULAR_CACHE.clear()
+    _POINTS_TODAY_CACHE["payload"] = None
     jmreads.invalidate()
     return jsonify({"status": "ok"})
 
@@ -3446,5 +3461,50 @@ def api_reads():
     return jsonify(jmreads.data(force=request.args.get("fresh") == "1"))
 
 
+# ── Cache warmer (2026-10-25, "precache it so it loads basically instantly") ──
+# Every payload the page fetches on load is rebuilt here before its TTL runs
+# out, so a page load always hits a warm cache instead of waiting 1-3 s for a
+# cold build: today's points every 60s, the rest (main data, the default
+# per-block chart, the weekly table) every 120s, under their 300s TTLs.
+WARM_POINTS_EVERY = 60.0
+WARM_DATA_EVERY = 120.0
+
+
+def _warm_once(data: bool = True) -> None:
+    try:
+        _POINTS_TODAY_CACHE["payload"], _POINTS_TODAY_CACHE["ts"] = _build_points_today(), time.time()
+    except Exception as e:  # noqa: BLE001 (a warmer failure must never take the server down)
+        print(f"[warm] points-today: {e}", flush=True)
+    if not data:
+        return
+    for name, build, store in (
+        ("data", _build_api_data, lambda v: _API_DATA_CACHE.update(payload=v, ts=time.time())),
+        ("weekly", _build_weekly_data, lambda v: _WEEKLY_CACHE.update(payload=v, ts=time.time())),
+        ("block chart", lambda: _build_granular_chart_data("block", offset=0),
+         lambda v: _GRANULAR_CACHE.__setitem__(("block", 0), {"payload": v, "ts": time.time()})),
+    ):
+        try:
+            store(build())
+        except Exception as e:  # noqa: BLE001
+            print(f"[warm] {name}: {e}", flush=True)
+
+
+def _warm_loop() -> None:
+    last_data = 0.0
+    while True:
+        due = time.time() - last_data >= WARM_DATA_EVERY
+        _warm_once(data=due)
+        if due:
+            last_data = time.time()
+        time.sleep(WARM_POINTS_EVERY)
+
+
+def start_warmer() -> threading.Thread:
+    t = threading.Thread(target=_warm_loop, name="cache-warmer", daemon=True)
+    t.start()
+    return t
+
+
 if __name__ == "__main__":
+    start_warmer()
     app.run(host="0.0.0.0", port=5558, debug=False)
