@@ -61,7 +61,7 @@ finished task with `agent_claims.py done <todoist id>`; report per task.
    copy the files in, commit (attribution trailer), `git push origin HEAD:wip`,
    `git worktree remove`. Check `git diff origin/wip -- <file>` first so you
    only ship the lanes' hunks.
-3. iPhone: `echo "dtd janus Inkwell" > ~/.cache/jm/ios-deploy-trigger`, then
+3. iPhone: `echo "dtd janus Inkwell jmdash" > ~/.cache/jm/ios-deploy-trigger`, then
    read `~/.cache/jm/ios-deploy.log` until `deploy done`; only list the apps
    that changed. "device not able to fulfill usage assertion" = the phone is
    locked: ask JM to unlock and retry. A dropped connection: retry once.

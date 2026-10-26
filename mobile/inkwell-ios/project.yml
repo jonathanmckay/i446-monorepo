@@ -14,7 +14,7 @@ settings:
     MARKETING_VERSION: "0.1"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: L3YRH72ZW7    # Jonathan McKay (Personal Team), picked in Xcode 2026-10-19
+    DEVELOPMENT_TEAM: L3YRH72ZW7    # Jonathan McKay, paid Apple Developer Program since 2026-10-26 (1-year profiles)
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MACCATALYST: NO
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
