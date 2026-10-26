@@ -560,6 +560,15 @@ class Form:
         import datetime as _dt
         split = splitting({k: f.text for k, f in self.by.items()})
         follow.append(("due", _dt.date.today().isoformat() if split else self.pre["due"]))
+        # keep remainder only means something on a split. Off a split it is
+        # skipped and stays checked (bug 2026-10-26, "changing points after
+        # going to the details screen is failing": Enter-through from [N] pts
+        # landed on it, Enter unchecked it, that disabled the pts just typed
+        # and validate refused the save).
+        kf = self.by["keep"]
+        kf.enabled = split
+        if not split:
+            kf.text = "x"
         # unchecked keep remainder: there is no remainder to shape
         keep = bool(self.by["keep"].text)
         for key in ("time", "points", "bonus", "due"):

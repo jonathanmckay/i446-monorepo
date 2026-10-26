@@ -146,7 +146,10 @@ def _run(tmp_path, keys: str, focus="mother", env_extra=None, content=LONG):
                     return
     pump(0.7)
     for k in keys:
-        os.write(fd, k.encode())
+        try:
+            os.write(fd, k.encode())
+        except OSError:   # the form already exited (a save); later keys are moot
+            break
         pump(0.04)
     pump(0.4)
     _, st = os.waitpid(pid, 0)
@@ -317,3 +320,15 @@ def test_pty_bonus_can_be_added_to_a_task_without_one(tmp_path):
     assert rc == 0, screen[-300:]
     j = json.loads(out.read_text())
     assert j["bonus"] == "5" and j["split"] is None
+
+
+def test_pty_enter_through_after_points_edit_does_not_uncheck_keep(tmp_path):
+    """Bug 2026-10-26: "changing points after going to the details screen is
+    failing". ctrl-o → Tab Tab → [N] pts 9, then Enter-through: bonus, do-date,
+    and the 4th Enter landed on keep remainder and unchecked it, which
+    disabled the pts just typed and made validate refuse the save. Off a split
+    keep remainder is skipped, so ^S saves the new points."""
+    rc, out, _, _, screen = _run(tmp_path, "\t\t\x15" "9\r\r\r\r\x13\x1b")
+    assert rc == 0, screen[-300:]
+    j = json.loads(out.read_text())
+    assert j["points"] == "9" and j["split"] is None
