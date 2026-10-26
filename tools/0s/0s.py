@@ -51,7 +51,7 @@ _writer = BackgroundWriter(recovery_dir=RECOVERY_DIR)
 FIELDS = [
     ("title",        "Title of the Day",            "E", "today",    "text"),
     ("notice",       "Who did I notice",            "F", "today",    "text"),
-    ("thankful",     "What am I thankful for?",     "G", "today",    "textml"),
+    ("thankful",     "Gratitude of the moment",     "G", "today",    "textml"),
     ("win",          "Biggest win today",           "H", "today",    "textml"),
     ("learn",        "Learning for tomorrow",       "I", "today",    "text"),
     ("neon",         "霓虹",                         "K", "today",    "num"),
