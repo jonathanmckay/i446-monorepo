@@ -32,6 +32,10 @@ import todoist as _todoist  # noqa: E402
 NOTIFY_TO = "mckay@m5c7.com"
 STATE_PATH = Path.home() / ".config/m5x2/vault_autopush_fail_state"
 ALERT_INTERVAL = datetime.timedelta(hours=24)
+# One failed 10-min cycle is usually a network blip that the next cycle
+# clears (2026-10-26: a 07:28 push failure raised the card, 07:38 closed
+# it). Only alert once sync has been failing this long.
+GRACE = datetime.timedelta(minutes=30)
 
 
 def _read_state() -> dict | None:
@@ -43,19 +47,28 @@ def _read_state() -> dict | None:
         return None
 
 
-def _write_state(task_id):
+def _write_state(task_id, first_failed_at: str | None = None, alerted: bool = True):
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.datetime.now().isoformat()
     STATE_PATH.write_text(json.dumps({
-        "alerted_at": datetime.datetime.now().isoformat(),
+        "first_failed_at": first_failed_at or now,
+        "alerted_at": now if alerted else None,
         "todoist_task_id": task_id,
     }))
 
 
 def fail(reason: str):
     state = _read_state()
-    if state:
+    now = datetime.datetime.now()
+    first = (state or {}).get("first_failed_at") or (state or {}).get("alerted_at")
+    if not first:
+        _write_state(None, alerted=False)  # first failure: start the clock, no alert
+        return
+    if now - datetime.datetime.fromisoformat(first) < GRACE:
+        return  # still within the blip window
+    if state.get("alerted_at"):
         alerted_at = datetime.datetime.fromisoformat(state["alerted_at"])
-        if datetime.datetime.now() - alerted_at < ALERT_INTERVAL:
+        if now - alerted_at < ALERT_INTERVAL:
             return  # already alerted recently; still broken, don't re-nag yet
 
     try:
@@ -81,6 +94,11 @@ def fail(reason: str):
         print(f"WARN: alert email failed: {e}", file=sys.stderr)
 
     task_id = (state or {}).get("todoist_task_id")
+    if task_id:  # re-nag replaces the old card instead of stacking a second one
+        try:
+            _todoist.close_task(task_id)
+        except Exception:
+            pass
     try:
         task = _todoist.create_task(
             "\U0001F513 vault-autopush stuck — ~/vault not syncing to GitHub "
@@ -91,7 +109,7 @@ def fail(reason: str):
     except Exception as e:
         print(f"WARN: Todoist alert task failed: {e}", file=sys.stderr)
 
-    _write_state(task_id)
+    _write_state(task_id, first_failed_at=first)
 
 
 def clear():

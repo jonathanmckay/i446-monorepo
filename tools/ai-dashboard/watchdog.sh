@@ -50,6 +50,24 @@ fi
 NOW_EPOCH=$(date +%s)
 AGE_MIN=$(( (NOW_EPOCH - LAST_TS) / 60 ))
 
+# A no-op sync (nothing used since the last run) commits nothing, so the
+# commit can be old while the pipeline is fine: also accept periodic-sync's
+# heartbeat. And right after the Mac wakes, cron hasn't had a turn yet, so
+# don't judge until it has been awake for a full threshold window. Both
+# were the source of the daily 07:00 false "sync_stalled" (2026-10-26).
+HB_FILE="$HOME/i446-monorepo/tools/ai-dashboard/.periodic-sync.heartbeat"
+HB_TS=$(cat "$HB_FILE" 2>/dev/null)
+if [ -n "$HB_TS" ]; then
+  HB_AGE=$(( (NOW_EPOCH - HB_TS) / 60 ))
+  [ "$HB_AGE" -lt "$AGE_MIN" ] && AGE_MIN=$HB_AGE
+fi
+WAKE_TS=$(sysctl -n kern.waketime 2>/dev/null | sed -E 's/.*sec = ([0-9]+).*/\1/')
+if [ "$AGE_MIN" -gt "$THRESHOLD_MIN" ] && [ -n "$WAKE_TS" ] && \
+   [ $(( (NOW_EPOCH - WAKE_TS) / 60 )) -lt "$THRESHOLD_MIN" ]; then
+  echo "[$(date '+%F %T')] ok user=$USER_ID age=${AGE_MIN}min (woke $(( (NOW_EPOCH - WAKE_TS) / 60 ))min ago; not judging yet)" >> "$WATCHDOG_LOG"
+  exit 0
+fi
+
 if [ "$AGE_MIN" -gt "$THRESHOLD_MIN" ]; then
   emit_alert "sync_stalled" "m5x2-ai-stats hasn't received a $USER_ID commit in ${AGE_MIN}min (threshold ${THRESHOLD_MIN}min) on $HOST"
   exit 1

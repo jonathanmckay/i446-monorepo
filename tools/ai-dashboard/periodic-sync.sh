@@ -65,6 +65,10 @@ if [ "$IS_AUTHORITATIVE" = 1 ]; then
 else
   git add "$USER_ID/session-stats.json" 2>/dev/null
 fi
+# Heartbeat: this run got as far as the commit decision. A no-op run (no
+# Claude use since the last one) commits nothing, so commit age alone made
+# the watchdog cry "stalled" after every quiet stretch (2026-10-26).
+date +%s > "$SCRIPT_DIR/.periodic-sync.heartbeat"
 git diff --cached --quiet && exit 0
 
 git commit -m "stats: $USER_ID periodic $(date '+%Y-%m-%d %H:%M')" -q
