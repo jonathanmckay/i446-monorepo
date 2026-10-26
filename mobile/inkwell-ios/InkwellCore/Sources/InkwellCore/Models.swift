@@ -222,8 +222,9 @@ public struct TimelineRow: Equatable, Hashable {
     /// logged the right should show number of points rather than the amount
     /// of time"); duration again if the server knows no number for it.
     public var rightMeta: String {
-        if isEntry && logged && !running, let p = loggedPoints ?? points { return "\(p)分" }
-        return (["\(minutes)m"] + [points.map { "\($0)分" }].compactMap { $0 }).joined(separator: " · ")
+        // Entry points render "[N]", the CLI's frame; "N分" is for day totals (2026-10-26).
+        if isEntry && logged && !running, let p = loggedPoints ?? points { return "[\(p)]" }
+        return (["\(minutes)m"] + [points.map { "[\($0)]" }].compactMap { $0 }).joined(separator: " · ")
     }
 }
 

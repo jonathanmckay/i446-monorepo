@@ -189,7 +189,7 @@ struct CurrentTimerCard: View {
                                 .font(Theme.mono).foregroundStyle(Color(hex: r.color)).lineLimit(2)
                             Text([r.project.isEmpty ? nil : "@" + r.project, "since " + r.start,
                                   CurrentTimerCard.elapsed(since: r.start, now: ctx.date),
-                                  r.points.map { "\($0)分" }].compactMap { $0 }.joined(separator: " · "))
+                                  r.points.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " · "))
                                 .font(Theme.monoSmall).foregroundStyle(Theme.dim)
                         }
                         Spacer(minLength: 6)
