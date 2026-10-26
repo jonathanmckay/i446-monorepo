@@ -229,6 +229,37 @@ def _norm_key(s: str) -> str:
     return re.sub(r"[\s\-—–]+", " ", _clean_annotations(s)).strip().lower()
 
 
+# None = STATE_DIR/completed-today.json, resolved per call (tests move STATE_DIR).
+COMPLETED_TODAY: Path | None = None
+
+
+def _dtd_done_points(today: _dt.date) -> dict[str, int]:
+    """{normalized name: 分} for everything closed today via dtd/did-fast
+    (completed-today.json): its recorded points, else a plain 0₦ habit's
+    row-2 weight. Lets a timer entry whose task was completed in dtd show as
+    logged with its 分 instead of minutes, and stops a second swipe-log
+    double-crediting it (JM 2026-10-26)."""
+    try:
+        data = json.loads((COMPLETED_TODAY or STATE_DIR / "completed-today.json").read_text())
+    except Exception:
+        return {}
+    if data.get("date") != today.isoformat():
+        return {}
+    pts = data.get("points") or {}
+    out: dict[str, int] = {}
+    for n in data.get("names") or []:
+        v = pts.get(n)
+        if not isinstance(v, (int, float)) or not v:
+            try:
+                from neon.rates import zero_n_done_points
+                v = zero_n_done_points(n)
+            except Exception:
+                v = None
+        if v:
+            out[_norm_key(n)] = int(v)
+    return out
+
+
 def _resolvable_points(desc: str, registered: set[str] | None = None) -> int | None:
     """The points value did-fast would resolve for `desc` on its own — an
     inline [N] already in `desc` itself, or a [N] on a matching OPEN task in
@@ -868,6 +899,19 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
     logged = _ledger(today)
     logged_pts = _logged_points(today)
+    # A task closed in dtd marks the LAST timer entry with its name as
+    # logged (one completion = one entry; an earlier same-name session can
+    # still be swiped).
+    dtd_done = _dtd_done_points(today) if is_today else {}
+    dtd_entry: dict[str, str] = {}
+    janus_logged_keys = {_norm_key(e.get("desc") or "") for e in entries
+                         if e["id"] in logged or str(e["id"]) in logged}
+    for e in sorted(entries, key=lambda e: e["start"]):
+        k = _norm_key(e.get("desc") or "")
+        # A completion that janus itself logged is already shown; only a
+        # name closed in dtd (no janus log of that name today) claims a row.
+        if k in dtd_done and k not in janus_logged_keys:
+            dtd_entry[k] = str(e["id"])
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     # The timeline's "live edge": gaps and dividers run to now on today, but a
@@ -950,6 +994,11 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
             # (2026-10-22): resolved [N] > habit rate > 25→30/50→60 meeting >
             # minutes. None once logged.
             r = rows[-1]
+            _k = _norm_key(e["desc"] or "")
+            if not r["logged"] and dtd_entry.get(_k) == str(e["id"]) and not e["running"]:
+                r["logged"] = True
+                r["done_in"] = "dtd"
+                logged_pts.setdefault(str(e["id"]), {"points": dtd_done[_k]})
             would = next(v for v in (r["points"], r["rate_points"],
                                      _speedy_meeting_pts(e["desc"], mins, day=today), mins)
                          if v is not None)

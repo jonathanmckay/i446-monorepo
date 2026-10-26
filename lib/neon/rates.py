@@ -68,3 +68,28 @@ def meeting_points(minutes) -> int:
     """What a logged meeting of `minutes` is worth: the speedy-meeting value
     when it applies, else the minutes themselves."""
     return speedy_meeting_points(minutes) or int(minutes or 0)
+
+
+# 0分!Q's own formula adds +9 whenever the 0g cell (0n!T) is marked.
+_ZERO_N_BONUS: dict[str, int] = {"T": 9}
+_WEIGHTS_CACHE: dict = {}
+
+
+def zero_n_done_points(habit: str) -> int | None:
+    """分 a plain 0₦ habit earns when marked done: its 0n row-2 weight (plus
+    0g's +9 Q bonus). None when `habit` isn't a 0n column. did-fast never
+    records these in completed-today.json's "points" (Excel's formula does
+    the crediting), so janus used to show minutes for a habit closed in dtd
+    (JM 2026-10-26: "set 0g in the timer, mark it done in dtd, janus should
+    know the points")."""
+    import time
+    from neon import cols as neon_cols, rules as neon_rules
+    col = neon_cols.maybe_col("0n", habit)
+    if not col:
+        return None
+    if time.time() - _WEIGHTS_CACHE.get("at", 0) > 300:
+        _WEIGHTS_CACHE.update(at=time.time(), w=neon_rules.load_weights())
+    w = (_WEIGHTS_CACHE.get("w") or {}).get(col)
+    if w is None:
+        return None
+    return int(round(w)) + _ZERO_N_BONUS.get(col, 0)
