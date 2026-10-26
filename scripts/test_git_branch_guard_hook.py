@@ -32,3 +32,9 @@ def test_hook_exit_code_blocks_via_stdin_json():
     payload = json.dumps({"tool_name": "Bash", "cwd": MONO, "tool_input": {"command": "git checkout -b z"}})
     r = subprocess.run(["python3", str(HERE / "git-branch-guard-hook.py")], input=payload, text=True, capture_output=True)
     assert r.returncode == 2 and "worktree" in r.stderr
+
+
+def test_relative_dash_c_resolves_against_prior_cd():
+    """v169 review: `-C rel` is relative to the tracked cd, not the hook's cwd."""
+    assert g.blocked("cd /private/tmp/wt && git -C sub checkout -b x", VAULT) is None
+    assert g.blocked(f"cd {os.path.dirname(VAULT)} && git -C vault switch x", "/private/tmp")

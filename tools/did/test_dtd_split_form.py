@@ -112,7 +112,8 @@ def test_split_remainder_stays_on_today_by_default():
     body = _split()
     assert "rem_date = date.today().isoformat()" in body
     assert "timedelta(days=1)" not in body
-    assert "'due_date': rem_date," in body
+    assert "_body['due_date'] = rem_date" in body
+    assert "is_recurring" in body       # v169: never strip a repeat rule
     guard = "if not keep_rem or rem_date > date.today().isoformat():\n    with open(removed_file, 'a') as f: f.write(clean.lower()"
     assert guard in body
     assert body.count("with open(removed_file, 'a')") == 1
