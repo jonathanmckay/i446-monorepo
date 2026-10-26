@@ -5103,6 +5103,21 @@ def _is_points_log_cmd(part: str) -> bool:
     return bool(_POINTS_LOG_CMD_RE.match(part.strip()))
 
 
+# 0n habits whose cell JM writes as a number, not a timer (2026-10-25: "janus
+# won't let me write to 其他人, that's something I should be able to write to
+# directly on the 0n page"). "其他人 3" used to reach tg-fast, whose bare
+# trailing-N rule made a 3-minute Toggl entry and left the 0n cell untouched;
+# it now goes to did-fast, which writes the value into today's 0n cell. The
+# bare name with no number still starts a timer.
+DIRECT_0N_HABITS = {"其他人"}
+_DIRECT_0N_RE = re.compile(r"^(\S+)\s+\d+(?:\.\d+)?$")
+
+
+def _is_direct_0n_write(part: str) -> bool:
+    m = _DIRECT_0N_RE.match(part.strip())
+    return bool(m and m.group(1) in DIRECT_0N_HABITS)
+
+
 _D_CMD_RE = re.compile(r"^/d\s+(\S.*)$", re.S)
 # Trailing form (2026-10-19): "QBR in person [180] /d". Without it the text fell
 # through to the plain timer path and the literal "/d" became the Toggl description.
@@ -6822,6 +6837,7 @@ def _on_enter(event):
         has_bonus = _has_bonus_points(part)
         force = getattr(STATE, "force_did", False)
         use_did = has_bonus or (has_range and (force or bool(re.search(r"\[-?\d+\]", part))))
+        use_did = use_did or _is_direct_0n_write(part)
         if force and not use_did:
             flash(f"⌥↵ /did needs a HHMM-HHMM range: {part}", 6.0)
             return None
