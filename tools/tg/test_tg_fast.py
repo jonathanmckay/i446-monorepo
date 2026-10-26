@@ -18,7 +18,7 @@ def test_backdate_end_pattern_exists():
     tree = ast.parse(_get_main_source())
     source = _get_main_source()
     # The regex for trailing HHMM must appear in the source
-    assert r"\s(\d{4})$" in source or r'\s(\d{4})$' in source
+    assert r"\s(\d{4})(?:\s*-)?" in source
 
 
 def test_backdate_end_match_regex():
@@ -276,3 +276,20 @@ def test_single_entry_still_works(monkeypatch):
     monkeypatch.setattr(mod.sys, "argv", ["tg-fast.py", "work 9-10"])
     mod.main()
     assert seen == ["work 9-10"]
+
+
+def test_trailing_open_ended_dash_backdates_instead_of_starting_now(monkeypatch):
+    """User report 2026-10-25: 'biking lesson 1626-' should start at 16:26
+    and keep running, not start now with '1626-' in the description."""
+    mod = _import_tg_fast()
+    captured = []
+    monkeypatch.setattr(mod, "cmd_backdated",
+                        lambda backtime, desc, project, tags: captured.append((backtime, desc, project, tags)))
+    monkeypatch.setattr(mod, "cmd_start",
+                        lambda desc, project, tags: (_ for _ in ()).throw(
+                            AssertionError(f"fell through to cmd_start with desc={desc!r}")))
+    for text in ("biking lesson 1626-", "biking lesson 1626 -", "biking lesson 1626- @xk87"):
+        captured.clear()
+        mod._process_entry(text)
+        assert captured and captured[0][0] == "1626", text
+        assert "1626" not in captured[0][1] and "-" not in captured[0][1], (text, captured[0][1])

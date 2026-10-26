@@ -635,13 +635,17 @@ def _process_entry(raw: str) -> str:
             desc, project, tags = resolve(rest)
             return cmd_backdated(backtime, desc, project, tags)
 
-    # Check for backdated start: "desc HHMM" (time at end)
-    backdate_end_match = re.search(r'\s(\d{4})$', raw)
+    # Check for backdated start: "desc HHMM" (time at end). Also "desc HHMM-"
+    # (open-ended: started then, still going) and either form followed by
+    # "@code". "biking lesson 1626-" used to match nothing and start a
+    # timer NOW named "biking lesson 1626-" (user report 2026-10-25; the
+    # leading "1626- desc" form was fixed 2026-09-06).
+    backdate_end_match = re.search(r'\s(\d{4})(?:\s*-)?(?=\s+@\S+\s*$|\s*$)', raw)
     if backdate_end_match:
         backtime = backdate_end_match.group(1)
         h, m = int(backtime[:2]), int(backtime[2:])
         if 0 <= h <= 23 and 0 <= m <= 59:
-            rest = raw[:backdate_end_match.start()].strip()
+            rest = (raw[:backdate_end_match.start()] + raw[backdate_end_match.end():]).strip()
             desc, project, tags = resolve(rest)
             return cmd_backdated(backtime, desc, project, tags)
 

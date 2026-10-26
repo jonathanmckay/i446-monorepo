@@ -234,6 +234,7 @@ final class JanusStore: ObservableObject {
         if t.hasPrefix("/") || t.hasPrefix("+") || t.contains(",") || t.contains("，") { return t }
         if first.count == 4, Int(first) != nil { return t }
         if t.range(of: #"\b\d{4}-\d{4}\b"#, options: .regularExpression) != nil { return t }
+        if trailingStart(t) != nil { return t }   // "desc 1626-" carries its own start
         let f = DateFormatter(); f.dateFormat = "HHmm"
         return f.string(from: now) + " " + t
     }
@@ -397,7 +398,22 @@ extension JanusStore {
         if t.range(of: #"\b\d{4}-\d{4}\b"#, options: .regularExpression) != nil { return nil }
         let parts = t.split(separator: " ", maxSplits: 1).map(String.init)
         if parts.count == 2, parts[0].count == 4, let at = todayAt(parts[0]) { return (parts[1], at) }
+        if let (desc, at) = trailingStart(t) { return (desc, at) }
         return (t, now)
+    }
+
+    /// "biking lesson 1626-" / "… 1626" / "… 1626- @xk87" → ("biking lesson
+    /// [@xk87]", 16:26): a trailing HHMM, optionally open-ended with "-",
+    /// is the start of a still-running entry (2026-10-25; tg-fast parses
+    /// the same forms server-side).
+    static func trailingStart(_ t: String) -> (String, Date)? {
+        guard let r = t.range(of: #"\s(\d{4})\s*-?(?=(\s+@\S+)?\s*$)"#, options: .regularExpression)
+        else { return nil }
+        let hhmm = t[r].filter(\.isNumber)
+        guard let at = todayAt(String(hhmm)) else { return nil }
+        let desc = (String(t[..<r.lowerBound]) + String(t[r.upperBound...]))
+            .trimmingCharacters(in: .whitespaces)
+        return desc.isEmpty ? nil : (desc, at)
     }
 
     func startOffline(desc: String, project: String, at start: Date) {
