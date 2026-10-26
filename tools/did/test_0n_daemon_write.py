@@ -168,7 +168,7 @@ def test_hcbi_daemon_failure_is_rc1_with_stderr(df, monkeypatch):
 
 def test_step4b_calls_daemon_before_raw_1n_script():
     src = (HERE / "did-fast.py").read_text()
-    i_daemon = src.index("one_n_result = write_1n_via_daemon(one_n_writes, week_mw)")
-    i_raw = src.index("script = build_1n_script(one_n_writes, week_mw)", i_daemon)
+    i_daemon = src.index("one_n_result = write_1n_via_daemon(group, week_mw)")
+    i_raw = src.index("script = build_1n_script(group, week_mw)", i_daemon)
     assert "if one_n_result is None:" in src[i_daemon:i_raw]
     assert "build_hcbi_script" not in src.replace("# build_hcbi_script AppleScript", "")

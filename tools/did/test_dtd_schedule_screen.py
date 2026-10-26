@@ -461,7 +461,7 @@ def test_pickenter_survey_cards_emit_execute_of_their_form():
                 {"id": "D", "content": "1 xk88 10.12"}, {"id": "G", "content": "😈 -1g"},
                 {"id": "M", "content": "Moral audit"}, {"id": "P", "content": "plain task (10) [5]"}]
         s, log = _gen_with_cache(tmp, rows)
-        want = {"L": "/h/i446-monorepo/tools/0s/0s.py",
+        want = {"L": "/h/i446-monorepo/tools/0s/0s.py --detach",
                 "S": "/h/i446-monorepo/tools/1s/1s-survey.py --no-mark",
                 "X": "/h/i446-monorepo/tools/xk887/xk887-survey.py",
                 "W": "/h/i446-monorepo/tools/xk887/xk887-survey.py",

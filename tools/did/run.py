@@ -398,9 +398,10 @@ def _target_date_obj(target_date: str) -> date:
     return target.date()
 
 
-def _calc_mw(target_date: str) -> tuple[float, int]:
-    """target_date 'M/D' → (M.W, week_row in 1n+)."""
-    target = _target_date_obj(target_date)
+def _calc_mw(target_date: str, name: str = "") -> tuple[float, int]:
+    """target_date 'M/D' → (M.W, week_row in 1n+). With `name`, a card on its
+    own cycle (weeks.CYCLE_START_WEEKDAY) lands in its cycle's row."""
+    target = weeks.cycle_start(name, _target_date_obj(target_date)) if name else _target_date_obj(target_date)
     # 2026-10-01 fix: 1n+ col B is a 4-4-5 fiscal-week ladder, not calendar
     # week-of-month (see lib/neon/weeks.py). The old "(sunday.day-1)//7+1"
     # put every write from 2026-08-30 on one row above its real week.
@@ -636,7 +637,7 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
     fen_col = d.get("neon_fen_col") or d["fen_col"]
 
     try:
-        mw, week_row = _calc_mw(target_date)
+        mw, week_row = _calc_mw(target_date, name)
     except Exception as e:
         print(f"  ✗ M.W lookup failed: {e}", file=sys.stderr)
         return 1
@@ -644,7 +645,9 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
     # Close BEFORE crediting: a card already rolled past this Sun-Sat week
     # means the habit is done for the week, so nothing may be written.
     # Closing early within the week (Thursday's card on Monday) stays allowed.
-    week_sat = weeks.week_sunday(_target_date_obj(target_date)) + timedelta(days=6)
+    # The period is the card's own cycle for weeks.CYCLE_START_WEEKDAY cards
+    # (a Monday card's Sunday run closes nothing due after that Sunday).
+    week_sat = weeks.cycle_start(name, _target_date_obj(target_date)) + timedelta(days=6)
     try:
         closed, closed_id = _find_and_close_todoist(
             d.get("todoist_label") or "1neon", name, d.get("aliases", []),

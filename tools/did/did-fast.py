@@ -3618,21 +3618,29 @@ def main():
         # not be this week.
         _week_date = (date.fromisoformat(target_date_iso(items[0].target_date, _daytime.today()))
                       if past_target else _daytime.today())
-        week_mw = calc_week_mw(_week_date)
-        # Daemon first (journaled + semantic ledger); raw ix-osa script is
-        # the daemon-down fallback only (Neon-off-Excel step 2b).
-        one_n_result = write_1n_via_daemon(one_n_writes, week_mw)
-        if one_n_result is None:
-            script = build_1n_script(one_n_writes, week_mw)
-            if script:
-                one_n_result = ix_run(script, timeout=30.0)
-        if one_n_result is not None:
-            # Parse weekRow from output for 0分 cell references
-            if one_n_result.returncode == 0:
-                import re as _re
-                m = _re.search(r"weekRow=(\d+)", one_n_result.stdout)
-                if m:
-                    week_row = m.group(1)
+        # Grouped by row (2026-10-26): a card on its own cycle
+        # (neon_weeks.CYCLE_START_WEEKDAY, e.g. 1 -2g / 1 -1n run Monday to
+        # Sunday) belongs to its cycle's week, so a Sunday run lands in the
+        # week that is ending rather than the one that Sunday opens.
+        by_week: dict[str, list] = {}
+        for r in one_n_writes:
+            _hname = ONENEON_ALIASES.get(r.item.name.lower(), r.item.name)
+            by_week.setdefault(neon_weeks.habit_week_label(_hname, _week_date), []).append(r)
+        for week_mw, group in by_week.items():
+            # Daemon first (journaled + semantic ledger); raw ix-osa script is
+            # the daemon-down fallback only (Neon-off-Excel step 2b).
+            one_n_result = write_1n_via_daemon(group, week_mw)
+            if one_n_result is None:
+                script = build_1n_script(group, week_mw)
+                if script:
+                    one_n_result = ix_run(script, timeout=30.0)
+            if one_n_result is not None:
+                # Parse weekRow from output for 0分 cell references
+                if one_n_result.returncode == 0:
+                    import re as _re
+                    m = _re.search(r"weekRow=(\d+)", one_n_result.stdout)
+                    if m:
+                        week_row = m.group(1)
 
     # 4c. Batch 1n+ → 0分 appends (via the excel-http daemon, one round-trip).
     # The week cell holds MINUTES (2026-07-27 redesign), so 0分 must NOT

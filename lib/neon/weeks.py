@@ -38,6 +38,34 @@ def week_sunday(d: date) -> date:
     return d - timedelta(days=(d.weekday() + 1) % 7)  # weekday(): Mon=0..Sun=6
 
 
+# Weekly cards that run on their own cycle, starting on their due weekday,
+# instead of the Sunday-Saturday sheet week (JM 2026-10-26: "for -1n habits I
+# don't follow the overall week, I follow that cycle ... Monday - Monday").
+# A completion belongs to the cycle that started on the most recent start day,
+# so a Sunday run of a Monday card counts toward the cycle that is ending, not
+# the sheet week that Sunday opens. Python weekday: Monday=0 .. Sunday=6.
+CYCLE_START_WEEKDAY = {"1 -2g": 0, "1 -1n": 0}
+
+
+def _cycle_key(name: str) -> str:
+    return " ".join((name or "").lower().split())
+
+
+def cycle_start(name: str, d: date) -> date:
+    """First day of the habit's cycle containing `d`: its own cycle start for a
+    CYCLE_START_WEEKDAY card, the week's Sunday for every other card."""
+    wd = CYCLE_START_WEEKDAY.get(_cycle_key(name))
+    if wd is None:
+        return week_sunday(d)
+    return d - timedelta(days=(d.weekday() - wd) % 7)
+
+
+def habit_week_label(name: str, d: date) -> str:
+    """'M.W' label of the 1n+ row a completion of `name` on `d` belongs to:
+    the sheet week holding the start of the habit's cycle."""
+    return fiscal_week_label(cycle_start(name, d))
+
+
 def fiscal_week_label(d: date) -> str:
     """'M.W' label of the 1n+ row for the week containing `d`."""
     sunday = week_sunday(d)
