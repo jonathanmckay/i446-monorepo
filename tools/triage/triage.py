@@ -288,6 +288,8 @@ def matches(rule: dict, item: Item) -> bool:
         return False
     if rule.get("work_content") and not is_work_content(p):
         return False
+    if rule.get("git_repo") and not (p.is_dir() and (p / ".git").exists()):
+        return False
     return True
 
 

@@ -198,3 +198,9 @@ def test_work_content_catches_neutral_names(tmp_path):
     assert triage.decide(_item(html, 1), RULES).rule == "work-content"
     assert triage.decide(_item(deck, 1), RULES).rule == "work-content"
     assert triage.decide(_item(plain, 1), RULES).rule != "work-content"
+
+
+def test_git_repo_is_never_moved(tmp_path):
+    repo = tmp_path / "proj"; (repo / ".git").mkdir(parents=True)
+    d = triage.decide(_item(repo, 400), RULES)
+    assert (d.rule, d.action) == ("git-repo", "review")

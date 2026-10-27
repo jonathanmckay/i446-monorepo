@@ -9,6 +9,12 @@
       ],
       "rules": [
         {
+          "name": "git-repo",
+          "git_repo": true,
+          "action": "review",
+          "note": "a git repository: belongs in ~/code, never in a synced folder (Syncthing corrupts .git)"
+        },
+        {
           "name": "office-lock",
           "glob": "~$*",
           "min_age_days": 1,
