@@ -177,19 +177,16 @@ def test_toggl_store_missing_file_is_a_review_item(tmp_path, monkeypatch):
     assert f.status == "fail" and f.review and "missing" in f.summary
 
 
-def test_duplicates_check_respects_dry_run(tmp_path, monkeypatch):
+def test_duplicates_check_reviews_name_clashes_without_deleting(tmp_path, monkeypatch):
     vh = _load()
     t = vh._load_triage()
-    a = tmp_path / "x.pdf"; a.write_bytes(b"same")
-    c = tmp_path / "x (1).pdf"; c.write_bytes(b"same")
+    a = tmp_path / "x.pdf"; a.write_bytes(b"one")
+    c = tmp_path / "x (1).pdf"; c.write_bytes(b"two")
     monkeypatch.setattr(t, "STATE", tmp_path)
     monkeypatch.setattr(t, "TRASH", tmp_path / "trash")
     monkeypatch.setattr(t, "DUPES", tmp_path / "duplicates.json")
-    t.DUPES.write_text(json.dumps([{"path": str(c), "original": str(a), "rule": "duplicate-copy", "size": 4}]))
+    t.DUPES.write_text(json.dumps([{"path": str(c), "original": str(a), "rule": "name-clash", "size": 3}]))
     monkeypatch.setattr(vh, "_load_triage", lambda: t)
-    monkeypatch.setattr(vh, "APPLY", False)
-    f = vh.check_duplicates()
-    assert c.exists() and f.summary.startswith("would trash 1") and f.fixed is None
     monkeypatch.setattr(vh, "APPLY", True)
     f = vh.check_duplicates()
-    assert not c.exists() and f.fixed == "trashed 1"
+    assert c.exists() and f.review and f.status == "warn" and "x (1).pdf vs x.pdf" in f.detail[0]

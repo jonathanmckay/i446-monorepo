@@ -23,14 +23,14 @@ Checks (v1, 2026-09-27):
                  aren't linked to dtd (agent_claims.SKILL_CLAIMS) or recorded
                  as declined (SKILL_NO_CLAIM) (added 2026-10-11)
   alerts         z_ibx/alerts.jsonl entries from the last 7 days, grouped
-  duplicates     Downloads duplicates queued by tools/triage (byte-identical
-                 `name (1).ext` copies, JPGs beside their HEIC), on this host
-                 (added 2026-10-27)
+  duplicates     Downloads name clashes queued by tools/triage: `name (1).ext`
+                 or a JPG beside its HEIC, with different bytes, on this host.
+                 Review items; byte-identical copies are trashed daily by
+                 triage itself (added 2026-10-27)
 
 Auto-fixes (only ever these): trigger a Syncthing rescan on a folder that is
-out of sync; trash the queued Downloads duplicates after re-verifying each
-against its original (not on --dry-run). Everything else is surfaced, never
-changed.
+out of sync; trash a queued Downloads name clash whose bytes now match its
+original (not on --dry-run). Everything else is surfaced, never changed.
 
 Usage:
     vault_health.py            # run, write report, upsert task
@@ -768,20 +768,21 @@ def _load_triage():
 
 
 def check_duplicates() -> Finding:
-    """Trash the duplicates tools/triage queued on this host (2026-10-27: JM wants
-    duplicates surfaced and removed weekly here rather than daily and silently)."""
+    """Downloads files with the same name as a neighbour but different bytes, queued by
+    tools/triage on this host (2026-10-27: identical copies are deleted daily; JM
+    reviews only same-name, different-content pairs here)."""
     triage = _load_triage()
     if not triage.DUPES.exists():
         return Finding("duplicates", "ok", f"no duplicate queue on {socket.gethostname().split('.')[0]}")
-    good, dropped = triage.trash_queue(do_apply=APPLY)
-    if not good and not dropped:
-        return Finding("duplicates", "ok", "no queued duplicates")
-    verb = "trashed" if APPLY else "would trash"
-    mb = sum(r.get("size", 0) for r in good) / 1e6
-    detail = [f"{verb}: {Path(r['path']).name} (same as {Path(r['original']).name})" for r in good]
-    detail += [f"dropped (no longer a duplicate): {Path(r['path']).name}" for r in dropped]
-    return Finding("duplicates", "ok", f"{verb} {len(good)} Downloads duplicate(s), {mb:.1f} MB", detail,
-                   fixed=f"trashed {len(good)}" if APPLY and good else None)
+    pending, resolved = triage.review_queue(do_apply=APPLY)
+    trashed = [r for r in resolved if r["outcome"].startswith("identical")]
+    fixed = f"trashed {len(trashed)} now-identical" if APPLY and trashed else None
+    if not pending:
+        return Finding("duplicates", "ok", "no Downloads name clashes to review", fixed=fixed)
+    detail = [f"{Path(r['path']).name} vs {Path(r['original']).name} "
+              f"({r.get('size', 0) / 1e6:.1f} MB): keep both, keep one, or rename" for r in pending]
+    return Finding("duplicates", "warn", f"{len(pending)} Downloads file(s) share a name with different contents",
+                   detail, review=True, fixed=fixed)
 
 
 # ---------------------------------------------------------------------------

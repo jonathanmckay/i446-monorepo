@@ -1,5 +1,5 @@
 {
-  "_doc": "Sources for tools/triage/triage.py. Rules are checked in order; the first match wins. Actions: trash (to ~/.Trash, reversible), move (to dest; {year} = first 20xx in the name), unzip (extract, trash the zip, triage the output), queue (duplicates; the weekly /1-i446 re-verifies and trashes them), review (listed, untouched). \"enabled\": false reports the rule as a proposal instead of acting. Ages count from the date the file landed in the folder (Spotlight kMDItemDateAdded).",
+  "_doc": "Sources for tools/triage/triage.py. Rules are checked in order; the first match wins. Actions: trash (to ~/.Trash, reversible), move (to dest; {year} = first 20xx in the name), unzip (extract, trash the zip, triage the output), queue (same name, different bytes; listed for review in the weekly /1-i446), review (listed, untouched). \"enabled\": false reports the rule as a proposal instead of acting. Ages count from the date the file landed in the folder (Spotlight kMDItemDateAdded).",
   "sources": {
     "downloads": {
       "path": "~/Downloads",
@@ -27,8 +27,13 @@
         {
           "name": "duplicate-copy",
           "duplicate": true,
+          "action": "trash"
+        },
+        {
+          "name": "name-clash",
+          "name_clash": true,
           "action": "queue",
-          "note": "byte-identical copy; trashed by the weekly /1-i446"
+          "note": "same name as a file beside it, different bytes: reviewed in the weekly /1-i446"
         },
         {
           "name": "zip-extracted",
@@ -135,7 +140,7 @@
             "heic"
           ],
           "action": "queue",
-          "note": "converted copy of a HEIC beside it; trashed by the weekly /1-i446"
+          "note": "same photo as the HEIC beside it, different bytes: reviewed in the weekly /1-i446"
         },
         {
           "name": "camera-photo-in-library",

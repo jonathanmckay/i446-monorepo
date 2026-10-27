@@ -155,20 +155,22 @@ def test_old_screenshot_moves_to_screenshots_with_date_first_name(tmp_path, monk
     assert out.name.endswith("--dl--chart.png") and out.name[:4].isdigit()
 
 
-def test_duplicates_are_queued_then_trashed_after_reverify(tmp_path, monkeypatch):
+def test_identical_copy_trashed_daily_name_clash_queued_for_review(tmp_path, monkeypatch):
     monkeypatch.setattr(triage, "TRASH", tmp_path / "trash")
     monkeypatch.setattr(triage, "STATE", tmp_path / "state")
     monkeypatch.setattr(triage, "DUPES", tmp_path / "state" / "duplicates.json")
     _touch(tmp_path, "a.pdf", b"same")
     copy = _touch(tmp_path, "a (1).pdf", b"same")
     _touch(tmp_path, "b.pdf", b"one")
-    drift = _touch(tmp_path, "b (1).pdf", b"one")
-    ds = [triage.decide(_item(p, 3), RULES) for p in (copy, drift)]
-    assert [d.action for d in ds] == ["queue", "queue"]
-    assert triage.apply(ds, tmp_path / "log.jsonl") == 0          # daily run leaves them
-    assert triage.write_queue(ds) == 2
-    (tmp_path / "b.pdf").write_bytes(b"edited")                  # original changed since queueing
-    good, dropped = triage.trash_queue(do_apply=False)
-    assert copy.exists() and len(good) == 1 and len(dropped) == 1  # dry run touches nothing
-    good, dropped = triage.trash_queue()
-    assert not copy.exists() and drift.exists() and (tmp_path / "trash" / "a (1).pdf").exists()
+    clash = _touch(tmp_path, "b (1).pdf", b"two")
+    dc, dn = (triage.decide(_item(p, 3), RULES) for p in (copy, clash))
+    assert (dc.rule, dc.action) == ("duplicate-copy", "trash")
+    assert (dn.rule, dn.action) == ("name-clash", "queue")
+    assert triage.apply([dc, dn], tmp_path / "log.jsonl") == 1
+    assert not copy.exists() and clash.exists()
+    assert triage.write_queue([dn]) == 1
+    pending, resolved = triage.review_queue()
+    assert clash.exists() and len(pending) == 1 and not resolved        # review never deletes
+    (tmp_path / "b.pdf").write_bytes(b"two")                             # now identical
+    pending, resolved = triage.review_queue()
+    assert not clash.exists() and resolved[0]["outcome"].startswith("identical")

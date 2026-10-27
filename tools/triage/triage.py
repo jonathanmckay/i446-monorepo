@@ -10,8 +10,9 @@ first matching rule decides a top-level item's fate:
           the date-first ~/screenshots name (tools/images/screenshot_names.py).
   unzip   extract beside the zip (inheriting its age), trash the zip, then
           triage what came out in the same run
-  queue   leave in place, list in duplicates.json for the weekly /1-i446,
-          which re-verifies and trashes them (tools/vault/vault_health.py)
+  queue   leave in place, list in duplicates.json for the weekly /1-i446 to
+          review: same name as a file beside it, different bytes
+          (tools/vault/vault_health.py). Byte-identical copies are trashed daily.
   review  leave in place, list it for JM
 Unmatched items are kept. A rule with "enabled": false is reported as review
 ("proposed: ...") until switched on. Ages count from Spotlight's
@@ -46,7 +47,7 @@ REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "triage.json"
 STATE = Path.home() / ".local" / "state" / "jm" / "triage"
 ADDED = STATE / "added.json"          # path -> inherited date-added (unzip output)
-DUPES = STATE / "duplicates.json"     # queued for the weekly /1-i446 to trash
+DUPES = STATE / "duplicates.json"     # name clashes queued for the weekly /1-i446 review
 TRASH = Path.home() / ".Trash"
 PHOTOS_DB = Path.home() / "Pictures" / "Photos Library.photoslibrary" / "database" / "Photos.sqlite"
 TOKEN = Path.home() / ".config" / "todoist" / "token"
@@ -152,6 +153,15 @@ def is_duplicate_copy(p: Path) -> bool:
     return bool(m) and same_bytes(p, p.with_name(m["stem"] + (m["ext"] or "")))
 
 
+def is_name_clash(p: Path) -> bool:
+    """`name (1).ext` whose original `name.ext` sits beside it with different bytes."""
+    m = COPY_RE.match(p.name)
+    if not m or not p.is_file():
+        return False
+    orig = p.with_name(m["stem"] + (m["ext"] or ""))
+    return orig.is_file() and not same_bytes(p, orig)
+
+
 def is_extracted_zip(p: Path) -> bool:
     """`foo.zip` with its unpacked `foo/` folder beside it."""
     return p.suffix.lower() == ".zip" and p.with_suffix("").is_dir()
@@ -234,6 +244,8 @@ def matches(rule: dict, item: Item) -> bool:
     if "not_regex" in rule and re.search(rule["not_regex"], p.name):
         return False
     if rule.get("duplicate") and not is_duplicate_copy(p):
+        return False
+    if rule.get("name_clash") and not is_name_clash(p):
         return False
     if rule.get("extracted") and not is_extracted_zip(p):
         return False
@@ -364,32 +376,30 @@ def write_queue(decisions: list[Decision]) -> int:
     return len(rows)
 
 
-def still_duplicate(row: dict) -> bool:
-    p, orig = Path(row["path"]), Path(row["original"])
-    if not (p.is_file() and orig.is_file()):
-        return False
-    return same_bytes(p, orig) if row["rule"] == "duplicate-copy" else True
-
-
-def trash_queue(do_apply: bool = True) -> tuple[list[dict], list[dict]]:
-    """Re-verify the queue; trash what still duplicates its original (when do_apply).
-    Returns (trashed-or-would-trash, dropped). The queue is cleared after applying."""
+def review_queue(do_apply: bool = True) -> tuple[list[dict], list[dict]]:
+    """Re-check the queued name clashes. Returns (still clashing, resolved).
+    A copy whose bytes now match its original is trashed (when do_apply); one
+    whose file or original is gone is dropped. Nothing that differs is touched."""
     try:
         rows = json.loads(DUPES.read_text())
     except (OSError, ValueError):
         return [], []
-    good = [r for r in rows if still_duplicate(r)]
-    dropped = [r for r in rows if r not in good]
-    if do_apply:
-        log = STATE / f"{dt.date.today()}.jsonl"
-        with log.open("a") as f:
-            for r in good:
-                dst = _move(Path(r["path"]), TRASH)
-                f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": r["rule"],
-                                    "action": "trash", "src": r["path"], "dst": str(dst),
-                                    "by": "1-i446"}) + "\n")
-        DUPES.write_text("[]")
-    return good, dropped
+    pending, resolved = [], []
+    log = STATE / f"{dt.date.today()}.jsonl"
+    for r in rows:
+        p, orig = Path(r["path"]), Path(r["original"])
+        if not (p.is_file() and orig.is_file()):
+            resolved.append({**r, "outcome": "gone"})
+        elif same_bytes(p, orig):
+            if do_apply:
+                dst = _move(p, TRASH)
+                with log.open("a") as f:
+                    f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": r["rule"],
+                                        "action": "trash", "src": str(p), "dst": str(dst), "by": "1-i446"}) + "\n")
+            resolved.append({**r, "outcome": "identical, trashed"})
+        else:
+            pending.append(r)
+    return pending, resolved
 
 
 # ── reporting ───────────────────────────────────────────────────────────────
