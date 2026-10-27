@@ -8408,5 +8408,15 @@
     "unit": "A103",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-10-27",
+    "effective": "2026-10-31",
+    "kind": "ntv",
+    "unit_id": "658",
+    "prop": "s129",
+    "unit": "7",
+    "tenant": null,
+    "baseline": false
   }
 ]

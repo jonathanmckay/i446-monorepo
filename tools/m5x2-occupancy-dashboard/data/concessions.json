@@ -9,66 +9,78 @@
     "concessions": -0.0
   },
   "2025-04": {
-    "concessions": -0.0
+    "concessions": 9806.66,
+    "lines": 3,
+    "units": 0
   },
   "2025-05": {
-    "concessions": -0.0
+    "concessions": 5257.54,
+    "lines": 3,
+    "units": 0
   },
   "2025-06": {
-    "concessions": -0.0
+    "concessions": 3837.2,
+    "lines": 4,
+    "units": 0
   },
   "2025-07": {
-    "concessions": -0.0
+    "concessions": 3666.98,
+    "lines": 3,
+    "units": 0
   },
   "2025-08": {
-    "concessions": -0.0
+    "concessions": 3092.99,
+    "lines": 2,
+    "units": 0
   },
   "2025-09": {
-    "concessions": -0.0
+    "concessions": 1627.0,
+    "lines": 2,
+    "units": 0
   },
   "2025-10": {
-    "concessions": 65.0,
-    "lines": 1,
+    "concessions": 2192.68,
+    "lines": 3,
     "units": 0
   },
   "2025-11": {
-    "concessions": 65.0,
-    "lines": 1,
+    "concessions": 3061.17,
+    "lines": 3,
     "units": 0
   },
   "2025-12": {
-    "concessions": 65.0,
-    "lines": 1,
+    "concessions": 6224.52,
+    "lines": 5,
     "units": 0
   },
   "2026-01": {
-    "concessions": 65.0,
+    "concessions": 6558.55,
     "gpr": 0.0,
-    "lines": 1,
+    "lines": 9,
     "units": 0
   },
   "2026-02": {
-    "concessions": 65.0,
+    "concessions": 6906.61,
     "gpr": 0.0,
-    "lines": 1,
+    "lines": 9,
     "units": 0
   },
   "2026-03": {
-    "concessions": 560.16,
+    "concessions": 8162.29,
     "gpr": 0.0,
-    "lines": 1,
+    "lines": 9,
     "units": 0
   },
   "2026-04": {
-    "concessions": 11610.63,
+    "concessions": 13141.63,
     "gpr": 0.0,
-    "lines": 7,
+    "lines": 10,
     "units": 0
   },
   "2026-05": {
-    "concessions": 9564.65,
+    "concessions": 24169.65,
     "gpr": 0.0,
-    "lines": 7,
+    "lines": 17,
     "units": 0
   },
   "2026-06": {
@@ -96,9 +108,9 @@
     "units": 283
   },
   "2026-10": {
-    "concessions": 50961.86,
+    "concessions": 51212.51,
     "gpr": 0.0,
-    "lines": 300,
-    "units": 262
+    "lines": 302,
+    "units": 263
   }
 }
