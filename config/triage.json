@@ -1,10 +1,9 @@
 {
-  "_doc": "Sources for tools/triage/triage.py. Rules are checked in order; the first match wins. Actions: trash (to ~/.Trash, reversible), move (to dest), review (listed, untouched). Ages count from the date the file landed in the folder (Spotlight kMDItemDateAdded).",
+  "_doc": "Sources for tools/triage/triage.py. Rules are checked in order; the first match wins. Actions: trash (to ~/.Trash, reversible), move (to dest), review (listed, untouched). \"enabled\": false reports the rule as a proposal instead of acting. Ages count from the date the file landed in the folder (Spotlight kMDItemDateAdded).",
   "sources": {
     "downloads": {
       "path": "~/Downloads",
       "skip": [
-        "_old",
         ".DS_Store",
         ".localized"
       ],
@@ -31,16 +30,55 @@
           "action": "trash"
         },
         {
-          "name": "sensitive-finance",
-          "regex": "(?i)(tax ?return|taxdocuments|k-?1\\b|\\b1065\\b|\\b990|\\bw-?2\\b|1099|1095|statements?\\b|p&l|cost segregation|insurance|dependent|care profile|emergency.?form)",
+          "name": "zip-extracted",
+          "extracted": true,
+          "min_age_days": 2,
+          "action": "trash",
+          "note": "unpacked folder sits beside it"
+        },
+        {
+          "name": "zip-app-installer",
+          "app_zip": true,
+          "min_age_days": 2,
+          "action": "trash",
+          "note": "zip holds a .app"
+        },
+        {
+          "name": "lp-k1-copy",
+          "regex": "(?i)k-?1\\b",
+          "not_regex": "(?i)mckay",
           "action": "review",
-          "note": "personal finance, tax, insurance, medical: file into qz12 / m5x2 / hcbi; never ages into _old"
+          "note": "another investor's K-1: confirm it is in m5x2 records, then delete"
+        },
+        {
+          "name": "tax-record",
+          "regex": "(?i)(tax ?return|taxdocuments|k-?1\\b|\\b1065\\b|\\b990|\\bw-?2\\b|1099|1095|cost segregation)",
+          "action": "move",
+          "dest": "~/Library/CloudStorage/OneDrive-Personal/qz12/tax",
+          "enabled": false,
+          "note": "permanent record; never the git-synced vault"
+        },
+        {
+          "name": "provider-export",
+          "regex": "(?i)(statements?\\b|p&l)",
+          "min_age_days": 30,
+          "action": "move",
+          "dest": "~/Archive",
+          "note": "re-downloadable from the bank / AppFolio"
+        },
+        {
+          "name": "household-record",
+          "regex": "(?i)(insurance|dependent|care profile|emergency.?form)",
+          "action": "review",
+          "note": "insurance / medical / school forms: file to hcbi or xk87, or Archive"
         },
         {
           "name": "work-confidential",
           "regex": "(?i)(\\bMBR\\b|\\bSLT\\b|attestation|xbox|blizzard|gaming store|pc-weekly-update)",
-          "action": "review",
-          "note": "Microsoft material on a personal Mac: move to Work OneDrive or delete"
+          "action": "move",
+          "dest": "~/Library/CloudStorage/OneDrive-Microsoft/From Personal Mac",
+          "enabled": false,
+          "note": "Microsoft material belongs in Work OneDrive"
         },
         {
           "name": "installer",
@@ -54,30 +92,46 @@
           "action": "trash"
         },
         {
-          "name": "archive",
+          "name": "zip-other",
           "ext": [
             "zip"
           ],
-          "min_age_days": 14,
-          "action": "trash"
+          "action": "review",
+          "note": "exports and bundles: unpack, file, or archive"
         },
         {
-          "name": "image",
+          "name": "image-twin",
+          "ext": [
+            "jpg",
+            "jpeg",
+            "png"
+          ],
+          "twin_exts": [
+            "heic"
+          ],
+          "action": "trash",
+          "note": "converted copy of a HEIC beside it"
+        },
+        {
+          "name": "camera-photo",
+          "regex": "^(IMG_\\d+|FullSizeRender)",
           "ext": [
             "heic",
             "png",
             "jpg",
-            "jpeg"
+            "jpeg",
+            "gif",
+            "webp"
           ],
           "min_age_days": 7,
           "action": "review",
-          "note": "photos and screenshots triage"
+          "note": "phone photos: almost certainly already in iCloud Photos"
         },
         {
           "name": "stale",
           "min_age_days": 30,
           "action": "move",
-          "dest": "~/Downloads/_old/{yyyy-mm}"
+          "dest": "~/Archive"
         }
       ]
     }

@@ -6,7 +6,8 @@ first matching rule decides a top-level item's fate:
   trash   move to ~/.Trash (reversible until the Trash is emptied)
   move    move to `dest` ({yyyy-mm} = the month the file landed)
   review  leave in place, list it for JM
-Unmatched items are kept. Ages count from Spotlight's kMDItemDateAdded (when
+Unmatched items are kept. A rule with "enabled": false is reported as
+review ("proposed: <action> -> dest") until JM switches it on. Ages count from Spotlight's kMDItemDateAdded (when
 the file landed in the folder), falling back to birth time.
 
 Dry run by default; --apply executes and logs every move to
@@ -25,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -108,6 +110,33 @@ def is_duplicate_copy(p: Path) -> bool:
             and _sha(orig) == _sha(p))
 
 
+def is_extracted_zip(p: Path) -> bool:
+    """`foo.zip` with its unpacked `foo/` folder beside it."""
+    return p.suffix.lower() == ".zip" and p.with_suffix("").is_dir()
+
+
+def is_app_zip(p: Path) -> bool:
+    """A zip whose top level holds a macOS .app bundle, i.e. an installer."""
+    if p.suffix.lower() != ".zip" or not p.is_file():
+        return False
+    try:
+        with zipfile.ZipFile(p) as z:
+            return any(n.split("/")[0].endswith(".app") for n in z.namelist())
+    except (zipfile.BadZipFile, OSError):
+        return False
+
+
+def has_twin(p: Path, exts: list[str]) -> bool:
+    """Same stem with one of `exts` beside it (IMG_1.jpg next to IMG_1.HEIC)."""
+    return p.is_file() and any(
+        q.is_file() and q != p and q.stem == p.stem and q.suffix.lower().lstrip(".") in exts
+        for q in p.parent.glob(glob_escape(p.stem) + ".*"))
+
+
+def glob_escape(s: str) -> str:
+    return re.sub(r"([*?\[])", r"[\1]", s)
+
+
 def matches(rule: dict, item: Item) -> bool:
     p = item.path
     if item.age_days < rule.get("min_age_days", 0):
@@ -117,6 +146,14 @@ def matches(rule: dict, item: Item) -> bool:
     if "ext" in rule and (p.is_dir() or p.suffix.lower().lstrip(".") not in rule["ext"]):
         return False
     if "regex" in rule and not re.search(rule["regex"], p.name):
+        return False
+    if "not_regex" in rule and re.search(rule["not_regex"], p.name):
+        return False
+    if rule.get("extracted") and not is_extracted_zip(p):
+        return False
+    if rule.get("app_zip") and not is_app_zip(p):
+        return False
+    if "twin_exts" in rule and not has_twin(p, rule["twin_exts"]):
         return False
     if rule.get("duplicate") and not is_duplicate_copy(p):
         return False
@@ -129,6 +166,10 @@ def decide(item: Item, rules: list[dict]) -> Decision:
             dest = None
             if rule["action"] == "move":
                 dest = Path(rule["dest"].replace("{yyyy-mm}", item.added.strftime("%Y-%m"))).expanduser()
+            if not rule.get("enabled", True):
+                where = f" -> {rule['dest']}" if dest else ""
+                note = f"proposed: {rule['action']}{where}" + (f"; {rule['note']}" if rule.get("note") else "")
+                return Decision(item, rule["name"], "review", None, note)
             return Decision(item, rule["name"], rule["action"], dest, rule.get("note", ""))
     return Decision(item, "-", "keep")
 

@@ -40,17 +40,16 @@ def test_duplicate_copy_only_when_identical(tmp_path):
     assert triage.decide(_item(diff, 0), RULES).rule != "duplicate-copy"
 
 
-def test_sensitive_finance_never_ages_into_old(tmp_path):
+def test_tax_record_is_proposal_until_enabled(tmp_path):
     p = _touch(tmp_path, "2025 Tax Return - MCKAY.pdf")
     d = triage.decide(_item(p, 400), RULES)
-    assert (d.action, d.rule) == ("review", "sensitive-finance")
+    assert (d.action, d.rule) == ("review", "tax-record") and d.note.startswith("proposed: move")
 
 
-def test_stale_moves_to_month_of_arrival(tmp_path):
+def test_stale_moves_to_flat_archive(tmp_path):
     p = _touch(tmp_path, "random.txt")
-    it = _item(p, 45)
-    d = triage.decide(it, RULES)
-    assert d.action == "move" and d.dest.name == it.added.strftime("%Y-%m")
+    d = triage.decide(_item(p, 45), RULES)
+    assert d.action == "move" and d.dest == Path.home() / "Archive"
 
 
 def test_apply_moves_and_logs_for_undo(tmp_path, monkeypatch):
@@ -79,4 +78,38 @@ def test_dry_run_touches_nothing(tmp_path, capsys):
 
 def test_review_rules_beat_trash_by_type(tmp_path):
     p = _touch(tmp_path, "2025 K-1 bundle.zip")
-    assert triage.decide(_item(p, 60), RULES).rule == "sensitive-finance"
+    assert triage.decide(_item(p, 60), RULES).rule == "lp-k1-copy"
+
+
+def test_plain_zip_is_reviewed_not_trashed(tmp_path):
+    import zipfile
+    p = tmp_path / "export.zip"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("notes/a.md", "x")
+    assert triage.decide(_item(p, 60), RULES).action == "review"
+
+
+def test_app_zip_and_extracted_zip_are_trashed(tmp_path):
+    import zipfile
+    app = tmp_path / "Tool.zip"
+    with zipfile.ZipFile(app, "w") as z:
+        z.writestr("Tool.app/Contents/Info.plist", "x")
+    ext = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(ext, "w") as z:
+        z.writestr("a.txt", "x")
+    (tmp_path / "bundle").mkdir()
+    assert triage.decide(_item(app, 5), RULES).rule == "zip-app-installer"
+    assert triage.decide(_item(ext, 5), RULES).rule == "zip-extracted"
+
+
+def test_jpg_beside_heic_is_trashed(tmp_path):
+    _touch(tmp_path, "IMG_1.HEIC")
+    j = _touch(tmp_path, "IMG_1.jpg")
+    assert triage.decide(_item(j, 10), RULES).rule == "image-twin"
+
+
+def test_own_k1_is_tax_record_others_are_lp_copies(tmp_path):
+    own = _touch(tmp_path, "BRADEN LLC_JONATHAN MCKAY_2025_1065_K1.pdf")
+    lp = _touch(tmp_path, "2025 K-1 - M5X2 FUND III - THE X TRUST.pdf")
+    assert triage.decide(_item(own, 5), RULES).rule == "tax-record"
+    assert triage.decide(_item(lp, 5), RULES).rule == "lp-k1-copy"
