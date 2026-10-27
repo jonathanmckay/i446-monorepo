@@ -43,3 +43,18 @@ def test_round_trip_records_labels_and_scores(tmp_path, monkeypatch):
     assert s["overall"] == {"n": 2, "agree": 1, "pct": 50}             # skips don't count
     again = label.cmd_batch(inbox, 5, 1)
     assert [r["name"] for r in again["rows"]] == []                    # labeled files aren't re-asked
+
+
+def test_choosing_the_folder_a_file_is_already_in_leaves_it(tmp_path, monkeypatch):
+    files, _ = _setup(tmp_path, monkeypatch)
+    arch = files / "archive"; arch.mkdir()
+    (arch / "r.pdf").write_text("r")
+    b = label.cmd_batch(arch, 5, 1)["batch"]
+    label.cmd_propose(b, {"1": {"a": "archive", "suggest": "a"}})
+    label.cmd_answer(b, "1a")
+    assert (arch / "r.pdf").exists() and not (arch / "r ~1.pdf").exists()
+
+
+def test_expand_ranges_and_default():
+    assert label.expand("1-3 x, 5b", [1, 2, 3, 4, 5], "a") == [(1, "x"), (2, "x"), (3, "x"), (4, "a"), (5, "b")]
+    assert label.expand("2c", [1, 2], "") == [(2, "c")]

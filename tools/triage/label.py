@@ -116,13 +116,26 @@ def _free(d: Path, name: str) -> Path:
     return t
 
 
-def cmd_answer(batch: str, answers: str, dry_run: bool = False) -> list[dict]:
+def expand(answers: str, rows: list[int], default: str = "") -> list[tuple[int, str]]:
+    """'1-5 x, 7b' -> pairs; ranges allowed; rows not mentioned get `default` (JM:
+    'assume a unless I say otherwise', 2026-10-27)."""
+    got: dict[int, str] = {}
+    for lo, hi, letter in re.findall(r"(\d+)(?:\s*-\s*(\d+))?\s*([a-z])", answers.lower()):
+        for n in range(int(lo), int(hi or lo) + 1):
+            got[n] = letter
+    if default:
+        for n in rows:
+            got.setdefault(n, default)
+    return sorted(got.items())
+
+
+def cmd_answer(batch: str, answers: str, dry_run: bool = False, default: str = "") -> list[dict]:
     data = json.loads(_batch_path(batch).read_text())
     rows = {r["n"]: r for r in data["rows"]}
     log = STATE / f"{dt.date.today()}.jsonl"
     out = []
-    for num, letter in ANSWER_RE.findall(answers):
-        r, letter = rows.get(int(num)), letter.lower()
+    for num, letter in expand(answers, list(rows), default):
+        r = rows.get(num)
         if not r:
             continue
         opts = r.get("options", {})
@@ -136,9 +149,12 @@ def cmd_answer(batch: str, answers: str, dry_run: bool = False) -> list[dict]:
         dst = None
         if not dry_run and chosen != "skip" and src.exists():
             to_dir = TRASH if chosen == "trash" else _target(chosen, src.name)
-            to_dir.mkdir(parents=True, exist_ok=True)
-            dst = _free(to_dir, src.name)
-            shutil.move(str(src), str(dst))
+            if to_dir.resolve() == src.parent.resolve():
+                dst = src                      # already there: label it, don't rename it
+            else:
+                to_dir.mkdir(parents=True, exist_ok=True)
+                dst = _free(to_dir, src.name)
+                shutil.move(str(src), str(dst))
             STATE.mkdir(parents=True, exist_ok=True)
             with log.open("a") as f:
                 f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": "label",
@@ -185,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     sh = sub.add_parser("show"); sh.add_argument("batch")
     an = sub.add_parser("answer"); an.add_argument("batch"); an.add_argument("answers")
     an.add_argument("--dry-run", action="store_true")
+    an.add_argument("--default", default="a", help="letter for rows not mentioned ('' to leave them)")
     sub.add_parser("score")
     a = ap.parse_args(argv)
     if a.cmd == "batch":
@@ -194,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "show":
         print(cmd_show(a.batch))
     elif a.cmd == "answer":
-        for r in cmd_answer(a.batch, a.answers, a.dry_run):
+        for r in cmd_answer(a.batch, a.answers, a.dry_run, a.default):
             print(f"  {'✓' if r['agree'] else '✗'} {r['name']} -> {r['chosen']}")
         print(json.dumps(cmd_score()["overall"]))
     elif a.cmd == "score":
