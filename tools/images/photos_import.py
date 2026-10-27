@@ -28,7 +28,7 @@ sn = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sn)
 
 MEDIA = {".jpg", ".jpeg", ".png", ".heic", ".gif", ".tif", ".tiff", ".bmp", ".psd",
-         ".arw", ".cr2", ".nef", ".dng", ".mov", ".mp4", ".m4v", ".avi"}
+         ".arw", ".cr2", ".nef", ".dng", ".mov", ".mp4", ".m4v", ".avi", ".mts"}
 BATCH = 200
 SCREENSHOTS = Path.home() / "screenshots"
 STATE = Path.home() / ".local" / "state" / "jm" / "photos-import.json"
@@ -147,8 +147,11 @@ def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
     if not dry_run:
         SCREENSHOTS.mkdir(exist_ok=True)
         for p in shots:
-            target = sn._free(SCREENSHOTS, sn.new_name(p.name, p.stat().st_mtime))
-            shutil.copy2(p, target)
+            name = sn.new_name(p.name, p.stat().st_mtime)
+            done = SCREENSHOTS / name
+            if done.exists() and done.stat().st_size == p.stat().st_size:
+                continue  # copied by an earlier run
+            shutil.copy2(p, sn._free(SCREENSHOTS, name))
     state = _load()
     for album, files in albums.items():
         if only and album != only:
