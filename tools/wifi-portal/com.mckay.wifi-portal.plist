@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mckay.wifi-portal</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/mckay/i446-monorepo/tools/wifi-portal/portal.py</string>
+    </array>
+
+    <!-- Network changes rewrite this directory; the interval catches a
+         portal that appears after the join (and the post-wake case). -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Library/Preferences/SystemConfiguration</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mckay/Library/Logs/wifi-portal.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mckay/Library/Logs/wifi-portal.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>
