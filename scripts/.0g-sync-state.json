@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-27T06:00:07.716942-07:00"
+  "tasks": {
+    "show up well at the offsite": {
+      "todoist_id": "6hr9mqhfg485c3j2",
+      "minutes": 100
+    },
+    "get 60分 from hiit in": {
+      "todoist_id": "6hr9mqjgJJPhvr42",
+      "minutes": 30
+    }
+  },
+  "last_sync": "2026-10-27T08:05:48.653144-07:00"
 }
