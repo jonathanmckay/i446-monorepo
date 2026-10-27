@@ -148,6 +148,10 @@ def list_events(start: dt.datetime, end: dt.datetime, *, force: bool = False) ->
                 "calendar_id": cid,
                 "all_day": "date" in ev["start"],
                 "transparency": ev.get("transparency", "opaque"),
+                # Anyone besides JM on it (2026-10-26): janus mobile only
+                # API-deletes guest-less events — deleting one JM organizes
+                # with sendUpdates='none' silently cancels it for everyone.
+                "has_guests": any(not a.get("self") for a in ev.get("attendees") or []),
             })
     cache.write_text(json.dumps(out))
     return _hydrate(out, start, end)
