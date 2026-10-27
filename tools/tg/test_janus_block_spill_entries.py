@@ -56,16 +56,47 @@ def test_spill_item_clipped_titled_and_selectable():
     mod = _load_tui()
     _setup(mod)
     today = _midnight()
+    # Only the RUNNING entry earns a spill row since 2026-10-26; a finished
+    # one is ◇ │ continuation (test_finished_spill_is_continuation_only).
     mod.STATE.entries = [_entry("run", today.replace(hour=19, minute=59),
-                                today.replace(hour=21, minute=0), eid=42)]
-    cutoff = today.replace(hour=21, minute=20)
+                                today.replace(hour=21, minute=0), eid=42,
+                                running=True)]
+    cutoff = today.replace(hour=20, minute=40)
     items = mod._block_spill_items(20, 21, cutoff)  # 亥
     assert len(items) == 1
     it = items[0]
     assert it["start_dt"] == today.replace(hour=20)
-    assert it["dur_min"] == 60
+    assert it["dur_min"] == 40
     assert "run" in it["label"]
     assert it["entry_ids"] == [42], "must carry the real id for selection/⌥↵"
+
+
+def test_finished_spill_is_continuation_only():
+    """User report 2026-10-26: happy hour 17:28-20:19 rendered "戌:xx", then
+    "  :00 happy hour", then ◇ │, and its 酉 row read 151m (clipped at the
+    20:00 detail band). Wanted: the 酉 row carries the full duration, and
+    戌 is just ◇ │ from its header down — no repeated title."""
+    mod = _load_tui()
+    _setup(mod)
+    today = _midnight()
+    mod.STATE.entries = [
+        _entry("2 hci", today.replace(hour=17, minute=14),
+               today.replace(hour=17, minute=28), eid=1),
+        _entry("happy hour", today.replace(hour=17, minute=28),
+               today.replace(hour=20, minute=19), eid=2),
+        _entry("Asha metrics request", today.replace(hour=20, minute=20),
+               today.replace(hour=20, minute=38), eid=3),
+    ]
+    mod.STATE.entries_yday = []
+    mod._read_block_emojis = lambda now=None: {}
+    mod.detail_window = lambda: (today.replace(hour=20), today.replace(hour=22))
+    assert mod._block_spill_items(18, 19, today.replace(hour=20)) == []
+    text = "".join(t for _, t, *_ in mod.render_morning())
+    you = text[text.index("酉"):text.index("戌")]
+    assert re.search(r"happy hour\s+171m", you), you
+    xu = text[text.index("戌"):]
+    assert "happy hour" not in xu and "戌:xx" not in xu, xu
+    assert xu.startswith("戌:00") and "◇ │" in xu.splitlines()[0], xu
 
 
 def test_spill_excludes_sleep_and_non_crossing_entries():

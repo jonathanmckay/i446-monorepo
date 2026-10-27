@@ -3270,6 +3270,17 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         spill_wait = bool(earlier_spills)
         if earlier_spills:
             head0 = None
+        # A finished entry flowing in from the previous block covers :00 —
+        # it no longer gets a spill row, so when the block's first item is
+        # past the first slot the header stays the block's own :00 and draws
+        # its ◇ │ instead of promoting that item over the covered stretch
+        # (2026-10-26). A short tail (first item inside the first half hour) still
+        # lets that item ride the header, as before.
+        hc0 = (cont or {}).get((blk_sh, 0))
+        if (head0 is not None and hc0 is not None and not isinstance(hc0, tuple)
+                and head0["start_dt"].hour * 60 + head0["start_dt"].minute
+                >= blk_sh * 60 + 30):
+            head0 = None
         # Tracks the block's own :00 slot when head0 was promoted from a
         # LATER slot, so the mark-fill grid below (FOCUS_ROWS' include_00)
         # doesn't re-materialize a phantom "  :00" row under a header that
@@ -3433,6 +3444,15 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             trail = max(1, WIDTH_HINT - dwidth(left) - dwidth(right))
             out.append(("class:dim", left))
             out.append(_gutter(blk_sh, 0, slot_min))
+            # An entry flowing in from the previous block covers this :00:
+            # the header draws its ◇ │ (2026-10-26), and the body grid must
+            # not repeat the :00 mark under it.
+            hc = (cont or {}).get((blk_sh, 0))
+            hc_sty, hc_event = hc if isinstance(hc, tuple) else (hc, False)
+            if hc is not None and not hc_event:
+                out.append((hc_sty or "class:future", "◇ │"))
+                trail -= dwidth("◇ │")
+                vacated_00 = (blk_sh, 0)
             out.append(("class:dim", " " * max(0, trail - 1)))
             if emojis:
                 out.append((NEON_PTS_STYLE, emojis))
@@ -3764,7 +3784,7 @@ def _past_block_picks(blk_name, merged, limit: int = 4) -> list[dict]:
         blk = hour_to_block(m["start_dt"].hour)
         if not blk or blk[0] != blk_name:
             continue
-        mins = int((m["end_dt"] - m["start_dt"]).total_seconds() // 60)
+        mins = int((m.get("dur_end", m["end_dt"]) - m["start_dt"]).total_seconds() // 60)
         is_running = bool(m.get("running"))
         if mins < 1 and not is_running:
             continue
@@ -3845,6 +3865,12 @@ def _block_spill_items(blk_sh, blk_eh, cutoff) -> list[dict]:
         if (e["desc"] or "").strip() == "睡觉":
             continue  # _block_sleep_item's job
         if not (e["start_dt"] < blk_start < e["end_dt"]):
+            continue
+        # A FINISHED entry already has its titled row, full duration, in the
+        # block it started in; here it is just ◇ │ continuation (user request
+        # 2026-10-26: "happy hour on the :28 line, then just ◇ │ through").
+        # Only the live, running entry still earns a titled spill row.
+        if not e.get("running"):
             continue
         end = min(e["end_dt"], blk_end, cutoff)
         mins = int((end - blk_start).total_seconds() // 60)
@@ -4375,6 +4401,10 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
                            "desc": e["desc"], "project_id": e["project_id"],
                            "tags": list(e.get("tags") or []),
                            "ids": [e["id"]], "contiguous": True})
+        # The row's duration is the entry's REAL length, not the part before
+        # the detail band (user report 2026-10-26: a 17:28-20:19 happy hour
+        # read 151m because the cutoff was 20:00).
+        merged[-1]["dur_end"] = e["end_dt"] if not e.get("running") else end
 
     bo_emojis = bo_emojis if bo_emojis is not None else _read_block_emojis()
     out: list[tuple[str, str]] = []
