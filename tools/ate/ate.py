@@ -38,16 +38,16 @@ TZ = ZoneInfo("America/Los_Angeles")
 BRANCHES = "卯辰巳午未申戌"
 
 GROUP_ALIASES = {
-    "beans": "bn", "bean": "bn", "bn": "bn",
-    "berries": "br", "berry": "br", "br": "br",
-    "fruit": "fr", "fruits": "fr", "fr": "fr",
-    "cruciferous": "cr", "cr": "cr",
-    "greens": "gr", "green": "gr", "gr": "gr",
+    "beans": "bn", "bean": "bn", "bn": "bn", "bns": "bn",
+    "berries": "br", "berry": "br", "br": "br", "bry": "br",
+    "fruit": "fr", "fruits": "fr", "fr": "fr", "frt": "fr",
+    "cruciferous": "cr", "cr": "cr", "crc": "cr",
+    "greens": "gr", "green": "gr", "gr": "gr", "gre": "gr",
     "vegetables": "vg", "vegetable": "vg", "veg": "vg", "vg": "vg",
     "flax": "fx", "flx": "fx", "fx": "fx",
-    "grains": "g", "grain": "g", "g": "g",
+    "grains": "g", "grain": "g", "g": "g", "grn": "g",
     "nuts": "nt", "nut": "nt", "nt": "nt",
-    "spices": "sp", "spice": "sp", "sp": "sp",
+    "spices": "sp", "spice": "sp", "sp": "sp", "spc": "sp",
     "water": "wtr", "wtr": "wtr",
 }
 

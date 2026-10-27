@@ -36,19 +36,27 @@ Examples:
    - `protein`: grams, rounded to 1, consistent with the kcal.
    - `groups`: Daily Dozen servings (table in `/ate`), counted by Dr Greger's
      serving sizes (nuts: ¼ cup or 2 tbsp nut butter; berries: ½ cup; greens:
-     1 cup raw; grains: ½ cup cooked or 1 slice bread; beans: ½ cup cooked;
-     spices: ¼ tsp turmeric or any notable spice use = 1). Under-tag rather
-     than over-tag; animal protein, oils and refined sugar map to zero.
+     1 cup raw or ½ cup cooked; grains: ½ cup cooked or 1 slice bread;
+     beans: ½ cup cooked; spices: ¼ tsp turmeric or any notable spice use
+     = 1). A small but real portion of a group food (¼ avocado as fruit, ½ cup
+     cooked kale) still counts as 1; don't round it to zero. Tag every group a
+     food belongs to (kale = greens 1 + cruciferous 1). Juice, animal protein,
+     oils and refined sugar map to zero.
    - `name`: a short, cleaned-up food name (fix spelling, keep it terse).
 
 3. **Propose and stop.** Print exactly this, then end the turn waiting for a
    reply:
    ```
-   <name> · ~<kcal> kcal · ~<protein>g protein · <groups or "no groups">
-     assumes: <portion assumptions, one line>
+   <kcal> kcal · <protein>g protein · {<groups> or "no groups"}
+   <name>
+
+   assumes: <portion assumptions, one line>
    /ate <name>, <kcal>, <protein> (<groups>)
    log it? y / or correct me
    ```
+   No `~` on the numbers (it reads as part of the number). Write groups as
+   three-letter codes with counts, e.g. `{frt 1, crc 1, gre 1}`: bns, bry,
+   frt, crc, gre, veg, flx, grn, nut, spc, wtr (ate.py accepts all of them).
    Set the terminal red first (`~/i446-monorepo/scripts/term-color.sh red`),
    since the reply is a user decision.
 
@@ -60,7 +68,7 @@ Examples:
        [--groups "<groups>"] [--branch <glyph>]
      ```
      Omit `--groups` when there are none. Echo the script's confirmation line,
-     marking the fields as estimated (`~`) per `/ate` Step 4.
+     without `~` marks.
    - A correction (e.g. "it was 2 oz jerky", "protein 30", "no spices") →
      re-estimate with the correction applied, and re-propose (back to Step 3).
      User-stated numbers are fixed from then on.
