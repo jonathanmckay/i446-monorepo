@@ -153,3 +153,22 @@ def test_old_screenshot_moves_to_screenshots_with_date_first_name(tmp_path, monk
     assert d.rule == "image-to-screenshots" and d.dest == Path.home() / "screenshots"
     out = triage._move(p, tmp_path / "ss", d.rename)
     assert out.name.endswith("--dl--chart.png") and out.name[:4].isdigit()
+
+
+def test_duplicates_are_queued_then_trashed_after_reverify(tmp_path, monkeypatch):
+    monkeypatch.setattr(triage, "TRASH", tmp_path / "trash")
+    monkeypatch.setattr(triage, "STATE", tmp_path / "state")
+    monkeypatch.setattr(triage, "DUPES", tmp_path / "state" / "duplicates.json")
+    _touch(tmp_path, "a.pdf", b"same")
+    copy = _touch(tmp_path, "a (1).pdf", b"same")
+    _touch(tmp_path, "b.pdf", b"one")
+    drift = _touch(tmp_path, "b (1).pdf", b"one")
+    ds = [triage.decide(_item(p, 3), RULES) for p in (copy, drift)]
+    assert [d.action for d in ds] == ["queue", "queue"]
+    assert triage.apply(ds, tmp_path / "log.jsonl") == 0          # daily run leaves them
+    assert triage.write_queue(ds) == 2
+    (tmp_path / "b.pdf").write_bytes(b"edited")                  # original changed since queueing
+    good, dropped = triage.trash_queue(do_apply=False)
+    assert copy.exists() and len(good) == 1 and len(dropped) == 1  # dry run touches nothing
+    good, dropped = triage.trash_queue()
+    assert not copy.exists() and drift.exists() and (tmp_path / "trash" / "a (1).pdf").exists()

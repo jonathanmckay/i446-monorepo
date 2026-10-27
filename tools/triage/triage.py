@@ -10,6 +10,8 @@ first matching rule decides a top-level item's fate:
           the date-first ~/screenshots name (tools/images/screenshot_names.py).
   unzip   extract beside the zip (inheriting its age), trash the zip, then
           triage what came out in the same run
+  queue   leave in place, list in duplicates.json for the weekly /1-i446,
+          which re-verifies and trashes them (tools/vault/vault_health.py)
   review  leave in place, list it for JM
 Unmatched items are kept. A rule with "enabled": false is reported as review
 ("proposed: ...") until switched on. Ages count from Spotlight's
@@ -44,6 +46,7 @@ REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "triage.json"
 STATE = Path.home() / ".local" / "state" / "jm" / "triage"
 ADDED = STATE / "added.json"          # path -> inherited date-added (unzip output)
+DUPES = STATE / "duplicates.json"     # queued for the weekly /1-i446 to trash
 TRASH = Path.home() / ".Trash"
 PHOTOS_DB = Path.home() / "Pictures" / "Photos Library.photoslibrary" / "database" / "Photos.sqlite"
 TOKEN = Path.home() / ".config" / "todoist" / "token"
@@ -69,7 +72,7 @@ class Item:
 class Decision:
     item: Item
     rule: str
-    action: str          # trash | move | unzip | review | keep
+    action: str          # trash | move | unzip | queue | review | keep
     dest: Path | None = None
     note: str = ""
     rename: str = ""
@@ -335,6 +338,60 @@ def apply(decisions: list[Decision], log: Path) -> int:
     return done
 
 
+# ── duplicate queue (trashed weekly by /1-i446) ─────────────────────────────
+
+def original_of(p: Path) -> Path | None:
+    """The file `p` duplicates: `name.ext` for `name (1).ext`, else a same-stem HEIC."""
+    m = COPY_RE.match(p.name)
+    if m:
+        orig = p.with_name(m["stem"] + (m["ext"] or ""))
+        if orig.is_file():
+            return orig
+    for q in p.parent.glob(glob_escape(p.stem) + ".*"):
+        if q != p and q.suffix.lower() == ".heic":
+            return q
+    return None
+
+
+def write_queue(decisions: list[Decision]) -> int:
+    rows = []
+    for d in decisions:
+        if d.action == "queue" and (orig := original_of(d.item.path)):
+            rows.append({"path": str(d.item.path), "original": str(orig), "rule": d.rule,
+                         "size": d.item.size})
+    STATE.mkdir(parents=True, exist_ok=True)
+    DUPES.write_text(json.dumps(rows, indent=1, ensure_ascii=False))
+    return len(rows)
+
+
+def still_duplicate(row: dict) -> bool:
+    p, orig = Path(row["path"]), Path(row["original"])
+    if not (p.is_file() and orig.is_file()):
+        return False
+    return same_bytes(p, orig) if row["rule"] == "duplicate-copy" else True
+
+
+def trash_queue(do_apply: bool = True) -> tuple[list[dict], list[dict]]:
+    """Re-verify the queue; trash what still duplicates its original (when do_apply).
+    Returns (trashed-or-would-trash, dropped). The queue is cleared after applying."""
+    try:
+        rows = json.loads(DUPES.read_text())
+    except (OSError, ValueError):
+        return [], []
+    good = [r for r in rows if still_duplicate(r)]
+    dropped = [r for r in rows if r not in good]
+    if do_apply:
+        log = STATE / f"{dt.date.today()}.jsonl"
+        with log.open("a") as f:
+            for r in good:
+                dst = _move(Path(r["path"]), TRASH)
+                f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": r["rule"],
+                                    "action": "trash", "src": r["path"], "dst": str(dst),
+                                    "by": "1-i446"}) + "\n")
+        DUPES.write_text("[]")
+    return good, dropped
+
+
 # ── reporting ───────────────────────────────────────────────────────────────
 
 def _human(n: float) -> str:
@@ -345,7 +402,7 @@ def _human(n: float) -> str:
     return f"{n:.1f}T"
 
 
-ORDER = {"trash": 0, "move": 1, "unzip": 2, "review": 3, "keep": 4}
+ORDER = {"trash": 0, "move": 1, "unzip": 2, "queue": 3, "review": 4, "keep": 5}
 
 
 def _groups(decisions: list[Decision]) -> list[tuple[tuple[str, str], list[Decision]]]:
@@ -408,7 +465,8 @@ def run_source(name: str, src: dict, do_apply: bool) -> list[Decision]:
         decisions = [decide(i, src["rules"]) for i in scan(root, src.get("skip", []))]
         if not unzipped:
             break
-    print(f"{name}: applied {total} changes; log: {log}")
+    queued = write_queue(decisions)
+    print(f"{name}: applied {total} changes, queued {queued} duplicate(s) for /1-i446; log: {log}")
     return decisions
 
 
