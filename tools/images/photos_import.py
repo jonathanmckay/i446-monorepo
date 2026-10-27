@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 import sys
 from pathlib import Path
 
@@ -136,6 +137,20 @@ def import_batch(folder: str, album: str, files) -> int:
     return int(r.stdout.strip() or 0)
 
 
+def restart_photos() -> None:
+    """Photos' scripted import wedges silently after a few thousand files
+    (2026-10-27: 2,440 in, every later batch returned 0 with no error and
+    nothing logged); a restart clears it. Relaunched hidden (-g -j) so it
+    doesn't steal focus."""
+    subprocess.run(["osascript", "-e", 'tell application "Photos" to quit'], capture_output=True)
+    for _ in range(60):
+        if subprocess.run(["pgrep", "-x", "Photos"], capture_output=True).returncode:
+            break
+        time.sleep(1)
+    subprocess.run(["open", "-g", "-j", "-a", "Photos"])
+    time.sleep(10)
+
+
 def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
     albums, shots, skipped = plan(root)
     albums, n_lib, n_rep = dedupe(albums, library_keys())
@@ -165,6 +180,12 @@ def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
                 print(f"{key}: {len(chunk)} files")
                 continue
             n = import_batch(folder, album, chunk)
+            if n == 0:
+                print(f"{key}: 0 imported, restarting Photos and retrying", flush=True)
+                restart_photos()
+                n = import_batch(folder, album, chunk)
+                if n == 0:
+                    raise SystemExit(f"{key}: still 0 after a Photos restart; stopping")
             state[key] = {"files": len(chunk), "imported": n}
             _save(state)
             print(f"{key}: imported {n} of {len(chunk)}", flush=True)
