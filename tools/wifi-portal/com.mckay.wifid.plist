@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.mckay.wifi-portal</string>
+    <string>com.mckay.wifid</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/Users/mckay/i446-monorepo/tools/wifi-portal/portal.py</string>
+        <string>/Users/mckay/i446-monorepo/tools/wifi-portal/wifid.py</string>
     </array>
 
     <!-- Network changes rewrite this directory; the interval catches a
