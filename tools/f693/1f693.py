@@ -232,7 +232,7 @@ def run_form() -> list[dict] | None:
     def _(e):
         e.app.layout.focus_previous()
 
-    @kb.add("escape", eager=True)
+    @kb.add("escape")   # not eager: Opt+Backspace (ESC DEL) must reach backward-kill-word
     @kb.add("c-s")
     def _(e):
         e.app.exit(result="submit")
@@ -246,6 +246,7 @@ def run_form() -> list[dict] | None:
                    ("status", "bg:#111111 fg:#00e676"), ("frame.border", "fg:#333333")])
     app = Application(layout=Layout(root, focused_element=order[0]), key_bindings=kb,
                       full_screen=True, style=style, mouse_support=True)
+    app.timeoutlen = 0.05   # lone Esc fires after 50ms instead of the 1s chord wait
     if app.run() != "submit":
         return None
     return [{"initials": who.text, "task": what.text} for who, what in areas]

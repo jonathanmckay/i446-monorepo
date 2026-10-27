@@ -517,7 +517,7 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     # from dtd's Enter, Esc must land back on the dtd list). Pages already
     # queued stay queued; the week's cards are closed only when every page
     # was submitted.
-    @kb.add("escape", eager=True)
+    @kb.add("escape")   # not eager: Opt+Backspace (ESC DEL) must reach backward-kill-word
     def _(e):
         e.app.exit(result="finish")
 
@@ -537,6 +537,7 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     app = Application(layout=Layout(root, focused_element=areas[ordered_keys[0]][0]),
                       key_bindings=kb, full_screen=True, style=style,
                       mouse_support=True)
+    app.timeoutlen = 0.05   # lone Esc fires after 50ms instead of the 1s chord wait
     action = app.run()
     return action, {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
 
