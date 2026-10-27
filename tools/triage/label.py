@@ -54,16 +54,26 @@ def _labeled() -> set[str]:
         return set()
 
 
-def cmd_batch(folder: Path, n: int, max_mb: float, match: str = "", exclude: str = "") -> dict:
+def _dir_snippet(d: Path) -> str:
+    items = sorted(x for x in d.rglob("*") if x.is_file() and not x.name.startswith("."))
+    size = sum(x.stat().st_size for x in items)
+    names = ", ".join(str(x.relative_to(d)) for x in items[:8])
+    return f"[folder: {len(items)} files, {size / 1e6:.1f} MB] {names}"
+
+
+def cmd_batch(folder: Path, n: int, max_mb: float, match: str = "", exclude: str = "",
+              dirs: bool = False) -> dict:
     done = _labeled()
-    files = [p for p in sorted(folder.iterdir()) if p.is_file() and not p.name.startswith(".")
+    files = [p for p in sorted(folder.iterdir()) if (p.is_dir() if dirs else p.is_file())
+             and not p.name.startswith(".")
              and str(p) not in done
              and (not match or re.search(match, p.name, re.I))
              and not (exclude and re.search(exclude, p.name, re.I))][:n]
     cfg = classify.load_config()
     cat = classify.catalog(cfg)
-    rows = [{"n": i, "path": str(p), "name": p.name, "size": p.stat().st_size,
-             "snippet": classify.snippet(p, max_mb)[:400]} for i, p in enumerate(files, 1)]
+    rows = [{"n": i, "path": str(p), "name": p.name + ("/" if p.is_dir() else ""), "size": p.stat().st_size,
+             "snippet": (_dir_snippet(p) if p.is_dir() else classify.snippet(p, max_mb))[:400]}
+            for i, p in enumerate(files, 1)]
     batch = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     data = {"batch": batch, "folder": str(folder), "rows": rows,
             "catalog": {k: [f.name for f in d.files[:4]] for k, d in sorted(cat.items())}}
@@ -116,13 +126,26 @@ def _free(d: Path, name: str) -> Path:
     return t
 
 
-def cmd_answer(batch: str, answers: str, dry_run: bool = False) -> list[dict]:
+def expand(answers: str, rows: list[int], default: str = "") -> list[tuple[int, str]]:
+    """'1-5 x, 7b' -> pairs; ranges allowed; rows not mentioned get `default` (JM:
+    'assume a unless I say otherwise', 2026-10-27)."""
+    got: dict[int, str] = {}
+    for lo, hi, letter in re.findall(r"(\d+)(?:\s*-\s*(\d+))?\s*([a-z])", answers.lower()):
+        for n in range(int(lo), int(hi or lo) + 1):
+            got[n] = letter
+    if default:
+        for n in rows:
+            got.setdefault(n, default)
+    return sorted(got.items())
+
+
+def cmd_answer(batch: str, answers: str, dry_run: bool = False, default: str = "") -> list[dict]:
     data = json.loads(_batch_path(batch).read_text())
     rows = {r["n"]: r for r in data["rows"]}
     log = STATE / f"{dt.date.today()}.jsonl"
     out = []
-    for num, letter in ANSWER_RE.findall(answers):
-        r, letter = rows.get(int(num)), letter.lower()
+    for num, letter in expand(answers, list(rows), default):
+        r = rows.get(num)
         if not r:
             continue
         opts = r.get("options", {})
@@ -136,9 +159,12 @@ def cmd_answer(batch: str, answers: str, dry_run: bool = False) -> list[dict]:
         dst = None
         if not dry_run and chosen != "skip" and src.exists():
             to_dir = TRASH if chosen == "trash" else _target(chosen, src.name)
-            to_dir.mkdir(parents=True, exist_ok=True)
-            dst = _free(to_dir, src.name)
-            shutil.move(str(src), str(dst))
+            if to_dir.resolve() == src.parent.resolve():
+                dst = src                      # already there: label it, don't rename it
+            else:
+                to_dir.mkdir(parents=True, exist_ok=True)
+                dst = _free(to_dir, src.name)
+                shutil.move(str(src), str(dst))
             STATE.mkdir(parents=True, exist_ok=True)
             with log.open("a") as f:
                 f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": "label",
@@ -181,20 +207,22 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--max-mb", type=float, default=10)
     b.add_argument("--match", default="", help="only names matching this regex")
     b.add_argument("--exclude", default="", help="skip names matching this regex")
+    b.add_argument("--dirs", action="store_true", help="batch folders instead of files")
     pr = sub.add_parser("propose"); pr.add_argument("batch"); pr.add_argument("json")
     sh = sub.add_parser("show"); sh.add_argument("batch")
     an = sub.add_parser("answer"); an.add_argument("batch"); an.add_argument("answers")
     an.add_argument("--dry-run", action="store_true")
+    an.add_argument("--default", default="a", help="letter for rows not mentioned ('' to leave them)")
     sub.add_parser("score")
     a = ap.parse_args(argv)
     if a.cmd == "batch":
-        print(json.dumps(cmd_batch(a.folder.expanduser(), a.n, a.max_mb, a.match, a.exclude), indent=1, ensure_ascii=False))
+        print(json.dumps(cmd_batch(a.folder.expanduser(), a.n, a.max_mb, a.match, a.exclude, a.dirs), indent=1, ensure_ascii=False))
     elif a.cmd == "propose":
         cmd_propose(a.batch, json.loads(a.json)); print(cmd_show(a.batch))
     elif a.cmd == "show":
         print(cmd_show(a.batch))
     elif a.cmd == "answer":
-        for r in cmd_answer(a.batch, a.answers, a.dry_run):
+        for r in cmd_answer(a.batch, a.answers, a.dry_run, a.default):
             print(f"  {'✓' if r['agree'] else '✗'} {r['name']} -> {r['chosen']}")
         print(json.dumps(cmd_score()["overall"]))
     elif a.cmd == "score":
