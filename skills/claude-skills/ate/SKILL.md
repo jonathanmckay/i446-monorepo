@@ -64,7 +64,7 @@ When parenthesized groups are present, increment those columns in `hcbi` for tod
 | spices      | sp     | N      |
 | water       | wtr    | O      |
 
-Pass to the script as `--groups abbrev:count ...`, e.g. `--groups br:3 g:1`.
+Pass to the script as one comma-separated string of `<name> <count>`, e.g. `--groups "bry 3, grn 1"`.
 
 ## Time bands (Earthly Branches)
 
