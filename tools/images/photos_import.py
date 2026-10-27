@@ -11,7 +11,9 @@ are listed, not touched.
 
 Progress is recorded per batch in STATE, so a rerun resumes.
 
-Usage: photos_import.py ROOT [--folder Archive] [--only NAME] [--dry-run]
+Usage: photos_import.py ROOT [--folder Archive] [--only NAME] [--album NAME]
+                         [--min-free-gb N] [--dry-run]
+  --album puts every file in one album (default: one per top-level folder).
 """
 import importlib.util
 import json
@@ -147,11 +149,30 @@ def restart_photos() -> None:
         if subprocess.run(["pgrep", "-x", "Photos"], capture_output=True).returncode:
             break
         time.sleep(1)
+    # On Ix the wedge was in photolibraryd itself (Photos hung at 0% CPU
+    # waiting on it); launchd restarts it on demand.
+    subprocess.run(["killall", "photolibraryd"], capture_output=True)
+    time.sleep(3)
     subprocess.run(["open", "-g", "-j", "-a", "Photos"])
     time.sleep(10)
 
 
-def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
+def wait_for_space(min_free_gb: float, max_wait_s: int = 4 * 3600) -> None:
+    """Block until the home volume has min_free_gb free. With "Optimize Mac
+    Storage", Photos frees uploaded originals only under disk pressure, so a
+    long import is paced by iCloud upload; better to wait than fill a server."""
+    waited = 0
+    while shutil.disk_usage(Path.home()).free / 1e9 < min_free_gb:
+        if waited >= max_wait_s:
+            raise SystemExit(f"free space stayed under {min_free_gb} GB for {waited // 60} min; stopping")
+        if waited == 0:
+            print(f"free space under {min_free_gb} GB; waiting for iCloud upload to free some", flush=True)
+        time.sleep(300)
+        waited += 300
+
+
+def run(root: Path, folder: str = "Archive", only=None, dry_run=False,
+        album_name=None, min_free_gb: float = 0) -> None:
     albums, shots, skipped = plan(root)
     albums, n_lib, n_rep = dedupe(albums, library_keys())
     print(f"skipping {n_lib} already in Photos, {n_rep} repeated within the archive")
@@ -180,11 +201,13 @@ def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
             if dry_run:
                 print(f"{key}: {len(chunk)} files")
                 continue
-            n = import_batch(folder, album, chunk)
+            if min_free_gb:
+                wait_for_space(min_free_gb)
+            n = import_batch(folder, album_name or album, chunk)
             if n == 0:
                 print(f"{key}: 0 imported, restarting Photos and retrying", flush=True)
                 restart_photos()
-                n = import_batch(folder, album, chunk)
+                n = import_batch(folder, album_name or album, chunk)
                 if n == 0:
                     # A batch Photos can't take at all (e.g. two old-camera
                     # SCHD*.MOV videos) is recorded and skipped; three in a
@@ -208,4 +231,5 @@ if __name__ == "__main__":
         sys.exit(2)
     opt = lambda k: args[args.index(k) + 1] if k in args else None
     run(Path(args[0]).expanduser(), folder=opt("--folder") or "Archive",
-        only=opt("--only"), dry_run="--dry-run" in args)
+        only=opt("--only"), dry_run="--dry-run" in args,
+        album_name=opt("--album"), min_free_gb=float(opt("--min-free-gb") or 0))
