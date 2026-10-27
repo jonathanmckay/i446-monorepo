@@ -204,3 +204,19 @@ def test_git_repo_is_never_moved(tmp_path):
     repo = tmp_path / "proj"; (repo / ".git").mkdir(parents=True)
     d = triage.decide(_item(repo, 400), RULES)
     assert (d.rule, d.action) == ("git-repo", "review")
+
+
+def test_deletion_queue_batches_expire_by_folder_date(tmp_path):
+    rules = json.loads(triage.CONFIG.read_text())["sources"]["to-delete"]["rules"]
+    today = dt.date.today()
+    old = tmp_path / (today - dt.timedelta(days=91)).isoformat()
+    soon = tmp_path / (today - dt.timedelta(days=80)).isoformat()
+    fresh = tmp_path / today.isoformat()
+    for d in (old, soon, fresh):
+        d.mkdir()
+    loose = _touch(tmp_path, "stray.zip")
+    # files inside keep ancient birth times; only the folder name counts
+    assert triage.decide(_item(old, 0), rules).action == "trash"
+    assert triage.decide(_item(soon, 0), rules).action == "review"
+    assert triage.decide(_item(fresh, 400), rules).action == "keep"
+    assert triage.decide(_item(loose, 0), rules).rule == "queue-undated"

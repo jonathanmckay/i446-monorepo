@@ -235,6 +235,34 @@
       ],
       "_skip_doc": "app-owned folders (Copilot, Cowork, Zoom, Autopilot write here); leave in place",
       "rules_from": "downloads"
+    },
+    "to-delete": {
+      "path": "~/.to-delete",
+      "_why": "Deletion queue: things that are probably junk, one YYYY-MM-DD folder per batch. A batch goes to the Trash 90 days after its date; from day 76 it is listed on the Sunday card so there are two weeks to rescue anything.",
+      "skip": [
+        ".DS_Store"
+      ],
+      "rules": [
+        {
+          "name": "queue-expired",
+          "dated_min_days": 90,
+          "action": "trash",
+          "note": "deletion-queue batch past 90 days"
+        },
+        {
+          "name": "queue-expiring",
+          "dated_min_days": 76,
+          "action": "review",
+          "note": "trashed at 90 days; move anything worth keeping out of ~/.to-delete/<date>"
+        },
+        {
+          "name": "queue-undated",
+          "regex": ".",
+          "not_regex": "^\\d{4}-\\d{2}-\\d{2}$",
+          "action": "review",
+          "note": "not in a dated batch folder; move it into ~/.to-delete/<today>"
+        }
+      ]
     }
   },
   "classify": {

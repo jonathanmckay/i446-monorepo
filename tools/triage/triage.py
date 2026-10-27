@@ -15,6 +15,8 @@ rule decides a top-level item's fate:
           review: same name as a file beside it, different bytes
           (tools/vault/vault_health.py). Byte-identical copies are trashed daily.
   review  leave in place, list it for JM
+`dated_min_days` matches a `YYYY-MM-DD` folder at least that many days old by its
+name (the ~/.to-delete batches).
 Unmatched items are kept. A rule with "enabled": false is reported as review
 ("proposed: ...") until switched on. Ages count from Spotlight's
 kMDItemDateAdded (when the file landed in the folder), falling back to birth
@@ -262,9 +264,27 @@ def is_work_content(p: Path) -> bool:
     return False
 
 
+DATED_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def dated_older(p: Path, days: float) -> bool:
+    """A `YYYY-MM-DD` folder (a ~/.to-delete batch) dated at least `days` ago. The
+    date comes from the name: Spotlight doesn't index hidden folders, and the files
+    inside keep their original, much older, birth times."""
+    if not (p.is_dir() and DATED_RE.fullmatch(p.name)):
+        return False
+    try:
+        when = dt.datetime.strptime(p.name, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return (dt.datetime.now() - when).days >= days
+
+
 def matches(rule: dict, item: Item) -> bool:
     p = item.path
     if item.age_days < rule.get("min_age_days", 0):
+        return False
+    if "dated_min_days" in rule and not dated_older(p, rule["dated_min_days"]):
         return False
     if "glob" in rule and not fnmatch.fnmatch(p.name, rule["glob"]):
         return False
