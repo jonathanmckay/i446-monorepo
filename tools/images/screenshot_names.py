@@ -26,6 +26,8 @@ from pathlib import Path
 DATED = re.compile(
     r"^Screen ?[Ss]hot (\d{4})-(\d{2})-(\d{2})(?: at)? "
     r"(\d{1,2})\.(\d{2})\.(\d{2})(?:[\s ]*([AP]M))?\s*(?:\((\d+)\))?$")
+# Dropbox Camera Uploads names: "2017-03-02 10.11.12.png", burst "...-1.png".
+CAMERA = re.compile(r"^(\d{4})-(\d{2})-(\d{2}) (\d{2})\.(\d{2})\.(\d{2})(?:-(\d+))?$")
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".heic", ".gif", ".webp", ".tif", ".tiff",
              ".bmp", ".mov", ".mp4"}
 STAMPED = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}--")
@@ -46,6 +48,13 @@ def new_name(name: str, mtime: float, source: str = "ss") -> str:
         out = f"{y}-{mo}-{d}_{h:02d}{mi}{s}--{source}"
         if dup:
             out += f"-{dup}"
+        return out + ext.lower()
+    m = CAMERA.match(stem)
+    if m:
+        y, mo, d, h, mi, s, dup = m.groups()
+        out = f"{y}-{mo}-{d}_{h}{mi}{s}--{source}"
+        if dup:
+            out += f"-{int(dup) + 1}"  # Dropbox's -1 is the 2nd shot that second
         return out + ext.lower()
     # Not a screenshot name: in practice a saved/downloaded image (Facebook
     # `_n.jpg`s, article art) that landed in the folder, so tagged dl.
