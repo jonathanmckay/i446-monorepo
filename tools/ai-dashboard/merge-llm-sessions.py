@@ -37,7 +37,7 @@ from pathlib import Path
 
 DEFAULT_SRC = Path.home() / ".claude" / "stats-cache.json"
 DEFAULT_DB = Path.home() / "vault" / "i447" / "i446" / "llm-sessions.db"
-DEFAULT_OUT = Path.home() / "m5x2-ai-stats" / "jm" / "stats-cache.json"
+DEFAULT_OUT = (Path.home() / "code" / "m5x2-ai-stats" if (Path.home() / "code" / "m5x2-ai-stats").is_dir() else Path.home() / "m5x2-ai-stats") / "jm" / "stats-cache.json"  # ~/code since 2026-10-27
 
 # Providers to fold into the dashboard alongside Claude Code.
 # 'claude' is excluded — already represented in the source stats-cache.json.

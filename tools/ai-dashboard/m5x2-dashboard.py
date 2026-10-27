@@ -65,6 +65,8 @@ with open(CONFIG_FILE) as f:
 GITHUB_USER = "jonathanmckay"
 PORT = CONFIG.get("port", 5556)
 STATS_REPO = Path(CONFIG.get("stats_repo", {}).get("local_path", "~/m5x2-ai-stats")).expanduser()
+if not STATS_REPO.is_dir():                      # teammates' clones still live at ~/m5x2-ai-stats
+    STATS_REPO = Path("~/m5x2-ai-stats").expanduser()
 
 # Get GitHub token
 try:

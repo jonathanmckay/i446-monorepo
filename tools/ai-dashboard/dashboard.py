@@ -52,7 +52,7 @@ You're on <code>{_current_host}</code> — bookmark <code>http://ix.local:5555</
 
 
 _RAW_STATS_CACHE = Path.home() / ".claude" / "stats-cache.json"
-_MERGED_STATS_CACHE = Path.home() / "m5x2-ai-stats" / "jm" / "stats-cache.json"
+_MERGED_STATS_CACHE = (Path.home() / "code" / "m5x2-ai-stats" if (Path.home() / "code" / "m5x2-ai-stats").is_dir() else Path.home() / "m5x2-ai-stats") / "jm" / "stats-cache.json"  # ~/code since 2026-10-27
 
 def _stats_cache_path():
     """Prefer the merged cache (Claude + Copilot) if it exists and is no older than the raw one."""

@@ -16,7 +16,7 @@
 
 THRESHOLD_MIN=${THRESHOLD_MIN:-90}
 USER_ID="${M5X2_USER_ID:-jm}"
-REPO_DIR="$HOME/m5x2-ai-stats"
+REPO_DIR="$HOME/code/m5x2-ai-stats"; [ -d "$REPO_DIR" ] || REPO_DIR="$HOME/m5x2-ai-stats"   # ~/code since 2026-10-27
 ALERTS="$HOME/vault/z_ibx/alerts.jsonl"
 WATCHDOG_LOG="$HOME/i446-monorepo/tools/ai-dashboard/.watchdog.log"
 HOST="$(hostname -s)"

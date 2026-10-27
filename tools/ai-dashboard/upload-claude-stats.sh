@@ -6,7 +6,7 @@
 set -e
 
 USER_ID="matt"
-REPO_DIR="$HOME/m5x2-ai-stats"
+REPO_DIR="$HOME/code/m5x2-ai-stats"; [ -d "$REPO_DIR" ] || REPO_DIR="$HOME/m5x2-ai-stats"   # ~/code since 2026-10-27
 STATS_FILE="$HOME/.claude/stats-cache.json"
 
 echo "m5x2 AI stats uploader — user: $USER_ID"

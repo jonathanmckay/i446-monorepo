@@ -17,7 +17,7 @@ python3 build.py
 # repo never sees), copy into the site repo clone, push. The site CI is
 # additive (cp output/*.html), so occupancy.html is never clobbered by it.
 PW_FILE="$HOME/.config/m5x2/staticrypt-password"
-SITE="$HOME/appfolio-dashboards-site"
+SITE="$HOME/code/appfolio-dashboards-site"; [ -d "$SITE" ] || SITE="$HOME/appfolio-dashboards-site"   # ~/code since 2026-10-27
 if [[ -s "$PW_FILE" && -d "$SITE/.git" ]]; then
   echo "── publish ──"
   npx --yes staticrypt@latest index.html -p "$(cat "$PW_FILE")" -d .publish --short

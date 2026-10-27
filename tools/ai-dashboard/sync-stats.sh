@@ -2,7 +2,7 @@
 # sync-stats.sh — auto-syncs Claude Code stats to m5x2/ai-stats repo
 # Runs as a Claude Code Stop hook. Set M5X2_USER_ID in your shell profile.
 
-REPO_DIR="$HOME/m5x2-ai-stats"
+REPO_DIR="$HOME/code/m5x2-ai-stats"; [ -d "$REPO_DIR" ] || REPO_DIR="$HOME/m5x2-ai-stats"   # ~/code since 2026-10-27
 USER_ID="${M5X2_USER_ID:-}"
 STATS_FILE="$HOME/.claude/stats-cache.json"
 
