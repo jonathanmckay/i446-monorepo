@@ -201,5 +201,19 @@
         }
       ]
     }
+  },
+  "classify": {
+    "_doc": "tools/triage/classify.py. Destinations = folders under `areas` (minus `skip`), cut to `depth` levels with years templated, holding >= min_files files. `samples` example filenames per destination go in the prompt. apply moves at confidence >= threshold.",
+    "root": "~/Library/CloudStorage/Dropbox",
+    "areas": ["qz12 - Finance", "m5c7 - Real Estate", "m828 - Nonprofit", "f8", "Archive"],
+    "skip": ["Archive/Web", "Archive/Games", "Archive/Pictures"],
+    "depth": 3,
+    "min_files": 3,
+    "samples": 6,
+    "model": "sonnet",
+    "batch": 20,
+    "parallel": 4,
+    "max_hydrate_mb": 10,
+    "threshold": 0.7
   }
 }
