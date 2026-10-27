@@ -263,9 +263,10 @@ def cmd_answer(batch: str, answers: str, dry_run: bool = False, default: str = "
         src = Path(r["path"])
         dst = None
         if not dry_run and chosen != "skip" and src.exists():
-            if chosen.startswith("gdrive:"):
+            if chosen.startswith(("gdrive:", "version:")):
                 try:
-                    dst = upload(src, chosen)
+                    dst = (upload_version(src, chosen[len("version:"):], "local") if chosen.startswith("version:")
+                           else upload(src, chosen))
                 except Exception as e:                  # leave it local; JM sees the error
                     print(f"  {num}: upload failed, left in place: {e}", file=sys.stderr)
                     continue
@@ -277,7 +278,7 @@ def cmd_answer(batch: str, answers: str, dry_run: bool = False, default: str = "
                     f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": "label",
                                         "action": "upload+trash", "src": str(src), "dst": dst,
                                         "local_copy": str(gone), "batch": batch}) + "\n")
-            to_dir = None if chosen.startswith("gdrive:") else (TRASH if chosen == "trash" else _target(chosen, src.name))
+            to_dir = None if chosen.startswith(("gdrive:", "version:")) else (TRASH if chosen == "trash" else _target(chosen, src.name))
             if to_dir is None:
                 pass
             elif to_dir.resolve() == src.parent.resolve():
