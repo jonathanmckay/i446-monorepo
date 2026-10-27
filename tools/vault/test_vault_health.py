@@ -175,3 +175,18 @@ def test_toggl_store_missing_file_is_a_review_item(tmp_path, monkeypatch):
     monkeypatch.setattr(vh, "TOGGL_STORE", tmp_path / "none.sqlite")
     f = vh.check_toggl_store(dt.datetime(2026, 10, 21, 12, tzinfo=vh.TZ))
     assert f.status == "fail" and f.review and "missing" in f.summary
+
+
+def test_duplicates_check_reviews_name_clashes_without_deleting(tmp_path, monkeypatch):
+    vh = _load()
+    t = vh._load_triage()
+    a = tmp_path / "x.pdf"; a.write_bytes(b"one")
+    c = tmp_path / "x (1).pdf"; c.write_bytes(b"two")
+    monkeypatch.setattr(t, "STATE", tmp_path)
+    monkeypatch.setattr(t, "TRASH", tmp_path / "trash")
+    monkeypatch.setattr(t, "DUPES", tmp_path / "duplicates.json")
+    t.DUPES.write_text(json.dumps([{"path": str(c), "original": str(a), "rule": "name-clash", "size": 3}]))
+    monkeypatch.setattr(vh, "_load_triage", lambda: t)
+    monkeypatch.setattr(vh, "APPLY", True)
+    f = vh.check_duplicates()
+    assert c.exists() and f.review and f.status == "warn" and "x (1).pdf vs x.pdf" in f.detail[0]

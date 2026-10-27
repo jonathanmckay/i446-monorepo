@@ -1,5 +1,5 @@
 {
-  "_doc": "Sources for tools/triage/triage.py. Rules are checked in order; the first match wins. Actions: trash (to ~/.Trash, reversible), move (to dest; {year} = first 20xx in the name), unzip (extract, trash the zip, triage the output), review (listed, untouched). \"enabled\": false reports the rule as a proposal instead of acting. Ages count from the date the file landed in the folder (Spotlight kMDItemDateAdded).",
+  "_doc": "Sources for tools/triage/triage.py. Rules are checked in order; the first match wins. Actions: trash (to ~/.Trash, reversible), move (to dest; {year} = first 20xx in the name), unzip (extract, trash the zip, triage the output), queue (same name, different bytes; listed for review in the weekly /1-i446), review (listed, untouched). \"enabled\": false reports the rule as a proposal instead of acting. Ages count from the date the file landed in the folder (Spotlight kMDItemDateAdded).",
   "sources": {
     "downloads": {
       "path": "~/Downloads",
@@ -28,6 +28,12 @@
           "name": "duplicate-copy",
           "duplicate": true,
           "action": "trash"
+        },
+        {
+          "name": "name-clash",
+          "name_clash": true,
+          "action": "queue",
+          "note": "same name as a file beside it, different bytes: reviewed in the weekly /1-i446"
         },
         {
           "name": "zip-extracted",
@@ -133,8 +139,8 @@
           "twin_exts": [
             "heic"
           ],
-          "action": "trash",
-          "note": "converted copy of a HEIC beside it"
+          "action": "queue",
+          "note": "same photo as the HEIC beside it, different bytes: reviewed in the weekly /1-i446"
         },
         {
           "name": "camera-photo-in-library",
@@ -166,6 +172,26 @@
           "min_age_days": 7,
           "action": "review",
           "note": "phone photo not found in iCloud Photos"
+        },
+        {
+          "name": "image-to-screenshots",
+          "ext": [
+            "heic",
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "webp",
+            "bmp",
+            "tiff",
+            "mov",
+            "mp4"
+          ],
+          "min_age_days": 7,
+          "action": "move",
+          "dest": "~/screenshots",
+          "rename": "screenshot",
+          "note": "non-photo images per i446-photos-and-screenshots: date-first name, kept forever"
         },
         {
           "name": "stale",

@@ -23,9 +23,14 @@ Checks (v1, 2026-09-27):
                  aren't linked to dtd (agent_claims.SKILL_CLAIMS) or recorded
                  as declined (SKILL_NO_CLAIM) (added 2026-10-11)
   alerts         z_ibx/alerts.jsonl entries from the last 7 days, grouped
+  duplicates     Downloads name clashes queued by tools/triage: `name (1).ext`
+                 or a JPG beside its HEIC, with different bytes, on this host.
+                 Review items; byte-identical copies are trashed daily by
+                 triage itself (added 2026-10-27)
 
 Auto-fixes (only ever these): trigger a Syncthing rescan on a folder that is
-out of sync. Everything else is surfaced, never changed.
+out of sync; trash a queued Downloads name clash whose bytes now match its
+original (not on --dry-run). Everything else is surfaced, never changed.
 
 Usage:
     vault_health.py            # run, write report, upsert task
@@ -65,6 +70,8 @@ TASK_CONTENT = "1 i446 (20) [15]"
 TASK_LABELS = ["i447"]
 TASK_KEY = "1 i446"
 TASK_PROJECT = "6Crfmq5PmPjqrx4x"   # i447
+
+APPLY = True   # main() clears it for --dry-run / --json so no auto-fix deletes anything
 
 _SA = importlib.util.spec_from_file_location("singleton_audit", Path(__file__).with_name("singleton-audit.py"))
 singleton_audit = importlib.util.module_from_spec(_SA); sys.modules["singleton_audit"] = singleton_audit
@@ -753,6 +760,31 @@ def check_neon_rules(now: dt.datetime) -> Finding:
     return Finding("neon-rules", status, summary, detail, review=review)
 
 
+def _load_triage():
+    spec = importlib.util.spec_from_file_location("triage", MONO / "tools/triage/triage.py")
+    mod = importlib.util.module_from_spec(spec); sys.modules["triage"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_duplicates() -> Finding:
+    """Downloads files with the same name as a neighbour but different bytes, queued by
+    tools/triage on this host (2026-10-27: identical copies are deleted daily; JM
+    reviews only same-name, different-content pairs here)."""
+    triage = _load_triage()
+    if not triage.DUPES.exists():
+        return Finding("duplicates", "ok", f"no duplicate queue on {socket.gethostname().split('.')[0]}")
+    pending, resolved = triage.review_queue(do_apply=APPLY)
+    trashed = [r for r in resolved if r["outcome"].startswith("identical")]
+    fixed = f"trashed {len(trashed)} now-identical" if APPLY and trashed else None
+    if not pending:
+        return Finding("duplicates", "ok", "no Downloads name clashes to review", fixed=fixed)
+    detail = [f"{Path(r['path']).name} vs {Path(r['original']).name} "
+              f"({r.get('size', 0) / 1e6:.1f} MB): keep both, keep one, or rename" for r in pending]
+    return Finding("duplicates", "warn", f"{len(pending)} Downloads file(s) share a name with different contents",
+                   detail, review=True, fixed=fixed)
+
+
 # ---------------------------------------------------------------------------
 # Report + task
 # ---------------------------------------------------------------------------
@@ -760,7 +792,8 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, check_root, check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now)):
+               check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
+               check_duplicates):
         try:
             out.append(fn())
         except Exception as e:  # noqa: BLE001 — one broken check must not hide the others
@@ -776,7 +809,7 @@ def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
              f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, "
-             "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run. Review items are in the 😈 Todoist task.", "",
+             "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed |", "|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.
@@ -826,6 +859,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
+    global APPLY
+    APPLY = not (a.dry_run or a.json)
     now = dt.datetime.now(TZ); today = now.date()
     findings = run_all(now)
     if a.json:

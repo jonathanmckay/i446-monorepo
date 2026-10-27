@@ -145,3 +145,32 @@ def test_own_k1_is_tax_record_others_are_lp_copies(tmp_path):
     assert triage.decide(_item(own, 5), RULES).rule == "tax-k1"
     assert triage.decide(_item(lp, 5), RULES).rule == "lp-k1-pending"
     assert triage.decide(_item(lp, 61), RULES).action == "trash"
+
+
+def test_old_screenshot_moves_to_screenshots_with_date_first_name(tmp_path, monkeypatch):
+    p = _touch(tmp_path, "chart.png")
+    d = triage.decide(_item(p, 10), RULES)
+    assert d.rule == "image-to-screenshots" and d.dest == Path.home() / "screenshots"
+    out = triage._move(p, tmp_path / "ss", d.rename)
+    assert out.name.endswith("--dl--chart.png") and out.name[:4].isdigit()
+
+
+def test_identical_copy_trashed_daily_name_clash_queued_for_review(tmp_path, monkeypatch):
+    monkeypatch.setattr(triage, "TRASH", tmp_path / "trash")
+    monkeypatch.setattr(triage, "STATE", tmp_path / "state")
+    monkeypatch.setattr(triage, "DUPES", tmp_path / "state" / "duplicates.json")
+    _touch(tmp_path, "a.pdf", b"same")
+    copy = _touch(tmp_path, "a (1).pdf", b"same")
+    _touch(tmp_path, "b.pdf", b"one")
+    clash = _touch(tmp_path, "b (1).pdf", b"two")
+    dc, dn = (triage.decide(_item(p, 3), RULES) for p in (copy, clash))
+    assert (dc.rule, dc.action) == ("duplicate-copy", "trash")
+    assert (dn.rule, dn.action) == ("name-clash", "queue")
+    assert triage.apply([dc, dn], tmp_path / "log.jsonl") == 1
+    assert not copy.exists() and clash.exists()
+    assert triage.write_queue([dn]) == 1
+    pending, resolved = triage.review_queue()
+    assert clash.exists() and len(pending) == 1 and not resolved        # review never deletes
+    (tmp_path / "b.pdf").write_bytes(b"two")                             # now identical
+    pending, resolved = triage.review_queue()
+    assert not clash.exists() and resolved[0]["outcome"].startswith("identical")

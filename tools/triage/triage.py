@@ -6,9 +6,13 @@ first matching rule decides a top-level item's fate:
   trash   move to ~/.Trash (reversible until the Trash is emptied)
   move    move to `dest`; {year} = first 20xx in the name, else the year the
           file landed. If an identical file already sits at the destination,
-          the incoming copy is trashed instead.
+          the incoming copy is trashed instead. "rename": "screenshot" gives
+          the date-first ~/screenshots name (tools/images/screenshot_names.py).
   unzip   extract beside the zip (inheriting its age), trash the zip, then
           triage what came out in the same run
+  queue   leave in place, list in duplicates.json for the weekly /1-i446 to
+          review: same name as a file beside it, different bytes
+          (tools/vault/vault_health.py). Byte-identical copies are trashed daily.
   review  leave in place, list it for JM
 Unmatched items are kept. A rule with "enabled": false is reported as review
 ("proposed: ...") until switched on. Ages count from Spotlight's
@@ -43,12 +47,15 @@ REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "triage.json"
 STATE = Path.home() / ".local" / "state" / "jm" / "triage"
 ADDED = STATE / "added.json"          # path -> inherited date-added (unzip output)
+DUPES = STATE / "duplicates.json"     # name clashes queued for the weekly /1-i446 review
 TRASH = Path.home() / ".Trash"
 PHOTOS_DB = Path.home() / "Pictures" / "Photos Library.photoslibrary" / "database" / "Photos.sqlite"
 TOKEN = Path.home() / ".config" / "todoist" / "token"
 COPY_RE = re.compile(r"^(?P<stem>.+) \(\d+\)(?P<ext>\.[^.]+)?$")
 YEAR_RE = re.compile(r"(?<!\d)(20\d\d)(?!\d)")
 APPLE_EPOCH = 978307200
+sys.path.insert(0, str(REPO / "tools" / "images"))
+import screenshot_names  # noqa: E402
 
 
 @dataclass
@@ -66,9 +73,10 @@ class Item:
 class Decision:
     item: Item
     rule: str
-    action: str          # trash | move | unzip | review | keep
+    action: str          # trash | move | unzip | queue | review | keep
     dest: Path | None = None
     note: str = ""
+    rename: str = ""
 
 
 # ── scanning ────────────────────────────────────────────────────────────────
@@ -143,6 +151,15 @@ def is_duplicate_copy(p: Path) -> bool:
     """`name (1).ext` whose original `name.ext` sits beside it with identical bytes."""
     m = COPY_RE.match(p.name)
     return bool(m) and same_bytes(p, p.with_name(m["stem"] + (m["ext"] or "")))
+
+
+def is_name_clash(p: Path) -> bool:
+    """`name (1).ext` whose original `name.ext` sits beside it with different bytes."""
+    m = COPY_RE.match(p.name)
+    if not m or not p.is_file():
+        return False
+    orig = p.with_name(m["stem"] + (m["ext"] or ""))
+    return orig.is_file() and not same_bytes(p, orig)
 
 
 def is_extracted_zip(p: Path) -> bool:
@@ -228,6 +245,8 @@ def matches(rule: dict, item: Item) -> bool:
         return False
     if rule.get("duplicate") and not is_duplicate_copy(p):
         return False
+    if rule.get("name_clash") and not is_name_clash(p):
+        return False
     if rule.get("extracted") and not is_extracted_zip(p):
         return False
     if rule.get("app_zip") and not is_app_zip(p):
@@ -254,7 +273,8 @@ def decide(item: Item, rules: list[dict]) -> Decision:
                 where = f" -> {dest}" if dest else ""
                 note = f"proposed: {rule['action']}{where}" + (f"; {rule['note']}" if rule.get("note") else "")
                 return Decision(item, rule["name"], "review", None, note)
-            return Decision(item, rule["name"], rule["action"], dest, rule.get("note", ""))
+            return Decision(item, rule["name"], rule["action"], dest, rule.get("note", ""),
+                            rule.get("rename", ""))
     return Decision(item, "-", "keep")
 
 
@@ -268,9 +288,12 @@ def _free_name(dest_dir: Path, name: str) -> Path:
     return target
 
 
-def _move(src: Path, dest_dir: Path) -> Path:
+def _move(src: Path, dest_dir: Path, rename: str = "") -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    target = _free_name(dest_dir, src.name)
+    if rename == "screenshot":
+        target = screenshot_names._free(dest_dir, screenshot_names.new_name(src.name, src.stat().st_mtime))
+    else:
+        target = _free_name(dest_dir, src.name)
     shutil.move(str(src), str(target))
     return target
 
@@ -316,7 +339,7 @@ def apply(decisions: list[Decision], log: Path) -> int:
                     action = "trash"
                 elif action == "move" and same_bytes(src, d.dest / src.name):
                     action = "trash"        # identical copy already filed
-                dst = _move(src, TRASH if action == "trash" else d.dest)
+                dst = _move(src, TRASH, "") if action == "trash" else _move(src, d.dest, d.rename)
             except (OSError, zipfile.BadZipFile, RuntimeError) as e:   # encrypted / corrupt zip
                 print(f"  skip {src.name}: {e}", file=sys.stderr)
                 continue
@@ -325,6 +348,58 @@ def apply(decisions: list[Decision], log: Path) -> int:
                                 "src": str(src), "dst": str(dst)}) + "\n")
             done += 1
     return done
+
+
+# ── duplicate queue (trashed weekly by /1-i446) ─────────────────────────────
+
+def original_of(p: Path) -> Path | None:
+    """The file `p` duplicates: `name.ext` for `name (1).ext`, else a same-stem HEIC."""
+    m = COPY_RE.match(p.name)
+    if m:
+        orig = p.with_name(m["stem"] + (m["ext"] or ""))
+        if orig.is_file():
+            return orig
+    for q in p.parent.glob(glob_escape(p.stem) + ".*"):
+        if q != p and q.suffix.lower() == ".heic":
+            return q
+    return None
+
+
+def write_queue(decisions: list[Decision]) -> int:
+    rows = []
+    for d in decisions:
+        if d.action == "queue" and (orig := original_of(d.item.path)):
+            rows.append({"path": str(d.item.path), "original": str(orig), "rule": d.rule,
+                         "size": d.item.size})
+    STATE.mkdir(parents=True, exist_ok=True)
+    DUPES.write_text(json.dumps(rows, indent=1, ensure_ascii=False))
+    return len(rows)
+
+
+def review_queue(do_apply: bool = True) -> tuple[list[dict], list[dict]]:
+    """Re-check the queued name clashes. Returns (still clashing, resolved).
+    A copy whose bytes now match its original is trashed (when do_apply); one
+    whose file or original is gone is dropped. Nothing that differs is touched."""
+    try:
+        rows = json.loads(DUPES.read_text())
+    except (OSError, ValueError):
+        return [], []
+    pending, resolved = [], []
+    log = STATE / f"{dt.date.today()}.jsonl"
+    for r in rows:
+        p, orig = Path(r["path"]), Path(r["original"])
+        if not (p.is_file() and orig.is_file()):
+            resolved.append({**r, "outcome": "gone"})
+        elif same_bytes(p, orig):
+            if do_apply:
+                dst = _move(p, TRASH)
+                with log.open("a") as f:
+                    f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": r["rule"],
+                                        "action": "trash", "src": str(p), "dst": str(dst), "by": "1-i446"}) + "\n")
+            resolved.append({**r, "outcome": "identical, trashed"})
+        else:
+            pending.append(r)
+    return pending, resolved
 
 
 # ── reporting ───────────────────────────────────────────────────────────────
@@ -337,7 +412,7 @@ def _human(n: float) -> str:
     return f"{n:.1f}T"
 
 
-ORDER = {"trash": 0, "move": 1, "unzip": 2, "review": 3, "keep": 4}
+ORDER = {"trash": 0, "move": 1, "unzip": 2, "queue": 3, "review": 4, "keep": 5}
 
 
 def _groups(decisions: list[Decision]) -> list[tuple[tuple[str, str], list[Decision]]]:
@@ -400,7 +475,8 @@ def run_source(name: str, src: dict, do_apply: bool) -> list[Decision]:
         decisions = [decide(i, src["rules"]) for i in scan(root, src.get("skip", []))]
         if not unzipped:
             break
-    print(f"{name}: applied {total} changes; log: {log}")
+    queued = write_queue(decisions)
+    print(f"{name}: applied {total} changes, queued {queued} duplicate(s) for /1-i446; log: {log}")
     return decisions
 
 
