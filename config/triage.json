@@ -68,19 +68,19 @@
           "name": "tax-return",
           "regex": "(?i)tax ?return",
           "action": "move",
-          "dest": "~/Library/CloudStorage/Dropbox/qz12 - Finance/Income Taxes/{year} Tax/Filed Returns"
+          "dest": "~/files/qz12/Income Taxes/{year} Tax/Filed Returns"
         },
         {
           "name": "tax-k1",
           "regex": "(?i)k-?1\\b",
           "action": "move",
-          "dest": "~/Library/CloudStorage/Dropbox/qz12 - Finance/Income Taxes/{year} Tax/k1"
+          "dest": "~/files/qz12/Income Taxes/{year} Tax/k1"
         },
         {
           "name": "tax-form",
           "regex": "(?i)(taxdocuments|\\bw-?2\\b|1099|1098|1095)",
           "action": "move",
-          "dest": "~/Library/CloudStorage/Dropbox/qz12 - Finance/Income Taxes/{year} Tax"
+          "dest": "~/files/qz12/Income Taxes/{year} Tax"
         },
         {
           "name": "property-record",
@@ -211,9 +211,14 @@
   },
   "classify": {
     "_doc": "tools/triage/classify.py. Destinations = folders under `areas` (minus `skip`), cut to `depth` levels with years templated, holding >= min_files files. `samples` example filenames per destination go in the prompt. apply moves at confidence >= threshold.",
-    "root": "~/Library/CloudStorage/Dropbox",
-    "areas": ["qz12 - Finance", "m5c7 - Real Estate", "m828 - Nonprofit", "f8", "Archive"],
-    "skip": ["Archive/Web", "Archive/Games", "Archive/Pictures"],
+    "root": "~/files",
+    "areas": [
+      "qz12"
+    ],
+    "skip": [
+      "archive",
+      "_meta"
+    ],
     "depth": 3,
     "min_files": 3,
     "samples": 6,

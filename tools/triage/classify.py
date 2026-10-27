@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""classify: file loose documents into the Dropbox domain tree with Haiku.
+"""classify: file loose documents into the ~/files domain tree with Haiku.
 
-The destination list is read live from Dropbox (config/triage.json "classify"):
+(2026-10-27: retargeted from Dropbox to ~/files, home-folder-tree.md; areas grow as
+Dropbox folders are imported. label.py runs the same catalog interactively.)
+
+The destination list is read live from ~/files (config/triage.json "classify"):
 every folder under the configured areas, cut to `depth` levels with years
 templated (`qz12 - Finance/Income Taxes/{year} Tax`), that holds at least
 `min_files` files. Each destination is shown to the model with a few sample
@@ -177,7 +180,7 @@ def snippet(p: Path, max_mb: float) -> str:
 
 # ── model ───────────────────────────────────────────────────────────────────
 
-SYSTEM = """You file JM's documents into his Dropbox folder tree. Folder names use his domain codes \
+SYSTEM = """You file JM's documents into his ~/files folder tree. Folder names use his domain codes \
 (qz12 = personal finance, m5c7/m5x2 = McKay Capital real estate funds and properties, h335 = career, \
 g245 = goals, i447 = infrastructure/tech, xk88 = marriage/social, s897 = social, hcb = health, \
 o314 = journal, m828 = nonprofit, f8 = career fast track). {year} in a folder means one folder per year.
