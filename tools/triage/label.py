@@ -54,10 +54,12 @@ def _labeled() -> set[str]:
         return set()
 
 
-def cmd_batch(folder: Path, n: int, max_mb: float) -> dict:
+def cmd_batch(folder: Path, n: int, max_mb: float, match: str = "", exclude: str = "") -> dict:
     done = _labeled()
     files = [p for p in sorted(folder.iterdir()) if p.is_file() and not p.name.startswith(".")
-             and str(p) not in done][:n]
+             and str(p) not in done
+             and (not match or re.search(match, p.name, re.I))
+             and not (exclude and re.search(exclude, p.name, re.I))][:n]
     cfg = classify.load_config()
     cat = classify.catalog(cfg)
     rows = [{"n": i, "path": str(p), "name": p.name, "size": p.stat().st_size,
@@ -128,7 +130,8 @@ def cmd_answer(batch: str, answers: str, dry_run: bool = False) -> list[dict]:
         if chosen is None:
             print(f"  {num}: no option {letter}; skipped", file=sys.stderr)
             continue
-        sug = opts.get(r.get("suggest", ""), r.get("suggest", ""))
+        sl = r.get("suggest", "")
+        sug = {"x": "trash", "s": "skip"}.get(sl) or opts.get(sl, sl)
         src = Path(r["path"])
         dst = None
         if not dry_run and chosen != "skip" and src.exists():
@@ -176,6 +179,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("batch"); b.add_argument("folder", type=Path); b.add_argument("--n", type=int, default=12)
     b.add_argument("--max-mb", type=float, default=10)
+    b.add_argument("--match", default="", help="only names matching this regex")
+    b.add_argument("--exclude", default="", help="skip names matching this regex")
     pr = sub.add_parser("propose"); pr.add_argument("batch"); pr.add_argument("json")
     sh = sub.add_parser("show"); sh.add_argument("batch")
     an = sub.add_parser("answer"); an.add_argument("batch"); an.add_argument("answers")
@@ -183,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("score")
     a = ap.parse_args(argv)
     if a.cmd == "batch":
-        print(json.dumps(cmd_batch(a.folder.expanduser(), a.n, a.max_mb), indent=1, ensure_ascii=False))
+        print(json.dumps(cmd_batch(a.folder.expanduser(), a.n, a.max_mb, a.match, a.exclude), indent=1, ensure_ascii=False))
     elif a.cmd == "propose":
         cmd_propose(a.batch, json.loads(a.json)); print(cmd_show(a.batch))
     elif a.cmd == "show":
