@@ -82,6 +82,18 @@ def test_dry_run_touches_nothing(tmp_path, capsys):
     assert p.exists() and "dry run" in capsys.readouterr().out
 
 
+def test_rules_from_reuses_another_sources_rules(tmp_path, capsys):
+    src = tmp_path / "desk"
+    src.mkdir()
+    _touch(src, "Foo.dmg")
+    cfg = tmp_path / "c.json"
+    cfg.write_text(json.dumps({"sources": {"dl": {"path": str(tmp_path / "none"), "rules": RULES},
+                                           "desk": {"path": str(src), "rules_from": "dl"}}}))
+    triage.main(["--config", str(cfg), "--source", "desk", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["path"] for r in rows] == [str(src / "Foo.dmg")]
+
+
 def test_review_rules_beat_trash_by_type(tmp_path):
     p = _touch(tmp_path, "2025 K-1 bundle.zip")
     assert triage.decide(_item(p, 60), RULES).rule == "lp-k1-copy"

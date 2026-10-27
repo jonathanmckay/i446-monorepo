@@ -207,6 +207,28 @@
           "dest": "~/files/archive"
         }
       ]
+    },
+    "desktop": {
+      "path": "~/Desktop",
+      "skip": [
+        ".DS_Store",
+        ".localized"
+      ],
+      "rules_from": "downloads"
+    },
+    "documents": {
+      "path": "~/Documents",
+      "skip": [
+        ".DS_Store",
+        ".localized",
+        "Copilot",
+        "Copilot 1",
+        "Cowork",
+        "Zoom",
+        "Jonathan McKay (Jonathan's Autopilot)"
+      ],
+      "_skip_doc": "app-owned folders (Copilot, Cowork, Zoom, Autopilot write here); leave in place",
+      "rules_from": "downloads"
     }
   },
   "classify": {

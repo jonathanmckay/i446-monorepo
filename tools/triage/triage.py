@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""triage — rule-based cleanup for unorganized folders (Downloads first).
+"""triage — rule-based cleanup for unorganized folders (Downloads, Desktop, Documents).
 
-Each source in config/triage.json is a folder plus an ordered rule list; the
-first matching rule decides a top-level item's fate:
+Each source in config/triage.json is a folder plus an ordered rule list
+("rules_from": "<source>" reuses another source's list); the first matching
+rule decides a top-level item's fate:
   trash   move to ~/.Trash (reversible until the Trash is emptied)
   move    move to `dest`; {year} = first 20xx in the name, else the year the
           file landed. If an identical file already sits at the destination,
@@ -524,7 +525,10 @@ def main(argv: list[str] | None = None) -> int:
     sources = json.loads(args.config.read_text())["sources"]
     out = []
     for name in args.source or list(sources):
-        decisions = run_source(name, sources[name], args.apply)
+        src = sources[name]
+        if "rules_from" in src:             # share another source's rule list
+            src = {**src, "rules": sources[src["rules_from"]]["rules"]}
+        decisions = run_source(name, src, args.apply)
         if args.json:
             out += [{"source": name, "path": str(d.item.path), "rule": d.rule, "action": d.action,
                      "dest": str(d.dest) if d.dest else None, "size": d.item.size,
