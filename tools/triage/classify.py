@@ -20,8 +20,9 @@ reading a file downloads it, so content is only read below `max_hydrate_mb`;
   apply     propose, then move every file at or above `threshold`; logged to
             ~/.local/state/jm/triage/YYYY-MM-DD.jsonl like triage, so undoable.
 
-Calls go through `claude -p --bare --model haiku` (subscription, no hooks, no
-CLAUDE.md), `batch` files per call, a few calls in parallel.
+Calls go through `claude -p --model haiku` on the subscription login (hooks off,
+ANTHROPIC_API_KEY stripped so nothing bills the API account), `batch` files per
+call, a few calls in parallel.
 
 Usage: classify.py eval [--n 300] [--seed 1] [--names-only] [--model sonnet]
        classify.py propose|apply <dir> [--names-only]
@@ -32,6 +33,7 @@ import argparse
 import collections
 import datetime as dt
 import json
+import os
 import random
 import re
 import subprocess
@@ -47,6 +49,9 @@ STATE = Path.home() / ".local" / "state" / "jm" / "triage"
 YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d\d)(?!\d)")
 SF_DATALESS = 0x40000000          # online-only File Provider placeholder
 SNIPPET = 1500
+# Subscription login, not the pay-per-token key in ~/.zshrc: with the key set (or
+# under --bare, which skips the keychain) `claude -p` bills the API account.
+CLAUDE_ENV = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
 
 def load_config() -> dict:
@@ -201,8 +206,8 @@ def system_prompt(dests: list[Dest], hide: set[Path], rng: random.Random, sample
 def _call(system: str, batch: list[tuple[int, str, str]], model: str) -> list[dict]:
     user = "\n\n".join(f"id {i}\nname: {name}\ncontent: {text or '(not read)'}" for i, name, text in batch)
     for _ in range(2):
-        raw = _run_claude(["claude", "-p", "--bare", "--model", model, "--output-format", "json",
-                           "--system-prompt", system], user)
+        raw = _run_claude(["claude", "-p", "--model", model, "--output-format", "json",
+                           "--settings", '{"disableAllHooks": true}', "--system-prompt", system], user)
         try:
             result = json.loads(raw)["result"]
             arr = json.loads(result[result.index("["): result.rindex("]") + 1])
@@ -216,7 +221,7 @@ def _call(system: str, batch: list[tuple[int, str, str]], model: str) -> list[di
 def _run_claude(cmd: list[str], prompt: str) -> str:
     try:
         return subprocess.run(cmd, input=prompt.replace("\0", " "), capture_output=True, text=True,
-                              timeout=300, cwd="/tmp").stdout
+                              timeout=300, cwd="/tmp", env=CLAUDE_ENV).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
 

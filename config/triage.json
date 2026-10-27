@@ -210,10 +210,10 @@
     "depth": 3,
     "min_files": 3,
     "samples": 6,
-    "model": "haiku",
+    "model": "sonnet",
     "batch": 20,
     "parallel": 4,
     "max_hydrate_mb": 10,
-    "threshold": 0.8
+    "threshold": 0.7
   }
 }
