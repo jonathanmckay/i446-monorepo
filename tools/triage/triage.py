@@ -34,6 +34,7 @@ import datetime as dt
 import fnmatch
 import hashlib
 import json
+import platform
 import re
 import shutil
 import sqlite3
@@ -480,7 +481,7 @@ def card(name: str, decisions: list[Decision]) -> str:
         desc.append(f"**{rule}** ({len(ds)})" + (f": {ds[0].note}" if ds[0].note else ""))
         desc += [f"- {d.item.path.name}" for d in sorted(ds, key=lambda d: d.item.added)]
         desc.append("")
-    body = json.dumps({"content": f"😈 {name} triage: {len(review)} to review (15) [5]",
+    body = json.dumps({"content": f"😈 {name} triage ({platform.node().split('.')[0]}): {len(review)} to review (15) [5]",
                        "description": "\n".join(desc)[:15000], "labels": ["i447"],
                        "due_string": "today", "priority": 4}).encode()
     req = urllib.request.Request("https://api.todoist.com/api/v1/tasks", data=body, method="POST",

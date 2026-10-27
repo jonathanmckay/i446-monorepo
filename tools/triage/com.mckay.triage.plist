@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Straylight: daily triage of ~/Downloads, ~/Desktop, ~/Documents (config/triage.json),
+  Sunday review card via --card. Ix runs the same job from config/ix.crontab at 04:30.
+  Hops through ssh localhost: launchd has no TCC access to those folders, sshd does
+  (same as bin/vault-backup-onedrive.sh). A run missed while asleep fires on wake.
+  Install: cp to ~/Library/LaunchAgents && launchctl bootstrap gui/$(id -u) <plist>
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mckay.triage</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-o</string>
+        <string>BatchMode=yes</string>
+        <string>-o</string>
+        <string>ConnectTimeout=10</string>
+        <string>localhost</string>
+        <string>/usr/bin/python3 i446-monorepo/tools/triage/triage.py --apply --card</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/mckay/.cache/jm/triage.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mckay/.cache/jm/triage.err</string>
+</dict>
+</plist>

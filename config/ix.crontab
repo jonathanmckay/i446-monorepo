@@ -67,3 +67,6 @@
 
 # narrative-month: create next month's g245/5e2 2g+1g narrative doc (+5e2.md link) the Sunday before its first week
 20 4 * * * python3 $HOME/i446-monorepo/tools/1g/narrative_month.py >> $HOME/i446-monorepo/tools/1g/.narrative-month.log 2>&1
+# triage: daily Downloads/Desktop/Documents cleanup (tools/triage, config/triage.json); Sunday review card via --card.
+# Hops through ssh localhost: cron has no TCC access to ~/Downloads|Desktop|Documents, sshd does (same as bin/vault-backup-onedrive.sh)
+30 4 * * * ssh -o BatchMode=yes -o ConnectTimeout=10 localhost /usr/bin/python3 i446-monorepo/tools/triage/triage.py --apply --card >> $HOME/i446-monorepo/tools/triage/.triage.log 2>&1 || $HOME/bin/cron-alert.sh triage apply_failed "daily triage exited non-zero (see tools/triage/.triage.log)"
