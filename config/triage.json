@@ -93,7 +93,7 @@
           "regex": "(?i)(statements?\\b|p&l)",
           "min_age_days": 30,
           "action": "move",
-          "dest": "~/Archive",
+          "dest": "~/files/archive",
           "note": "re-downloadable from the bank / AppFolio"
         },
         {
@@ -108,6 +108,13 @@
           "action": "move",
           "dest": "~/Library/CloudStorage/OneDrive-Microsoft/Downloads",
           "note": "Microsoft material belongs in Work OneDrive"
+        },
+        {
+          "name": "work-content",
+          "work_content": true,
+          "action": "move",
+          "dest": "~/Library/CloudStorage/OneDrive-Microsoft/Downloads",
+          "note": "Microsoft material found by content (sensitivity label, Xbox/Microsoft markers)"
         },
         {
           "name": "installer",
@@ -197,7 +204,7 @@
           "name": "stale",
           "min_age_days": 30,
           "action": "move",
-          "dest": "~/Archive"
+          "dest": "~/files/archive"
         }
       ]
     }
@@ -205,8 +212,18 @@
   "classify": {
     "_doc": "tools/triage/classify.py. Destinations = folders under `areas` (minus `skip`), cut to `depth` levels with years templated, holding >= min_files files. `samples` example filenames per destination go in the prompt. apply moves at confidence >= threshold.",
     "root": "~/Library/CloudStorage/Dropbox",
-    "areas": ["qz12 - Finance", "m5c7 - Real Estate", "m828 - Nonprofit", "f8", "Archive"],
-    "skip": ["Archive/Web", "Archive/Games", "Archive/Pictures"],
+    "areas": [
+      "qz12 - Finance",
+      "m5c7 - Real Estate",
+      "m828 - Nonprofit",
+      "f8",
+      "Archive"
+    ],
+    "skip": [
+      "Archive/Web",
+      "Archive/Games",
+      "Archive/Pictures"
+    ],
     "depth": 3,
     "min_files": 3,
     "samples": 6,

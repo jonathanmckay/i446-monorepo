@@ -55,7 +55,7 @@ def test_disabled_rule_is_a_proposal(tmp_path):
 def test_stale_moves_to_flat_archive(tmp_path):
     p = _touch(tmp_path, "random.txt")
     d = triage.decide(_item(p, 45), RULES)
-    assert d.action == "move" and d.dest == Path.home() / "Archive"
+    assert d.action == "move" and d.dest == Path.home() / "files" / "archive"
 
 
 def test_apply_moves_and_logs_for_undo(tmp_path, monkeypatch):
@@ -106,7 +106,7 @@ def test_plain_zip_is_unzipped_then_triaged_with_its_age(tmp_path, monkeypatch):
     assert (out / "a.md").exists() and not p.exists() and not (dl / "__MACOSX").exists()
     again = [i for i in triage.scan(dl, []) if i.path == out][0]
     assert abs((again.added - it.added).total_seconds()) < 2      # inherits the zip's age
-    assert triage.decide(again, RULES).dest == Path.home() / "Archive"
+    assert triage.decide(again, RULES).dest == Path.home() / "files" / "archive"
 
 
 def test_move_onto_identical_file_trashes_instead(tmp_path, monkeypatch):
@@ -174,3 +174,15 @@ def test_identical_copy_trashed_daily_name_clash_queued_for_review(tmp_path, mon
     (tmp_path / "b.pdf").write_bytes(b"two")                             # now identical
     pending, resolved = triage.review_queue()
     assert not clash.exists() and resolved[0]["outcome"].startswith("identical")
+
+
+def test_work_content_catches_neutral_names(tmp_path):
+    import zipfile
+    html = _touch(tmp_path, "mdau_review.html", b"<style>--xg:#107C10</style>")
+    deck = tmp_path / "weekly.pptx"
+    with zipfile.ZipFile(deck, "w") as z:
+        z.writestr("docProps/custom.xml", '<p name="MSIP_Label_abc_Enabled">true</p>')
+    plain = _touch(tmp_path, "notes.md", b"rent roll for kn47")
+    assert triage.decide(_item(html, 1), RULES).rule == "work-content"
+    assert triage.decide(_item(deck, 1), RULES).rule == "work-content"
+    assert triage.decide(_item(plain, 1), RULES).rule != "work-content"

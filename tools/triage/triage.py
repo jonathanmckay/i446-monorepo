@@ -231,6 +231,35 @@ def in_photos_library(p: Path) -> bool:
     return t is not None and any(abs(t - x) <= 2 for x in times)
 
 
+WORK_MARKERS = re.compile(rb"(?i)(xbox|microsoft\.com|#107C10|game ?pass|activision|blizzard|"
+                          rb"MSIP_Label|xcore|gaming-microsoft)")
+TEXT_EXTS = {".html", ".htm", ".md", ".csv", ".eml", ".py", ".json", ".txt", ".js", ".svg", ".ipynb"}
+
+
+def is_work_content(p: Path) -> bool:
+    """Microsoft material by content, not name (2026-10-27: ~/Archive held 78 work
+    files, most with neutral names like mdau_review.html): an Office file with a
+    Microsoft sensitivity label or company, or text containing Xbox/Microsoft markers."""
+    if not p.is_file() or p.stat().st_size > 50_000_000:
+        return False
+    ext = p.suffix.lower()
+    try:
+        if ext in (".pptx", ".xlsx", ".docx"):
+            with zipfile.ZipFile(p) as z:
+                for n in z.namelist():
+                    if n in ("docProps/custom.xml", "docProps/app.xml"):
+                        x = z.read(n)
+                        if b"MSIP_Label" in x or re.search(rb"<Company>[^<]*Microsoft", x):
+                            return True
+                    elif n.startswith(("ppt/slides/", "word/document", "xl/sharedStrings")) and WORK_MARKERS.search(z.read(n)):
+                        return True
+        elif ext in TEXT_EXTS:
+            return bool(WORK_MARKERS.search(p.read_bytes()))
+    except (zipfile.BadZipFile, OSError):
+        return False
+    return False
+
+
 def matches(rule: dict, item: Item) -> bool:
     p = item.path
     if item.age_days < rule.get("min_age_days", 0):
@@ -254,6 +283,8 @@ def matches(rule: dict, item: Item) -> bool:
     if "twin_exts" in rule and not has_twin(p, rule["twin_exts"]):
         return False
     if rule.get("in_photos") and not in_photos_library(p):
+        return False
+    if rule.get("work_content") and not is_work_content(p):
         return False
     return True
 

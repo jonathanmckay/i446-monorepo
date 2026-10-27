@@ -168,6 +168,7 @@ def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
                 continue  # copied by an earlier run
             shutil.copy2(p, sn._free(SCREENSHOTS, name))
     state = _load()
+    failed_streak = 0
     for album, files in albums.items():
         if only and album != only:
             continue
@@ -185,7 +186,16 @@ def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
                 restart_photos()
                 n = import_batch(folder, album, chunk)
                 if n == 0:
-                    raise SystemExit(f"{key}: still 0 after a Photos restart; stopping")
+                    # A batch Photos can't take at all (e.g. two old-camera
+                    # SCHD*.MOV videos) is recorded and skipped; three in a
+                    # row means Photos itself is stuck, so stop.
+                    failed_streak += 1
+                    print(f"{key}: still 0 after a Photos restart; skipped", flush=True)
+                    if failed_streak >= 3:
+                        _save(state)
+                        raise SystemExit("3 batches in a row imported nothing; stopping")
+            if n:
+                failed_streak = 0
             state[key] = {"files": len(chunk), "imported": n}
             _save(state)
             print(f"{key}: imported {n} of {len(chunk)}", flush=True)
