@@ -35,7 +35,7 @@ def test_migrate_copies_and_dedupes(tmp_path):
     src, dst = tmp_path / "src", tmp_path / "dst"
     src.mkdir()
     (src / "Screenshot 2026-10-27 at 8.20.47 AM.png").write_bytes(b"a")
-    (src / "Screenshot 2026-10-27 08.20.47.png").write_bytes(b"b")  # same instant
+    (src / "Screenshot 2026-10-27 08.20.47.png").write_bytes(b"bb")  # same instant
     (src / ".DS_Store").write_bytes(b"x")
     (src / "deck.pptx").write_bytes(b"p")
     assert sn.migrate(src, dst) == 2

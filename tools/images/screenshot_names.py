@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 DATED = re.compile(
@@ -63,6 +64,23 @@ def _free(dst: Path, name: str) -> Path:
     return dst / f"{stem}-{i}{ext}"
 
 
+def _copy_online_only(f: Path, target: Path, tries: int = 8) -> None:
+    """Plain read, not shutil.copy2: macOS's fcopyfile is refused (EPERM) on
+    Dropbox online-only placeholders. A read of a not-yet-downloaded file
+    also fails with EPERM, but it kicks off the download, so retry with
+    backoff until the bytes land."""
+    for i in range(tries):
+        try:
+            data = f.read_bytes()
+            break
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(min(0.5 * 2 ** i, 15))
+    target.write_bytes(data)
+    shutil.copystat(f, target)
+
+
 def migrate(src: Path, dst: Path, dry_run: bool = False) -> int:
     dst.mkdir(parents=True, exist_ok=True)
     n = 0
@@ -72,16 +90,15 @@ def migrate(src: Path, dst: Path, dry_run: bool = False) -> int:
         if f.suffix.lower() not in IMAGE_EXT:
             print(f"skip (not an image): {f.name}")
             continue
-        target = _free(dst, new_name(f.name, f.stat().st_mtime))
+        name = new_name(f.name, f.stat().st_mtime)
+        done = dst / name
+        if done.exists() and done.stat().st_size == f.stat().st_size:
+            continue  # copied by an earlier (interrupted) run
+        target = _free(dst, name)
         if dry_run:
             print(f"{f.name}  →  {target.name}")
         else:
-            # Plain read, not shutil.copy2: macOS's fcopyfile is refused
-            # (EPERM) on Dropbox online-only placeholders, while an ordinary
-            # read makes the File Provider download the file first.
-            with open(f, "rb") as fin, open(target, "wb") as fout:
-                shutil.copyfileobj(fin, fout)
-            shutil.copystat(f, target)
+            _copy_online_only(f, target)
         n += 1
     return n
 
