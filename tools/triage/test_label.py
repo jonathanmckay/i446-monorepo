@@ -58,3 +58,24 @@ def test_choosing_the_folder_a_file_is_already_in_leaves_it(tmp_path, monkeypatc
 def test_expand_ranges_and_default():
     assert label.expand("1-3 x, 5b", [1, 2, 3, 4, 5], "a") == [(1, "x"), (2, "x"), (3, "x"), (4, "a"), (5, "b")]
     assert label.expand("2c", [1, 2], "") == [(2, "c")]
+
+
+def test_drive_destination_uploads_then_trashes_local(tmp_path, monkeypatch):
+    files, inbox = _setup(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(label, "upload", lambda src, dest: calls.append((src.name, dest)) or f"{dest}/{src.name}")
+    b = label.cmd_batch(inbox, 1, 1)["batch"]
+    label.cmd_propose(b, {"1": {"a": "gdrive:m5x2 Main/r204 /tc68", "suggest": "a"}})
+    recs = label.cmd_answer(b, "1a")
+    assert calls == [("a.pdf", "gdrive:m5x2 Main/r204 /tc68")]
+    assert not (inbox / "a.pdf").exists() and (tmp_path / "trash" / "a.pdf").exists()
+    assert recs[0]["dst"] == "gdrive:m5x2 Main/r204 /tc68/a.pdf" and recs[0]["agree"]
+
+
+def test_drive_catalog_from_index(tmp_path, monkeypatch):
+    d = tmp_path / "drive"; d.mkdir()
+    (d / "drives.tsv").write_text("ID1\tm5x2 Main\n")
+    (d / "idx-ID1.json").write_text(json.dumps([{"Path": f"r204 /tc68/f{i}.pdf", "Name": f"f{i}.pdf"} for i in range(3)]))
+    monkeypatch.setattr(label, "DRIVE_DIR", d)
+    assert label._remote("gdrive:m5x2 Main/r204 /tc68") == "m5x2drive,team_drive=ID1:r204 /tc68"
+    assert "gdrive:m5x2 Main/r204 /tc68" in label.drive_catalog()

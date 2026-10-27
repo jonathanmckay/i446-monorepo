@@ -41,6 +41,84 @@ FILES = Path.home() / "files"
 LABELS = FILES / "_meta" / "labels.jsonl"
 TRASH = Path.home() / ".Trash"
 ANSWER_RE = re.compile(r"(\d+)\s*([a-z])", re.I)
+DRIVE_DIR = STATE / "drive"                     # drives.tsv + idx-<id>.json (rclone lsjson --hash)
+REMOTE = "m5x2drive"
+
+
+# ── Google Drive destinations (2026-10-27: m5x2 documents live in the m5x2 Drive) ──
+
+def drives() -> dict[str, str]:
+    """shared-drive name -> id, from the cached `rclone backend drives` list."""
+    try:
+        return {n: i for i, n in (l.split("\t", 1) for l in (DRIVE_DIR / "drives.tsv").read_text().splitlines() if l)}
+    except OSError:
+        return {}
+
+
+def drive_catalog(depth: int = 3, min_files: int = 3, only: tuple[str, ...] = ()) -> dict[str, list[str]]:
+    """`gdrive:<drive>/<dir>` -> sample filenames, folders holding >= min_files files."""
+    out: dict[str, list[str]] = {}
+    for name, did in drives().items():
+        if only and name not in only:
+            continue
+        try:
+            items = json.loads((DRIVE_DIR / f"idx-{did}.json").read_text())
+        except (OSError, ValueError):
+            continue
+        for it in items:
+            parts = it["Path"].split("/")[:-1][:depth]
+            if parts:
+                out.setdefault(f"gdrive:{name}/" + "/".join(parts), []).append(it["Name"])
+    return {k: v[:4] for k, v in sorted(out.items()) if len(v) >= min_files}
+
+
+def _remote(dest: str) -> str:
+    """'gdrive:m5x2 Main/r204 /x' -> 'm5x2drive,team_drive=<id>:r204 /x'."""
+    name, _, path = dest[len("gdrive:"):].partition("/")
+    did = drives().get(name)
+    if not did:
+        raise ValueError(f"unknown shared drive {name!r}; refresh {DRIVE_DIR}/drives.tsv")
+    return f"{REMOTE},team_drive={did}:{path}"
+
+
+def _md5(p: Path) -> str:
+    h = hashlib.md5()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def upload(src: Path, dest: str) -> str:
+    """Copy src (file or folder) into the Drive folder `dest`, never overwriting:
+    identical bytes already there -> nothing uploaded; same name, different
+    bytes -> uploaded as `name ~N`. Verified with rclone check. Returns the
+    Drive path it now lives at."""
+    import subprocess
+    base = _remote(dest).rstrip("/")
+    if src.is_dir():
+        target = f"{base}/{src.name}"
+        subprocess.run(["rclone", "copy", str(src), target, "--ignore-existing"], check=True, capture_output=True)
+        r = subprocess.run(["rclone", "check", str(src), target, "--one-way"], capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError(f"verify failed for {src.name}: {r.stderr.strip()[-200:]}")
+        return f"{dest}/{src.name}"
+    name, k = src.name, 1
+    while True:
+        r = subprocess.run(["rclone", "lsjson", "--hash", f"{base}/{name}"], capture_output=True, text=True)
+        found = json.loads(r.stdout or "[]") if r.returncode == 0 else []
+        if not found:
+            break
+        if found[0].get("Hashes", {}).get("md5") == _md5(src):
+            return f"{dest}/{name}"                  # already filed, identical
+        name = f"{src.stem} ~{k}{src.suffix}"
+        k += 1
+    subprocess.run(["rclone", "copyto", str(src), f"{base}/{name}"], check=True, capture_output=True)
+    r = subprocess.run(["rclone", "lsjson", "--hash", f"{base}/{name}"], capture_output=True, text=True)
+    got = json.loads(r.stdout or "[]")
+    if not got or got[0].get("Hashes", {}).get("md5") != _md5(src):
+        raise RuntimeError(f"verify failed for {src.name}")
+    return f"{dest}/{name}"
 
 
 def _batch_path(batch: str) -> Path:
@@ -62,7 +140,7 @@ def _dir_snippet(d: Path) -> str:
 
 
 def cmd_batch(folder: Path, n: int, max_mb: float, match: str = "", exclude: str = "",
-              dirs: bool = False) -> dict:
+              dirs: bool = False, drive: tuple[str, ...] = ()) -> dict:
     done = _labeled()
     files = [p for p in sorted(folder.iterdir()) if (p.is_dir() if dirs else p.is_file())
              and not p.name.startswith(".")
@@ -77,6 +155,8 @@ def cmd_batch(folder: Path, n: int, max_mb: float, match: str = "", exclude: str
     batch = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     data = {"batch": batch, "folder": str(folder), "rows": rows,
             "catalog": {k: [f.name for f in d.files[:4]] for k, d in sorted(cat.items())}}
+    if drive:
+        data["catalog"].update(drive_catalog(only=drive))
     STATE.mkdir(parents=True, exist_ok=True)
     _batch_path(batch).write_text(json.dumps(data, indent=1, ensure_ascii=False))
     return data
@@ -158,18 +238,35 @@ def cmd_answer(batch: str, answers: str, dry_run: bool = False, default: str = "
         src = Path(r["path"])
         dst = None
         if not dry_run and chosen != "skip" and src.exists():
-            to_dir = TRASH if chosen == "trash" else _target(chosen, src.name)
-            if to_dir.resolve() == src.parent.resolve():
+            if chosen.startswith("gdrive:"):
+                try:
+                    dst = upload(src, chosen)
+                except Exception as e:                  # leave it local; JM sees the error
+                    print(f"  {num}: upload failed, left in place: {e}", file=sys.stderr)
+                    continue
+                TRASH.mkdir(parents=True, exist_ok=True)
+                gone = _free(TRASH, src.name)
+                shutil.move(str(src), str(gone))
+                STATE.mkdir(parents=True, exist_ok=True)
+                with log.open("a") as f:
+                    f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": "label",
+                                        "action": "upload+trash", "src": str(src), "dst": dst,
+                                        "local_copy": str(gone), "batch": batch}) + "\n")
+            to_dir = None if chosen.startswith("gdrive:") else (TRASH if chosen == "trash" else _target(chosen, src.name))
+            if to_dir is None:
+                pass
+            elif to_dir.resolve() == src.parent.resolve():
                 dst = src                      # already there: label it, don't rename it
             else:
                 to_dir.mkdir(parents=True, exist_ok=True)
                 dst = _free(to_dir, src.name)
                 shutil.move(str(src), str(dst))
-            STATE.mkdir(parents=True, exist_ok=True)
-            with log.open("a") as f:
-                f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": "label",
-                                    "action": "trash" if chosen == "trash" else "move",
-                                    "src": str(src), "dst": str(dst), "batch": batch}) + "\n")
+            if to_dir is not None:
+                STATE.mkdir(parents=True, exist_ok=True)
+                with log.open("a") as f:
+                    f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "rule": "label",
+                                        "action": "trash" if chosen == "trash" else "move",
+                                        "src": str(src), "dst": str(dst), "batch": batch}) + "\n")
         rec = {"ts": dt.datetime.now().isoformat(timespec="seconds"), "batch": batch, "path": r["path"],
                "name": r["name"], "snippet_sha": hashlib.sha256(r.get("snippet", "").encode()).hexdigest()[:12],
                "suggested": sug, "chosen": chosen, "agree": sug == chosen,
@@ -208,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--match", default="", help="only names matching this regex")
     b.add_argument("--exclude", default="", help="skip names matching this regex")
     b.add_argument("--dirs", action="store_true", help="batch folders instead of files")
+    b.add_argument("--drive", action="append", default=[], help="add this shared drive's folders to the menu")
     pr = sub.add_parser("propose"); pr.add_argument("batch"); pr.add_argument("json")
     sh = sub.add_parser("show"); sh.add_argument("batch")
     an = sub.add_parser("answer"); an.add_argument("batch"); an.add_argument("answers")
@@ -216,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("score")
     a = ap.parse_args(argv)
     if a.cmd == "batch":
-        print(json.dumps(cmd_batch(a.folder.expanduser(), a.n, a.max_mb, a.match, a.exclude, a.dirs), indent=1, ensure_ascii=False))
+        print(json.dumps(cmd_batch(a.folder.expanduser(), a.n, a.max_mb, a.match, a.exclude, a.dirs, tuple(a.drive)), indent=1, ensure_ascii=False))
     elif a.cmd == "propose":
         cmd_propose(a.batch, json.loads(a.json)); print(cmd_show(a.batch))
     elif a.cmd == "show":
