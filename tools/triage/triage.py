@@ -6,7 +6,8 @@ first matching rule decides a top-level item's fate:
   trash   move to ~/.Trash (reversible until the Trash is emptied)
   move    move to `dest`; {year} = first 20xx in the name, else the year the
           file landed. If an identical file already sits at the destination,
-          the incoming copy is trashed instead.
+          the incoming copy is trashed instead. "rename": "screenshot" gives
+          the date-first ~/screenshots name (tools/images/screenshot_names.py).
   unzip   extract beside the zip (inheriting its age), trash the zip, then
           triage what came out in the same run
   review  leave in place, list it for JM
@@ -49,6 +50,8 @@ TOKEN = Path.home() / ".config" / "todoist" / "token"
 COPY_RE = re.compile(r"^(?P<stem>.+) \(\d+\)(?P<ext>\.[^.]+)?$")
 YEAR_RE = re.compile(r"(?<!\d)(20\d\d)(?!\d)")
 APPLE_EPOCH = 978307200
+sys.path.insert(0, str(REPO / "tools" / "images"))
+import screenshot_names  # noqa: E402
 
 
 @dataclass
@@ -69,6 +72,7 @@ class Decision:
     action: str          # trash | move | unzip | review | keep
     dest: Path | None = None
     note: str = ""
+    rename: str = ""
 
 
 # ── scanning ────────────────────────────────────────────────────────────────
@@ -254,7 +258,8 @@ def decide(item: Item, rules: list[dict]) -> Decision:
                 where = f" -> {dest}" if dest else ""
                 note = f"proposed: {rule['action']}{where}" + (f"; {rule['note']}" if rule.get("note") else "")
                 return Decision(item, rule["name"], "review", None, note)
-            return Decision(item, rule["name"], rule["action"], dest, rule.get("note", ""))
+            return Decision(item, rule["name"], rule["action"], dest, rule.get("note", ""),
+                            rule.get("rename", ""))
     return Decision(item, "-", "keep")
 
 
@@ -268,9 +273,12 @@ def _free_name(dest_dir: Path, name: str) -> Path:
     return target
 
 
-def _move(src: Path, dest_dir: Path) -> Path:
+def _move(src: Path, dest_dir: Path, rename: str = "") -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    target = _free_name(dest_dir, src.name)
+    if rename == "screenshot":
+        target = screenshot_names._free(dest_dir, screenshot_names.new_name(src.name, src.stat().st_mtime))
+    else:
+        target = _free_name(dest_dir, src.name)
     shutil.move(str(src), str(target))
     return target
 
@@ -316,7 +324,7 @@ def apply(decisions: list[Decision], log: Path) -> int:
                     action = "trash"
                 elif action == "move" and same_bytes(src, d.dest / src.name):
                     action = "trash"        # identical copy already filed
-                dst = _move(src, TRASH if action == "trash" else d.dest)
+                dst = _move(src, TRASH, "") if action == "trash" else _move(src, d.dest, d.rename)
             except (OSError, zipfile.BadZipFile, RuntimeError) as e:   # encrypted / corrupt zip
                 print(f"  skip {src.name}: {e}", file=sys.stderr)
                 continue

@@ -145,3 +145,11 @@ def test_own_k1_is_tax_record_others_are_lp_copies(tmp_path):
     assert triage.decide(_item(own, 5), RULES).rule == "tax-k1"
     assert triage.decide(_item(lp, 5), RULES).rule == "lp-k1-pending"
     assert triage.decide(_item(lp, 61), RULES).action == "trash"
+
+
+def test_old_screenshot_moves_to_screenshots_with_date_first_name(tmp_path, monkeypatch):
+    p = _touch(tmp_path, "chart.png")
+    d = triage.decide(_item(p, 10), RULES)
+    assert d.rule == "image-to-screenshots" and d.dest == Path.home() / "screenshots"
+    out = triage._move(p, tmp_path / "ss", d.rename)
+    assert out.name.endswith("--dl--chart.png") and out.name[:4].isdigit()

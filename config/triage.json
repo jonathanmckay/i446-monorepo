@@ -168,6 +168,26 @@
           "note": "phone photo not found in iCloud Photos"
         },
         {
+          "name": "image-to-screenshots",
+          "ext": [
+            "heic",
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "webp",
+            "bmp",
+            "tiff",
+            "mov",
+            "mp4"
+          ],
+          "min_age_days": 7,
+          "action": "move",
+          "dest": "~/screenshots",
+          "rename": "screenshot",
+          "note": "non-photo images per i446-photos-and-screenshots: date-first name, kept forever"
+        },
+        {
           "name": "stale",
           "min_age_days": 30,
           "action": "move",
