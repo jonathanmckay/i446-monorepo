@@ -27,11 +27,11 @@ calendar month** (it's a month-end review). Year defaults to the current year.
   The month's aggregates live on its **first-week row** (col A == `M.1`, e.g.
   April = 4.1 = row 15). Read live via ix-osa so formula values are current,
   not save-cache stale.
-- **Target:** `计分卡  2s, 3s.xlsx` (Dropbox `Eclipse SSD`, open in **local**
-  Excel on Straylight — Dropbox is NOT synced to Ix, so this is the one Excel
-  write that is deliberately local; the OneDrive-conflict rule doesn't apply).
+- **Target:** `计分卡  2s, 3s.xlsx` in `~/OneDrive/vault-excel/`, open in Excel
+  on **Ix** like the source (moved out of Dropbox `Eclipse SSD` on 2026-10-27,
+  so it follows the same write-on-Ix rule as every OneDrive workbook).
   Sheet `18-26 2s`; row looked up by col A == year, col B == month, never
-  hardcoded (April 2026 → row 101). Opens the workbook from Dropbox if closed;
+  hardcoded (April 2026 → row 101). Opens the workbook on Ix if closed;
   saves after writing.
 - **Mapping** (header-verified 2026-07-05): `AQ:BA` → `C:N` **skipping I**
   (deprecated 5^1₦ stays empty), and `BC` (分/d) → `Y`. Values pasted as
@@ -45,8 +45,9 @@ calendar month** (it's a month-end review). Year defaults to the current year.
 
 - `no M.1 row` — 1分+1s has no week-1 row for that month yet.
 - `month not aggregated yet` — the M.1 row exists but AQ:BC are all empty.
-- Write error — 计分卡 not open and the Dropbox path moved; check
-  `~/Library/CloudStorage/Dropbox/Eclipse SSD/计分卡  2s, 3s.xlsx`.
+- Write error — 计分卡 not open on Ix and the path moved; check
+  `~/OneDrive/vault-excel/计分卡  2s, 3s.xlsx` on Ix. The old Dropbox copy is
+  stale; never write to it.
 - Ix unreachable — the source read fails loudly (never falls back to the stale
   on-disk copy).
 

@@ -4,8 +4,8 @@
 Source: Neon分v12.2.xlsx (open in Excel on IX), sheet 1分+1s. Monthly aggregates
 live on the month's FIRST week row (col A == M.1), columns AQ..BA + BC.
 
-Target: 计分卡  2s, 3s.xlsx (Dropbox 'Eclipse SSD', open in LOCAL Excel on
-Straylight — Dropbox is not synced to Ix), sheet '18-26 2s'. Month row is looked
+Target: 计分卡  2s, 3s.xlsx (OneDrive vault-excel, open in Excel on IX like the
+source; moved out of Dropbox 'Eclipse SSD' 2026-10-27), sheet '18-26 2s'. Month row is looked
 up by col A == year, col B == month. Columns C..N skipping I (deprecated 5^1₦),
 plus Y.
 
@@ -31,7 +31,9 @@ from pathlib import Path
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 SCORECARD = "计分卡  2s, 3s.xlsx"   # note: two spaces before 2s
-SCORECARD_PATH = Path.home() / "Library/CloudStorage/Dropbox/Eclipse SSD" / SCORECARD
+# Path on IX (OneDrive-Personal), where the write runs; moved from Dropbox
+# 'Eclipse SSD' 2026-10-27 so both workbooks follow the write-on-Ix rule.
+SCORECARD_PATH = "/Users/mckay/OneDrive/vault-excel/" + SCORECARD
 SHEET_2S = "18-26 2s"
 NEON_WB = "Neon分v12.2.xlsx"
 SHEET_1S = "1分+1s"
@@ -92,8 +94,8 @@ end tell'''
 
 
 def write_scorecard(year: int, month: int, values: list[str], dry: bool) -> str:
-    """Local osascript: find the (year, month) row in 18-26 2s, SET the 12 cells.
-    Opens the workbook from Dropbox if not already open."""
+    """osascript on IX: find the (year, month) row in 18-26 2s, SET the 12 cells.
+    Opens the workbook from OneDrive if not already open."""
     pairs = list(zip(DST_COLS + [DST_EXTRA], values))
     sets = "\n        ".join(
         f'set value of range ("{c}" & theRow) of theSheet to {v}'
@@ -116,11 +118,11 @@ def write_scorecard(year: int, month: int, values: list[str], dry: bool) -> str:
     save workbook "{SCORECARD}"
     return "OK row=" & theRow
 end tell'''
-    r = subprocess.run(["osascript", "-"], input=script, capture_output=True,
-                       text=True, timeout=60)
+    r = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
+                       text=True, timeout=120)
     out = (r.stdout or "").strip()
     if r.returncode != 0 or out.startswith("ERROR"):
-        sys.exit(f"ERROR writing scorecard: {out or r.stderr.strip()}")
+        sys.exit(f"ERROR writing scorecard on ix: {out or r.stderr.strip()}")
     return out
 
 
