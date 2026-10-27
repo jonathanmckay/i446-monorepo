@@ -16,7 +16,9 @@ Usage: photos_import.py ROOT [--folder Archive] [--only NAME] [--dry-run]
 import importlib.util
 import json
 import shutil
+import sqlite3
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -46,7 +48,7 @@ on run argv
         if not (exists album albName of fld) then make new album named albName at fld
         set alb to album albName of fld
         with timeout of 3600 seconds
-            set imported to import fileList into alb skip check duplicates false
+            set imported to import fileList into alb skip check duplicates true
         end timeout
         if imported is missing value then return 0
         return count of imported
@@ -76,6 +78,44 @@ def plan(root: Path):
     return albums, shots, skipped
 
 
+LIBRARY_DB = Path.home() / "Pictures" / "Photos Library.photoslibrary" / "database" / "Photos.sqlite"
+
+
+def library_keys(db: Path = LIBRARY_DB) -> set:
+    """(lowercased original filename, original byte size) of every asset in
+    the Photos library, read from a temp copy (Photos holds the live DB)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for suffix in ("", "-wal", "-shm"):
+            src = Path(str(db) + suffix)
+            if src.exists():
+                shutil.copy2(src, Path(tmp) / ("Photos.sqlite" + suffix))
+        con = sqlite3.connect(f"file:{tmp}/Photos.sqlite?mode=ro", uri=True)
+        rows = con.execute("select lower(ZORIGINALFILENAME), ZORIGINALFILESIZE "
+                           "from ZADDITIONALASSETATTRIBUTES").fetchall()
+        con.close()
+    return {(n, sz) for n, sz in rows if n}
+
+
+def dedupe(albums: dict, existing: set):
+    """Drop files already in the library or earlier in this run.
+    Returns (albums, n_in_library, n_repeat_in_archive)."""
+    seen, out, lib, rep = set(), {}, 0, 0
+    for album, files in albums.items():
+        keep = []
+        for p in files:
+            key = (p.name.lower(), p.stat().st_size)
+            if key in existing:
+                lib += 1
+            elif key in seen:
+                rep += 1
+            else:
+                seen.add(key)
+                keep.append(p)
+        if keep:
+            out[album] = keep
+    return out, lib, rep
+
+
 def _load() -> dict:
     try:
         return json.loads(STATE.read_text())
@@ -98,6 +138,8 @@ def import_batch(folder: str, album: str, files) -> int:
 
 def run(root: Path, folder: str = "Archive", only=None, dry_run=False) -> None:
     albums, shots, skipped = plan(root)
+    albums, n_lib, n_rep = dedupe(albums, library_keys())
+    print(f"skipping {n_lib} already in Photos, {n_rep} repeated within the archive")
     print(f"{sum(map(len, albums.values()))} media files in {len(albums)} albums, "
           f"{len(shots)} screenshots, {len(skipped)} skipped non-media")
     for p in skipped:
