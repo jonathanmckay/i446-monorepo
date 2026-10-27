@@ -20,7 +20,7 @@
 */10 * * * * AUTOPUSH_RECONCILE=1 bash $HOME/i446-monorepo/scripts/git-autopush.sh >> $HOME/i446-monorepo/scripts/.autopush.log 2>&1
 # dream: overnight chief-of-staff agent (runs ~40-60 min, writes to vault/i447/i446/.dream-runs/)
 0 3 * * * bash $HOME/i446-monorepo/scripts/dream-launch.sh >> $HOME/i446-monorepo/scripts/.dream-launch.log 2>&1
-*/2 * * * * cd $HOME/m5x2-ai-stats && git pull --rebase origin main -q 2>&1 | tail -50 >> $HOME/m5x2-ai-stats/.pull.log
+*/2 * * * * cd $HOME/code/m5x2-ai-stats && git pull --rebase origin main -q 2>&1 | tail -50 >> $HOME/code/m5x2-ai-stats/.pull.log
 
 # refresh-last-contact: auto-derive d359 last_contact from Toggl + d358 before Dream runs
 30 2 * * * python3 $HOME/i446-monorepo/tools/d359/refresh_last_contact.py --days 14 --apply >> $HOME/i446-monorepo/tools/d359/.refresh-last-contact.log 2>&1
