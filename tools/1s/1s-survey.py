@@ -558,7 +558,7 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
         else:
             e.app.layout.focus_next()
 
-    @kb.add("escape", eager=True)   # eager: no 1s meta-chord wait (2026-10-16)
+    @kb.add("escape")   # not eager: Opt+Backspace (ESC DEL) must reach backward-kill-word
     async def _(e):
         await _submit(e.app)
 
@@ -582,6 +582,7 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
     app = Application(layout=Layout(root, focused_element=areas[FIELDS[0][0]][0]),
                       key_bindings=kb, full_screen=True, style=style,
                       mouse_support=True)
+    app.timeoutlen = 0.05   # lone Esc fires after 50ms instead of the 1s chord wait
     # None on cancel (^Q/^C); on submit, _submit() has already written to
     # Neon (and printed live progress in the status line) before exiting, so
     # this returns {"answers", "all_ok", "filled"} rather than a bare marker.

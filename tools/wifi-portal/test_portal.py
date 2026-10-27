@@ -3,6 +3,7 @@ over a priced pass, fills the login, stops on 2FA, and only ever acts on
 allowlisted airline hosts."""
 import http.server
 import importlib.util
+import secrets
 import threading
 from pathlib import Path
 
@@ -73,10 +74,13 @@ def test_ticks_terms_and_takes_free_over_paid(srv, tmp_path):
 
 
 def test_fills_login_from_creds(srv, tmp_path):
-    r = portal.drive(_url(srv, "/login"), ("123456789", "s3cret"), tmp_path,
-                     lambda: srv.online)
+    # Random per run, never a literal pair: GitGuardian flagged the old
+    # hardcoded ("123456789", "s3cret") tuple as an Authentication Tuple
+    # (2026-10-27 false positive).
+    fake = (secrets.token_hex(4), secrets.token_hex(8))
+    r = portal.drive(_url(srv, "/login"), fake, tmp_path, lambda: srv.online)
     assert r == "online"
-    assert any("mp=123456789" in h and "pw=s3cret" in h for h in srv.hits)
+    assert any(f"mp={fake[0]}" in h and f"pw={fake[1]}" in h for h in srv.hits)
 
 
 def test_stops_on_2fa(srv, tmp_path):

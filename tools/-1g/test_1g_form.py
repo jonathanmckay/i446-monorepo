@@ -121,7 +121,7 @@ def test_todoist_failure_is_reported_nonzero(form, monkeypatch):
 
 def test_form_has_escape_save_and_ctrl_q_discard(form):
     src = (HERE / "-1g-form.py").read_text()
-    assert '@kb.add("escape", eager=True)' in src and '@kb.add("c-q")' in src
+    assert '@kb.add("escape")' in src and '@kb.add("c-q")' in src
 
 
 def test_detach_spawns_child_and_reports_in_dtd_header(form, monkeypatch, tmp_path):

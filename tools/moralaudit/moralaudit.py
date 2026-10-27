@@ -288,7 +288,7 @@ def run_form(target: _dt.date) -> dict | None:
         else:
             e.app.layout.focus_next()
 
-    @kb.add("escape", eager=True)   # Esc = save and back to dtd (2026-10-16)
+    @kb.add("escape")   # not eager: Opt+Backspace (ESC DEL) must reach backward-kill-word
     @kb.add("c-s")
     def _(e):
         _submit(e.app)
@@ -308,6 +308,7 @@ def run_form(target: _dt.date) -> dict | None:
 
     app = Application(layout=Layout(root, focused_element=areas[FIELDS[0][0]][0]),
                       key_bindings=kb, full_screen=True, style=style, mouse_support=True)
+    app.timeoutlen = 0.05   # lone Esc fires after 50ms instead of the 1s chord wait
     if app.run() != "submit":
         return None
     return {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
