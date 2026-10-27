@@ -184,6 +184,31 @@ def cmd_show(batch: str) -> str:
     return "\n".join(out)
 
 
+def upload_version(src: Path, drive_file: str, tag: str = "local") -> str:
+    """Keep both (JM 2026-10-27): put `src` beside the Drive file it conflicts with as
+    `<stem> (<tag> YYYY-MM-DD)<ext>` (src's modified date). Drive's own revisions
+    expire after 30 days, so a sibling file is the durable version. `drive_file`
+    is '<shared drive>/<path>' as in the drive index. Returns the new Drive path."""
+    import subprocess
+    name, _, path = drive_file.partition("/")
+    folder = path.rsplit("/", 1)[0] if "/" in path else ""
+    when = dt.datetime.fromtimestamp(src.stat().st_mtime).strftime("%Y-%m-%d")
+    new = f"{src.stem} ({tag} {when}){src.suffix}"
+    base = _remote(f"gdrive:{name}/{folder}").rstrip("/")
+    if folder == "":
+        base = _remote(f"gdrive:{name}/").rstrip("/")
+    target = f"{base}/{new}"
+    r = subprocess.run(["rclone", "lsjson", "--hash", target], capture_output=True, text=True)
+    have = json.loads(r.stdout or "[]") if r.returncode == 0 else []
+    if not have:
+        subprocess.run(["rclone", "copyto", str(src), target], check=True, capture_output=True)
+        r = subprocess.run(["rclone", "lsjson", "--hash", target], capture_output=True, text=True)
+        have = json.loads(r.stdout or "[]")
+    if not have or have[0].get("Hashes", {}).get("md5") != _md5(src):
+        raise RuntimeError(f"verify failed for {src.name}")
+    return f"{name}/{folder}/{new}"
+
+
 def _area(dest: str) -> str:
     return dest.split("/")[0] if dest not in ("trash", "skip") else dest
 
