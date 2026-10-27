@@ -12,8 +12,8 @@ suffixes. Anything else keeps its original name behind an mtime prefix:
   IMG_1234.jpg  →  2024-03-01_101500--dl--IMG_1234.jpg
 Non-images (.htm, .pptx …) are skipped and listed, not copied.
 
-Usage: screenshot_names.py migrate SRC DST [--dry-run]
-       (copies; SRC is never modified)
+Usage: screenshot_names.py migrate SRC DST [--dry-run] [--move]
+       (copies, SRC untouched; --move renames instead, for a local staging copy)
 """
 import datetime as dt
 import os
@@ -81,7 +81,7 @@ def _copy_online_only(f: Path, target: Path, tries: int = 8) -> None:
     shutil.copystat(f, target)
 
 
-def migrate(src: Path, dst: Path, dry_run: bool = False) -> int:
+def migrate(src: Path, dst: Path, dry_run: bool = False, move: bool = False) -> int:
     dst.mkdir(parents=True, exist_ok=True)
     n = 0
     for f in sorted(src.iterdir()):
@@ -98,7 +98,10 @@ def migrate(src: Path, dst: Path, dry_run: bool = False) -> int:
         if dry_run:
             print(f"{f.name}  →  {target.name}")
         else:
-            _copy_online_only(f, target)
+            if move:
+                f.rename(target)  # same disk: no second copy (Ix staging, 2026-10-27)
+            else:
+                _copy_online_only(f, target)
         n += 1
     return n
 
@@ -106,7 +109,7 @@ def migrate(src: Path, dst: Path, dry_run: bool = False) -> int:
 if __name__ == "__main__":
     if len(sys.argv) >= 4 and sys.argv[1] == "migrate":
         print(migrate(Path(sys.argv[2]).expanduser(), Path(sys.argv[3]).expanduser(),
-                      "--dry-run" in sys.argv), "files")
+                      "--dry-run" in sys.argv, "--move" in sys.argv), "files")
     else:
         print(__doc__)
         sys.exit(2)
