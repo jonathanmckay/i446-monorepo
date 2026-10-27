@@ -1,10 +1,6 @@
 {
   "version": 1,
   "tasks": {
-    "be social": {
-      "todoist_id": "6hqxgmwfHJG9XV42",
-      "minutes": 30
-    },
     "get first pass through dashboards done": {
       "todoist_id": "6hqxgp4P45gVvHM2",
       "minutes": 40
@@ -14,5 +10,5 @@
       "minutes": 40
     }
   },
-  "last_sync": "2026-10-26T20:00:01.131725-07:00"
+  "last_sync": "2026-10-26T22:00:03.726904-07:00"
 }
