@@ -40,10 +40,16 @@ def test_duplicate_copy_only_when_identical(tmp_path):
     assert triage.decide(_item(diff, 0), RULES).rule != "duplicate-copy"
 
 
-def test_tax_record_is_proposal_until_enabled(tmp_path):
-    p = _touch(tmp_path, "2025 Tax Return - MCKAY.pdf")
+def test_tax_return_files_into_its_year(tmp_path):
+    p = _touch(tmp_path, "2024 Tax Return - MCKAY.pdf")
     d = triage.decide(_item(p, 400), RULES)
-    assert (d.action, d.rule) == ("review", "tax-record") and d.note.startswith("proposed: move")
+    assert d.rule == "tax-return" and d.dest.parts[-2:] == ("2024 Tax", "Filed Returns")
+
+
+def test_disabled_rule_is_a_proposal(tmp_path):
+    p = _touch(tmp_path, "x.dmg")
+    d = triage.decide(_item(p, 30), [{"name": "r", "ext": ["dmg"], "action": "trash", "enabled": False}])
+    assert d.action == "review" and d.note.startswith("proposed: trash")
 
 
 def test_stale_moves_to_flat_archive(tmp_path):
@@ -81,12 +87,37 @@ def test_review_rules_beat_trash_by_type(tmp_path):
     assert triage.decide(_item(p, 60), RULES).rule == "lp-k1-copy"
 
 
-def test_plain_zip_is_reviewed_not_trashed(tmp_path):
+def test_plain_zip_is_unzipped_then_triaged_with_its_age(tmp_path, monkeypatch):
     import zipfile
-    p = tmp_path / "export.zip"
+    monkeypatch.setattr(triage, "TRASH", tmp_path / "trash")
+    monkeypatch.setattr(triage, "ADDED", tmp_path / "added.json")
+    dl = tmp_path / "dl"
+    dl.mkdir()
+    p = dl / "export.zip"
     with zipfile.ZipFile(p, "w") as z:
         z.writestr("notes/a.md", "x")
-    assert triage.decide(_item(p, 60), RULES).action == "review"
+        z.writestr("notes/b.md", "y")
+        z.writestr("__MACOSX/junk", "z")
+    it = _item(p, 60)
+    d = triage.decide(it, RULES)
+    assert d.action == "unzip"
+    assert triage.apply([d], tmp_path / "log.jsonl") == 1
+    out = dl / "notes"
+    assert (out / "a.md").exists() and not p.exists() and not (dl / "__MACOSX").exists()
+    again = [i for i in triage.scan(dl, []) if i.path == out][0]
+    assert abs((again.added - it.added).total_seconds()) < 2      # inherits the zip's age
+    assert triage.decide(again, RULES).dest == Path.home() / "Archive"
+
+
+def test_move_onto_identical_file_trashes_instead(tmp_path, monkeypatch):
+    monkeypatch.setattr(triage, "TRASH", tmp_path / "trash")
+    dest = tmp_path / "filed"
+    dest.mkdir()
+    _touch(dest, "2025 W2.pdf", b"same")
+    p = _touch(tmp_path, "2025 W2.pdf", b"same")
+    d = triage.Decision(_item(p, 1), "tax-form", "move", dest)
+    triage.apply([d], tmp_path / "log.jsonl")
+    assert not p.exists() and (tmp_path / "trash" / "2025 W2.pdf").exists() and not (dest / "2025 W2 ~1.pdf").exists()
 
 
 def test_app_zip_and_extracted_zip_are_trashed(tmp_path):
@@ -111,5 +142,6 @@ def test_jpg_beside_heic_is_trashed(tmp_path):
 def test_own_k1_is_tax_record_others_are_lp_copies(tmp_path):
     own = _touch(tmp_path, "BRADEN LLC_JONATHAN MCKAY_2025_1065_K1.pdf")
     lp = _touch(tmp_path, "2025 K-1 - M5X2 FUND III - THE X TRUST.pdf")
-    assert triage.decide(_item(own, 5), RULES).rule == "tax-record"
-    assert triage.decide(_item(lp, 5), RULES).rule == "lp-k1-copy"
+    assert triage.decide(_item(own, 5), RULES).rule == "tax-k1"
+    assert triage.decide(_item(lp, 5), RULES).rule == "lp-k1-pending"
+    assert triage.decide(_item(lp, 61), RULES).action == "trash"

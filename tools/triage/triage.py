@@ -4,16 +4,23 @@
 Each source in config/triage.json is a folder plus an ordered rule list; the
 first matching rule decides a top-level item's fate:
   trash   move to ~/.Trash (reversible until the Trash is emptied)
-  move    move to `dest` ({yyyy-mm} = the month the file landed)
+  move    move to `dest`; {year} = first 20xx in the name, else the year the
+          file landed. If an identical file already sits at the destination,
+          the incoming copy is trashed instead.
+  unzip   extract beside the zip (inheriting its age), trash the zip, then
+          triage what came out in the same run
   review  leave in place, list it for JM
-Unmatched items are kept. A rule with "enabled": false is reported as
-review ("proposed: <action> -> dest") until JM switches it on. Ages count from Spotlight's kMDItemDateAdded (when
-the file landed in the folder), falling back to birth time.
+Unmatched items are kept. A rule with "enabled": false is reported as review
+("proposed: ...") until switched on. Ages count from Spotlight's
+kMDItemDateAdded (when the file landed in the folder), falling back to birth
+time; unzipped output keeps its zip's date via a sidecar in the state dir.
 
-Dry run by default; --apply executes and logs every move to
+Dry run by default; --apply executes and logs every change to
 ~/.local/state/jm/triage/YYYY-MM-DD.jsonl (src, dst) so any run can be undone.
+--card files one Todoist card listing the review pile on Sundays (once per
+ISO week); --card-now files it regardless of the day.
 
-Usage: triage.py [--source downloads] [--apply] [--json]
+Usage: triage.py [--source downloads] [--apply] [--card | --card-now] [--json]
 """
 from __future__ import annotations
 
@@ -24,17 +31,24 @@ import hashlib
 import json
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
+import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "triage.json"
-LOG_DIR = Path.home() / ".local" / "state" / "jm" / "triage"
+STATE = Path.home() / ".local" / "state" / "jm" / "triage"
+ADDED = STATE / "added.json"          # path -> inherited date-added (unzip output)
 TRASH = Path.home() / ".Trash"
+PHOTOS_DB = Path.home() / "Pictures" / "Photos Library.photoslibrary" / "database" / "Photos.sqlite"
+TOKEN = Path.home() / ".config" / "todoist" / "token"
 COPY_RE = re.compile(r"^(?P<stem>.+) \(\d+\)(?P<ext>\.[^.]+)?$")
+YEAR_RE = re.compile(r"(?<!\d)(20\d\d)(?!\d)")
+APPLE_EPOCH = 978307200
 
 
 @dataclass
@@ -52,10 +66,12 @@ class Item:
 class Decision:
     item: Item
     rule: str
-    action: str          # trash | move | review | keep
+    action: str          # trash | move | unzip | review | keep
     dest: Path | None = None
     note: str = ""
 
+
+# ── scanning ────────────────────────────────────────────────────────────────
 
 def _size(p: Path) -> int:
     if p.is_dir() and not p.is_symlink():
@@ -81,16 +97,34 @@ def _date_added(paths: list[Path]) -> dict[Path, dt.datetime]:
     return out
 
 
+def _load_added() -> dict[str, str]:
+    try:
+        return json.loads(ADDED.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember_added(path: Path, when: dt.datetime) -> None:
+    data = {k: v for k, v in _load_added().items() if Path(k).exists()}
+    data[str(path)] = when.isoformat(timespec="seconds")
+    ADDED.parent.mkdir(parents=True, exist_ok=True)
+    ADDED.write_text(json.dumps(data, indent=1))
+
+
 def scan(root: Path, skip: list[str]) -> list[Item]:
-    paths = sorted(p for p in root.iterdir() if p.name not in skip)
+    paths = sorted(p for p in root.iterdir() if p.name not in skip and not p.name.startswith(".triage-"))
     added = _date_added(paths)
+    inherited = _load_added()
     items = []
     for p in paths:
         st = p.lstat()
-        when = added.get(p) or dt.datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_mtime))
+        when = (dt.datetime.fromisoformat(inherited[str(p)]) if str(p) in inherited
+                else added.get(p) or dt.datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_mtime)))
         items.append(Item(p, when, _size(p)))
     return items
 
+
+# ── matchers ────────────────────────────────────────────────────────────────
 
 def _sha(p: Path) -> str:
     h = hashlib.sha256()
@@ -100,14 +134,15 @@ def _sha(p: Path) -> str:
     return h.hexdigest()
 
 
+def same_bytes(a: Path, b: Path) -> bool:
+    return (a.is_file() and b.is_file() and a.stat().st_size == b.stat().st_size
+            and _sha(a) == _sha(b))
+
+
 def is_duplicate_copy(p: Path) -> bool:
     """`name (1).ext` whose original `name.ext` sits beside it with identical bytes."""
     m = COPY_RE.match(p.name)
-    if not m or not p.is_file():
-        return False
-    orig = p.with_name(m["stem"] + (m["ext"] or ""))
-    return (orig.is_file() and orig.stat().st_size == p.stat().st_size
-            and _sha(orig) == _sha(p))
+    return bool(m) and same_bytes(p, p.with_name(m["stem"] + (m["ext"] or "")))
 
 
 def is_extracted_zip(p: Path) -> bool:
@@ -126,6 +161,10 @@ def is_app_zip(p: Path) -> bool:
         return False
 
 
+def glob_escape(s: str) -> str:
+    return re.sub(r"([*?\[])", r"[\1]", s)
+
+
 def has_twin(p: Path, exts: list[str]) -> bool:
     """Same stem with one of `exts` beside it (IMG_1.jpg next to IMG_1.HEIC)."""
     return p.is_file() and any(
@@ -133,8 +172,46 @@ def has_twin(p: Path, exts: list[str]) -> bool:
         for q in p.parent.glob(glob_escape(p.stem) + ".*"))
 
 
-def glob_escape(s: str) -> str:
-    return re.sub(r"([*?\[])", r"[\1]", s)
+_photos_cache: dict[str, list[float]] | None = None
+
+
+def _photos_index() -> dict[str, list[float]]:
+    """original filename (lower) -> capture times (unix) for photos not in Photos' trash.
+
+    Read-only, immutable open of the library database; any failure (no Full Disk
+    Access under launchd, schema change) yields {} so the photo stays in review."""
+    global _photos_cache
+    if _photos_cache is None:
+        _photos_cache = {}
+        try:
+            con = sqlite3.connect(f"file:{PHOTOS_DB}?mode=ro&immutable=1", uri=True)
+            for name, created in con.execute(
+                    "select a.ZORIGINALFILENAME, z.ZDATECREATED from ZADDITIONALASSETATTRIBUTES a "
+                    "join ZASSET z on a.ZASSET = z.Z_PK where z.ZTRASHEDSTATE = 0"):
+                if name and created is not None:
+                    _photos_cache.setdefault(name.lower(), []).append(created + APPLE_EPOCH)
+            con.close()
+        except sqlite3.Error:
+            _photos_cache = {}
+    return _photos_cache
+
+
+def _capture_time(p: Path) -> float | None:
+    try:
+        raw = subprocess.run(["mdls", "-name", "kMDItemContentCreationDate", "-raw", str(p)],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+        return dt.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S %z").timestamp()
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def in_photos_library(p: Path) -> bool:
+    """Photos holds an original with this filename captured within 2 s of this file."""
+    times = _photos_index().get(p.name.lower())
+    if not times or not p.is_file():
+        return False
+    t = _capture_time(p)
+    return t is not None and any(abs(t - x) <= 2 for x in times)
 
 
 def matches(rule: dict, item: Item) -> bool:
@@ -149,30 +226,39 @@ def matches(rule: dict, item: Item) -> bool:
         return False
     if "not_regex" in rule and re.search(rule["not_regex"], p.name):
         return False
+    if rule.get("duplicate") and not is_duplicate_copy(p):
+        return False
     if rule.get("extracted") and not is_extracted_zip(p):
         return False
     if rule.get("app_zip") and not is_app_zip(p):
         return False
     if "twin_exts" in rule and not has_twin(p, rule["twin_exts"]):
         return False
-    if rule.get("duplicate") and not is_duplicate_copy(p):
+    if rule.get("in_photos") and not in_photos_library(p):
         return False
     return True
+
+
+def _dest(template: str, item: Item) -> Path:
+    m = YEAR_RE.search(item.path.name)
+    year = m.group(1) if m else str(item.added.year)
+    return Path(template.replace("{year}", year)
+                        .replace("{yyyy-mm}", item.added.strftime("%Y-%m"))).expanduser()
 
 
 def decide(item: Item, rules: list[dict]) -> Decision:
     for rule in rules:
         if matches(rule, item):
-            dest = None
-            if rule["action"] == "move":
-                dest = Path(rule["dest"].replace("{yyyy-mm}", item.added.strftime("%Y-%m"))).expanduser()
+            dest = _dest(rule["dest"], item) if rule["action"] == "move" else None
             if not rule.get("enabled", True):
-                where = f" -> {rule['dest']}" if dest else ""
+                where = f" -> {dest}" if dest else ""
                 note = f"proposed: {rule['action']}{where}" + (f"; {rule['note']}" if rule.get("note") else "")
                 return Decision(item, rule["name"], "review", None, note)
             return Decision(item, rule["name"], rule["action"], dest, rule.get("note", ""))
     return Decision(item, "-", "keep")
 
+
+# ── applying ────────────────────────────────────────────────────────────────
 
 def _free_name(dest_dir: Path, name: str) -> Path:
     target, n = dest_dir / name, 1
@@ -182,23 +268,66 @@ def _free_name(dest_dir: Path, name: str) -> Path:
     return target
 
 
+def _move(src: Path, dest_dir: Path) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = _free_name(dest_dir, src.name)
+    shutil.move(str(src), str(target))
+    return target
+
+
+def _unzip(item: Item) -> Path:
+    """Extract beside the zip; a single top-level entry is lifted out so there is
+    no folder-in-folder. Returns what came out."""
+    zp = item.path
+    tmp = zp.parent / f".triage-unzip-{zp.stem}"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    with zipfile.ZipFile(zp) as z:
+        for m in z.infolist():
+            if m.filename.startswith("__MACOSX/") or m.filename.endswith(".DS_Store"):
+                continue
+            z.extract(m, tmp)           # zipfile strips absolute paths and '..'
+    entries = list(tmp.iterdir())
+    if len(entries) == 1:
+        out = _free_name(zp.parent, entries[0].name)
+        shutil.move(str(entries[0]), str(out))
+        tmp.rmdir()
+    else:
+        out = _free_name(zp.parent, zp.stem)
+        tmp.rename(out)
+    _remember_added(out, item.added)
+    return out
+
+
 def apply(decisions: list[Decision], log: Path) -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
     done = 0
     with log.open("a") as f:
         for d in decisions:
-            if d.action not in ("trash", "move"):
+            if d.action not in ("trash", "move", "unzip"):
                 continue
-            dest_dir = TRASH if d.action == "trash" else d.dest
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            target = _free_name(dest_dir, d.item.path.name)
-            shutil.move(str(d.item.path), str(target))
+            src, action = d.item.path, d.action
+            try:
+                if action == "unzip":
+                    out = _unzip(d.item)
+                    rec = {"action": "unzip", "src": str(src), "dst": str(out)}
+                    f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"),
+                                        "rule": d.rule, **rec}) + "\n")
+                    action = "trash"
+                elif action == "move" and same_bytes(src, d.dest / src.name):
+                    action = "trash"        # identical copy already filed
+                dst = _move(src, TRASH if action == "trash" else d.dest)
+            except (OSError, zipfile.BadZipFile, RuntimeError) as e:   # encrypted / corrupt zip
+                print(f"  skip {src.name}: {e}", file=sys.stderr)
+                continue
             f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"),
-                                "rule": d.rule, "action": d.action,
-                                "src": str(d.item.path), "dst": str(target)}) + "\n")
+                                "rule": d.rule, "action": action,
+                                "src": str(src), "dst": str(dst)}) + "\n")
             done += 1
     return done
 
+
+# ── reporting ───────────────────────────────────────────────────────────────
 
 def _human(n: float) -> str:
     for unit in ("B", "K", "M", "G"):
@@ -208,26 +337,79 @@ def _human(n: float) -> str:
     return f"{n:.1f}T"
 
 
-def report(name: str, decisions: list[Decision]) -> str:
+ORDER = {"trash": 0, "move": 1, "unzip": 2, "review": 3, "keep": 4}
+
+
+def _groups(decisions: list[Decision]) -> list[tuple[tuple[str, str], list[Decision]]]:
     groups: dict[tuple[str, str], list[Decision]] = {}
     for d in decisions:
         groups.setdefault((d.action, d.rule), []).append(d)
-    order = {"trash": 0, "move": 1, "review": 2, "keep": 3}
+    return sorted(groups.items(), key=lambda kv: (ORDER[kv[0][0]], kv[0][1]))
+
+
+def report(name: str, decisions: list[Decision]) -> str:
     lines = [f"{name}: {len(decisions)} items, {_human(sum(d.item.size for d in decisions))}", ""]
-    for (action, rule), ds in sorted(groups.items(), key=lambda kv: (order[kv[0][0]], kv[0][1])):
+    for (action, rule), ds in _groups(decisions):
         lines.append(f"  {action:<6} {rule:<18} {len(ds):>4}  {_human(sum(d.item.size for d in ds)):>7}")
-    for (action, rule), ds in sorted(groups.items(), key=lambda kv: (order[kv[0][0]], kv[0][1])):
-        if action != "review":
-            continue
-        lines += ["", f"  review / {rule}" + (f" ({ds[0].note})" if ds[0].note else "")]
-        lines += [f"    {d.item.added:%Y-%m-%d}  {d.item.path.name}" for d in sorted(ds, key=lambda d: d.item.added)]
+    for (action, rule), ds in _groups(decisions):
+        if action == "review":
+            lines += ["", f"  review / {rule}" + (f" ({ds[0].note})" if ds[0].note else "")]
+            lines += [f"    {d.item.added:%Y-%m-%d}  {d.item.path.name}"
+                      for d in sorted(ds, key=lambda d: d.item.added)]
     return "\n".join(lines)
+
+
+def card(name: str, decisions: list[Decision]) -> str:
+    """One Todoist card per ISO week listing the review pile; returns a status line."""
+    review = [d for d in decisions if d.action == "review"]
+    if not review:
+        return "card: nothing to review"
+    year, week, _ = dt.date.today().isocalendar()
+    mark = STATE / f"card-{name}-{year}-W{week:02d}"
+    if mark.exists():
+        return f"card: already filed for {year}-W{week:02d}"
+    desc = []
+    for (_, rule), ds in _groups(review):
+        desc.append(f"**{rule}** ({len(ds)})" + (f": {ds[0].note}" if ds[0].note else ""))
+        desc += [f"- {d.item.path.name}" for d in sorted(ds, key=lambda d: d.item.added)]
+        desc.append("")
+    body = json.dumps({"content": f"😈 {name} triage: {len(review)} to review (15) [5]",
+                       "description": "\n".join(desc)[:15000], "labels": ["i447"],
+                       "due_string": "today", "priority": 4}).encode()
+    req = urllib.request.Request("https://api.todoist.com/api/v1/tasks", data=body, method="POST",
+                                 headers={"Authorization": "Bearer " + TOKEN.read_text().strip(),
+                                          "Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=15).read()
+    STATE.mkdir(parents=True, exist_ok=True)
+    mark.touch()
+    return f"card: filed ({len(review)} items)"
+
+
+# ── main ────────────────────────────────────────────────────────────────────
+
+def run_source(name: str, src: dict, do_apply: bool) -> list[Decision]:
+    root = Path(src["path"]).expanduser()
+    decisions = [decide(i, src["rules"]) for i in scan(root, src.get("skip", []))]
+    if not do_apply:
+        return decisions
+    log = STATE / f"{dt.date.today()}.jsonl"
+    total = 0
+    for _ in range(3):                      # unzip output is triaged in the same run
+        total += apply(decisions, log)
+        unzipped = any(d.action == "unzip" for d in decisions)
+        decisions = [decide(i, src["rules"]) for i in scan(root, src.get("skip", []))]
+        if not unzipped:
+            break
+    print(f"{name}: applied {total} changes; log: {log}")
+    return decisions
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--source", action="append", help="source name(s) from config; default all")
-    ap.add_argument("--apply", action="store_true", help="execute trash/move (default: dry run)")
+    ap.add_argument("--apply", action="store_true", help="execute trash/move/unzip (default: dry run)")
+    ap.add_argument("--card", action="store_true", help="file the review card if today is Sunday")
+    ap.add_argument("--card-now", action="store_true", help="file the review card today")
     ap.add_argument("--json", action="store_true", help="machine-readable decisions")
     ap.add_argument("--config", type=Path, default=CONFIG)
     args = ap.parse_args(argv)
@@ -235,20 +417,20 @@ def main(argv: list[str] | None = None) -> int:
     sources = json.loads(args.config.read_text())["sources"]
     out = []
     for name in args.source or list(sources):
-        src = sources[name]
-        root = Path(src["path"]).expanduser()
-        decisions = [decide(i, src["rules"]) for i in scan(root, src.get("skip", []))]
+        decisions = run_source(name, sources[name], args.apply)
         if args.json:
             out += [{"source": name, "path": str(d.item.path), "rule": d.rule, "action": d.action,
                      "dest": str(d.dest) if d.dest else None, "size": d.item.size,
                      "added": d.item.added.isoformat(timespec="seconds")} for d in decisions]
             continue
         print(report(name, decisions))
-        if args.apply:
-            n = apply(decisions, LOG_DIR / f"{dt.date.today()}.jsonl")
-            print(f"\n  applied {n} trash/move actions; log: {LOG_DIR}/{dt.date.today()}.jsonl")
-        else:
+        if not args.apply:
             print("\n  dry run; pass --apply to execute")
+        if args.card_now or (args.card and dt.date.today().weekday() == 6):
+            try:
+                print(card(name, decisions))
+            except Exception as e:      # the report above still stands
+                print(f"card: not filed: {e}", file=sys.stderr)
     if args.json:
         json.dump(out, sys.stdout, indent=1)
     return 0
