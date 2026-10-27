@@ -135,8 +135,18 @@ def import_batch(folder: str, album: str, files) -> int:
     r = subprocess.run(["osascript", "-e", APPLESCRIPT, folder, album, *map(str, files)],
                        capture_output=True, text=True, timeout=4000)
     if r.returncode:
+        if "-1712" in r.stderr:  # AppleEvent timed out: Photos wedged, same as a silent 0
+            print(f"Photos timed out: {r.stderr.strip()[:120]}", flush=True)
+            return 0
         raise RuntimeError(r.stderr.strip())
     return int(r.stdout.strip() or 0)
+
+
+def photos_responsive(timeout_s: int = 20) -> bool:
+    r = subprocess.run(["osascript", "-e", f"with timeout of {timeout_s} seconds",
+                        "-e", 'tell application "Photos" to count of albums',
+                        "-e", "end timeout"], capture_output=True, text=True)
+    return r.returncode == 0
 
 
 def restart_photos() -> None:
@@ -154,7 +164,13 @@ def restart_photos() -> None:
     subprocess.run(["killall", "photolibraryd"], capture_output=True)
     time.sleep(3)
     subprocess.run(["open", "-g", "-j", "-a", "Photos"])
-    time.sleep(10)
+    # Wait until the library actually answers (it can take a minute+ after
+    # photolibraryd restarts), not a fixed sleep.
+    for _ in range(20):
+        time.sleep(15)
+        if photos_responsive():
+            return
+    print("Photos still unresponsive 5 min after restart", flush=True)
 
 
 def wait_for_space(min_free_gb: float, max_wait_s: int = 4 * 3600) -> None:
@@ -203,6 +219,9 @@ def run(root: Path, folder: str = "Archive", only=None, dry_run=False,
                 continue
             if min_free_gb:
                 wait_for_space(min_free_gb)
+            if not photos_responsive():
+                print(f"{key}: Photos unresponsive before batch; restarting", flush=True)
+                restart_photos()
             n = import_batch(folder, album_name or album, chunk)
             if n == 0:
                 print(f"{key}: 0 imported, restarting Photos and retrying", flush=True)
