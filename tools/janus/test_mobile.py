@@ -1092,3 +1092,26 @@ def test_log_entry_crossed_off_in_dtd_adds_nothing(jm, monkeypatch, tmp_path):
     monkeypatch.setattr(jm, "COMPLETED_TODAY", ct)
     r = jm.log_entry("c1", "call steve", 12, "qz12")
     assert r["credited"] and r["already"] and "text" not in seen
+
+
+def test_adjust_points_appends_the_difference_in_the_entrys_block(jm, monkeypatch):
+    """JM 2026-10-28: swipe a logged row again (desktop ^G) to fix its 分 —
+    the signed difference goes in as a did-fast 分 log in the entry's block."""
+    seen = _capture_did(jm, monkeypatch)
+    today = dt.datetime.now(jm.TZ).date()
+    st = dt.datetime.combine(today, dt.time(8, 30), jm.TZ)
+    en = dt.datetime.combine(today, dt.time(9, 10), jm.TZ)
+    monkeypatch.setattr(jm, "_get_entry", lambda eid, day=None: {
+        "id": 5, "start": st.isoformat(), "stop": en.isoformat()})
+    jm._logged_points_add(today, "5", 30, [])
+    r = jm.adjust_points("5", "write memo", "i9", "18")
+    assert r["ok"] and r["points"] == 18 and r["delta"] == -12
+    assert seen["text"] == "-12 write memo adj @i9 巳"
+    assert jm._logged_points(today)["5"]["points"] == 18
+    assert jm.adjust_points("5", "write memo", "i9", "18")["unchanged"]
+
+
+def test_adjust_points_refuses_an_unlogged_entry(jm, monkeypatch):
+    seen = _capture_did(jm, monkeypatch)
+    r = jm.adjust_points("77", "never logged", "i9", "10")
+    assert not r["ok"] and "not logged" in r["error"] and "text" not in seen

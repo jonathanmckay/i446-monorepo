@@ -175,7 +175,10 @@ struct JanusView: View {
             Button("log") { store.answerPoints(a, pointsText); pointsText = "" }
             Button("cancel", role: .cancel) { pointsText = "" }
         } message: { a in
-            Text("\(a.desc) · \(a.minutes)m")
+            Text("\(a.desc) · \(a.minutes)m" + (a.current.map { " · now \($0)" } ?? ""))
+        }
+        .onChange(of: store.pointsAsk?.current) { _, cur in
+            if let cur { pointsText = String(cur) }
         }
     }
 }

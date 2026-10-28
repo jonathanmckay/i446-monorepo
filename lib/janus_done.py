@@ -63,3 +63,32 @@ def points_from_answer(text, minutes: int) -> int | None:
         return int(text)
     except ValueError:
         return None
+
+
+# ── ^G points correction (JM 2026-10-28) ──────────────────────────────────
+_ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
+
+
+def entry_block(start, end) -> str:
+    """The 地支 block holding most of an entry's minutes (ties → the earlier
+    block), the same rule as did-fast's infer_range_blocks (accrual)."""
+    import datetime as _dt
+    import neon_blocks as nb
+    counts: dict[str, int] = {}
+    t = start
+    while t < end:
+        b = nb.current_block(t.hour)
+        counts[b] = counts.get(b, 0) + 1
+        t += _dt.timedelta(minutes=1)
+    return max(counts, key=counts.get) if counts else nb.current_block(start.hour)
+
+
+def adjust_cmd(desc: str, code: str, delta: int, start, end, past_day: bool) -> str:
+    """did-fast 分-log line for a points correction: the signed difference to
+    the entry's domain, noted "<desc> adj", in the entry's own block. A past
+    day carries its M/D instead (callers add --past-ok); block credit is a
+    today-only notion."""
+    note = re.sub(r"[\[\]{}()+@,;，；]|\b\d{4}-\d{4}\b", " ", _ANNOT_RE.sub(" ", desc or ""))
+    note = " ".join(note.split()) or "entry"
+    cmd = f"{delta:+d} {note} adj @{code}"
+    return cmd + (f" {start.month}/{start.day}" if past_day else f" {entry_block(start, end)}")

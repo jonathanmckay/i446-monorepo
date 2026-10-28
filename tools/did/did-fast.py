@@ -3784,7 +3784,9 @@ def main():
             item_pts += r.fen_points
         if r.item.curly_points and r.item.curly_points > 0:
             item_pts += r.item.curly_points
-        if item_pts > 0:
+        # A signed 分 log (janus ^G correction, 2026-10-28) moves its block
+        # either way; everything else only ever adds.
+        if item_pts > 0 or (r.item.points_log and item_pts != 0):
             block_override_totals.append((r.item.name, r.item.block_override, item_pts, r))
 
     if block_override_totals:

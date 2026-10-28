@@ -648,6 +648,8 @@ class State:
         # unrelated later submission (cancel via empty text, Escape, or a
         # day-nav all clear it the same way event_sel already does).
         self.edit_target: dict | None = None
+        # ^G "these points were wrong": the row being re-pointed (Enter applies).
+        self.points_edit_target: dict | None = None
         # Armed by ^P on a selected completed entry: {"id", "date", "desc",
         # "project_id", "tags", "start_dt", "end_dt"}. The next Enter reads
         # the input line as the HHMM split point and cuts the entry in two.
@@ -3392,7 +3394,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
                 my_key = None  # synthetic pick (sleep spillover) — unselectable
             is_sel, head0_click, head0_marker = _row_selection(my_key)
             dur = (f"({head0['dur_min']})" if head0.get("is_event")
-                   else _entry_dur_display(head0["dur_min"], head0.get("raw_desc")))
+                   else _entry_dur_display(head0["dur_min"], head0.get("raw_desc"),
+                                           head0.get("entry_ids") or [head0.get("id")]))
             prefix = "▶ " if running else ""
             # d357 recording live → 🎙 rides RIGHT of the task name
             # (user request 2026-08-02: "move the mic to be to the right
@@ -3727,7 +3730,8 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
         elif is_future or p.get("is_event"):
             dur = f"({p['dur_min']})"
         else:
-            dur = _entry_dur_display(p["dur_min"], p.get("raw_desc"))
+            dur = _entry_dur_display(p["dur_min"], p.get("raw_desc"),
+                                     p.get("entry_ids") or [p.get("id")])
         # Value/credit tags (-1/-2/-3, or a domain code like xk87/家) ride the
         # right edge just before the minutes (user request 2026-07-28,
         # colored chips 2026-08-10).
@@ -5778,7 +5782,49 @@ def _mark_cmd_done_today(cmd: str) -> None:
         pass
 
 
-def _entry_dur_display(dur_min: int, raw_desc: str | None) -> str:
+_POINTS_ADJ = Path.home() / ".local/state/jm/janus-points-adj.json"
+
+
+def _points_adj_today() -> dict:
+    """{entry id: Σ ^G adjustments} for today (JM 2026-10-28)."""
+    try:
+        data = json.loads(_POINTS_ADJ.read_text())
+    except Exception:
+        return {}
+    if data.get("date") != dt.datetime.now(_tz()).date().isoformat():
+        return {}
+    return data.get("adj") or {}
+
+
+def _points_adj_add(entry_ids, delta: int) -> None:
+    today = dt.datetime.now(_tz()).date().isoformat()
+    try:
+        data = json.loads(_POINTS_ADJ.read_text())
+        if data.get("date") != today:
+            data = {"date": today, "adj": {}}
+    except Exception:
+        data = {"date": today, "adj": {}}
+    if entry_ids:
+        key = str(entry_ids[0])
+        data["adj"][key] = int(data["adj"].get(key, 0)) + int(delta)
+    try:
+        _POINTS_ADJ.parent.mkdir(parents=True, exist_ok=True)
+        _POINTS_ADJ.write_text(json.dumps(data))
+    except OSError:
+        pass
+
+
+def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[bool, int]:
+    """(recorded, 分) for a row today, including its ^G adjustments."""
+    if not raw_desc:
+        return False, 0
+    recorded, pts = _points_recorded_today(raw_desc, dur_min)
+    adj = sum(int(v) for k, v in _points_adj_today().items()
+              if k in {str(i) for i in (entry_ids or [])})
+    return (recorded or bool(adj)), pts + adj
+
+
+def _entry_dur_display(dur_min: int, raw_desc: str | None, entry_ids=None) -> str:
     """Duration text for a past/current (non-event, non-spill) entry row:
     its own [N] points once today's did-fast run has recorded them — the
     point total is the more useful number at that point, and the raw
@@ -5786,7 +5832,7 @@ def _entry_dur_display(dur_min: int, raw_desc: str | None) -> str:
     ordinary Nm/Nh duration. Past-day views have no per-entry points record
     (_points_recorded_today is today-only), so they always show minutes."""
     if STATE.day_offset == 0 and raw_desc:
-        recorded, pts = _points_recorded_today(raw_desc, dur_min)
+        recorded, pts = _row_points(raw_desc, dur_min, entry_ids)
         if recorded:
             return f"[{pts}]"
     return fmt_dur(dur_min)
@@ -6519,6 +6565,8 @@ def _on_enter(event):
     _t = input_buffer.text.strip()
     if STATE.done_target is not None:
         JE.emit("action", "done_points", (), _t)
+    elif STATE.points_edit_target is not None:
+        JE.emit("action", "points_edit", STATE.points_edit_target.get("ids") or [], _t)
     elif STATE.split_target is not None:
         JE.emit("action", "split", [STATE.split_target.get("id")], _t)
     elif STATE.edit_target is not None:
@@ -6554,6 +6602,47 @@ def _on_enter(event):
             _run_row_did(event.app, cmd, dtgt["row_key"])
         else:
             _run_done_command(event.app, cmd)
+        return
+    if STATE.points_edit_target is not None:
+        pe = STATE.points_edit_target
+        STATE.points_edit_target = None
+        text = input_buffer.text.strip()
+        input_buffer.reset()
+        if not text:
+            flash("points unchanged", 3.0)
+            return
+        if pe["past_day"]:
+            # No per-row record on past days: the answer IS the change.
+            try:
+                delta = int(text)
+            except ValueError:
+                flash(f"not a change like +10 / -5: {text!r}", 4.0)
+                return
+        else:
+            new_pts = _points_from_answer(text, pe["minutes"])
+            if new_pts is None:
+                flash(f"not a number or rate: {text!r}", 4.0)
+                return
+            delta = new_pts - pe["cur"]
+        if delta == 0:
+            flash("points unchanged", 3.0)
+            return
+        cmd = _points_adjust_cmd(pe["desc"], pe["code"], delta, pe["start_dt"],
+                                 pe["end_dt"], pe["past_day"])
+
+        async def _run_adjust():
+            flash(f"$ did {cmd}")
+            event.app.invalidate()
+            res = await asyncio.to_thread(run_did_fast, cmd)
+            if not res.startswith("err") and not pe["past_day"]:
+                _points_adj_add(pe["ids"], delta)
+            flash(res, 8.0)
+            event.app.invalidate()
+            await asyncio.to_thread(fetch_today, True)
+            await asyncio.to_thread(fetch_points)
+            event.app.invalidate()
+
+        _enqueue_work(event.app, f"did {cmd}", _run_adjust, key=cmd)
         return
     if STATE.split_target is not None:
         # Same chokepoint discipline as edit_target below: consumed first,
@@ -7122,7 +7211,8 @@ def _(event):
     (user request 2026-07-27). On a past-day view there's no completion
     record to check, so it runs unconditionally (that's the backfill case)."""
     if (input_buffer.text.strip() and STATE.done_target is None
-            and STATE.split_target is None and STATE.edit_target is None):
+            and STATE.split_target is None and STATE.edit_target is None
+            and STATE.points_edit_target is None):
         # ⌥↵ on a just-TYPED command = Enter + /did in one gesture: the
         # completed range lands in Toggl AND its points are granted via
         # did-fast (user request 2026-10-12; it used to flash "select a
@@ -7263,6 +7353,46 @@ def _run_row_did(app, cmd: str, key: str) -> None:
         app.invalidate()
 
     _enqueue_work(app, f"did {cmd}", _run_did_and_refresh, key=key)
+
+
+_entry_block = janus_done.entry_block
+_points_adjust_cmd = janus_done.adjust_cmd  # shared with mobile.py (web + iOS)
+
+
+@kb.add("c-g")
+def _(event):
+    """^G on a logged row: "these points were wrong" (JM 2026-10-28). Prefills
+    the row's current 分; Enter appends the difference to its domain via a
+    did-fast 分 log, in the block the entry happened in."""
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    if not (isinstance(item, dict) and item.get("kind") == "entry"):
+        flash("^G: select a logged time entry first", 3.0)
+        return
+    if item.get("running"):
+        flash("^G: stop + log it first (⌥↵), then fix its points", 4.0)
+        return
+    desc, dur = item.get("raw_desc") or "", item.get("dur_min") or 0
+    ids = item.get("entry_ids") or []
+    recorded, cur = _row_points(desc, dur, ids) if STATE.day_offset == 0 else (True, 0)
+    if not recorded:
+        flash("^G: not logged yet — ⌥↵ logs it", 4.0)
+        return
+    code = toggl_project_code(item.get("project_id"), desc)
+    if not code:
+        flash("^G: entry has no project code — set one (Enter to edit) first", 4.0)
+        return
+    start = item["start_dt"]
+    STATE.event_sel = None
+    STATE.points_edit_target = {"desc": desc, "code": code, "ids": ids, "cur": cur,
+                                "start_dt": start,
+                                "end_dt": start + dt.timedelta(minutes=dur),
+                                "minutes": dur, "past_day": STATE.day_offset != 0}
+    input_buffer.text = str(cur) if STATE.day_offset == 0 else ""
+    input_buffer.cursor_position = len(input_buffer.text)
+    flash(f'points for "{desc}": now {cur} — type the right total (or .5/m), ⏎'
+          if STATE.day_offset == 0 else
+          f'"{desc}" on a past day: type the change (+10 / -5), ⏎', 8.0)
 
 
 @kb.add("c-p")
@@ -7504,12 +7634,13 @@ def _day_back(event):
     STATE.day_offset -= 1
     STATE.scroll_min = 0
     STATE.event_sel = None  # a different day has different (or no) events
-    if STATE.edit_target is not None or STATE.split_target is not None:
+    if STATE.edit_target is not None or STATE.split_target is not None or STATE.points_edit_target is not None:
         # A different day's rows are about to render — an armed edit/split +
         # prefilled input text from THIS day would otherwise survive the
         # nav and silently update the wrong entries on the next Enter.
         STATE.edit_target = None
         STATE.split_target = None
+        STATE.points_edit_target = None
         input_buffer.reset()
     flash(f"◀ {view_now():%a %-m/%-d}")
     JE.emit("view", "prev", (), f"{view_now():%Y-%m-%d}")
@@ -7525,9 +7656,10 @@ def _day_forward(event):
     STATE.day_offset += 1
     STATE.scroll_min = 0
     STATE.event_sel = None
-    if STATE.edit_target is not None or STATE.split_target is not None:
+    if STATE.edit_target is not None or STATE.split_target is not None or STATE.points_edit_target is not None:
         STATE.edit_target = None
         STATE.split_target = None
+        STATE.points_edit_target = None
         input_buffer.reset()
     flash("today" if STATE.day_offset == 0 else f"◀ {view_now():%a %-m/%-d}")
     JE.emit("view", "next", (), f"{view_now():%Y-%m-%d}")
@@ -7539,13 +7671,14 @@ def _day_forward(event):
 # Esc -- "janus won't let me use arrows to navigate entries" (2026-10-20).
 # Arrows now cancel the armed edit and move; a hand-typed command keeps the
 # gate (↑/↓ are the command line's own history keys then).
-_edit_armed = Condition(lambda: STATE.edit_target is not None or STATE.split_target is not None)
+_edit_armed = Condition(lambda: STATE.edit_target is not None or STATE.split_target is not None or STATE.points_edit_target is not None)
 
 
 def _cancel_armed_edit_for_nav() -> None:
-    if STATE.edit_target is not None or STATE.split_target is not None:
+    if STATE.edit_target is not None or STATE.split_target is not None or STATE.points_edit_target is not None:
         STATE.edit_target = None
         STATE.split_target = None
+        STATE.points_edit_target = None
         input_buffer.reset()
         flash("edit cancelled")
 
@@ -7624,10 +7757,11 @@ def _(event):
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing;
                     # cancel an armed edit/selection
 def _(event):
-    if (STATE.edit_target is not None or STATE.split_target is not None
+    if (STATE.edit_target is not None or STATE.split_target is not None or STATE.points_edit_target is not None
             or STATE.event_sel is not None):
         STATE.edit_target = None
         STATE.split_target = None
+        STATE.points_edit_target = None
         STATE.event_sel = None
         input_buffer.reset()
         flash("cancelled")

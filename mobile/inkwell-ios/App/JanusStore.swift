@@ -201,7 +201,15 @@ final class JanusStore: ObservableObject {
             // sync would credit twice.
             toast.show("offline entry · log it once it syncs")
         } else if r.logged {
-            toast.show("already logged")
+            // Swipe a logged row again = "these points were wrong" (desktop
+            // janus ^G, JM 2026-10-28): ask for the right total, the server
+            // appends the difference in the entry's own block.
+            pointsAsk = PointsAsk(path: "/api/adjust-points",
+                                  body: dated(["id": r.id, "desc": r.desc, "project": r.project]),
+                                  desc: r.desc, minutes: r.minutes,
+                                  current: r.loggedPoints ?? r.points) { d in
+                d.bool("unchanged") ? "points unchanged"
+                    : "points → \(d.int("points")) (\(d.int("delta") >= 0 ? "+" : "")\(d.int("delta"))) ✓" }
         } else {
             act("/api/log", dated(Bodies.log(r)), offline: "log \(r.desc)", optimistic: { [weak self] in
                 self?.markLogged(r) }) { d in
@@ -253,7 +261,7 @@ final class JanusStore: ObservableObject {
             case .ok(let j) where j.bool("needs_points"):
                 Platform.haptic(.commit)
                 pointsAsk = PointsAsk(path: path, body: body, desc: j.string("desc"),
-                                      minutes: j.int("minutes"), toastText: toastText)
+                                      minutes: j.int("minutes"), current: nil, toastText: toastText)
             case .ok(let j): Platform.haptic(.success); toast.show(toastText(j)); onOk?(j); await load()
             case .error(let m) where offline != nil && Outbox.isOffline(m):
                 outbox.enqueue(url: base + path, body: queuedBody ?? body, label: offline!)
@@ -551,5 +559,6 @@ struct PointsAsk {
     let body: [String: Any]
     let desc: String
     let minutes: Int
+    let current: Int?          // set when correcting an already-logged row
     let toastText: (JSON) -> String
 }

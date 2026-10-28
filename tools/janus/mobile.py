@@ -1724,6 +1724,47 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
         _INFLIGHT.discard(key)
 
 
+def adjust_points(entry_id: str, desc: str, project: str, answer: str,
+                  day: _dt.date | None = None) -> dict:
+    """"These points were wrong" (JM 2026-10-28, desktop janus ^G): set a
+    logged entry's 分 to `answer` (a total, or a rate like ".5/m") by
+    appending the signed difference as a did-fast 分 log in the entry's own
+    block (lib/janus_done.adjust_cmd, shared with desktop janus)."""
+    today = day or _dt.datetime.now(_tz()).date()
+    key = f"adjust:{entry_id}"
+    if key in _INFLIGHT:
+        return {"ok": False, "error": "already adjusting"}
+    _INFLIGHT.add(key)
+    try:
+        if not project:
+            return {"ok": False, "error": "entry has no project code — edit it first"}
+        cur = (_logged_points(today).get(str(entry_id)) or {}).get("points")
+        if cur is None:
+            cur = _dtd_done_points(today).get(_norm_key(desc)) if day is None else None
+        if cur is None:
+            return {"ok": False, "error": "not logged yet — swipe right to log it"}
+        e = _get_entry(entry_id, day=day)
+        if not e or not e.get("stop"):
+            return {"ok": False, "error": "entry not found or still running"}
+        start, end = _parse_iso(e["start"]), _parse_iso(e["stop"])
+        minutes = int((end - start).total_seconds() // 60)
+        new = janus_done.points_from_answer(answer, minutes)
+        if new is None:
+            return {"ok": False, "error": f"not a number or rate: {answer!r}"}
+        delta = new - int(cur)
+        if delta == 0:
+            return {"ok": True, "unchanged": True, "points": new}
+        cmd = janus_done.adjust_cmd(desc, project, delta, start, end, past_day=day is not None)
+        r = _run_did_fast(cmd, ("--past-ok",) if day is not None else ())
+        if r["ok"]:
+            _logged_points_add(today, entry_id, new, r.get("credits") or [])
+            _ledger_add(today, entry_id, f"{desc} points {cur} → {new} ({delta:+d})")
+            r.update(points=new, delta=delta)
+        return r
+    finally:
+        _INFLIGHT.discard(key)
+
+
 # ---------------------------------------------------------------------------
 # Flask
 # ---------------------------------------------------------------------------
@@ -2057,6 +2098,15 @@ def api_delete_event():
                               b.get("end_iso") or "", str(b.get("event_id") or ""),
                               str(b.get("calendar_id") or ""))
     return jsonify(r), (200 if r.get("ok") else 400)
+
+
+@app.route("/api/adjust-points", methods=["POST"])
+def api_adjust_points():
+    b = request.get_json(force=True, silent=True) or {}
+    if not b.get("id") or not b.get("desc") or b.get("points") is None:
+        return jsonify({"ok": False, "error": "id+desc+points required"}), 400
+    return jsonify(adjust_points(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip(),
+                                 str(b["points"]), day=_parse_day(b.get("date"))))
 
 
 @app.route("/api/split", methods=["POST"])
@@ -2510,8 +2560,25 @@ function act(row, line, r){
   }
   if(r.type === 'event'){ commitConvert(line, r); return; }
   if(r.running){ commitDone(line, r); return; }
-  if(r.logged){ toast('already logged', true); return; }
+  if(r.logged){ adjustPoints(r); return; }
   commitLog(line, r);
+}
+
+// Swipe a logged row again = "these points were wrong" (desktop janus ^G,
+// JM 2026-10-28): the server appends the difference in the entry's block.
+async function adjustPoints(r){
+  const cur = (r.logged_points != null) ? r.logged_points : (r.points != null ? r.points : '');
+  const a = prompt('points for "'+r.desc+'" ('+r.minutes+'m) — now '+cur+'. Right total (or .5/m)?', String(cur));
+  if(a === null || a.trim() === '' || a.trim() === String(cur)) return;
+  try {
+    const resp = await fetch('/api/adjust-points', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:r.id, desc:r.desc, project:r.project, points:a})});
+    const d = await resp.json();
+    if(!d.ok){ toast(d.error||'adjust failed', true); return; }
+    toast(d.unchanged ? 'points unchanged' : ('points → '+d.points+' ('+(d.delta>0?'+':'')+d.delta+') ✓'));
+    load();
+  } catch(e){ toast('offline', true); }
 }
 
 async function commitConvert(line, r){
