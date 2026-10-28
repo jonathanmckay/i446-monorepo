@@ -5685,11 +5685,12 @@ def _norm_done_name(s: str) -> str:
     return " ".join(_ANNOT_RE.sub(" ", s).split()).lower()
 
 
-def _points_recorded_today(desc: str) -> tuple[bool, int]:
+def _points_recorded_today(desc: str, minutes: int | None = None) -> tuple[bool, int]:
     """(recorded, 分) for a desc completed TODAY, from completed-today.json —
     did-fast's own idempotency record. Only meaningful for today's view:
     past days keep no completion record, so callers must treat (False, 0)
-    there as "unknown", not "not recorded"."""
+    there as "unknown", not "not recorded". `minutes` (the entry's own
+    duration) prices a multiplied 0₦ habit (hiit: 2×min via hcbi!Y)."""
     try:
         data = json.loads(_COMPLETED_TODAY.read_text())
     except Exception:
@@ -5717,8 +5718,15 @@ def _points_recorded_today(desc: str) -> tuple[bool, int]:
                 # 0₦ habit's real credit is its 0n row-2 weight (2026-10-26:
                 # 0g closed in dtd should show its 分, not minutes); anything
                 # else stays unrecorded so the caller falls back to duration.
+                # A multiplied habit is worth its rate × the entry's minutes,
+                # not the flat row-2 weight (bug 2026-10-28: an 18m hiit
+                # showed [7] instead of [36]).
                 try:
-                    from neon.rates import zero_n_done_points
+                    from neon.rates import zero_n_done_points, zero_n_points
+                    if minutes is not None:
+                        rp = zero_n_points(n, minutes)
+                        if rp is not None:
+                            return True, rp
                     hp = zero_n_done_points(n)
                 except Exception:
                     hp = None
@@ -5777,7 +5785,7 @@ def _entry_dur_display(dur_min: int, raw_desc: str | None) -> str:
     ordinary Nm/Nh duration. Past-day views have no per-entry points record
     (_points_recorded_today is today-only), so they always show minutes."""
     if STATE.day_offset == 0 and raw_desc:
-        recorded, pts = _points_recorded_today(raw_desc)
+        recorded, pts = _points_recorded_today(raw_desc, dur_min)
         if recorded:
             return f"[{pts}]"
     return fmt_dur(dur_min)
