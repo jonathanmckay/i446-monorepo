@@ -31,7 +31,9 @@ def main() -> int:
     # 🕐 / 😈, then the optional 'Nm · ' elapsed.
     # 2026-10-21: the claim glyph may carry the session's cmux number ("3🕐", "7😈"),
     # and a started-today task an agent works on keeps JM's 🧮 after it.
-    plain = re.sub(r"^(?:🧮|[·✢✳✶✻✽]) (?:\d{0,2}🕐 )?(?:\d{0,2}😈 )?(?:🧮 )?(?:[^·]* · )?", "", plain)
+    # 2026-10-28: a waiting claim leads with its clock alone ("🕐 ", "3🕐 "); kept
+    # as its own branch so a plain title containing " · " is never cut.
+    plain = re.sub(r"^(?:(?:🧮|[·✢✳✶✻✽]) (?:\d{0,2}🕐 )?(?:\d{0,2}😈 )?(?:🧮 )?(?:[^·]* · )?|\d{0,2}🕐 )", "", plain)
 
     # Todoist v1 ids are opaque alphanumeric strings (e.g. 6gqQ59G5HHVRQR3R),
     # never containing spaces. Try an exact id match first; if none, the arg was

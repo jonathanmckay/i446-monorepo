@@ -4,7 +4,7 @@
 2026-10-13 order, top down: JM's running timer (spinner Nm since 2026-10-16,
 was 🧮 Nm), tasks JM started today (Enter/ctrl-s) that aren't done (🧮, most
 recent start first), agent
-claims mid-turn (spinner + 😈, grey), agent claims waiting on JM (🧮 🕐),
+claims mid-turn (spinner + 😈, grey), agent claims waiting on JM (🕐, no 🧮 since 2026-10-28),
 then everything else. A task JM is timing stays on top even if an agent
 also holds it; a WORKING claim on it swaps the abacus for spinner + 😈
 (2026-10-16), an idle one leaves his timer's 🧮 Nm.
@@ -139,7 +139,7 @@ def test_tier_markers():
     # 2026-10-22: the running row keeps JM's 🧮 after the moving minutes
     assert " 5m · 🧮 " in a, a
     assert "😈" not in a and "🕐" not in a and GREY not in a
-    assert "🧮 🕐 " in b and "😈" not in b and GREY not in b
+    assert "🕐 " in b and "🧮" not in b and "😈" not in b and GREY not in b, b
     assert "😈" in c and "🧮" not in c and c.startswith(GREY)
     for i in ("N1", "N2"):
         row = _row_for_id(out, i)
@@ -214,7 +214,8 @@ def test_resolver_strips_tier_prefixes():
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     for vis in ("🧮 5m · plain one", "🧮 🕐 plain one", "🧮 🕐 ↻ plain one",
                 "✻ 5m · plain one", "· 5m · plain one", "✽ 😈 5m · plain one", "✢ 😈 plain one",
-                "✶ 7😈 🧮 plain one", "🧮 3🕐 plain one", "✢ 12😈 plain one"):
+                "✶ 7😈 🧮 plain one", "🧮 3🕐 plain one", "✢ 12😈 plain one",
+                "🕐 plain one", "3🕐 plain one", "🕐 ↻ plain one"):
         r = subprocess.run([sys.executable, str(Path(__file__).with_name("dtd_resolve.py")),
                             "/nonexistent", vis], capture_output=True, text=True)
         assert r.stdout.strip().endswith("plain one") and "🧮" not in r.stdout, (vis, r.stdout)

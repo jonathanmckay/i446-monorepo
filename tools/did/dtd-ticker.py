@@ -231,7 +231,7 @@ def _post(port: int, action: str) -> bool:
 # In-progress lines (2026-10-11, "any task that is active, AI or me, should be
 # above the line"): the footer is the only part of fzf above the list's
 # separator, so every active task lives here, one line each, in the same tiers
-# the list used: ▶ JM's timer, then 🧮 🕐 claims waiting on JM (domain-free,
+# the list used: ▶ JM's timer, then 🕐 claims waiting on JM (domain-free,
 # plain), then spinner + 😈 claims mid-turn (grey). The list keeps those rows at
 # its very bottom so they stay searchable and ⌥↵-able. Claims are re-read once
 # a second, not per tick.
@@ -260,7 +260,7 @@ def _footer_name(name: str) -> str:
 def claim_lines(claims: list[tuple[str, bool]], tick: int) -> str:
     """One footer line per claim: waiting ones first, then working ones."""
     frame = SPIN[tick % len(SPIN)]
-    out = [f"\n🧮 🕐 {_footer_name(n)}" for n, w in claims if not w]
+    out = [f"\n🕐 {_footer_name(n)}" for n, w in claims if not w]
     out += [f"\n{AGENT_GREY}{frame} 😈 {_footer_name(n)}\033[0m" for n, w in claims if w]
     return "".join(out)
 

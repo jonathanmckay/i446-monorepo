@@ -2630,7 +2630,8 @@ for t in unique:
     #   A2 JM started it today (Enter/ctrl-s), timer moved on, not done: 🧮
     #      ('if I started but didn't finish, it can just show the abacus')
     #   C  agent claim working: spinner + 😈, grey
-    #   B  agent claim waiting on JM (idle): 🧮 🕐, domain color
+    #   B  agent claim waiting on JM (idle): 🕐, domain color (2026-10-28: no
+    #      🧮: 'it should only have abacus if it's my current task in janus')
     # A working claim beats A (2026-10-16: 'when agent started working on
     # /0t it didn't replace the abacus with a demon icon'): the row keeps its
     # elapsed minutes and top slot, but the abacus becomes spinner + 😈 and it
@@ -2667,7 +2668,7 @@ for t in unique:
         # pane number leads it, '6✅', like '6😈' while it worked.
         prefix = _pane + '✅ ' + prefix
     elif is_claimed:
-        prefix = '🧮 ' + _pane + '🕐 ' + prefix
+        prefix = _pane + '🕐 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so
     # they align in a column regardless of the prefix. ANSI is added after.
     body = rjust_est(prefix + line, cols)

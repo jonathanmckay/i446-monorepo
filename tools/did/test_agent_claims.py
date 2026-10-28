@@ -104,7 +104,7 @@ def test_hook_noop_without_claims_dir(tmp_path):
 
 def test_ticker_claim_lines_above_the_line():
     """Every claim gets its own footer line (the footer is above fzf's list
-    separator): waiting first as 🧮 🕐, then working as spinner + 😈."""
+    separator): waiting first as 🕐, then working as spinner + 😈."""
     spec = importlib.util.spec_from_file_location("ticker", HERE / "dtd-ticker.py")
     tk = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tk)
@@ -112,7 +112,7 @@ def test_ticker_claim_lines_above_the_line():
     out = tk.claim_lines([("source logging (30) [20]", True), ("wait (x [5]", False)], 0)
     lines = out.split("\n")[1:]
     assert len(lines) == 2
-    assert lines[0] == "🧮 🕐 wait x"
+    assert lines[0] == "🕐 wait x"
     assert "😈 source logging" in lines[1] and "30" not in lines[1]
     assert not any(c in out for c in "(){}")   # a ) would end change-footer()
     assert tk.claim_lines([("a", True)], 0) != tk.claim_lines([("a", True)], 1)  # it spins
