@@ -3410,6 +3410,40 @@ def f695():
     return p.read_text()
 
 
+def _f695_grades():
+    """m5x2-weekly-reports/grades.py: JM's A-F review grades, stored in the f695 doc."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "f695_grades", Path.home() / "i446-monorepo/tools/m5x2-weekly-reports/grades.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@app.route("/f695/grades")
+def f695_grades():
+    g = _f695_grades()
+    return jsonify(g.read_grades(g.DOC.read_text(encoding="utf-8")))
+
+
+@app.route("/f695/grade", methods=["POST"])
+def f695_grade():
+    """Body: the picker's data-* fields + grade ("" clears). m5x2 → thread
+    (+ who/topic/subject/date to link it first if needed); i9 → week, person."""
+    d = request.get_json(force=True) or {}
+    g = _f695_grades()
+    link = None
+    if d.get("kind") == "m5x2" and d.get("who"):
+        link = {k: d.get(k, "") for k in ("thread", "who", "topic", "subject", "date")}
+        link["sender"] = ""
+    try:
+        g.save(d.get("kind", ""), d.get("grade", ""), thread=d.get("thread", ""),
+               week=d.get("week", ""), person=d.get("person", ""), link=link)
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True})
+
+
 @app.route("/jmreads")
 def jmreads_page():
     """Goodreads-style reading page: currently reading, the year's reading

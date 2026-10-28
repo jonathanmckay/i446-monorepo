@@ -195,7 +195,9 @@ def build_grid(emails: list[dict], docs: list[dict]) -> dict:
                     and not (veto and re.search(veto, e["subject"], re.I)):
                 grid.setdefault((week_start(e["date"]), disp), []).append({
                     "url": f"https://mail.google.com/mail/u/0/#all/{e['thread']}",
-                    "title": f"{e['date'].isoformat()} · {e['subject']}", "kind": "mail"})
+                    "title": f"{e['date'].isoformat()} · {e['subject']}", "kind": "mail",
+                    "thread": e["thread"], "subject": e["subject"],
+                    "date": e["date"].isoformat()})
                 break
     for f in docs:
         name_l = f["name"].lower()
@@ -281,6 +283,22 @@ def jm_draft_in_progress(grid: dict) -> tuple[dt.date, str] | None:
     return None
 
 
+TOPIC = {d: t for d, t, *_ in REPORTERS}
+GRADES = ["A", "B", "C", "D", "F"]
+
+
+def grade_select(grade: str = "", **data: str) -> str:
+    """JM's A-F grade picker for one review. Saved by the dashboard's
+    /f695/grade endpoint into the f695 doc (grades.py); the page reloads
+    current grades from /f695/grades on open, so `grade` is only the
+    build-time value."""
+    opts = ["<option value=''>–</option>"] + [
+        f"<option{' selected' if g == grade else ''}>{g}</option>"
+        for g in GRADES + ([grade] if grade and grade not in GRADES else [])]
+    attrs = " ".join(f"data-{k}='{html.escape(str(v), quote=True)}'" for k, v in data.items())
+    return f" <select class='grade' {attrs} title='your grade for this review'>{''.join(opts)}</select>"
+
+
 def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
     today = dt.date.today()
     cur_wk = week_start(today)
@@ -294,7 +312,7 @@ def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
                 days=I9_JM_DUE_OFFSET if p == "Growth (JM)" else I9_DUE_OFFSET)
             hit = grid.get((wk, p))
             if hit is not None:
-                grade = f" <span class='grade'>{html.escape(hit['grade'])}</span>" if hit["grade"] else ""
+                grade = grade_select(kind="i9", week=wk.isoformat(), person=p, grade=hit["grade"])
                 late = " <span title='arrived after the Friday due date'>⚠️</span>" if hit["late"] else ""
                 cells.append(
                     f"<td class='ok'><a href='{html.escape(F695_OBSIDIAN_URI)}' "
@@ -316,8 +334,8 @@ def render_i9_section(grid: dict, weeks: list[dt.date]) -> str:
 <table><tr><th style="text-align:left">Week of</th>{head}</tr>
 {''.join(rows)}
 </table>
-<div class="note">✓ opens the f695 doc (hover for which week/person); a letter next to it
-is JM's grade for that update; ⚠️ = arrived after its due date. An update counts
+<div class="note">✓ opens the f695 doc (hover for which week/person); the picker next to it
+is JM's grade for that update (saved as **JM (X):** in the doc); ⚠️ = arrived after its due date. An update counts
 for the week it COVERS (a Friday send covers its own week); team updates are due that
 Friday, Growth (JM) the following Monday. ✍️ = JM's own update mid-draft (click to open the draft); — is a week with
 nothing logged.</div>
@@ -337,7 +355,11 @@ def render(grid: dict, weeks: list[dt.date], n_mail: int, n_docs: int, i9_html: 
             if hits:
                 links = " ".join(
                     f"<a href='{html.escape(h['url'])}' title='{html.escape(h['title'])}'>"
-                    f"{'✓' if h['kind'] == 'mail' else '📄'}</a>" for h in hits)
+                    f"{'✓' if h['kind'] == 'mail' else '📄'}</a>"
+                    + (grade_select(kind="m5x2", thread=h["thread"], who=disp,
+                                    topic=TOPIC[disp], subject=h["subject"], date=h["date"])
+                       if h["kind"] == "mail" else "")
+                    for h in hits)
                 cells.append(f"<td class='ok'>{links}</td>")
             elif wk == cur_wk:
                 cells.append("<td class='due'>due</td>")
@@ -360,6 +382,8 @@ td.miss{{color:#e23b3b;font-weight:700}}
 td.due{{color:#ff8a3d;font-size:12px;white-space:nowrap}}
 td.wip a{{text-decoration:none;font-size:15px}}
 td.ok .grade{{color:#8b96a3;font-weight:700;font-size:12px}}
+select.grade{{background:#0d0f12;color:#e7ecf0;border:1px solid #242a31;border-radius:4px;font:700 12px -apple-system,sans-serif;padding:1px 2px;margin-left:4px;cursor:pointer}}
+select.grade.saved{{border-color:#2faa4d}} select.grade.err{{border-color:#e23b3b}}
 .note{{color:#8b96a3;font-size:12px;margin-top:12px}}
 a.folder{{color:#2979ff}}
 </style></head><body>
@@ -372,8 +396,26 @@ a.folder{{color:#2979ff}}
 <div class="note">✓ links to the Gmail thread of that week's update email (hover for date + subject);
 📄 links to a Doc in the <a class="folder" href="{FOLDER_URL}">Weekly Reports folder</a>
 (named <b>YYYY-MM-DD First-name Topic</b>). A report counts for the Sunday-anchored week it was
-received. — is a missed week; the current week shows "due" until it arrives.</div>
+received. — is a missed week; the current week shows "due" until it arrives. The A–F picker
+next to ✓ is your grade for that review, saved on its link line in the f695 doc.</div>
 {i9_html}
+<script>
+// Grades live in the f695 doc; the dashboard reads/writes them (grades.py).
+const key = s => s.dataset.kind === "m5x2" ? s.dataset.thread : s.dataset.week + "|" + s.dataset.person;
+const sel = [...document.querySelectorAll("select.grade")];
+fetch("/f695/grades").then(r => r.json()).then(g => sel.forEach(s => {{
+  const v = (g[s.dataset.kind] || {{}})[key(s)] || "";
+  if (v && ![...s.options].some(o => o.value === v)) s.add(new Option(v, v));
+  s.value = v;
+}})).catch(() => {{}});
+sel.forEach(s => s.addEventListener("change", () => {{
+  s.classList.remove("saved", "err");
+  fetch("/f695/grade", {{method: "POST", headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({{...s.dataset, grade: s.value}})}})
+    .then(r => r.ok ? s.classList.add("saved") : Promise.reject())
+    .catch(() => s.classList.add("err"));
+}}));
+</script>
 </body></html>"""
 
 
