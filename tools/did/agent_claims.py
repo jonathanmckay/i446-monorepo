@@ -455,6 +455,10 @@ def push() -> None:
 
 
 HOOK_RE = __import__("re").compile(r"^\s*/(?:d|claim)(?:\s+(.*))?$", __import__("re").S)
+# `/d 21 can you look at this?` (2026-10-28): a row number with the request
+# run on after it, no colon. A URL's `https:` is not the task/request colon.
+ROW_PREFIX_RE = __import__("re").compile(r"^(\d{1,3})\s+\S")
+TASK_COLON_RE = __import__("re").compile(r":(?!//)")
 
 # dtd sections that are "surfaced" (visible task rows). The 0neon/1neon/夜neon
 # sections are habit cards, never what a Claude thread is working on.
@@ -633,7 +637,7 @@ def hook(payload: str) -> str:
     # newline) is the request: `/d work offline sync` + a pasted /bug
     # paragraph used to become one long query that matched nothing and was
     # created as a new task (2026-10-22).
-    query = arg.split("\n", 1)[0].split(":", 1)[0].strip()
+    query = TASK_COLON_RE.split(arg.split("\n", 1)[0], 1)[0].strip()
     if query.lower() in ("off", "release", "done"):
         release(session)
         push()
@@ -647,7 +651,13 @@ def hook(payload: str) -> str:
         tq = df.load_task_queue()
         return bare_d_line(all_tasks(tq), df, tq)
     explicit_new = query.lower().startswith("new ")
-    cands = [] if explicit_new else candidates(query, all_tasks(df.load_task_queue()), df)
+    tasks = [] if explicit_new else all_tasks(df.load_task_queue())
+    row = None if explicit_new else ROW_PREFIX_RE.match(query)
+    if row and not any(query.lower() in df.ANNOT_RE.sub("", t.get("content", "")).lower() for t in tasks):
+        # A leading number is the dtd row unless the whole line names a
+        # task ("1 hpm"); the rest is the request, never a new task's name.
+        query = row.group(1)
+    cands = [] if explicit_new else candidates(query, tasks, df)
     if not explicit_new and not cands and query.isdigit() and len(query) <= 3:
         # "/d 5" with no row 5 in a fresh render: never create a task named "5".
         return (f"[claim hook] no dtd row {query} in the latest render (dtd closed, "

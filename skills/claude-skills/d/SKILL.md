@@ -46,7 +46,9 @@ context starting with `[claim hook]`:
   `python3 ~/i446-monorepo/tools/did/agent_claims.py new "<task>"` yourself.
 - `couldn't create ...` → say so and stop.
 - No `[claim hook]` line at all (hook didn't run) → do it yourself: split the
-  FIRST LINE of the argument on its first `:` (later lines are request), then
+  FIRST LINE of the argument on its first `:` that isn't a URL's `://` (later
+  lines are request); a leading row number followed by words (`21 can you...`)
+  is row 21 unless the whole line names a task (`1 hpm`); then
   `python3 ~/i446-monorepo/tools/did/agent_claims.py claim "<query>"`,
   `... new "<task>"`, or `... release`.
 

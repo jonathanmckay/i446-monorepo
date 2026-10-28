@@ -255,6 +255,37 @@ def test_hook_matched_d_does_not_create(hooked, monkeypatch):
     assert "😈 claimed: source logging" in _fast("/d source logging")
 
 
+def test_hook_row_number_with_runon_request_claims_row(hooked, monkeypatch):
+    """2026-10-28: `/d 21 can you take a look ... https://x` split at the
+    URL's colon, queried "21 can you ... https", and created that as a task."""
+    monkeypatch.setattr(ac, "new_task", lambda c: (_ for _ in ()).throw(AssertionError("created")))
+    monkeypatch.setattr(ac, "row_task_id", lambda n: {2: "T2"}.get(n))
+    out = _fast("/d 2 can you take a look at this? https://example.com/board.pdf")
+    assert "😈 claimed: source review" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "T2"
+
+
+def test_hook_row_number_runon_with_no_row_creates_nothing(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "new_task", lambda c: (_ for _ in ()).throw(AssertionError("created")))
+    monkeypatch.setattr(ac, "row_task_id", lambda n: None)
+    assert "no dtd row 21" in _fast("/d 21 can you take a look at this")
+
+
+def test_hook_number_led_task_name_still_matches_by_name(hooked, monkeypatch):
+    """`/d 1 hpm` names the "1 hpm" card; it is not row 1."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "H1", "content": "1 hpm (60) [60]"}]))
+    monkeypatch.setattr(ac, "row_task_id", lambda n: "T1")
+    assert "😈 claimed: 1 hpm" in _fast("/d 1 hpm")
+    assert (hooked / "by-session" / "S9").read_text().strip() == "H1"
+
+
+def test_hook_url_colon_does_not_end_task_name(hooked, monkeypatch):
+    made = []
+    monkeypatch.setattr(ac, "new_task", lambda c: made.append(c) or {"id": "N3", "content": c})
+    _fast("/d read https://example.com/doc")
+    assert made == ["read https://example.com/doc"]
+
+
 # ── bare [N] = the claimed task's value, never a completion (2026-10-05:
 #    a bare [200] got logged as +200 immediately; points are opportunity
 #    until JM completes the task in dtd with ⌥↵) ──
