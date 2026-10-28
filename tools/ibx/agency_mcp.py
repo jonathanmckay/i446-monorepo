@@ -79,6 +79,54 @@ _CHROME_LOGIN_TABS = '''tell application "Google Chrome"
     return out
 end tell'''
 
+# Fail closed when the tab scan can't see (2026-10-28). Under cron (the 03:00
+# dream run and its outlook subagents) macOS denies osascript the Apple Events
+# permission to script Chrome, so every scan errored, read as "no tab", and
+# Agency opened ANOTHER sign-in tab: ~26/day on ix, one every 15-30 min from
+# 03:00 to 05:00, piling up in Chrome all night. So a scan reports _UNKNOWN
+# instead of None when it fails, and an unknown answer falls back to a ledger
+# file: written when a call times out or a server fails to start (what an
+# unanswered sign-in looks like), cleared by any successful call or by a scan
+# that positively sees no tab, and ignored after _LOGIN_MARKER_TTL so a stale
+# marker costs at most one tab per TTL rather than blocking Agency forever.
+_UNKNOWN = object()
+_LOGIN_MARKER = Path(os.environ.get(
+    "AGENCY_LOGIN_MARKER",
+    str(Path.home() / ".config" / "agency" / "login-pending.json"),
+))
+_LOGIN_MARKER_TTL = 3 * 3600
+
+
+def _mark_login_pending(server_name, why):
+    try:
+        _LOGIN_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        _LOGIN_MARKER.write_text(json.dumps(
+            {"at": time.time(), "server": server_name, "why": why}))
+    except OSError:
+        pass
+    _LOGIN_TAB_CACHE.update(at=0.0, url=None)
+
+
+def _clear_login_marker():
+    try:
+        _LOGIN_MARKER.unlink()
+    except OSError:
+        pass
+
+
+def _marked_login_pending():
+    """Ledger stand-in for a tab URL when the browser can't be asked, or None."""
+    try:
+        data = json.loads(_LOGIN_MARKER.read_text())
+    except (OSError, ValueError):
+        return None
+    if time.time() - float(data.get("at", 0)) > _LOGIN_MARKER_TTL:
+        return None
+    since = time.strftime("%H:%M", time.localtime(float(data["at"])))
+    return (f"agency-login-pending: {data.get('server')} {data.get('why')} at {since}; "
+            f"browser tabs unreadable from this context ({_LOGIN_MARKER})")
+
+
 class EntraLoginPending(RuntimeError):
     """A Microsoft sign-in tab is already open and unfinished in a browser.
 
@@ -105,16 +153,17 @@ def _chrome_running():
 
 
 def _scan_login_tabs(script):
-    """URL of an open Microsoft sign-in tab per `script`, or None. Callers
-    must confirm the browser is running first: `tell application` launches it."""
+    """URL of an open Microsoft sign-in tab per `script`, None if there is
+    none, or _UNKNOWN if the browser couldn't be asked. Callers must confirm
+    the browser is running first: `tell application` launches it."""
     for host in MS_SIGNIN_HOSTS:
         try:
             r = subprocess.run(["osascript", "-e", script % host],
                                capture_output=True, text=True, timeout=10)
         except Exception:
-            return None
+            return _UNKNOWN
         if r.returncode != 0:
-            return None  # Automation permission denied etc. -> can't tell, don't block
+            return _UNKNOWN  # Automation permission denied etc. -> can't tell
         for line in r.stdout.splitlines():
             if line.strip():
                 return line.strip()
@@ -135,17 +184,27 @@ def _chrome_login_tab():
 
 def _any_login_tab():
     """First pending sign-in tab in Safari or Chrome (whichever is default
-    gets AzureAuth's tab; checking both costs one pgrep for the other)."""
-    return _safari_login_tab() or _chrome_login_tab()
+    gets AzureAuth's tab; checking both costs one pgrep for the other).
+    _UNKNOWN if neither showed a tab and at least one couldn't be asked."""
+    results = [_safari_login_tab(), _chrome_login_tab()]
+    for r in results:
+        if r and r is not _UNKNOWN:
+            return r
+    return _UNKNOWN if any(r is _UNKNOWN for r in results) else None
 
 
 def entra_login_pending(force=False):
-    """Return the pending sign-in tab URL, or None. Cached for _LOGIN_TAB_TTL
-    seconds so a burst of tool calls costs one AppleScript round-trip."""
+    """Return the pending sign-in tab URL (or ledger reason), or None. Cached
+    for _LOGIN_TAB_TTL seconds so a burst of tool calls costs one AppleScript
+    round-trip."""
     now = time.time()
     if not force and now - _LOGIN_TAB_CACHE["at"] < _LOGIN_TAB_TTL:
         return _LOGIN_TAB_CACHE["url"]
     url = _any_login_tab()
+    if url is _UNKNOWN:
+        url = _marked_login_pending()
+    elif url is None:
+        _clear_login_marker()  # positively no tab: sign-in done or abandoned
     _LOGIN_TAB_CACHE.update(at=now, url=url)
     return url
 
@@ -223,6 +282,7 @@ def _start_server(name):
             break
     if port is None:
         proc.kill()
+        _mark_login_pending(name, "server start failed")
         raise RuntimeError(f"Failed to start agency mcp {name}")
     _write_pidfile(name, proc.pid, port)
     return proc, port
@@ -340,11 +400,18 @@ def call_tool(server_name, tool_name, arguments=None, timeout=120):
     _refuse_if_login_pending(f"calling {server_name}/{tool_name}")
     try:
         port = get_server(server_name)
-        return _call_tool_once("localhost", port, server_name, tool_name, arguments, timeout)
-    except (AgencyTimeout, OSError):
+        result = _call_tool_once("localhost", port, server_name, tool_name, arguments, timeout)
+    except (AgencyTimeout, OSError) as e:
+        # A timeout is either a wedged server or one sitting on a sign-in tab.
+        # Ledger it first, so the respawn below (and every later caller) is
+        # refused if the tabs can't be read, rather than opening another one.
+        if isinstance(e, AgencyTimeout):
+            _mark_login_pending(server_name, "call timed out")
         restart_server(server_name)
         port = get_server(server_name)
-        return _call_tool_once("localhost", port, server_name, tool_name, arguments, timeout)
+        result = _call_tool_once("localhost", port, server_name, tool_name, arguments, timeout)
+    _clear_login_marker()
+    return result
 
 
 def _call_tool_once(host, port, server_name, tool_name, arguments, timeout):

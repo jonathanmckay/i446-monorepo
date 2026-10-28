@@ -19,8 +19,9 @@ LOGIN_URL = "https://login.microsoftonline.com/organizations/oauth2/v2.0/authori
 
 
 @pytest.fixture(autouse=True)
-def _fresh_cache(monkeypatch):
+def _fresh_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(am, "_LOGIN_TAB_CACHE", {"at": 0.0, "url": None})
+    monkeypatch.setattr(am, "_LOGIN_MARKER", tmp_path / "login-pending.json")
     monkeypatch.delenv("AGENCY_REMOTE_CALENDAR_PORT", raising=False)
     am._servers.clear()
 
@@ -98,14 +99,23 @@ def test_safari_not_running_never_launches_it(monkeypatch):
     assert ran == [], "no osascript when Safari is closed (tell application would launch it)"
 
 
-def test_osascript_failure_does_not_block(monkeypatch):
-    # Automation permission denied / timeout -> unknown -> let the call through.
+def test_osascript_failure_is_unknown_not_no_tab(monkeypatch):
+    # Automation permission denied / timeout -> unknown (was None, which read
+    # as "no tab" and let Agency open another one; see the 2026-10-28 block).
     class R:
         returncode = 1
         stdout = ""
     monkeypatch.setattr(am, "_safari_running", lambda: True)
     monkeypatch.setattr(am.subprocess, "run", lambda *a, **k: R())
-    assert am._safari_login_tab() is None
+    assert am._safari_login_tab() is am._UNKNOWN
+
+
+def test_unknown_scan_without_marker_does_not_block(monkeypatch):
+    monkeypatch.setattr(am, "_safari_login_tab", lambda: None)
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: am._UNKNOWN)
+    monkeypatch.setattr(am, "get_server", lambda name: 1)
+    monkeypatch.setattr(am, "_call_tool_once", lambda *a: {"ok": True})
+    assert am.call_tool("mail", "ListMailFolders", {}) == {"ok": True}
 
 
 def test_pending_error_is_runtimeerror_for_existing_callers():
@@ -156,3 +166,81 @@ def test_chrome_check_uses_chrome_applescript_and_never_launches_it(monkeypatch)
                         lambda cmd, **kw: ran.append(cmd) or type("R", (), {"returncode": 1, "stdout": ""})())
     assert am._chrome_login_tab() is None
     assert all(c[0] == "pgrep" for c in ran), "Chrome not running -> no AppleScript (would launch it)"
+
+
+# --- cron can't read Chrome tabs (2026-10-28) ---------------------------------
+# Under cron (03:00 dream run, its outlook subagents) macOS denies osascript
+# Apple Events access to Chrome, so every tab scan failed, read as "no tab",
+# and Agency opened another sign-in tab every 15-30 min from 03:00 to 05:00
+# (~26/day piling up in Chrome on ix). An unanswered sign-in now leaves a
+# ledger marker that blocks further starts when the tabs can't be read.
+
+def _cron_context(monkeypatch):
+    monkeypatch.setattr(am, "_safari_login_tab", lambda: None)
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: am._UNKNOWN)
+
+
+def test_cron_timeout_on_signin_opens_only_one_tab(monkeypatch):
+    _cron_context(monkeypatch)
+    spawned = []
+    monkeypatch.setattr(am, "_read_pidfile", lambda name: (None, None))
+    monkeypatch.setattr(am, "_start_server",
+                        lambda name: spawned.append(name) or (type("P", (), {"pid": 1})(), 7000))
+    monkeypatch.setattr(am, "restart_server", lambda name: am._servers.pop(name, None))
+
+    def waiting_on_signin(*a):
+        raise am.AgencyTimeout("no result: Agency is waiting for a browser sign-in")
+    monkeypatch.setattr(am, "_call_tool_once", waiting_on_signin)
+
+    with pytest.raises(am.EntraLoginPending):
+        am.call_tool("mail", "SearchMessagesQueryParameters", {})
+    assert spawned == ["mail"], "the self-heal respawn must not open a second tab"
+
+    # The next dream subagent 15 minutes later is refused before touching Agency.
+    am._LOGIN_TAB_CACHE.update(at=0.0, url=None)
+    with pytest.raises(am.EntraLoginPending):
+        am.call_tool("calendar", "ListEvents", {})
+    assert spawned == ["mail"]
+
+
+def test_marker_expires_after_ttl(monkeypatch):
+    _cron_context(monkeypatch)
+    am._mark_login_pending("mail", "call timed out")
+    assert am.entra_login_pending(force=True)
+    now = am.time.time()
+    monkeypatch.setattr(am.time, "time", lambda: now + am._LOGIN_MARKER_TTL + 1)
+    assert am.entra_login_pending(force=True) is None
+
+
+def test_visible_no_tab_clears_marker(monkeypatch):
+    # Interactive context that CAN read Chrome sees the tab is gone (signed
+    # in or closed): the ledger must not keep blocking.
+    am._mark_login_pending("mail", "call timed out")
+    monkeypatch.setattr(am, "_safari_login_tab", lambda: None)
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: None)
+    assert am.entra_login_pending(force=True) is None
+    assert not am._LOGIN_MARKER.exists()
+
+
+def test_successful_call_clears_marker(monkeypatch):
+    am._mark_login_pending("mail", "call timed out")
+    monkeypatch.setattr(am, "_safari_login_tab", lambda: None)
+    monkeypatch.setattr(am, "_chrome_login_tab", lambda: LOGIN_URL)
+    monkeypatch.setattr(am, "entra_login_pending", lambda force=False: None)
+    monkeypatch.setattr(am, "get_server", lambda name: 1)
+    monkeypatch.setattr(am, "_call_tool_once", lambda *a: {"ok": True})
+    assert am.call_tool("mail", "ListMailFolders", {}) == {"ok": True}
+    assert not am._LOGIN_MARKER.exists()
+
+
+def test_failed_server_start_marks_pending(monkeypatch):
+    class P:
+        pid = 1
+        stdout = type("S", (), {"readline": lambda self: ""})()
+        def kill(self): pass
+    monkeypatch.setattr(am.subprocess, "Popen", lambda *a, **k: P())
+    t = iter(range(0, 1000, 31))
+    monkeypatch.setattr(am.time, "time", lambda: next(t))
+    with pytest.raises(RuntimeError):
+        am._start_server("mail")
+    assert am._LOGIN_MARKER.exists()

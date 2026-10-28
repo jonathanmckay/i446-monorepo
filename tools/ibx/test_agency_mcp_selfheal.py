@@ -11,6 +11,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import agency_mcp as am
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(am, "_LOGIN_MARKER", tmp_path / "login-pending.json")
 
 
 def test_timeout_triggers_restart_and_retry(monkeypatch):
