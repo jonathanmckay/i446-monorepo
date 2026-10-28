@@ -111,8 +111,13 @@ def test_log_entry_passes_minutes_and_project(jm, monkeypatch):
             stderr = ""
         return P()
     monkeypatch.setattr(jm.subprocess, "run", fake_run)
-    jm.log_entry("e9", "leadership offsite", 83, "i9")
-    assert seen["text"] == "leadership offsite 83 @i9"
+    # An entry that is neither a task nor time-based asks first (JM
+    # 2026-10-28, lib/janus_done.py); the answer rides as [N].
+    r = jm.log_entry("e9", "leadership offsite", 83, "i9")
+    assert r == {"ok": True, "needs_points": True, "desc": "leadership offsite", "minutes": 83}
+    assert "text" not in seen, "must not run did-fast before the answer"
+    jm.log_entry("e9", "leadership offsite", 83, "i9", points="2/m")
+    assert seen["text"] == "leadership offsite [166] @i9"
 
 
 def test_fill_gap_rejects_bad_times(jm):
@@ -667,8 +672,10 @@ def test_done_current_stops_and_logs(jm, monkeypatch):
             stderr = ""
         return P()
     monkeypatch.setattr(jm.subprocess, "run", fake_run)
-    r = jm.done_current("1", "deep work", "i9")
+    assert jm.done_current("1", "deep work", "i9")["needs_points"]
+    r = jm.done_current("1", "deep work", "i9", points="30")
     assert r["ok"] and r["step"] == "variable"
+    assert "[30]" in seen["text"]
     assert seen["text"].startswith("deep work ") and seen["text"].endswith("@i9")
     assert "1" in jm._ledger(dt.datetime.now(jm.TZ).date())
 
@@ -746,8 +753,9 @@ def test_log_entry_still_falls_back_to_minutes_when_unresolved(jm, monkeypatch):
             stderr = ""
         return P()
     monkeypatch.setattr(jm.subprocess, "run", fake_run)
-    jm.log_entry("e2", "unmatched activity", 40, "i9")
-    assert seen["text"] == "unmatched activity 40 @i9"
+    assert jm.log_entry("e2", "unmatched activity", 40, "i9")["needs_points"]
+    jm.log_entry("e2", "bball", 40, "hcbp")  # a time-based category keeps its minutes
+    assert seen["text"] == "bball 40 @hcbp"
 
 
 def test_done_current_uses_resolved_points_explicitly(jm, monkeypatch):
@@ -1037,8 +1045,7 @@ def test_log_entry_25m_meeting_credits_30_but_plain_25m_stays_minutes(jm, monkey
     assert seen["text"] == "Sync w/ Asha [30] @i9"
     jm.log_entry("m2", "新闻", 25, "hcmc")
     assert seen["text"] == "新闻 25 @hcmc"
-    jm.log_entry("m3", "Sync w/ Asha", 30, "i9")
-    assert seen["text"] == "Sync w/ Asha 30 @i9"
+    assert jm.log_entry("m3", "Sync w/ Asha", 30, "i9")["needs_points"]  # not a speedy length
 
 
 def test_build_timeline_preview_points_rounds_speedy_meetings(jm, monkeypatch):
@@ -1073,3 +1080,15 @@ def test_fetch_events_today_remembers_meeting_titles_even_when_tracked(jm, monke
     e = _entry(jm, 14, 5, 14, 30, desc="Sync w/ Asha")
     assert jm._fetch_events_today([e]) == []
     assert jm._is_meeting("sync w/ asha") and not jm._is_meeting("OOO")
+
+
+def test_log_entry_crossed_off_in_dtd_adds_nothing(jm, monkeypatch, tmp_path):
+    """JM 2026-10-28: a task crossed off in dtd first is credited by its own
+    points; logging its time entry must not credit the minutes again."""
+    seen = _capture_did(jm, monkeypatch)
+    ct = tmp_path / "completed-today.json"
+    ct.write_text(json.dumps({"date": dt.datetime.now(jm.TZ).date().isoformat(),
+                              "names": ["call steve"], "points": {}}))
+    monkeypatch.setattr(jm, "COMPLETED_TODAY", ct)
+    r = jm.log_entry("c1", "call steve", 12, "qz12")
+    assert r["credited"] and r["already"] and "text" not in seen

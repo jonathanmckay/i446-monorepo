@@ -577,6 +577,7 @@ class ParsedItem:
     toggl_tags: list = None  # #tag tokens → Toggl tags
     bonus_points: Optional[int] = None  # +N bonus points added on top of computed value
     block_override: Optional[str] = None  # explicit 地支 block (e.g. "巳") this completion happened in
+    block_inferred: bool = False  # block_override came from the HHMM-HHMM range, not a typed glyph
     # "+90 @m5x2 monthly sync" / "-15 @m5x2 late fee": a bare 分 log — signed
     # points to a domain column with a free-text note. The note goes ONLY
     # into the 分 log (neon ledger src + completed-today); no Todoist task,
@@ -3317,6 +3318,36 @@ def skip_threshold_zero(r, task_id: Optional[str]) -> Optional[str]:
         return None
 
 
+def infer_range_blocks(items: list) -> None:
+    """Accrual, not cash (JM 2026-10-28): a completion with an HHMM-HHMM
+    range credits the block the work happened in, not the block it was
+    logged in. Sets block_override to the 地支 block holding most of the
+    range's minutes (ties → the earlier block), for today's items with no
+    typed glyph. Step 5a then credits that block's 0分 G:O cell; a range in
+    the current block is a no-op there ("skip")."""
+    import neon_blocks as nb
+    today = _daytime.today()
+    today_md = f"{today.month}/{today.day}"
+    for it in items:
+        if it.block_override or not it.time_range or (it.target_date or today_md) != today_md:
+            continue
+        s, e = it.time_range
+        try:
+            sm = int(s[:2]) * 60 + int(s[2:])
+            em = int(e[:2]) * 60 + int(e[2:])
+        except ValueError:
+            continue
+        if em < sm:
+            em += 24 * 60  # overnight range
+        counts: dict[str, int] = {}
+        for m in range(sm, em):
+            b = nb.current_block((m // 60) % 24)
+            counts[b] = counts.get(b, 0) + 1
+        if counts:
+            it.block_override = max(counts, key=counts.get)
+            it.block_inferred = True
+
+
 def _past_target(items: list, past_ok: bool) -> bool:
     """True when --past-ok was given AND the batch's target_date is not
     today: the signal that today-scoped side effects must be skipped."""
@@ -3433,6 +3464,7 @@ def main():
 
     # 1. Parse
     items = parse_input(raw)
+    infer_range_blocks(items)
     if not items:
         _emit({"error": "no items parsed"})
         sys.exit(1)
@@ -3740,6 +3772,8 @@ def main():
                                     or _hcbi_domain_col(r.fen_col) is not None
                                     or _0n_domain_header(r.fen_col) is not None)
         if habit_routes_via_formula:
+            if r.item.block_inferred:
+                continue  # range-inferred: no glyph was typed, nothing to warn about
             print(f"⚠ {r.item.name}: block override ({r.item.block_override}) "
                   f"ignored — hcbi habits route points through a formula, "
                   f"not an appendable column", file=sys.stderr)
