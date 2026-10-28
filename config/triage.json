@@ -236,6 +236,26 @@
       "_skip_doc": "app-owned folders (Copilot, Cowork, Zoom, Autopilot write here); leave in place",
       "rules_from": "downloads"
     },
+    "movies": {
+      "path": "~/Movies",
+      "skip": [
+        ".DS_Store",
+        ".localized",
+        "TV"
+      ],
+      "_skip_doc": "TV = the TV app's library; hidden in Finder 2026-10-28, swept so loose files don't pile up unseen",
+      "rules_from": "downloads"
+    },
+    "music": {
+      "path": "~/Music",
+      "skip": [
+        ".DS_Store",
+        ".localized",
+        "Music"
+      ],
+      "_skip_doc": "Music = the Music app's library; hidden in Finder 2026-10-28, swept so loose files don't pile up unseen",
+      "rules_from": "downloads"
+    },
     "to-delete": {
       "path": "~/.to-delete",
       "_why": "Deletion queue: things that are probably junk, one YYYY-MM-DD folder per batch. A batch goes to the Trash 90 days after its date; from day 76 it is listed on the Sunday card so there are two weeks to rescue anything.",
