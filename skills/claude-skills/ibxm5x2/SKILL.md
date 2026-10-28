@@ -24,7 +24,7 @@ python3 agent_triage.py m5x2 --all
 ```
 
 1. `m5x2_weekly_links.py` finds the team's weekly updates (LX, Ian, Andie,
-   Stef, Leeroy, Florencia, Lawrence, Olga — the same matchers as the m5x2
+   Stef, Leeroy, Florencia, Lawrence, Olga, Jesus, Viviana, Tim — the same matchers as the m5x2
    weekly-reports dash) and adds one link line per update to
    `~/vault/h335/f693/1-f695-weekly-updates.md` under `## m5x2 weekly updates`
    → `### Week of <Y.MM.DD>` (week received). Already-linked threads are
