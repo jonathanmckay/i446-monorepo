@@ -2,7 +2,7 @@
 """m5x2_weekly_links — file the team's m5x2 weekly updates into f695 as links.
 
 /ibxm5x2 step 1 (2026-10-23). The m5x2 weekly updates (LX, Ian, Andie, Stef,
-Leeroy, Florencia, Lawrence, Olga) are matched with the SAME sender/subject
+Leeroy, Florencia, Lawrence, Olga, Jesus, Viviana, Tim) are matched with the SAME sender/subject
 rules the m5x2 weekly-reports dash uses (tools/m5x2-weekly-reports/build.py
 REPORTERS), so the doc and the dash never disagree about what counts.
 

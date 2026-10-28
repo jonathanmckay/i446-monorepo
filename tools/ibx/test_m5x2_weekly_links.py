@@ -56,3 +56,24 @@ def test_matches_only_weekly_updates():
           {"sender": "lx@m5c7.com", "subject": "lunch?", "thread": "b", "date": dt.date(2026, 10, 21)},
           {"sender": "ian@m5c7.com", "subject": "Weekly Update delay", "thread": "c", "date": dt.date(2026, 10, 21)}]
     assert [u["thread"] for u in wl.match(es)] == ["a"]
+
+
+def _e(sender, subject):
+    return {"sender": sender, "subject": subject, "thread": subject,
+            "date": dt.date(2026, 10, 27)}
+
+
+def test_recap_senders_match_and_chatter_does_not():
+    """2026-10-28: Jesus/Viviana/Tim recaps and Olga's 'Ancillary Income Recap'
+    were going to ai-no-response-needed without an f695 link."""
+    hits = wl.match([
+        _e("jesus@m5c7.com", "r204 Weekly Update 10/27"),
+        _e("viviana@m5c7.com", "DQ Weekly Recap – October 27, 2026"),
+        _e("viviana@m5c7.com", "WEEKLY DQ RECAP | SEPTEMBER 15, 2026"),
+        _e("tim@m5c7.com", "Recap 10/20/2026 ~ 10/26/2026"),
+        _e("tim@m5c7.com", "App recap 08/04/2026 - 08/10/2026"),
+        _e("olga@m5c7.com", "Ancillary Income Recap"),
+        _e("jesus@m5c7.com", "Go Daddy Domain Gogo Heights Transfer"),
+        _e("viviana@m5c7.com", "Write-Off Analysis August 2026"),
+    ])
+    assert [h["who"] for h in hits] == ["Jesus", "Viviana", "Viviana", "Tim", "Tim", "Olga"]

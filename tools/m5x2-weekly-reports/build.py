@@ -73,7 +73,13 @@ REPORTERS = [
     ("Lawrence", "Projects", ("lawrence",),
      ("lawrence@m5c7.com",), r"(weekly\s+)?projects\s+update", None),
     ("Olga", "Property Management", ("olga",),
-     ("olga@m5c7.com",), r"weekly\s+ancillary", None),
+     ("olga@m5c7.com",), r"weekly\s+ancillary|ancillary\s+income\s+recap", None),
+    ("Jesus", "r204", ("jesus",),
+     ("jesus@m5c7.com",), r"r204\s+weekly\s+update", None),
+    ("Viviana", "Delinquency", ("viviana",),
+     ("viviana@m5c7.com",), r"(dq\s+weekly|weekly\s+dq)\s+recap", None),
+    ("Tim", "Weekly Recap", ("tim",),
+     ("tim@m5c7.com",), r"^(app\s+)?recap\b", None),
 ]
 REPLY_PREFIXES = ("re:", "fwd:", "fw:", "accepted:", "declined:", "invitation")
 
@@ -109,13 +115,15 @@ def week_start(d: dt.date) -> dt.date:
 
 # Gmail-side subject narrowing per reporter (regexes above still decide) —
 # one targeted query per reporter keeps this to a handful of metadata fetches
-# instead of paging every email seven chatty senders wrote.
+# instead of paging every email the chatty senders wrote.
 SUBJECT_QUERY = {
     "LX": 'subject:"weekly update"', "Ian": 'subject:"weekly update"',
     "Andie": 'subject:"leasing weekly update"', "Stef": "subject:trs",
     "Leeroy": "subject:(turn OR turns)",
     "Florencia": 'subject:"weekly update"', "Lawrence": 'subject:"projects update"',
     "Olga": "subject:ancillary",
+    "Jesus": 'subject:"r204 weekly update"', "Viviana": "subject:(dq recap)",
+    "Tim": "subject:recap",
 }
 
 
