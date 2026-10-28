@@ -202,7 +202,7 @@
           ],
           "min_age_days": 7,
           "action": "move",
-          "dest": "~/screenshots",
+          "dest": "~/files/screenshots",
           "rename": "screenshot",
           "note": "non-photo images per i446-photos-and-screenshots: date-first name, kept forever"
         },

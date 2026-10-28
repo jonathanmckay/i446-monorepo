@@ -5,7 +5,7 @@ Dropbox Archive/Pictures merge, vault i446-photos-and-screenshots).
 Each top-level folder becomes an album inside a Photos folder ("Archive" by
 default), keeping the old trip/era organization. Photos' own duplicate check
 stays on, so anything already in the library is skipped. Screenshot-named
-images go to ~/screenshots under the date-first name instead (the image
+images go to ~/files/screenshots under the date-first name instead (the image
 rules: screenshots never live in Photos). Files Photos can't take (mp3 …)
 are listed, not touched.
 
@@ -33,7 +33,7 @@ _spec.loader.exec_module(sn)
 MEDIA = {".jpg", ".jpeg", ".png", ".heic", ".gif", ".tif", ".tiff", ".bmp", ".psd",
          ".arw", ".cr2", ".nef", ".dng", ".mov", ".mp4", ".m4v", ".avi", ".mts"}
 BATCH = 200
-SCREENSHOTS = Path.home() / "screenshots"
+SCREENSHOTS = Path.home() / "files" / "screenshots"
 STATE = Path.home() / ".local" / "state" / "jm" / "photos-import.json"
 LOOSE_ALBUM = "Archive (loose files)"
 

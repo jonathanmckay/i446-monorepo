@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Date-first names for the ~/screenshots monofolder (2026-10-27).
+"""Date-first names for the ~/files/screenshots monofolder (2026-10-27; moved into ~/files 2026-10-28).
 
   Screenshot 2026-10-27 at 8.20.47 AM.png  →  2026-10-27_082047--ss.png
 

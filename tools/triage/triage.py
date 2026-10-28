@@ -8,7 +8,7 @@ rule decides a top-level item's fate:
   move    move to `dest`; {year} = first 20xx in the name, else the year the
           file landed. If an identical file already sits at the destination,
           the incoming copy is trashed instead. "rename": "screenshot" gives
-          the date-first ~/screenshots name (tools/images/screenshot_names.py).
+          the date-first ~/files/screenshots name (tools/images/screenshot_names.py).
   unzip   extract beside the zip (inheriting its age), trash the zip, then
           triage what came out in the same run
   queue   leave in place, list in duplicates.json for the weekly /1-i446 to
