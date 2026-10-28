@@ -269,7 +269,22 @@
     "_doc": "tools/triage/classify.py. Destinations = folders under `areas` (minus `skip`), cut to `depth` levels with years templated, holding >= min_files files. `samples` example filenames per destination go in the prompt. apply moves at confidence >= threshold.",
     "root": "~/files",
     "areas": [
-      "qz12"
+      "qz12",
+      "h335",
+      "g245",
+      "i446",
+      "i447",
+      "i444",
+      "s897",
+      "xk87",
+      "xk88",
+      "hcbi",
+      "hcmc",
+      "o314",
+      "o315",
+      "m828",
+      "jia1",
+      "n156"
     ],
     "skip": [
       "archive",
