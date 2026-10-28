@@ -71,6 +71,7 @@ from flask import Flask, jsonify, render_template_string, request  # noqa: E402
 from mcp.toggl_server import toggl_api  # noqa: E402
 from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
 from neon.rates import meeting_points, speedy_meeting_points  # noqa: E402
+import janus_done  # noqa: E402  /done points paths, shared with desktop janus
 
 # Calendar clients (2026-08-14): both self-contained (gcal_client reads OAuth
 # tokens straight off disk, no MCP server needed at runtime; outlook_client
@@ -1502,8 +1503,38 @@ def _run_did_fast(text: str, flags: tuple[str, ...] = ()) -> dict:
             "stderr_tail": proc.stderr.strip()[-200:]}
 
 
+def _crossed_off_today(desc: str, today: _dt.date) -> bool:
+    """`desc` is in today's completed-today.json names (crossed off in dtd
+    or anywhere else before this entry was logged)."""
+    try:
+        data = json.loads((COMPLETED_TODAY or STATE_DIR / "completed-today.json").read_text())
+    except Exception:
+        return False
+    if data.get("date") != today.isoformat():
+        return False
+    key = _norm_key(desc)
+    return bool(key) and any(_norm_key(n) == key for n in data.get("names") or [])
+
+
+def _done_path(desc: str, task_pts: int | None, today: _dt.date | None) -> str:
+    """task / time / credited / ask — the shared rule (lib/janus_done.py),
+    same as desktop janus. `today` None = a past day: nothing can be
+    "crossed off" there (completed-today is today-only)."""
+    name = _norm_key(re.sub(r"\s@\S+", " ", desc or ""))
+    try:
+        df = _load_df_mod()
+        habits = registered_habit_names()
+        time_based = janus_done.is_time_based(
+            name, is_habit=lambda n: df.header_normalize(n) in habits, df=df)
+    except Exception:
+        time_based = False
+    return janus_done.classify(task_points=task_pts, time_based=time_based,
+                               crossed_off=bool(today) and _crossed_off_today(desc, today))
+
+
 def log_entry(entry_id: str, desc: str, minutes: int, project: str,
-              tags: list[str] | None = None, day: _dt.date | None = None) -> dict:
+              tags: list[str] | None = None, day: _dt.date | None = None,
+              points: str | None = None) -> dict:
     """`day` (2026-10-26, swipes on previous days): a past-day entry logs
     with the viewed M/D appended and --past-ok, so the 分 land on THAT day
     (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
@@ -1524,6 +1555,19 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     pts = _resolvable_points(desc)
     if pts is None:
         pts = _speedy_meeting_pts(desc, minutes)  # 25m meeting → [30] (2026-10-22)
+    # Same three paths as desktop janus (lib/janus_done.py, JM 2026-10-28):
+    # a crossed-off task adds nothing; an unknown entry asks for a total or
+    # a rate instead of crediting the minutes at 1x. `points` is the answer.
+    path = _done_path(desc, pts, None if day is not None else today)
+    if path == janus_done.CREDITED:
+        _ledger_add(today, entry_id, f"{desc} already crossed off — no extra 分")
+        return {"ok": True, "already": True, "credited": True}
+    if path == janus_done.ASK:
+        if points is None:
+            return {"ok": True, "needs_points": True, "desc": desc, "minutes": minutes}
+        pts = janus_done.points_from_answer(points, minutes)
+        if pts is None:
+            return {"ok": False, "error": f"not a number or rate: {points!r}"}
     text = f"{desc} [{pts}]" if pts is not None else f"{desc} {minutes}"
     if project:
         text += f" @{project}"
@@ -1610,16 +1654,16 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
         _INFLIGHT.discard(key)
 
 
-def done_current(entry_id: str, desc: str, project: str) -> dict:
+def done_current(entry_id: str, desc: str, project: str, points: str | None = None) -> dict:
     """The /done action for the running timer: stop it AND grant its points
     in one shot — mirrors tools/tg/janus.py's _run_current_timer_done. A
     completed HHMM-nowHHMM did-fast command's Toggl-creation step calls
     trim_range() under the hood, which finds the still-open running entry
     covering that exact window and closes/trims it — no separate stop call
-    needed. (Desktop's d357-recording-finalize branch and its interactive
-    "no resolvable points, ask the user" prompt are both deliberately not
-    ported here — out of scope per 2026-08-14 request; an unresolvable
-    entry just logs 0分 same as a regular swiped entry already can. When
+    needed. (Desktop's d357-recording-finalize branch is not ported. The
+    points prompt is, since 2026-10-28: an unresolvable entry answers
+    needs_points and the client re-sends with `points`, per
+    lib/janus_done.py.) When
     the running entry DOES match a dtd task (_resolvable_points, see
     log_entry for why this is more reliable than did-fast's own re-match),
     its [N] rides the command explicitly — 2026-08-15 fix, same reasoning
@@ -1645,6 +1689,24 @@ def done_current(entry_id: str, desc: str, project: str) -> dict:
         pts = _resolvable_points(desc)
         if pts is None:  # 25m meeting → [30] (2026-10-22)
             pts = _speedy_meeting_pts(desc, _hhmm_span_min(start, now), day=now.date())
+        path = _done_path(desc, pts, now.date())
+        if path == janus_done.CREDITED:
+            # Crossed off in dtd first: just stop the timer, no extra 分.
+            try:
+                proc = subprocess.run(["/usr/bin/python3", str(TG_FAST), "stop"],
+                                      capture_output=True, text=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error": "tg-fast timeout"}
+            _ledger_add(now.date(), entry_id, f"{desc} stopped, already crossed off")
+            return {"ok": proc.returncode == 0, "credited": True, "stopped": True,
+                    "stderr_tail": proc.stderr.strip()[-200:]}
+        if path == janus_done.ASK:
+            mins = int((now - start).total_seconds() // 60)
+            if points is None:
+                return {"ok": True, "needs_points": True, "desc": desc, "minutes": mins}
+            pts = janus_done.points_from_answer(points, mins)
+            if pts is None:
+                return {"ok": False, "error": f"not a number or rate: {points!r}"}
         text = f"{desc} {start:%H%M}-{now:%H%M}"
         if pts is not None:
             text += f" [{pts}]"
@@ -1964,7 +2026,8 @@ def api_log():
         return jsonify({"ok": False, "error": "id+desc required"}), 400
     return jsonify(log_entry(str(b["id"]), b["desc"].strip(),
                              int(b.get("minutes") or 0), (b.get("project") or "").strip(),
-                             tags=b.get("tags") or [], day=_parse_day(b.get("date"))))
+                             tags=b.get("tags") or [], day=_parse_day(b.get("date")),
+                             points=None if b.get("points") is None else str(b["points"])))
 
 
 @app.route("/api/edit", methods=["POST"])
@@ -2027,7 +2090,8 @@ def api_done_current():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id") or not b.get("desc"):
         return jsonify({"ok": False, "error": "id+desc required"}), 400
-    return jsonify(done_current(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip()))
+    return jsonify(done_current(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip(),
+                                points=None if b.get("points") is None else str(b["points"])))
 
 
 @app.route("/api/where", methods=["POST"])
@@ -2469,13 +2533,27 @@ async function commitConvert(line, r){
   } catch(e){ line.classList.remove('converting'); toast('offline', true); }
 }
 
-async function commitDone(line, r){
+// needs_points (lib/janus_done.py, same as desktop janus): ask for a total
+// or a per-minute rate, then re-send. null = cancelled.
+function askPoints(r, d){
+  return prompt('points for "'+r.desc+'" ('+d.minutes+'m)? total (40) or rate (.5/m)', '');
+}
+
+async function commitDone(line, r, points){
   line.classList.add('converting');
   try {
+    const body = {id:r.id, desc:r.desc, project:r.project};
+    if(points !== undefined) body.points = points;
     const resp = await fetch('/api/done-current', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id:r.id, desc:r.desc, project:r.project})});
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const d = await resp.json();
+    if(d.needs_points){
+      line.classList.remove('converting');
+      const a = askPoints(r, d);
+      if(a === null){ toast('not logged', true); return; }
+      return commitDone(line, r, a);
+    }
+    if(d.credited){ toast('stopped · already crossed off ✓'); load(); return; }
     if(!d.ok){
       line.classList.remove('converting');
       toast(d.needs_agent ? 'no route — use /did on desktop' : (d.error||'done failed'), true);
@@ -2486,13 +2564,21 @@ async function commitDone(line, r){
   } catch(e){ line.classList.remove('converting'); toast('offline', true); }
 }
 
-async function commitLog(line, r){
+async function commitLog(line, r, points){
   line.classList.add('logged');
   try {
+    const body = {id:r.id, desc:r.desc, minutes:r.minutes, project:r.project, tags:r.tags||[]};
+    if(points !== undefined) body.points = points;
     const resp = await fetch('/api/log', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id:r.id, desc:r.desc, minutes:r.minutes, project:r.project, tags:r.tags||[]})});
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const d = await resp.json();
+    if(d.needs_points){
+      line.classList.remove('logged');
+      const a = askPoints(r, d);
+      if(a === null){ toast('not logged', true); return; }
+      return commitLog(line, r, a);
+    }
+    if(d.credited){ toast('already crossed off — no extra 分'); return; }
     if(d.already){ toast('already logged'); return; }
     if(!d.ok){
       line.classList.remove('logged');

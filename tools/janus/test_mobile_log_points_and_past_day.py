@@ -60,13 +60,13 @@ def test_credits_empty_on_garbage(jm):
 
 # ── log → toast + logged points ─────────────────────────────────────────
 def test_log_returns_credits_and_points_and_timeline_shows_them(jm, monkeypatch):
-    _fake_did(jm, monkeypatch, [{"name": "gym", "step": "variable",
+    _fake_did(jm, monkeypatch, [{"name": "bball", "step": "variable",
                                  "0fen": {"col": "W", "points": 12}, "curly_q": 5}])
-    d = jm.app.test_client().post("/api/log", json={"id": "1", "desc": "gym", "minutes": 12,
+    d = jm.app.test_client().post("/api/log", json={"id": "1", "desc": "bball", "minutes": 12,
                                                     "project": "hcb"}).get_json()
     assert d["ok"] and d["credits"] == [{"col": "hcb", "points": 12}, {"col": "0g", "points": 5}]
     assert d["points"] == 17
-    e = _entry(jm, 6, 0, 6, 12, desc="gym", code="hcb", eid="1")
+    e = _entry(jm, 6, 0, 6, 12, desc="bball", code="hcb", eid="1")
     monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
     row = next(r for r in jm.build_timeline(lite=True)["rows"] if r["type"] == "entry")
     assert row["logged"] and row["logged_points"] == 17
@@ -74,7 +74,7 @@ def test_log_returns_credits_and_points_and_timeline_shows_them(jm, monkeypatch)
 
 def test_log_without_credits_falls_back_to_minutes(jm, monkeypatch):
     _fake_did(jm, monkeypatch, [{"name": "x", "step": "variable"}])
-    r = jm.log_entry("2", "x", 33, "")
+    r = jm.log_entry("2", "bball", 33, "")
     assert r["credits"] == [] and r["points"] == 33
 
 
@@ -96,13 +96,13 @@ def test_unlogged_row_has_no_logged_points(jm, monkeypatch):
 # ── past days ────────────────────────────────────────────────────────────
 def test_past_day_log_appends_date_and_past_ok_and_ledgers_that_day(jm, monkeypatch):
     seen = []
-    _fake_did(jm, monkeypatch, [{"name": "reading", "step": "variable",
+    _fake_did(jm, monkeypatch, [{"name": "bball", "step": "variable",
                                  "0fen": {"col": "U", "points": 40}}], seen)
     day = _past(jm)
-    d = jm.app.test_client().post("/api/log", json={"id": "9", "desc": "reading", "minutes": 40,
+    d = jm.app.test_client().post("/api/log", json={"id": "9", "desc": "bball", "minutes": 40,
                                                     "project": "hcmc", "date": day.isoformat()}).get_json()
     assert d["ok"]
-    assert seen[0][-1] == f"reading 40 @hcmc {day.month}/{day.day}"
+    assert seen[0][-1] == f"bball 40 @hcmc {day.month}/{day.day}"
     assert "--past-ok" in seen[0][:-1]
     assert "9" in jm._ledger(day) and "9" not in jm._ledger(dt.datetime.now(jm.TZ).date())
     assert jm._logged_points(day)["9"]["points"] == 40
@@ -112,9 +112,9 @@ def test_today_date_is_treated_as_today(jm, monkeypatch):
     seen = []
     _fake_did(jm, monkeypatch, [{"name": "x", "step": "variable"}], seen)
     today = dt.datetime.now(jm.TZ).date()
-    jm.app.test_client().post("/api/log", json={"id": "3", "desc": "x", "minutes": 5,
+    jm.app.test_client().post("/api/log", json={"id": "3", "desc": "bball", "minutes": 5,
                                                 "date": today.isoformat()})
-    assert seen[0][-1] == "x 5" and "--past-ok" not in seen[0]
+    assert seen[0][-1] == "bball 5" and "--past-ok" not in seen[0]
 
 
 def test_past_day_delete_split_edit_use_the_viewed_day(jm, monkeypatch):

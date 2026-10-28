@@ -8,6 +8,7 @@ struct JanusView: View {
     @State private var fillTarget: FillTarget? = nil
     @State private var editTarget: TimelineRow? = nil
     @State private var deleteTarget: TimelineRow? = nil
+    @State private var pointsText = ""
 
     /// A gap to fill, or "start now" from the header's +.
     struct FillTarget: Identifiable {
@@ -167,6 +168,14 @@ struct JanusView: View {
             EditSheet(row: r, loadCodes: { await store.projectCodes() },
                       onSave: { d, s, e, p in store.edit(r, desc: d, start: s, end: e, project: p) },
                       onSplit: { mode in store.split(r, mode: mode) })
+        }
+        // Same question the CLI asks (lib/janus_done.py): a total or a rate.
+        .alert("points?", isPresented: isPresented($store.pointsAsk), presenting: store.pointsAsk) { a in
+            TextField("40 or .5/m", text: $pointsText)
+            Button("log") { store.answerPoints(a, pointsText); pointsText = "" }
+            Button("cancel", role: .cancel) { pointsText = "" }
+        } message: { a in
+            Text("\(a.desc) · \(a.minutes)m")
         }
     }
 }

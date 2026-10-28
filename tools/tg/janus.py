@@ -72,6 +72,7 @@ sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
 import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
 from neon.rates import speedy_meeting_points  # noqa: E402  25m→30 / 50m→60 meetings
+import janus_done  # noqa: E402  /done points paths, shared with mobile.py
 import outlook_client  # noqa: E402
 from blocks import is_future_block  # noqa: E402  shared future-block gate
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
@@ -5849,57 +5850,25 @@ def _completed_in_dtd_today(desc: str) -> bool:
 
 
 def _is_time_based(desc: str) -> bool:
-    """A known variable habit or category whose 分 come from the minutes
-    (fen.md rates): a 0n/1n+ header or alias (hiit, xk22, 冥想, relax, …),
-    did-fast's VARIABLE_0N, or a VARIABLE_DOMAIN keyword (bball, walk, …)."""
+    """A known variable habit or category whose 分 come from the minutes —
+    the shared rule in lib/janus_done.py, with janus's own habit lookup."""
     name = _norm_done_name(re.sub(r"\s@\S+", " ", desc or ""))
-    if not name:
-        return False
-    if _habit_tags([name]):
-        return True
     try:
-        df = _df_tags_mod()
-        name = df.ALIASES.get(name, name)
-        return (name in df.VARIABLE_0N or name in df.VARIABLE_DOMAIN
-                or bool(_habit_tags([name])))
+        return janus_done.is_time_based(name, is_habit=lambda n: bool(_habit_tags([n])),
+                                        df=_df_tags_mod())
     except Exception:
-        return False
+        return bool(name and _habit_tags([name]))
 
 
 def _done_points_path(desc: str) -> str:
-    """How a time entry's /done earns 分 (JM 2026-10-28):
-      "task"     — an open Todoist task (or inline) [N]: the task's points
-      "time"     — a known variable habit/category: points from the minutes
-      "credited" — already crossed off today (dtd) and not time-based: its
-                   task points are in; the entry adds nothing
-      "ask"      — none of the above: ask for a total or a per-minute rate
-    Time-based beats "credited" so a repeatable habit (xk22, hiit) still
-    credits its second session's minutes."""
-    if _resolvable_points(desc) is not None:
-        return "task"
-    if _is_time_based(desc):
-        return "time"
-    if _completed_in_dtd_today(desc):
-        return "credited"
-    return "ask"
+    """task / time / credited / ask for a time entry's /done — decided by
+    lib/janus_done.py so mobile.py (web + iOS) behaves the same."""
+    return janus_done.classify(task_points=_resolvable_points(desc),
+                               time_based=_is_time_based(desc),
+                               crossed_off=_completed_in_dtd_today(desc))
 
 
-_RATE_ANSWER_RE = re.compile(r"^(\d*\.?\d+)\s*/\s*m(?:in)?$", re.IGNORECASE)
-
-
-def _points_from_answer(text: str, minutes: int) -> int | None:
-    """The points prompt's answer: "40" = 40 total, ".5/m" or "2/min" = a
-    rate times the entry's minutes, blank = 0. None = unparseable."""
-    text = (text or "").strip()
-    if not text:
-        return 0
-    m = _RATE_ANSWER_RE.match(text)
-    if m:
-        return int(round(float(m.group(1)) * max(minutes, 0)))
-    try:
-        return int(text)
-    except ValueError:
-        return None
+_points_from_answer = janus_done.points_from_answer
 
 
 def _did_summary(stdout_text: str) -> str:

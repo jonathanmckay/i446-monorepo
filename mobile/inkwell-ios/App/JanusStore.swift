@@ -30,6 +30,10 @@ final class JanusStore: ObservableObject {
     private let outbox = Outbox("janus")
     /// Writes queued while offline (⇡N in the header), replayed on reconnect.
     @Published private(set) var pending = 0
+    /// The server's needs_points answer (lib/janus_done.py, same rule as the
+    /// CLI): neither a task with [N] nor a time-based habit/category, so the
+    /// view asks for a total ("40") or a rate (".5/m") and re-sends.
+    @Published var pointsAsk: PointsAsk? = nil
     private var loadedAt: Date? = nil
     private var cachedAt: Date? = nil
     private var loadSeq = 0
@@ -190,7 +194,8 @@ final class JanusStore: ObservableObject {
             stopOffline(r)
         } else if r.running {
             act("/api/done-current", Bodies.doneCurrent(r)) { d in
-                "stopped + " + Self.loggedToast(d, fallback: "logged → \(d.string("step", "neon"))") }
+                d.bool("credited") ? "stopped · already crossed off ✓"
+                    : "stopped + " + Self.loggedToast(d, fallback: "logged → \(d.string("step", "neon"))") }
         } else if r.isLocal {
             // Its Toggl entry doesn't exist yet; logging now and again after
             // sync would credit twice.
@@ -200,12 +205,20 @@ final class JanusStore: ObservableObject {
         } else {
             act("/api/log", dated(Bodies.log(r)), offline: "log \(r.desc)", optimistic: { [weak self] in
                 self?.markLogged(r) }) { d in
+                if d.bool("credited") { return "already crossed off — no extra 分" }
                 if d.bool("already") { return "already logged" }
                 let extra = d.strings("tag_steps").joined(separator: ", ")
                 return Self.loggedToast(d, fallback: "+\(r.minutes)m → \(d.string("step", "neon"))"
                                         + (extra.isEmpty ? "" : " + \(extra)"))
             }
         }
+    }
+
+    /// Re-send the asked-for write with the typed answer ("40" or ".5/m").
+    func answerPoints(_ a: PointsAsk, _ text: String) {
+        var body = a.body
+        body["points"] = text.trimmingCharacters(in: .whitespaces)
+        act(a.path, body, toastText: a.toastText)
     }
 
     /// "logged: +12 hcb · +5 0g ✓" from the server's per-column credits
@@ -237,6 +250,10 @@ final class JanusStore: ObservableObject {
                 : .error("offline")   // known offline: queue now, don't wait on a timeout
             busy = false
             switch r {
+            case .ok(let j) where j.bool("needs_points"):
+                Platform.haptic(.commit)
+                pointsAsk = PointsAsk(path: path, body: body, desc: j.string("desc"),
+                                      minutes: j.int("minutes"), toastText: toastText)
             case .ok(let j): Platform.haptic(.success); toast.show(toastText(j)); onOk?(j); await load()
             case .error(let m) where offline != nil && Outbox.isOffline(m):
                 outbox.enqueue(url: base + path, body: queuedBody ?? body, label: offline!)
@@ -526,4 +543,13 @@ extension JanusStore {
         }
         return out
     }
+}
+
+/// A pending points question for a swipe the server couldn't price.
+struct PointsAsk {
+    let path: String
+    let body: [String: Any]
+    let desc: String
+    let minutes: Int
+    let toastText: (JSON) -> String
 }
