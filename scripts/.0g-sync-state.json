@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-28T08:00:05.467848-07:00"
+  "tasks": {
+    "good interactions with xcore": {
+      "todoist_id": "6hrQMcHHxGxHM7cR",
+      "minutes": 40
+    },
+    "rep well with etam": {
+      "todoist_id": "6hrQMcQR9xJPpmx2",
+      "minutes": 40
+    },
+    "as much hcb opportunity as possible": {
+      "todoist_id": "6hrQMcP7f47cRhJR",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-10-28T10:00:01.198462-07:00"
 }
