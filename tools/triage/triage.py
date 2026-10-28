@@ -519,6 +519,9 @@ def card(name: str, decisions: list[Decision]) -> str:
 
 def run_source(name: str, src: dict, do_apply: bool) -> list[Decision]:
     root = Path(src["path"]).expanduser()
+    if not root.is_dir():                   # e.g. the Ix-only queue when running on Straylight
+        print(f"{name}: {root} not on this machine; skipped")
+        return []
     decisions = [decide(i, src["rules"]) for i in scan(root, src.get("skip", []))]
     if not do_apply:
         return decisions

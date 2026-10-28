@@ -240,7 +240,8 @@
       "path": "~/.to-delete",
       "_why": "Deletion queue: things that are probably junk, one YYYY-MM-DD folder per batch. A batch goes to the Trash 90 days after its date; from day 76 it is listed on the Sunday card so there are two weeks to rescue anything.",
       "skip": [
-        ".DS_Store"
+        ".DS_Store",
+        "MANIFEST.tsv"
       ],
       "rules": [
         {
@@ -262,6 +263,15 @@
           "action": "review",
           "note": "not in a dated batch folder; move it into ~/.to-delete/<today>"
         }
+      ]
+    },
+    "to-delete-ix": {
+      "path": "/Volumes/Ix Files/.to-delete",
+      "_why": "Ix-side deletion queue for items too large for Straylight (e.g. 21 GB of source zips). Same rules as to-delete; run by Ix's daily triage cron. Skipped wherever the path doesn't exist.",
+      "rules_from": "to-delete",
+      "skip": [
+        ".DS_Store",
+        "MANIFEST.tsv"
       ]
     }
   },

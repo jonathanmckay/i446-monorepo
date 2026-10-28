@@ -220,3 +220,8 @@ def test_deletion_queue_batches_expire_by_folder_date(tmp_path):
     assert triage.decide(_item(soon, 0), rules).action == "review"
     assert triage.decide(_item(fresh, 400), rules).action == "keep"
     assert triage.decide(_item(loose, 0), rules).rule == "queue-undated"
+
+
+def test_missing_source_path_is_skipped(tmp_path):
+    src = {"path": str(tmp_path / "nope"), "rules": []}
+    assert triage.run_source("ghost", src, False) == []
