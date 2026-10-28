@@ -131,7 +131,7 @@ def test_unresolvable_points_arms_done_target_not_did_fast(tmp_path, monkeypatch
         "code": mod.toggl_project_code(None, "fix the parser bug"),
     }
     assert mod.input_buffer.text == ""
-    assert "no points" in mod.STATE.flash
+    assert "points for" in mod.STATE.flash and ".5/m" in mod.STATE.flash
     assert mod.STATE.event_sel is None
 
 
@@ -192,7 +192,7 @@ def test_enter_with_non_numeric_input_cancels_without_running_did_fast(tmp_path,
     assert mod.STATE.done_target is None
     assert mod.STATE.queued_cmds == set(), "garbage input must not run did-fast"
     assert "cancelled" in mod.STATE.flash
-    assert "still running" in mod.STATE.flash
+    assert "not a number or rate" in mod.STATE.flash
 
 
 def test_done_target_is_consumed_before_normal_empty_enter_handling(tmp_path, monkeypatch):
@@ -227,3 +227,16 @@ def test_alt_enter_on_current_row_arms_prompt_when_unresolvable(tmp_path, monkey
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_enter_with_rate_answer_prices_the_minutes(tmp_path, monkeypatch):
+    """JM 2026-10-28: the prompt takes a per-minute rate too (".5/m")."""
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 9, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, desc="fix the parser bug", tmp_path=tmp_path)
+    start = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
+    mod.STATE.done_target = {"desc": "fix the parser bug", "start_dt": start, "code": None}
+    mod.input_buffer.text = "2/m"
+    _binding(mod, ("c-m",)).handler(_FakeEvent())
+    assert mod.STATE.queued_cmds == {"fix the parser bug 1400-1430 [60]"}

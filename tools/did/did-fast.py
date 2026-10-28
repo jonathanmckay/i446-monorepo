@@ -1804,9 +1804,14 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         # Compute points: explicit [N] > typed minutes (e.g. "bball 30") >
         # time_range duration > 0. Honoring time_value here keeps the manual
         # path ("bball 30") and the timer path (apply_timer_minutes) in sync.
-        pts = item.points_override or item.time_value or 0
-        if pts == 0 and item.time_range:
-            pts = time_range_minutes(item.time_range[0], item.time_range[1])
+        # An explicit [0] means 0, not "fall back to the minutes" (janus's
+        # points prompt sends [0] for a deliberate zero, 2026-10-28).
+        if item.points_override is not None:
+            pts = item.points_override
+        else:
+            pts = item.time_value or 0
+            if pts == 0 and item.time_range:
+                pts = time_range_minutes(item.time_range[0], item.time_range[1])
         if item.bonus_points:
             pts += item.bonus_points
 

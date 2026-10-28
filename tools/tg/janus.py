@@ -5835,6 +5835,73 @@ def _resolvable_points(desc: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _completed_in_dtd_today(desc: str) -> bool:
+    """`desc` is in today's completed-today.json names — crossed off (in dtd
+    or anywhere else) before its time entry was /done'd."""
+    try:
+        data = json.loads(_COMPLETED_TODAY.read_text())
+    except Exception:
+        return False
+    if data.get("date") != dt.datetime.now(_tz()).date().isoformat():
+        return False
+    target = _norm_done_name(desc)
+    return bool(target) and any(_norm_done_name(n) == target for n in data.get("names", []))
+
+
+def _is_time_based(desc: str) -> bool:
+    """A known variable habit or category whose 分 come from the minutes
+    (fen.md rates): a 0n/1n+ header or alias (hiit, xk22, 冥想, relax, …),
+    did-fast's VARIABLE_0N, or a VARIABLE_DOMAIN keyword (bball, walk, …)."""
+    name = _norm_done_name(re.sub(r"\s@\S+", " ", desc or ""))
+    if not name:
+        return False
+    if _habit_tags([name]):
+        return True
+    try:
+        df = _df_tags_mod()
+        name = df.ALIASES.get(name, name)
+        return (name in df.VARIABLE_0N or name in df.VARIABLE_DOMAIN
+                or bool(_habit_tags([name])))
+    except Exception:
+        return False
+
+
+def _done_points_path(desc: str) -> str:
+    """How a time entry's /done earns 分 (JM 2026-10-28):
+      "task"     — an open Todoist task (or inline) [N]: the task's points
+      "time"     — a known variable habit/category: points from the minutes
+      "credited" — already crossed off today (dtd) and not time-based: its
+                   task points are in; the entry adds nothing
+      "ask"      — none of the above: ask for a total or a per-minute rate
+    Time-based beats "credited" so a repeatable habit (xk22, hiit) still
+    credits its second session's minutes."""
+    if _resolvable_points(desc) is not None:
+        return "task"
+    if _is_time_based(desc):
+        return "time"
+    if _completed_in_dtd_today(desc):
+        return "credited"
+    return "ask"
+
+
+_RATE_ANSWER_RE = re.compile(r"^(\d*\.?\d+)\s*/\s*m(?:in)?$", re.IGNORECASE)
+
+
+def _points_from_answer(text: str, minutes: int) -> int | None:
+    """The points prompt's answer: "40" = 40 total, ".5/m" or "2/min" = a
+    rate times the entry's minutes, blank = 0. None = unparseable."""
+    text = (text or "").strip()
+    if not text:
+        return 0
+    m = _RATE_ANSWER_RE.match(text)
+    if m:
+        return int(round(float(m.group(1)) * max(minutes, 0)))
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
 def _did_summary(stdout_text: str) -> str:
     """One flash-able line from did-fast's JSON blob. The old last-line-of-
     output flash literally showed "}" for every successful conversion; pull
@@ -6352,23 +6419,41 @@ def _run_current_timer_done(app) -> None:
         STATE.event_sel = None
         _run_done_command(app, cmd)
         return
-    if _resolvable_points(raw_desc) is None:
-        # Neither an inline [N] nor a matching Todoist task carries a points
-        # value — did-fast would silently default to 0. janus is the
-        # interactive points-conversion interface (user request 2026-08-09),
-        # so ask instead of guessing: arm done_target and hand the input line
-        # to the user. The next Enter (top of the enter handler) reads
-        # whatever they typed as the point value and completes the /done.
+    path = _done_points_path(raw_desc)
+    if path == "ask":
+        # Not a task with [N] and not a time-based habit/category: janus is
+        # the interactive points-conversion interface (user request
+        # 2026-08-09), so ask instead of guessing. The next Enter (top of the
+        # enter handler) reads a total ("40") or a rate (".5/m").
         STATE.event_sel = None
         STATE.done_target = {"desc": raw_desc, "start_dt": start, "code": code}
         input_buffer.text = ""
-        flash(f'no points for "{raw_desc}" — type a number, ⏎ to log (blank = 0)', 8.0)
+        flash(f'points for "{raw_desc}"? total (40) or rate (.5/m), ⏎ = 0', 8.0)
+        return
+    if path == "credited":
+        # Crossed off in dtd first: its task points are already in, so the
+        # entry adds no 分 — just stop the timer (JM 2026-10-28).
+        STATE.event_sel = None
+        _optimistic_stop()
+        _enqueue_work(app, "stop", lambda: _stop_only(app, raw_desc), key="stop")
         return
     cmd = f"{raw_desc} {start:%H%M}-{now:%H%M}"
     if code:
         cmd += f" @{code}"
     STATE.event_sel = None
     _run_done_command(app, cmd)
+
+
+async def _stop_only(app, desc: str) -> None:
+    """Stop the running timer with no did-fast credit (the "credited" path:
+    the task was already crossed off in dtd)."""
+    flash(f'"{desc}" already crossed off — stopping the timer, no extra 分')
+    app.invalidate()
+    res = await asyncio.to_thread(run_tg_fast, "stop")
+    flash(f"{res}  ({desc}: already credited)", 6.0)
+    app.invalidate()
+    await _refresh_parallel(fetch_current, (fetch_today, True), fetch_points)
+    app.invalidate()
 
 
 def _run_done_command(app, cmd: str) -> None:
@@ -6485,17 +6570,21 @@ def _on_enter(event):
         STATE.done_target = None
         text = input_buffer.text.strip()
         input_buffer.reset()
-        try:
-            pts = int(text) if text else 0
-        except ValueError:
-            flash(f"not a number: {text!r} — done cancelled, timer still running", 4.0)
+        # A finished row carries its own end; the running timer ends now.
+        end = dtgt.get("end_dt") or dt.datetime.now(_tz())
+        minutes = int((end - dtgt["start_dt"]).total_seconds() // 60)
+        pts = _points_from_answer(text, minutes)
+        if pts is None:
+            flash(f"not a number or rate: {text!r} — done cancelled", 4.0)
             return
-        now = dt.datetime.now(_tz())
-        cmd = f"{dtgt['desc']} {dtgt['start_dt']:%H%M}-{now:%H%M}"
+        cmd = f"{dtgt['desc']} {dtgt['start_dt']:%H%M}-{end:%H%M}"
         if dtgt.get("code"):
             cmd += f" @{dtgt['code']}"
-        cmd += f" [{pts}]"
-        _run_done_command(event.app, cmd)
+        cmd += f" [{pts}]" + dtgt.get("suffix", "")
+        if dtgt.get("row_key"):
+            _run_row_did(event.app, cmd, dtgt["row_key"])
+        else:
+            _run_done_command(event.app, cmd)
         return
     if STATE.split_target is not None:
         # Same chokepoint discipline as edit_target below: consumed first,
@@ -7000,22 +7089,26 @@ def _on_enter(event):
 _DF_TAGS_MOD = None  # lazy did-fast module, habit-name lookups only
 
 
+def _df_tags_mod():
+    global _DF_TAGS_MOD
+    if _DF_TAGS_MOD is None:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("df_tags", DID_FAST)
+        _mod = _ilu.module_from_spec(_spec)
+        sys.modules["df_tags"] = _mod
+        _spec.loader.exec_module(_mod)
+        _DF_TAGS_MOD = _mod
+    return _DF_TAGS_MOD
+
+
 def _habit_tags(tags: list) -> list:
     """Subset of a Toggl entry's tags that name known habits (0n/1n+ headers
     or aliases). Mirrors tools/janus/mobile.py habit_tags — meta tags (-3, 2,
     project codes…) resolve to nothing. Best-effort: failures return []."""
-    global _DF_TAGS_MOD
     if not tags:
         return []
     try:
-        if _DF_TAGS_MOD is None:
-            import importlib.util as _ilu
-            _spec = _ilu.spec_from_file_location("df_tags", DID_FAST)
-            _mod = _ilu.module_from_spec(_spec)
-            sys.modules["df_tags"] = _mod
-            _spec.loader.exec_module(_mod)
-            _DF_TAGS_MOD = _mod
-        df = _DF_TAGS_MOD
+        df = _df_tags_mod()
         h = df.load_headers()
         known = {df.header_normalize(k)
                  for k in list(h.get("0n", {})) + list(h.get("1n", {}))}
@@ -7140,8 +7233,8 @@ def _(event):
     cmd = f"{desc} {start:%H%M}-{end:%H%M}"
     if code:
         cmd += f" @{code}"
-    cmd += _speedy_meeting_tag(desc, start, end)  # 25m meeting → [30] (2026-10-22)
-    cmd += date_sfx
+    speedy = _speedy_meeting_tag(desc, start, end)  # 25m meeting → [30] (2026-10-22)
+    cmd += speedy
     # Habit TAGS on the Toggl entry (其他人, 冥想, …) ride along as extra
     # comma-separated /did items so both ledgers get the minutes (user
     # request 2026-07-27: a run tagged 其他人 credits hcbp points AND 其他人
@@ -7151,8 +7244,10 @@ def _(event):
         if _e.get("id") in (item.get("entry_ids") or []):
             entry_tags = _e.get("tags") or []
             break
+    suffix = date_sfx
     for _t in _habit_tags(entry_tags):
-        cmd += f", {_t} {item['dur_min']}{date_sfx}"
+        suffix += f", {_t} {item['dur_min']}{date_sfx}"
+    cmd += suffix
     # Idempotency is keyed on the exact command (desc + time range), not the
     # bare desc — a repeatable shortcode (hiit, xk22, …) legitimately recurs
     # several times a day, and each occurrence has its own distinct HHMM-HHMM
@@ -7165,19 +7260,40 @@ def _(event):
         flash(f"already recorded: {cmd} — not re-running", 6.0)
         return
     STATE.event_sel = None
+    # Same three paths as the running timer's /done (JM 2026-10-28): a task
+    # with [N] or a time-based habit/category goes straight to did-fast; a
+    # task already crossed off adds nothing; anything else asks instead of
+    # silently crediting the minutes at 1x.
+    path = "task" if speedy else _done_points_path(desc)
+    if path == "credited":
+        _mark_cmd_done_today(cmd)
+        flash(f'"{desc}" already crossed off today — no extra 分 for the entry', 6.0)
+        return
+    if path == "ask":
+        STATE.done_target = {"desc": desc, "start_dt": start, "end_dt": end,
+                             "code": code, "suffix": suffix, "row_key": cmd}
+        input_buffer.text = ""
+        flash(f'points for "{desc}" ({item["dur_min"]}m)? total (40) or rate (.5/m), ⏎ = 0', 8.0)
+        return
+    _run_row_did(event.app, cmd, cmd)
 
+
+def _run_row_did(app, cmd: str, key: str) -> None:
+    """did-fast a FINISHED entry row (no timer to stop) and refresh. `key`
+    is the row's idempotency command (its points-less form when the points
+    were asked for), marked done once did-fast has run."""
     async def _run_did_and_refresh():
         flash(f"$ did {cmd}")
-        event.app.invalidate()
+        app.invalidate()
         res = await asyncio.to_thread(run_did_fast, cmd)
-        _mark_cmd_done_today(cmd)
+        _mark_cmd_done_today(key)
         flash(res, 8.0)
-        event.app.invalidate()
+        app.invalidate()
         await asyncio.to_thread(fetch_today, True)
         await asyncio.to_thread(fetch_points)
-        event.app.invalidate()
+        app.invalidate()
 
-    _enqueue_work(event.app, f"did {cmd}", _run_did_and_refresh, key=cmd)
+    _enqueue_work(app, f"did {cmd}", _run_did_and_refresh, key=key)
 
 
 @kb.add("c-p")
