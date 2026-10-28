@@ -15,6 +15,8 @@ Checks:
                   no .partial older than 36h  (needs FDA: the launchd job
                   must stay wrapped in `ssh localhost`, same as the backup
                   itself — TCC blocked plain launchd for 6 weeks unnoticed)
+  files_cloud   — ~/files mirrored to OneDrive (files-backup-onedrive.sh)
+                  < 36h ago, per its success stamp
   syncthing     — process alive; g245/5e-1/build-order.md (written on
                   Straylight, synced here) < 36h old proves the pipe flows
 
@@ -35,6 +37,7 @@ VAULT = os.path.expanduser("~/vault")
 MONOREPO = os.path.expanduser("~/i446-monorepo")
 ONEDRIVE_BACKUPS = os.path.expanduser("~/OneDrive/vault-backups.noindex")
 HEALTH_JSON = os.path.join(VAULT, "i447", "backup-health.json")
+FILES_CLOUD_STAMP = os.path.expanduser("~/.local/state/jm/files-backup-onedrive.ok")
 
 HOURS = 3600.0
 
@@ -100,6 +103,15 @@ def check_onedrive():
     return None
 
 
+def check_files_cloud():
+    if not os.path.exists(FILES_CLOUD_STAMP):
+        return "files_cloud: ~/files has never finished a OneDrive backup run"
+    age = (time.time() - os.path.getmtime(FILES_CLOUD_STAMP)) / HOURS
+    if age > 36:
+        return f"files_cloud: last ~/files OneDrive backup finished {age:.0f}h ago (see ~/.local/state/jm/files-backup-onedrive.log)"
+    return None
+
+
 def check_syncthing():
     rc, _, _ = run(["pgrep", "-x", "syncthing"])
     if rc != 0:
@@ -119,6 +131,7 @@ CHECKS = [
     ("ix_branch", check_ix_branch),
     ("monorepo_git", check_monorepo_git),
     ("onedrive", check_onedrive),
+    ("files_cloud", check_files_cloud),
     ("syncthing", check_syncthing),
 ]
 

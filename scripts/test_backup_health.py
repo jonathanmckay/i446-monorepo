@@ -53,6 +53,21 @@ def test_onedrive_stale_partial_fails(tmp_path, monkeypatch):
     assert err and "partial" in err
 
 
+def test_files_cloud_fresh_stamp_ok(tmp_path, monkeypatch):
+    stamp = tmp_path / "files-backup-onedrive.ok"
+    monkeypatch.setattr(bh, "FILES_CLOUD_STAMP", str(stamp))
+    _touch(str(stamp), age_hours=5)
+    assert bh.check_files_cloud() is None
+
+
+def test_files_cloud_stale_or_missing_stamp_fails(tmp_path, monkeypatch):
+    stamp = tmp_path / "files-backup-onedrive.ok"
+    monkeypatch.setattr(bh, "FILES_CLOUD_STAMP", str(stamp))
+    assert "never finished" in bh.check_files_cloud()
+    _touch(str(stamp), age_hours=48)
+    assert "48h ago" in bh.check_files_cloud()
+
+
 def _run_alert(env_home, health, stamp):
     env = dict(os.environ, BACKUP_HEALTH_JSON=str(health), BACKUP_ALERT_STAMP=str(stamp))
     r = subprocess.run(["bash", ALERT], capture_output=True, text=True, env=env, timeout=15)
