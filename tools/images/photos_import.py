@@ -154,11 +154,18 @@ def restart_photos() -> None:
     (2026-10-27: 2,440 in, every later batch returned 0 with no error and
     nothing logged); a restart clears it. Relaunched hidden (-g -j) so it
     doesn't steal focus."""
-    subprocess.run(["osascript", "-e", 'tell application "Photos" to quit'], capture_output=True)
-    for _ in range(60):
+    subprocess.run(["osascript", "-e", "with timeout of 20 seconds",
+                    "-e", 'tell application "Photos" to quit', "-e", "end timeout"],
+                   capture_output=True)
+    for _ in range(30):
         if subprocess.run(["pgrep", "-x", "Photos"], capture_output=True).returncode:
             break
         time.sleep(1)
+    else:
+        # A hung Photos never processes the quit event; without this the same
+        # frozen instance survived every "restart" (Ix, 2026-10-27, 43 min).
+        subprocess.run(["killall", "-9", "Photos"], capture_output=True)
+        time.sleep(3)
     # On Ix the wedge was in photolibraryd itself (Photos hung at 0% CPU
     # waiting on it); launchd restarts it on demand.
     subprocess.run(["killall", "photolibraryd"], capture_output=True)
