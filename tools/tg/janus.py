@@ -118,15 +118,33 @@ def _pane_cols() -> int:
         pass
     return 0
 
+def _apply_width(cols: int) -> None:
+    global WIDTH_HINT, DESC_MAX, EVENT_SHORT_COLS
+    if cols >= 40:
+        WIDTH_HINT = min(cols - 1, 64)      # fill the pane; cap keeps it narrow
+        DESC_MAX = max(24, WIDTH_HINT - 16)  # descriptions scale with available width
+        EVENT_SHORT_COLS = max(33, WIDTH_HINT - 8)  # Haiku-shorten only titles wider than this
+    else:
+        WIDTH_HINT = 50  # informs collapse logic, not strict
+        DESC_MAX = 24    # max display width for task/event descriptions
+        EVENT_SHORT_COLS = 33  # event titles wider than this get a Haiku short name
+
+
 _cols = _pane_cols()
-if _cols >= 40:
-    WIDTH_HINT = min(_cols - 1, 64)      # fill the pane; cap keeps it narrow
-    DESC_MAX = max(24, WIDTH_HINT - 16)  # descriptions scale with available width
-    EVENT_SHORT_COLS = max(33, WIDTH_HINT - 8)  # Haiku-shorten only titles wider than this
-else:
-    WIDTH_HINT = 50  # informs collapse logic, not strict
-    DESC_MAX = 24    # max display width for task/event descriptions
-    EVENT_SHORT_COLS = 33  # event titles wider than this get a Haiku short name
+_apply_width(_cols)
+
+
+def _sync_width() -> None:
+    """Re-size the layout to the live pane before each repaint. WIDTH_HINT used
+    to be fixed at startup, so a pane narrowed after launch kept the old width
+    and every right-edge number — the block 分 — was clipped off-screen (bug
+    2026-10-28: "I don't see block points in Janus": a 50-col layout in a
+    45-col pane showed `7 1` for `7 133分`). Headless (tests) keeps its width."""
+    global _cols
+    cols = _pane_cols()
+    if cols and cols != _cols:
+        _cols = cols
+        _apply_width(cols)
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
 NO_TIMER_FLASH_DELAY = 15  # s with no running timer before the idle nag starts
 # flashing (user request 2026-08-11: switching tasks always has a beat of no
@@ -5062,6 +5080,7 @@ def render_focus_compact(bo_emojis: dict[str, str] | None = None) -> list[tuple[
 
 
 def render_all() -> list[tuple[str, str]]:
+    _sync_width()
     # Event cursor spans the WHOLE day now (past blocks' uncovered meetings,
     # the current + next block) — reset once here, before anything renders,
     # so render_morning's registrations survive render_focus_compact's (each
