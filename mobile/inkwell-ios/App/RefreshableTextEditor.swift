@@ -47,8 +47,11 @@ struct RefreshableTextEditor: UIViewRepresentable {
     /// table's pipes and separator row dim so the cells read. The text itself
     /// is never touched; only attributes, so undo, saving and the sha merge
     /// see the same plain markdown. Skipped mid-IME composition (pinyin):
-    /// rewriting attributes under marked text cancels it.
-    static func restyle(_ tv: UITextView) {
+    /// rewriting attributes under marked text cancels it. `lines` limits the
+    /// pass to the paragraphs touching that range: while typing only the
+    /// edited lines are restyled, because re-laying out the whole note on
+    /// every keystroke jumped the view to another line (2026-10-29).
+    static func restyle(_ tv: UITextView, lines: NSRange? = nil) {
         guard tv.markedTextRange == nil else { return }
         let size = UIFont.preferredFont(forTextStyle: .body).pointSize
         func mono(_ scale: CGFloat, _ weight: UIFont.Weight) -> UIFont {
@@ -58,9 +61,14 @@ struct RefreshableTextEditor: UIViewRepresentable {
         let base: [NSAttributedString.Key: Any] = [.font: mono(1, .regular), .foregroundColor: fg]
         let ts = tv.textStorage, ns = ts.string as NSString
         let selection = tv.selectedRange
+        var span = NSRange(location: 0, length: ns.length)
+        if let lines {
+            let loc = min(lines.location, ns.length)
+            span = ns.paragraphRange(for: NSRange(location: loc, length: min(lines.length, ns.length - loc)))
+        }
         ts.beginEditing()
-        ts.setAttributes(base, range: NSRange(location: 0, length: ns.length))
-        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: .byLines) { line, r, _, _ in
+        ts.setAttributes(base, range: span)
+        ns.enumerateSubstrings(in: span, options: .byLines) { line, r, _, _ in
             guard let line else { return }
             if let level = MarkdownLine.headingLevel(line) {
                 // h1 28 · h2 22 · h3 20 · h4+ bold body, matching MarkdownView
@@ -78,13 +86,33 @@ struct RefreshableTextEditor: UIViewRepresentable {
             }
         }
         ts.endEditing()
-        tv.selectedRange = selection
+        if tv.selectedRange != selection { tv.selectedRange = selection }
         tv.typingAttributes = base   // the next keystroke restyles its own line
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
         context.coordinator.parent = self
-        if tv.text != text { tv.text = text; Self.restyle(tv) }
+        if tv.text != text { Self.replace(tv, with: text) }
+    }
+
+    /// Adopt text that changed outside the editor (a sync or a merged put)
+    /// without moving the reader: assigning `tv.text` puts the caret at the
+    /// end and scrolls there. The caret keeps its place, shifted by the
+    /// length change when the edit landed above it, and the scroll offset
+    /// stays put (2026-10-29: "the window refocuses to a different line").
+    static func replace(_ tv: UITextView, with text: String) {
+        let old = tv.text as NSString, new = text as NSString
+        let sel = tv.selectedRange, offset = tv.contentOffset
+        var prefix = 0
+        let n = min(old.length, new.length)
+        while prefix < n && old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+        let caret = sel.location <= prefix ? sel.location : sel.location + new.length - old.length
+        tv.text = text
+        restyle(tv)
+        tv.selectedRange = NSRange(location: max(0, min(caret, new.length)), length: 0)
+        tv.layoutIfNeeded()
+        let maxY = max(0, tv.contentSize.height - tv.bounds.height + tv.adjustedContentInset.bottom)
+        tv.setContentOffset(CGPoint(x: offset.x, y: min(max(offset.y, -tv.adjustedContentInset.top), maxY)), animated: false)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -92,8 +120,14 @@ struct RefreshableTextEditor: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: RefreshableTextEditor
         init(_ parent: RefreshableTextEditor) { self.parent = parent }
+        /// Union of the ranges edited since the last restyle (several while an
+        /// IME composes), in post-edit coordinates.
+        private var edited: NSRange? = nil
         func textViewDidChange(_ tv: UITextView) {
-            RefreshableTextEditor.restyle(tv)
+            if tv.markedTextRange == nil {
+                RefreshableTextEditor.restyle(tv, lines: edited ?? tv.selectedRange)
+                edited = nil
+            }
             parent.text = tv.text
         }
 
@@ -101,6 +135,8 @@ struct RefreshableTextEditor: UIViewRepresentable {
         /// item's marker (or break out of an empty one). Falls through to a
         /// plain newline for non-list lines.
         func textView(_ tv: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            let r = NSRange(location: range.location, length: (text as NSString).length)
+            edited = edited.map { NSUnionRange($0, r) } ?? r
             guard text == "\n",
                   let edit = MarkdownList.onNewline(text: tv.text as NSString, selection: range),
                   let start = tv.position(from: tv.beginningOfDocument, offset: edit.range.location),
@@ -111,7 +147,9 @@ struct RefreshableTextEditor: UIViewRepresentable {
             if let caret = tv.position(from: tv.beginningOfDocument, offset: edit.cursor) {
                 tv.selectedTextRange = tv.textRange(from: caret, to: caret)
             }
-            RefreshableTextEditor.restyle(tv)
+            RefreshableTextEditor.restyle(tv, lines: NSRange(location: edit.range.location,
+                                                             length: (edit.replacement as NSString).length))
+            edited = nil
             parent.text = tv.text   // `replace` doesn't fire textViewDidChange
             return false
         }
