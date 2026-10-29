@@ -95,3 +95,17 @@ def test_run_unlogged_credit_is_flagged(tmp_path):
 def test_run_needs_points(tmp_path):
     res = sf.run("A1", cache_file=tmp_path / "none.json", api=lambda *a, **k: 1 / 0)
     assert not res["ok"]
+
+
+def test_run_recurring_task_keeps_cadence(tmp_path):
+    """v169 review: a plain due_date on a repeating task strips its recurrence;
+    split renames the occurrence but never writes due_date on it."""
+    task = {"id": "R1", "content": "cpap clean (30) [20]", "labels": [], "project_id": "P",
+            "due": {"date": T, "is_recurring": True, "string": "every day"}}
+    api, calls = _fake(task)
+    res = sf.run("R1", cache_file=tmp_path / "none.json", pts=10, api=api,
+                 credit=lambda item: {"results": [{}]}, label_for=lambda l: "@hcb",
+                 tie=lambda n, i: None)
+    assert res["ok"]
+    upd = [c for c in calls if c[0] == "POST" and c[1] == "/tasks/R1"]
+    assert upd and all("due_date" not in (c[2] or {}) for c in upd)

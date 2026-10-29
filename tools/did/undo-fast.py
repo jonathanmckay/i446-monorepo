@@ -471,10 +471,12 @@ def reverse_record(record: dict, errors: list[str]) -> None:
                 errors.append(f"reopen task {tid}: {e}")
         if tid:
             try:
-                _api("POST", f"/tasks/{tid}", {
-                    "content": record.get("prev_content", ""),
-                    "due_date": record.get("prev_due") or today_iso,
-                })
+                body = {"content": record.get("prev_content", "")}
+                # split never moved a recurring task's date; a bare due_date
+                # here would strip its cadence (v169 review)
+                if not record.get("recurring"):
+                    body["due_date"] = record.get("prev_due") or today_iso
+                _api("POST", f"/tasks/{tid}", body)
             except Exception as e:
                 errors.append(f"restore task {tid}: {e}")
         for key in ("didfast", "didfast_bonus"):

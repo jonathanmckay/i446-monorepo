@@ -3320,10 +3320,11 @@ if remaining_bonus > 0:
     _tags.append(f'{{{remaining_bonus}}}')
 new_content = ' '.join([remaining_desc or clean] + _tags)
 if keep_rem:
-    api('POST', f'/tasks/{tid}', {
-        'content': new_content,
-        'due_date': rem_date,
-    })
+    _body = {'content': new_content}
+    # a plain due_date strips a recurring task's cadence (v169 review)
+    if not (task.get('due') or {}).get('is_recurring'):
+        _body['due_date'] = rem_date
+    api('POST', f'/tasks/{tid}', _body)
 else:
     api('POST', f'/tasks/{tid}/close')
 if rem_short and keep_rem:
@@ -3406,6 +3407,7 @@ record = {
     'didfast': didfast_out,
     'didfast_bonus': didfast_bonus,
     'closed': not keep_rem,
+    'recurring': bool((task.get('due') or {}).get('is_recurring')),
 }
 subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
                 '--append', 'PLACEHOLDER_JOURNAL'],

@@ -448,6 +448,13 @@ def cmd_backdated(backtime, desc, project, tags):
     hhmm = backtime[:2] + ":" + backtime[2:]
     back_h, back_m = int(backtime[:2]), int(backtime[2:])
     back_min = back_h * 60 + back_m
+    # A start later than now is a pre-midnight time typed after midnight (or a
+    # trailing number like "plan 2026"): the trim below would delete the
+    # running entry and recreate it in the future (v169 review). Refuse.
+    _now = datetime.now()
+    if back_min > _now.hour * 60 + _now.minute:
+        return ("✗ %s is later than now (%s); not backdating. Use janus to edit "
+                "yesterday's entries." % (hhmm, _now.strftime("%H:%M")))
 
     # Handle running timer first
     cur = _run_cli("current")
