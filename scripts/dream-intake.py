@@ -1155,33 +1155,39 @@ def run_sources(selected=None, timeout=30):
                 "error": f"{type(e).__name__}: {e}",
             }
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {}
-        for name, info in sources_to_run.items():
-            fut = pool.submit(_run_one, name, info)
-            futures[fut] = name
+    # No `with` block: its __exit__ joins every worker, so one hung source
+    # (2026-10: an Agency start stuck in interactive auth) held the whole intake
+    # for 2h despite the per-source timeout. One shared deadline; stragglers are
+    # abandoned and main() exits with os._exit so atexit can't join them either.
+    pool = ThreadPoolExecutor(max_workers=8)
+    deadline = time.time() + timeout
+    futures = {}
+    for name, info in sources_to_run.items():
+        fut = pool.submit(_run_one, name, info)
+        futures[fut] = name
 
-        for fut in futures:
-            try:
-                name, result = fut.result(timeout=timeout)
-                results[name] = result
-            except FuturesTimeout:
-                name = futures[fut]
-                results[name] = {
-                    "status": "timeout",
-                    "elapsed_ms": timeout * 1000,
-                    "data": None,
-                    "error": f"Exceeded {timeout}s timeout",
-                }
-            except Exception as e:
-                name = futures[fut]
-                results[name] = {
-                    "status": "error",
-                    "elapsed_ms": 0,
-                    "data": None,
-                    "error": f"{type(e).__name__}: {e}",
-                }
+    for fut in futures:
+        try:
+            name, result = fut.result(timeout=max(deadline - time.time(), 0))
+            results[name] = result
+        except FuturesTimeout:
+            name = futures[fut]
+            results[name] = {
+                "status": "timeout",
+                "elapsed_ms": timeout * 1000,
+                "data": None,
+                "error": f"Exceeded {timeout}s timeout",
+            }
+        except Exception as e:
+            name = futures[fut]
+            results[name] = {
+                "status": "error",
+                "elapsed_ms": 0,
+                "data": None,
+                "error": f"{type(e).__name__}: {e}",
+            }
 
+    pool.shutdown(wait=False, cancel_futures=True)
     return results
 
 
@@ -1298,3 +1304,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Hard exit: concurrent.futures registers an atexit hook that joins all
+    # worker threads, which would re-block on any source that blew its timeout.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
