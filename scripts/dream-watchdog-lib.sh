@@ -41,3 +41,21 @@ dream_kill_tree() {
   pkill -KILL -P "$pid" 2>/dev/null || true
   kill -KILL "$pid" 2>/dev/null || true
 }
+
+# dream_reap_keepalive RUN_DIR — kill any process whose command line contains
+# RUN_DIR/tmp/keepalive.sh (plus its direct children). Never fails.
+#
+# Bug (v171, 2026-10-28): the dispatcher started `sh RUN/tmp/keepalive.sh RUN`
+# to feed the stall watchdog, then claude exited and nobody stopped it. It ran
+# orphaned for ~22h rewriting logs/heartbeat.txt every 2 min, and each write
+# became a vault autopush commit. The launcher calls this after every claude
+# exit and from its EXIT trap.
+dream_reap_keepalive() {
+  local pattern="$1/tmp/keepalive.sh" pid
+  for pid in $(pgrep -f "$pattern" 2>/dev/null); do
+    [[ "$pid" == "$$" ]] && continue
+    pkill -TERM -P "$pid" 2>/dev/null || true
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  return 0
+}

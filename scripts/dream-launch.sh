@@ -35,6 +35,7 @@ done
 # --- Date strings ---
 DATE_ISO=$(date '+%Y-%m-%d')
 DATE_DOT=$(date '+%Y.%m.%d')
+WEEKDAY=$(date '+%A')  # prompt line "Today's date: {{DATE}} ({{WEEKDAY}})"; unrendered through v172
 
 # --- Auto-increment version ---
 # Find latest run for today, extract version number, increment
@@ -83,7 +84,10 @@ if [[ -f "$LOCK" ]]; then
   fi
 fi
 echo $$ > "$LOCK"
-trap 'rm -f "$LOCK"' EXIT
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dream-watchdog-lib.sh"
+# EXIT trap also reaps a dispatcher keepalive (RUN/tmp/keepalive.sh) that would
+# otherwise outlive claude: v171's ran orphaned for 22h, one autopush per beat.
+trap 'dream_reap_keepalive "$RUN_DIR"; rm -f "$LOCK"' EXIT
 
 # --- Create run dir ---
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/staged" "$RUN_DIR/drafts" "$RUN_DIR/approvals" "$RUN_DIR/branches" "$RUN_DIR/tmp"
@@ -126,6 +130,7 @@ sed \
   -e "s|{{RUN_DIR}}|$RUN_DIR|g" \
   -e "s|{{DATE}}|$DATE_ISO|g" \
   -e "s|{{DATE_DOT}}|$DATE_DOT|g" \
+  -e "s|{{WEEKDAY}}|$WEEKDAY|g" \
   -e "s|{{COMPUTE_FLOOR}}|$FLOOR|g" \
   -e "s|{{BUDGET_USD}}|$BUDGET|g" \
   -e "s|{{BACKFILL_DATE}}|$BACKFILL_DATE|g" \
@@ -193,16 +198,23 @@ fi
 # (stalled). Launcher then checks what pass completed and retries the
 # remaining pass with a fresh session. See dream-watchdog-lib.sh for the
 # 2026-10-26 first-match-not-newest bug that killed v166-v168.
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dream-watchdog-lib.sh"
 cd "$HOME/vault"
 STALL_THRESHOLD=1500  # 25 min with no write anywhere in RUN_DIR = stalled (subagents run 20+ min silently)
 WATCHDOG_INTERVAL=180  # check every 3 min
 DEADLINE=$(($(date +%s) + 10800))  # hard stop at 3h regardless
+# Print mode stops background subagents 10 min after the dispatcher's last turn
+# ("Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely"). That is
+# what killed v171: the dispatcher ended its turn with Pass-2 subagents still
+# running. Wait indefinitely; DEADLINE, the stall watchdog and --max-budget-usd
+# still bound the run.
+export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
+CLAUDE_START_UTC=""  # set at the first claude start; opens the Todoist audit window
 
 _run_claude() {
   local prompt_file="$1"
   local label="$2"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting claude ($label)" >> "$LOG"
+  [[ -n "$CLAUDE_START_UTC" ]] || CLAUDE_START_UTC=$(date -u '+%Y-%m-%dT%H:%M:%S')
 
   caffeinate -s "$CLAUDE" \
     --print \
@@ -224,6 +236,7 @@ _run_claude() {
     if [[ $(date +%s) -ge $DEADLINE ]]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] DEADLINE reached, killing claude ($label)" >> "$LOG"
       dream_kill_tree "$CLAUDE_PID"
+      dream_reap_keepalive "$RUN_DIR"
       return 124
     fi
 
@@ -232,11 +245,13 @@ _run_claude() {
     if [[ $FILE_AGE -gt $STALL_THRESHOLD ]]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] STALL detected ($label): no activity for ${FILE_AGE}s, killing" >> "$LOG"
       dream_kill_tree "$CLAUDE_PID"
+      dream_reap_keepalive "$RUN_DIR"
       return 1
     fi
   done
   local rc=0
   wait "$CLAUDE_PID" || rc=$?
+  dream_reap_keepalive "$RUN_DIR"
   return $rc
 }
 
@@ -304,7 +319,7 @@ AUDIT_SCRIPT="$HOME/i446-monorepo/scripts/dream-audit-todoist.py"
 if [[ -f "$AUDIT_SCRIPT" ]]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running Todoist mutation audit..." >> "$LOG"
   AUDIT_RC=0
-  python3 "$AUDIT_SCRIPT" --run-dir "$RUN_DIR" --since "$RUN_START_UTC" >> "$LOG" 2>&1 || AUDIT_RC=$?
+  python3 "$AUDIT_SCRIPT" --run-dir "$RUN_DIR" --since "${CLAUDE_START_UTC:-$RUN_START_UTC}" >> "$LOG" 2>&1 || AUDIT_RC=$?
   if [[ $AUDIT_RC -eq 2 ]]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ MUTATION BUDGET EXCEEDED — alert prepended to brief" >> "$LOG"
   elif [[ $AUDIT_RC -ne 0 ]]; then

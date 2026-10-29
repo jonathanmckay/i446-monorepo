@@ -27,9 +27,13 @@ import json
 import sys
 import urllib.request
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
+_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
+TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
+                 else os.environ.get("TODOIST_API_KEY", ""))
 BASE = "https://api.todoist.com/api/v1"
 MUTATION_CAP_DEFAULT = 10
 # The neon emitter (neon-task-checksum) mints the 😈 block-ritual tasks every 2h,
@@ -38,9 +42,88 @@ MUTATION_CAP_DEFAULT = 10
 # "added" extra_data carries only client/content/note_count — no labels — so
 # match on the emitter's client + 😈 prefix. Dream's MCP writes show
 # client "todoist-mcp/*" and are never exempt.
-def is_emitter_task(extra: dict) -> bool:
-    return ((extra.get("client") or "").startswith("Python-urllib")
-            and (extra.get("content") or "").startswith("😈"))
+import re  # noqa: E402
+
+# v170 (5) and v171 (16) still raised the ⛔ banner: every one of those "added"
+# events came from client Python-urllib — the -1neon emitter (build-order-daemon),
+# JM's /defer (defer-fast.py: a "deferred: …" posthoc record plus the one-off
+# copy, created within a second of each other) and 0g/-1g block goals ("… {N}").
+# Dream writes through todoist-mcp. Attribution is therefore by client first,
+# content pattern second (for events that carry no client string).
+DREAM_CLIENT_PREFIX = "todoist-mcp"
+EMITTER_LABELS = {"0g", "-1g", "-1neon"}
+_EMITTER_CONTENT = (
+    re.compile(r"^😈"),                 # -1neon block rituals (build-order-daemon)
+    re.compile(r"^deferred:"),          # /defer posthoc eval record (defer-fast.py)
+    re.compile(r"\{\d+\}\s*$"),         # 0g / -1g block goals: "250分 「10」 {10}", "1n {7}"
+)
+DEFER_PAIR_SECONDS = 15
+
+
+def _ts(iso: str) -> float:
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def matches_emitter_content(extra: dict) -> bool:
+    content = extra.get("content") or ""
+    if any(p.search(content) for p in _EMITTER_CONTENT):
+        return True
+    return bool(EMITTER_LABELS & set(extra.get("labels") or []))
+
+
+def classify_added(events: list[dict]) -> dict[str, list[dict]]:
+    """Split "added" events into dream / emitter / other.
+
+    dream   — created via todoist-mcp (Dream's only Todoist path), or carrying no
+              client string and no known emitter pattern (fail loud, not quiet).
+    emitter — a known non-Dream script: 😈 / deferred: / {N} content, a #0g/-1neon
+              label, or the /defer copy created alongside a "deferred:" record.
+    other   — any other non-MCP client (JM's apps, curl, ad-hoc scripts): listed in
+              revert-mapping.json for inspection, never bannered.
+    """
+    defer_times = [_ts(e.get("event_date", "")) for e in events
+                   if (e.get("extra_data", {}).get("content") or "").startswith("deferred:")]
+    out: dict[str, list[dict]] = {"dream": [], "emitter": [], "other": []}
+    for e in events:
+        x = e.get("extra_data", {}) or {}
+        client = x.get("client") or ""
+        rec = {"id": str(e.get("object_id", "")),
+               "content": (x.get("content", "") or "")[:100],
+               "client": client,
+               "event_date": e.get("event_date", "")}
+        if client.startswith(DREAM_CLIENT_PREFIX):
+            bucket = "dream"
+        elif matches_emitter_content(x):
+            bucket = "emitter"
+        elif client and any(abs(_ts(rec["event_date"]) - t) <= DEFER_PAIR_SECONDS
+                            for t in defer_times):
+            bucket = "emitter"  # /defer's one-off copy of the deferred occurrence
+        elif client:
+            bucket = "other"
+        else:
+            bucket = "dream"
+        out[bucket].append(rec)
+    return out
+
+
+def claude_start_from_log(run_dir: Path) -> str | None:
+    """First "Starting claude" line of RUN/logs/agent-run.log (local time) → UTC ISO.
+
+    The Dream window opens when claude starts, not when the launcher starts:
+    intake runs for minutes first and creates nothing.
+    """
+    log = run_dir / "logs" / "agent-run.log"
+    if not log.exists():
+        return None
+    m = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] Starting claude",
+                  log.read_text(errors="replace"), re.M)
+    if not m:
+        return None
+    local = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").astimezone()
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _api(url: str):
@@ -70,16 +153,24 @@ def fetch_events(event_type: str, since_iso: str) -> list[dict]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
-    ap.add_argument("--since", required=True, help="run start, ISO8601 UTC (e.g. 2026-06-12T10:00:00)")
+    ap.add_argument("--since", default=None,
+                    help="claude start, ISO8601 UTC (e.g. 2026-06-12T10:00:00); default: the "
+                         "first 'Starting claude' line of RUN/logs/agent-run.log")
     ap.add_argument("--until", default=None, help="run end, ISO8601 UTC (default: now)")
     ap.add_argument("--cap", type=int, default=MUTATION_CAP_DEFAULT)
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).expanduser()
+    if not args.since:
+        args.since = claude_start_from_log(run_dir)
+        if not args.since:
+            print("ERROR: no --since and no 'Starting claude' line in logs/agent-run.log",
+                  file=sys.stderr)
+            return 1
     until = args.until or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
     counts: dict[str, int] = {}
-    restorable, no_prior, created, emitter = [], [], [], []
+    restorable, no_prior, created, emitter, other = [], [], [], [], []
     # "added" is monitored because creation is PROHIBITED entirely (not budgeted):
     # any task Dream created is a policy violation to flag, not a mutation to count.
     for etype in ("added", "updated", "deleted", "completed"):
@@ -91,12 +182,8 @@ def main() -> int:
             continue
         counts[etype] = len(evs)
         if etype == "added":
-            for e in evs:
-                x = e.get("extra_data", {})
-                rec = {"id": str(e.get("object_id", "")),
-                       "content": (x.get("content", "") or "")[:100],
-                       "event_date": e.get("event_date", "")}
-                (emitter if is_emitter_task(x) else created).append(rec)
+            split = classify_added(evs)
+            created, emitter, other = split["dream"], split["emitter"], split["other"]
         if etype == "updated":
             for e in evs:
                 x = e.get("extra_data", {})
@@ -110,11 +197,12 @@ def main() -> int:
     mapping_path = run_dir / "revert-mapping.json"
     mapping_path.write_text(json.dumps(
         {"window": {"since": args.since, "until": until}, "counts": counts,
-         "created": created, "emitter_added": emitter, "restorable": restorable, "no_prior": no_prior},
+         "created": created, "emitter_added": emitter, "other_added": other, "restorable": restorable, "no_prior": no_prior},
         indent=1, ensure_ascii=False))
 
     mutations = max(counts.get("updated", 0), 0) + max(counts.get("deleted", 0), 0)
-    print(f"audit: {counts} | created: {len(created)} (+{len(emitter)} emitter, ignored) "
+    print(f"audit: {counts} | created: {len(created)} (+{len(emitter)} emitter, "
+          f"+{len(other)} other non-MCP clients, ignored) "
           f"| due-date changes: {len(restorable) + len(no_prior)} "
           f"| mutations vs cap: {mutations}/{args.cap}")
 

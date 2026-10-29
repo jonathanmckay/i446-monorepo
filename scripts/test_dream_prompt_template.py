@@ -18,3 +18,19 @@ def test_version_short_already_has_v_prefix():
 @pytest.mark.skipif(not BASE.exists(), reason="vault prompt base not on this host")
 def test_prompt_base_does_not_double_the_v():
     assert not re.search(r"v\{\{VERSION(_SHORT)?\}\}", BASE.read_text())
+
+
+@pytest.mark.skipif(not BASE.exists(), reason="vault prompt base not on this host")
+def test_every_placeholder_is_rendered():
+    """v172 PROMPT.md read "2026-10-29 ({{WEEKDAY}})": the base used a placeholder
+    the launcher's sed never substituted."""
+    src = (HERE / "dream-launch.sh").read_text()
+    rendered = set(re.findall(r'-e "s\|\{\{([A-Z_]+)\}\}\|', src))
+    used = set(re.findall(r"\{\{([A-Z_]+)\}\}", BASE.read_text()))
+    assert used <= rendered, sorted(used - rendered)
+
+
+def test_launcher_renders_weekday():
+    src = (HERE / "dream-launch.sh").read_text()
+    assert re.search(r"^WEEKDAY=\$\(date '\+%A'\)", src, re.M)
+    assert '-e "s|{{WEEKDAY}}|$WEEKDAY|g"' in src

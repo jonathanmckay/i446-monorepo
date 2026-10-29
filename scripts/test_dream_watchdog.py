@@ -93,3 +93,42 @@ def test_launcher_uses_lib_and_tolerates_nonzero():
     calls = [l for l in src.splitlines() if re.match(r'\s*_run_claude "', l)]
     assert calls and all("|| EXIT_CODE=$?" in l for l in calls), calls
     assert re.search(r'python3 "\$AUDIT_SCRIPT".*\|\| AUDIT_RC=\$\?', src)
+
+
+def test_reap_keepalive_kills_only_this_runs_keepalive(tmp_path):
+    """v171 (2026-10-28): RUN/tmp/keepalive.sh outlived claude by ~22h."""
+    mine, other = tmp_path / "run", tmp_path / "other-run"
+    for rd in (mine, other):
+        (rd / "tmp").mkdir(parents=True)
+        (rd / "tmp" / "keepalive.sh").write_text("#!/bin/sh\nwhile true; do sleep 1; done\n")
+    ka = subprocess.Popen(["/bin/sh", str(mine / "tmp" / "keepalive.sh"), str(mine)])
+    bystander = subprocess.Popen(["/bin/sh", str(other / "tmp" / "keepalive.sh"), str(other)])
+    try:
+        out = subprocess.run(
+            ["bash", "-c", f'set -euo pipefail; source "{LIB}"; dream_reap_keepalive "$1"; echo ok',
+             "_", str(mine)], capture_output=True, text=True, timeout=20)
+        assert out.stdout.strip() == "ok"
+        assert ka.wait(timeout=5) != 0
+        assert bystander.poll() is None
+    finally:
+        for p in (ka, bystander):
+            if p.poll() is None:
+                p.kill()
+
+
+def test_reap_keepalive_noop_when_none_running(tmp_path):
+    out = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail; source "{LIB}"; dream_reap_keepalive "$1"; echo ok',
+         "_", str(tmp_path)], capture_output=True, text=True, timeout=20)
+    assert out.stdout.strip() == "ok"
+
+
+def test_launcher_bg_wait_and_keepalive_reaping():
+    src = LAUNCH.read_text()
+    # v171: print mode killed background subagents 10 min after the last turn.
+    assert re.search(r"^export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0$", src, re.M)
+    assert re.search(r"^trap '.*dream_reap_keepalive \"\$RUN_DIR\".*' EXIT$", src, re.M)
+    # the lib must be sourced before the trap that calls into it
+    assert src.index("dream-watchdog-lib.sh\"") < src.index("dream_reap_keepalive \"$RUN_DIR\"; rm -f")
+    # the audit window opens at claude start, not launcher start
+    assert '--since "${CLAUDE_START_UTC:-$RUN_START_UTC}"' in src
