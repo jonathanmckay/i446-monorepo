@@ -30,8 +30,8 @@ def _w(df, name, col_num, value=1):
 def test_daemon_path_synthesizes_echo_and_pre_images(df, monkeypatch):
     seen = {}
 
-    def fake_batch_write(sheet, writes, *, date=None, row=None, src=None):
-        seen.update(sheet=sheet, writes=writes, date=date, src=src)
+    def fake_batch_write(sheet, writes, *, date=None, row=None, src=None, fallback=True):
+        seen.update(sheet=sheet, writes=writes, date=date, src=src, fallback=fallback)
         return {"ok": True, "row": 293, "results": [
             {"ok": True, "col": "AE", "value": "1", "formula": "1", "chain": "ok",
              "before_value": "", "mode": "set"},
@@ -47,6 +47,7 @@ def test_daemon_path_synthesizes_echo_and_pre_images(df, monkeypatch):
     assert seen["writes"] == [{"col": "AE", "value": 1, "mode": "set"},
                               {"col": "AJ", "value": 15, "mode": "add"}]   # xk20 is cumulative
     assert seen["src"] == "did hiit, xk20"
+    assert seen["fallback"] is False   # no ssh per-cell writes under the raw-script fallback
     assert res.returncode == 0
     assert df.verify_0n_output(res.stdout, writes) is None                # echo satisfies verify
     assert df.parse_pre_lines(res.stdout) == {"31": "", "36": "30"}       # ctrl-z pre-images
@@ -99,8 +100,8 @@ def _w1n(df, name, col, value=1, cumulative=0, variable=False):
 def test_1n_daemon_path_maps_modes_and_synthesizes_echo(df, monkeypatch):
     seen = {}
 
-    def fake_bw(sheet, writes, *, date=None, row=None, src=None):
-        seen.update(sheet=sheet, writes=writes, date=date, src=src)
+    def fake_bw(sheet, writes, *, date=None, row=None, src=None, fallback=True):
+        seen.update(sheet=sheet, writes=writes, date=date, src=src, fallback=fallback)
         return {"ok": True, "row": 20, "results": [
             {"ok": True, "col": "D", "value": "75", "formula": "=0+30+45", "before": "=0+30",
              "before_value": "30", "mode": "append", "chain": "ok"},
@@ -115,6 +116,7 @@ def test_1n_daemon_path_maps_modes_and_synthesizes_echo(df, monkeypatch):
               _w1n(df, "问学 wk", "S", cumulative=20)]
     res = df.write_1n_via_daemon(writes, "10.3")
     assert seen["sheet"] == "1n+" and seen["date"] == "10.3"
+    assert seen["fallback"] is False   # appends: ssh fallback + raw script = double credit
     assert seen["writes"] == [{"col": "D", "value": "+45", "mode": "append"},
                               {"col": "K", "value": 1, "mode": "set"},
                               {"col": "S", "value": "+20", "mode": "append"}]
