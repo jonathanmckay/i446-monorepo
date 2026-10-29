@@ -10,9 +10,11 @@ Then open: http://localhost:5555
 import json
 import glob
 import os
+import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -644,89 +646,149 @@ def get_permissions_stats(days=30):
     return daily
 
 
+# Autopush snapshot commits ("vault backup: 2026-10-27 04:57:48" from Obsidian
+# Git, "vault: 2026-08-11 05:00" before that, "auto: 2026-10-27 04:50" from the
+# i446-monorepo autopush) land ~144/day and say nothing about JM's work; the
+# heatmap counts everything else. Anchored on the timestamp so a hand-written
+# "vault: fix links" still counts.
+_GH_SNAPSHOT_RE = re.compile(r"^\s*(vault backup|vault|auto):\s*\d{4}-\d{2}-\d{2}", re.I)
+# Branches read besides each repo's default branch. i446-monorepo's live tree
+# is on wip (see ~/.claude/CLAUDE.md "Shared Checkouts"), so main alone missed
+# nearly all of its commits after 09-24. Shas are de-duplicated per repo.
+_GH_EXTRA_BRANCHES = {"jonathanmckay/i446-monorepo": ("wip",)}
+# Pages of 100 per branch per refresh. 150 covers 90 days of an autopush
+# branch on a cold start; incremental refreshes need 1-2 pages.
+_GH_MAX_PAGES_PER_REPO = 150
+_GH_REFRESH_S = 600
+# repos: full_name -> {"through": {branch: datetime}, "commits": {sha: (date_key, counted)}}
+_GH_STATE = {"ts": 0.0, "result": None, "repos": {}}
+_GH_LOCK = threading.Lock()
+
+
+def _is_snapshot_commit(message):
+    return bool(_GH_SNAPSHOT_RE.match(message or ""))
+
+
+def _github_paginate(url, params, headers, max_pages):
+    """Yield commit dicts across GitHub's Link rel="next" pages, up to
+    max_pages. Raises on a non-200 so the caller can keep its old cursor."""
+    pages = 0
+    while url and pages < max_pages:
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            raise RuntimeError(f"GitHub {resp.status_code} for {url}")
+        for c in resp.json() or []:
+            yield c
+        pages += 1
+        url = (resp.links or {}).get("next", {}).get("url")
+        params = None  # the next URL already carries the query string
+
+
 def get_github_commits():
-    """Get GitHub commits with daily breakdown for heatmap"""
+    """GitHub commits per Pacific day over the last 90 days, for the heatmap.
+
+    Was a single per_page=100 request per repo with no paging (2026-10-27):
+    autopush repos fill 100 rows in under a day, so the heatmap showed ~36 h
+    and then a hole back to whichever quiet repo reached further. Now pages
+    through Link headers (capped), keeps a per-repo memo so refreshes only
+    fetch commits newer than the last pass, and excludes autopush snapshot
+    commits (_GH_SNAPSHOT_PREFIXES).
+    """
+    with _GH_LOCK:
+        now_ts = time.time()
+        if _GH_STATE["result"] is not None and now_ts - _GH_STATE["ts"] < _GH_REFRESH_S:
+            return _GH_STATE["result"]
+        try:
+            result = _refresh_github_commits()
+        except Exception as e:
+            return {"total_commits": 0, "daily_commits": {}, "repos": [], "error": str(e)}
+        _GH_STATE["ts"], _GH_STATE["result"] = now_ts, result
+        return result
+
+
+def _fetch_branch_commits(name, branch, state, headers, now, days_ago_90, pacific_tz):
+    """Add one branch's commits since its last pass into state["commits"]."""
+    through = state["through"].get(branch)
+    # Overlap the last pass by an hour (author dates can trail push time).
+    since = max(days_ago_90, through - timedelta(hours=1)) if through else days_ago_90
+    params = {"since": since.isoformat(), "per_page": 100}
+    if branch:
+        params["sha"] = branch
+    fresh = {}
     try:
-        from datetime import timezone
-        from collections import defaultdict
-        import pytz
+        for commit in _github_paginate(
+            f"https://api.github.com/repos/{name}/commits", params, headers,
+            _GH_MAX_PAGES_PER_REPO,
+        ):
+            # Accept commits where author.login matches, OR where the git
+            # author name contains "mckay" (catches unlinked local commits).
+            # NOTE: not filtering by author server-side - git configs vary.
+            author_login = (commit.get("author") or {}).get("login", "")
+            git_author = (commit.get("commit") or {}).get("author") or {}
+            if author_login != GITHUB_USER and "mckay" not in git_author.get("name", "").lower():
+                continue
+            date_str = git_author.get("date", "")
+            if not date_str or not commit.get("sha"):
+                continue
+            commit_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            date_key = commit_dt.astimezone(pacific_tz).strftime("%Y-%m-%d")
+            counted = not _is_snapshot_commit((commit.get("commit") or {}).get("message", ""))
+            fresh[commit["sha"]] = (date_key, counted)
+    except Exception:
+        return  # keep the old cursor; retry next refresh
+    state["commits"].update(fresh)
+    state["through"][branch] = now
 
-        # Use Pacific timezone (America/Los_Angeles)
-        pacific_tz = pytz.timezone('America/Los_Angeles')
 
-        # Get commits for last 90 days
-        days_ago_90 = datetime.now(timezone.utc) - timedelta(days=90)
-        daily_commits = defaultdict(int)
-        repos = set()
-        total_commits = 0
+def _refresh_github_commits():
+    pacific_tz = pytz.timezone('America/Los_Angeles')
+    now = datetime.now(timezone.utc)
+    days_ago_90 = now - timedelta(days=90)
 
-        # Strategy: Check ALL repos for recent commits
-        # Use /user/repos for authenticated requests (includes private repos)
-        # Fall back to /users/{username}/repos for unauthenticated (public only)
-        if GITHUB_TOKEN:
-            repos_url = "https://api.github.com/user/repos?sort=pushed&per_page=100&affiliation=owner"
-            headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-        else:
-            repos_url = f"https://api.github.com/users/{GITHUB_USER}/repos?type=all&sort=pushed&per_page=100"
-            headers = {}
-        repos_response = requests.get(repos_url, headers=headers, timeout=10)
+    # Use /user/repos for authenticated requests (includes private repos)
+    # Fall back to /users/{username}/repos for unauthenticated (public only)
+    if GITHUB_TOKEN:
+        repos_url = "https://api.github.com/user/repos?sort=pushed&per_page=100&affiliation=owner"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    else:
+        repos_url = f"https://api.github.com/users/{GITHUB_USER}/repos?type=all&sort=pushed&per_page=100"
+        headers = {}
+    repos_response = requests.get(repos_url, headers=headers, timeout=10)
+    all_repos = repos_response.json() if repos_response.status_code == 200 else []
 
-        if repos_response.status_code == 200:
-            all_repos = repos_response.json()
+    memo = _GH_STATE["repos"]
+    for repo in all_repos:
+        pushed_at = repo.get("pushed_at")
+        if not pushed_at:
+            continue
+        if datetime.fromisoformat(pushed_at.replace("Z", "+00:00")) < days_ago_90:
+            continue
+        name = repo["full_name"]
+        state = memo.setdefault(name, {"through": {}, "commits": {}})
+        for branch in (None,) + tuple(_GH_EXTRA_BRANCHES.get(name, ())):
+            _fetch_branch_commits(name, branch, state, headers, now, days_ago_90, pacific_tz)
 
-            for repo in all_repos:
-                pushed_at = repo.get("pushed_at")
-                if not pushed_at:
-                    continue
+    cutoff_key = days_ago_90.astimezone(pacific_tz).strftime("%Y-%m-%d")
+    daily_commits = defaultdict(int)
+    repos = []
+    total_commits = 0
+    for name, state in memo.items():
+        state["commits"] = {sha: v for sha, v in state["commits"].items() if v[0] >= cutoff_key}
+        n = 0
+        for date_key, counted in state["commits"].values():
+            if counted:
+                daily_commits[date_key] += 1
+                n += 1
+        if n:
+            repos.append(name)
+        total_commits += n
 
-                push_date = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
-                if push_date < days_ago_90:
-                    continue
-
-                # Fetch commits from this repo
-                try:
-                    commits_url = f"https://api.github.com/repos/{repo['full_name']}/commits"
-                    commits_params = {
-                        "since": days_ago_90.isoformat(),
-                        "per_page": 100
-                        # NOTE: Not filtering by author - git configs vary (mckay vs jonathanmckay)
-                    }
-                    commits_response = requests.get(commits_url, params=commits_params, headers=headers, timeout=5)
-
-                    if commits_response.status_code == 200:
-                        repo_commits = commits_response.json()
-
-                        if repo_commits:
-                            repos.add(repo["full_name"])
-
-                        for commit in repo_commits:
-                            # Accept commits where author.login matches, OR where the git
-                            # author name contains "mckay" (catches unlinked local commits)
-                            author_login = commit.get("author", {}).get("login", "") if commit.get("author") else ""
-                            git_author_name = commit.get("commit", {}).get("author", {}).get("name", "").lower()
-                            if author_login != GITHUB_USER and "mckay" not in git_author_name:
-                                continue
-
-                            commit_date_str = commit.get("commit", {}).get("author", {}).get("date", "")
-                            if commit_date_str:
-                                commit_date = datetime.fromisoformat(commit_date_str.replace("Z", "+00:00"))
-                                # Convert to Pacific timezone before formatting date
-                                commit_date_pacific = commit_date.astimezone(pacific_tz)
-                                date_key = commit_date_pacific.strftime("%Y-%m-%d")
-                                daily_commits[date_key] += 1
-                                total_commits += 1
-
-                except Exception:
-                    continue
-
-        return {
-            "total_commits": total_commits,
-            "daily_commits": dict(daily_commits),
-            "repos": list(repos)[:10],
-            "note": "Public repos only" if total_commits == 0 else None
-        }
-    except Exception as e:
-        return {"total_commits": 0, "daily_commits": {}, "repos": [], "error": str(e)}
+    return {
+        "total_commits": total_commits,
+        "daily_commits": dict(daily_commits),
+        "repos": repos[:10],
+        "note": "Public repos only" if total_commits == 0 else None,
+    }
 
 
 @_cached(
