@@ -1,6 +1,6 @@
 ---
 name: "ate"
-description: "Log a food entry to today's hcbi row, into the time-of-day triad picked by current hour (Earthly Branches 卯辰巳午未申戌). Any of kcal/protein/food-groups you omit gets filled in with a best estimate. Usage: /ate <name>[, <kcal>[, <protein_g>]] [(group count, ...)]"
+description: "Log a food entry to today's hcbi row, into the time-of-day triad picked by current hour (Earthly Branches 卯辰巳午未申戌). Any of kcal/protein/food-groups you omit gets filled in with a best estimate. Usage: /ate <name>[, <kcal>[, <protein_g>]] [(group count, ...)]; 'help' in any field = estimate it"
 user-invocable: true
 ---
 
@@ -37,6 +37,11 @@ whatever's missing gets filled in with a best-effort estimate from nutritional
 knowledge of the named food (portion size inferred from the name, e.g. "2 eggs"
 vs "1 egg"), not asked for. A field the user DID type is never overridden.
 
+Typing **`help`** in any of those three slots means the same thing as leaving it
+out: you decide the value. Use it to hold a position, e.g. to give protein but
+not kcal (`/ate tofu scramble, help, 22`), or to ask for groups explicitly
+(`(help)`). Matched case-insensitively; it is never written to Excel as text.
+
 Examples:
 ```
 /ate raspberries, 80, 1 (berries 3)          # fully specified, nothing estimated
@@ -44,6 +49,7 @@ Examples:
 /ate chicken caesar salad, 450                # kcal given; protein + groups estimated
 /ate oatmeal with flax (grains 1, flax 1)     # groups given; kcal/protein estimated
 /ate 卯 leftover oatmeal, 300, 1     # force the 卯 (early morning) band
+/ate tofu scramble, help, 22 (help)  # protein given; kcal + groups decided for you
 ```
 
 ### Nutrition groups (Daily Dozen)
@@ -132,6 +138,8 @@ higher value (e.g. a one-off bonus) is never clobbered downward.
    groups_str = groups_match.group(1) if groups_match else None
    if groups_match:
        user_input = user_input[:groups_match.start()].rstrip()
+   if groups_str is not None and groups_str.strip().lower() == "help":
+       groups_str = None  # (help) = estimate the groups
    ```
    Then split the remainder on the **last two commas** (so the name may itself
    contain commas), and classify how many TRAILING segments are actually
@@ -147,15 +155,20 @@ higher value (e.g. a one-off bonus) is never clobbered downward.
        except Exception:
            return False
 
+   def is_help(s):
+       return s.lower() == "help"
+
    trailing = []
-   while segments and len(trailing) < 2 and is_numeric(segments[-1]):
+   while segments and len(trailing) < 2 and (is_numeric(segments[-1]) or is_help(segments[-1])):
        trailing.insert(0, segments.pop())
+   trailing = [None if is_help(t) else t for t in trailing]
 
    name = ",".join(segments).strip()
    kcal    = trailing[0] if len(trailing) >= 1 else None
    protein = trailing[1] if len(trailing) >= 2 else None
    ```
-   `kcal`/`protein` end up `None` exactly when the user didn't type them —
+   `kcal`/`protein` end up `None` exactly when the user didn't type them or
+   typed `help` —
    evaluate any arithmetic expression that IS present (e.g. `300+200+60`).
    `groups_str` is `None` when no parenthesized groups were given.
 
