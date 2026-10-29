@@ -337,6 +337,19 @@ def _ledger(day: _dt.date) -> dict:
         return {}
 
 
+def _ledger_near(day: _dt.date) -> dict:
+    """The ledgers of `day` and both neighbours, merged. _fetch_today shows
+    every entry that OVERLAPS a day, so an entry crossing midnight appears on
+    both days, but it is ledgered only under the day it was logged from
+    (done-current always uses the current date). Checking one day let the
+    other day's view swipe it again and credit it twice (2026-10-27 review).
+    Toggl ids are unique, so merging neighbours can't mask another entry."""
+    out: dict = {}
+    for off in (-1, 1, 0):  # the day's own notes win
+        out.update(_ledger(day + _dt.timedelta(days=off)))
+    return out
+
+
 def _ledger_add(day: _dt.date, entry_id: str, note: str) -> None:
     d = _ledger(day)
     d[str(entry_id)] = note
@@ -898,7 +911,7 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
         events = []
     else:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
-    logged = _ledger(today)
+    logged = _ledger_near(today)
     logged_pts = _logged_points(today)
     # A task closed in dtd marks the LAST timer entry with its name as
     # logged (one completion = one entry; an earlier same-name session can
@@ -1303,7 +1316,7 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
                 return {"ok": False, "error": "bad end time (HH:MM)"}
             if new_end <= new_start:
                 return {"ok": False, "error": "end must be after start"}
-            ledger = _ledger(today)
+            ledger = _ledger_near(today)
             if str(entry_id) in ledger:
                 return {"ok": False, "error": "already logged — can't retime a logged entry"}
             if _would_touch_logged(entry_id, new_start, new_end, ledger):
@@ -1352,7 +1365,7 @@ def split_entry(entry_id: str, mode: str, day: _dt.date | None = None) -> dict:
     if duration_min <= chunk:
         return {"ok": False, "error": f"too short to split (need > {chunk}m)"}
 
-    if str(entry_id) in _ledger(today):
+    if str(entry_id) in _ledger_near(today):
         return {"ok": False, "error": "already logged — can't split a logged entry"}
 
     cut = (start + _dt.timedelta(minutes=chunk) if mode == "top"
@@ -1387,7 +1400,7 @@ def delete_entry(entry_id: str, day: _dt.date | None = None) -> dict:
     if (e.get("duration") or 0) < 0 or not e.get("stop"):
         return {"ok": False, "error": "can't delete a running timer — stop it first"}
     today = day or _dt.datetime.now(_tz()).date()
-    if str(entry_id) in _ledger(today):
+    if str(entry_id) in _ledger_near(today):
         return {"ok": False, "error": "already logged — can't delete a logged entry"}
     try:
         if _parse_iso(e["start"]).date() != today or _parse_iso(e["stop"]).date() != today:
@@ -1539,8 +1552,23 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     with the viewed M/D appended and --past-ok, so the 分 land on THAT day
     (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
     today = day or _dt.datetime.now(_tz()).date()
-    if str(entry_id) in _ledger(today):
+    if str(entry_id) in _ledger_near(today):
         return {"ok": True, "already": True}
+    # The ledger is written only after did-fast returns (seconds), so a
+    # double-tap or an iOS retry of a slow request passed the check above
+    # twice and credited twice. Same guard as convert_event/done-current.
+    key = f"log:{entry_id}"
+    if key in _INFLIGHT:
+        return {"ok": False, "error": "already logging"}
+    _INFLIGHT.add(key)
+    try:
+        return _log_entry_locked(entry_id, desc, minutes, project, tags, day, today, points)
+    finally:
+        _INFLIGHT.discard(key)
+
+
+def _log_entry_locked(entry_id, desc, minutes, project, tags, day, today,
+                      points=None) -> dict:
     # A dtd-started task carries its OWN point value (e.g. [30]), which is
     # generally NOT the same number as the entry's elapsed minutes. Passing
     # a bare number here only ever means anything to did-fast's Step 6
@@ -1554,7 +1582,8 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # (2026-08-15 user report: dtd-started points weren't reliably landing).
     pts = _resolvable_points(desc)
     if pts is None:
-        pts = _speedy_meeting_pts(desc, minutes)  # 25m meeting → [30] (2026-10-22)
+        # day=today: a past-day log must test THAT day's meeting titles.
+        pts = _speedy_meeting_pts(desc, minutes, day=today)  # 25m meeting → [30] (2026-10-22)
     # Same three paths as desktop janus (lib/janus_done.py, JM 2026-10-28):
     # a crossed-off task adds nothing; an unknown entry asks for a total or
     # a rate instead of crediting the minutes at 1x. `points` is the answer.
