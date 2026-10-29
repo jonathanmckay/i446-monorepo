@@ -7,6 +7,7 @@ jobs produced 50-90 tabs a day for weeks. Fix: if a sign-in tab is already
 open and unfinished, refuse to start a server or forward a call
 (EntraLoginPending). One tab is the cue to sign in; a second one is noise.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -234,9 +235,13 @@ def test_successful_call_clears_marker(monkeypatch):
 
 
 def test_failed_server_start_marks_pending(monkeypatch):
+    # Agency exits before printing a port: its stdout is a pipe at EOF
+    # (watchdog-fix reads the raw fd with select/os.read, not readline).
+    r, w = os.pipe()
+    os.close(w)
     class P:
         pid = 1
-        stdout = type("S", (), {"readline": lambda self: ""})()
+        stdout = type("S", (), {"fileno": lambda self: r, "readline": lambda self: ""})()
         def kill(self): pass
     monkeypatch.setattr(am.subprocess, "Popen", lambda *a, **k: P())
     t = iter(range(0, 1000, 31))

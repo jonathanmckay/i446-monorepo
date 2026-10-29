@@ -50,6 +50,9 @@ def test_concurrent_logs_of_one_entry_credit_once(jm, monkeypatch):
     seen = []
     gate = threading.Event()
     _fake_did(jm, monkeypatch, seen, gate)
+    # A task with [N] (path "task"): an unknown "x" now answers needs_points
+    # without running did-fast (lib/janus_done.py, 2026-10-28).
+    monkeypatch.setattr(jm, "_resolvable_points", lambda desc: 5)
     out = []
     t = threading.Thread(target=lambda: out.append(jm.log_entry("9", "x", 20, "")))
     t.start()
