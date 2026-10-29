@@ -13,11 +13,24 @@ tail refresh here) is hard-capped to ~90 days back from today. The Reports v3
 endpoint can reach back up to 366 days per request, but for this account
 (Toggl descriptions are highly varied, not just per-project, so there are many
 distinct groups) a single 365-day request needs 20+ paginated pages at ~16s
-each — confirmed live, too slow for a dashboard request. Chunking into ~60-day
-windows keeps each request in the sub-2s range (also confirmed live), so this
-script sweeps the desired backfill window in small chunks and writes results
-to a persistent cache (.toggl-daily-cache.json) that the dashboard reads
-directly for anything older than its live tail.
+each — confirmed live, too slow for a dashboard request. So this script sweeps
+the desired backfill window in small chunks and writes results to a persistent
+cache (.toggl-daily-cache.json) that the dashboard reads directly for anything
+older than its live tail.
+
+WINDOW SIZING (2026-10-21): the Reports v3 grouped search SILENTLY TRUNCATES
+wide windows. Measured live: a 60-day request terminates "cleanly" (empty
+final page, no x-next-id) after returning only a fraction of the entries,
+dropping whole tracked days from the tail of the range — e.g. 2026-05-18
+(34 entries / 1434 min when queried as a 1-day window) returns ZERO entries
+inside the 2026-05-01..2026-06-29 window, and still zero inside a 30-day
+2026-05-01..2026-05-30 window. This left 77 of 292 days of 2026 (~26%) missing
+from the cache. A 7-day window captures every tracked day in that window
+(2026-05-15..2026-05-21 returns May-18's full 34 entries). The earlier
+"60-day windows are complete, confirmed live" note was true for a smaller
+account and has since gone stale as entry volume grew. Keep windows SMALL
+(<=7 days) — correctness of the per-day cache depends on it, and the extra
+requests are cheap for a periodic/one-time backfill.
 
 Usage:
   python3 backfill_toggl_cache.py [--days N] [--force]
@@ -52,7 +65,8 @@ CACHE_PATH = HERE / ".toggl-daily-cache.json"
 # time it's rebuilt.
 LOCAL_TZ = daytime.HOME_TZ
 WORKSPACE_ID = int(os.environ.get("TOGGL_WORKSPACE_ID", "2092616"))
-WINDOW_DAYS = 60  # keeps each Reports v3 request fast (~1-2s, confirmed live)
+WINDOW_DAYS = 7  # MUST stay small: Reports v3 silently truncates wide windows,
+#                  dropping whole tracked days (see module docstring, 2026-10-21).
 
 # Mirrors dashboard.py's PROJECT_ID_TO_CODE — kept as a plain data copy here
 # rather than importing dashboard.py, since that module pulls in Flask/GA4 and
