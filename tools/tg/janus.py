@@ -5906,12 +5906,16 @@ def _is_time_based(desc: str) -> bool:
         return bool(name and _habit_tags([name]))
 
 
-def _done_points_path(desc: str) -> str:
+def _done_points_path(desc: str, past_day: bool = False) -> str:
     """task / time / credited / ask for a time entry's /done — decided by
-    lib/janus_done.py so mobile.py (web + iOS) behaves the same."""
+    lib/janus_done.py so mobile.py (web + iOS) behaves the same. `past_day`:
+    completed-today.json is TODAY's record, so on a past-day view nothing
+    counts as crossed off (mobile.py's _done_path passes today=None the same
+    way). Without it, backfilling yesterday's "call steve" after crossing off
+    today's "call steve" credited nothing and marked the row done (v172)."""
     return janus_done.classify(task_points=_resolvable_points(desc),
                                time_based=_is_time_based(desc),
-                               crossed_off=_completed_in_dtd_today(desc))
+                               crossed_off=not past_day and _completed_in_dtd_today(desc))
 
 
 _points_from_answer = janus_done.points_from_answer
@@ -7323,7 +7327,7 @@ def _(event):
     # with [N] or a time-based habit/category goes straight to did-fast; a
     # task already crossed off adds nothing; anything else asks instead of
     # silently crediting the minutes at 1x.
-    path = "task" if speedy else _done_points_path(desc)
+    path = "task" if speedy else _done_points_path(desc, past_day=STATE.day_offset != 0)
     if path == "credited":
         _mark_cmd_done_today(cmd)
         flash(f'"{desc}" already crossed off today — no extra 分 for the entry', 6.0)
