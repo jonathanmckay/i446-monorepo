@@ -362,7 +362,9 @@ final class StubNet: URLProtocol {
         StubNet.seen.append((request.url?.path ?? "", body))
         let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
-        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"# : #"{"ok":true}"#
+        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"#
+            : (body["desc"] as? String) == "ask-me" ? #"{"ok":true,"needs_points":true,"desc":"ask-me","minutes":30}"#
+            : #"{"ok":true}"#
         client?.urlProtocol(self, didLoad: reply.data(using: .utf8)!)
         client?.urlProtocolDidFinishLoading(self)
     }
@@ -418,6 +420,26 @@ do {
        "+12 hcb · +5 0g", "credits toast text")
     check(Parsers.creditsSummary(JSON.parse(#"{"ok":true,"credits":[]}"#)!) == nil, "no credits → nil")
     check(Parsers.creditsSummary(JSON.parse(#"{"ok":true}"#)!) == nil, "old server → nil")
+}
+
+// A replayed log the server answers needs_points (lib/janus_done.py "ask")
+// credited nothing: it must be reported, not counted as sent (v172 review).
+do {
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.protocolClasses = [StubNet.self]
+    let api = Api(configuration: cfg)
+    let ob = Outbox("corecheck-needs-points"); ob.clear()
+    StubNet.seen = []
+    ob.enqueue(url: "http://ix/api/log", body: ["id": "E1", "desc": "ask-me", "minutes": 30], label: "log ask-me")
+    ob.enqueue(url: "http://ix/api/log", body: ["id": "E2", "desc": "gym", "minutes": 40], label: "log gym")
+    let sema = DispatchSemaphore(value: 0)
+    var run: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    Task { StubNet.online = true; run = await ob.flush(api); sema.signal() }
+    sema.wait()
+    eq(run.sent, 1, "needs_points reply is not counted as sent")
+    eq(run.rejected, ["log ask-me: needs points — swipe it again"], "needs_points reply is reported")
+    eq(ob.count, 0, "queue still drains past it")
+    ob.clear()
 }
 
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }
