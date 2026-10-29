@@ -498,8 +498,20 @@ def get_claude_stats():
         total_cost += cost
         model_costs[model_type] = model_costs.get(model_type, 0) + cost
 
+    # stats-cache.json stopped being rewritten by Claude Code on 2026-07-01, so its
+    # lifetime totals froze (660 sessions / 237,402 messages) while the last 30 days
+    # alone held 1,600+ sessions. Add the JSONL-parsed days strictly after the last
+    # cached date (the overlap day is already in the cache totals). Approximate:
+    # a session spanning midnight counts once per day.
+    total_sessions = data.get("totalSessions", 0)
+    for day, act in extra_activity.items():
+        if day > last_cached_date:
+            total_sessions += act["sessionCount"]
+            total_messages += act["messageCount"]
+    total_turns = total_messages // 6
+
     return {
-        "total_sessions": data.get("totalSessions", 0),
+        "total_sessions": total_sessions,
         "total_messages": total_messages,
         "total_turns": total_turns,
         "total_cost": total_cost,
@@ -2857,7 +2869,21 @@ def api_turns():
     return jsonify(result)
 
 
+def _ingest_loop(every_s=900.0):
+    """Keep llm-sessions.db current without a page view. Before 2026-10-26 ingest ran
+    only inside the '/' route, so the DB sat 8 days stale (last row 10-18) whenever
+    nobody opened the page."""
+    while True:
+        try:
+            ingest_claude_sessions()
+        except Exception as e:  # noqa: BLE001 (never take the server down)
+            print(f"[ingest] {e}", flush=True)
+        time.sleep(every_s)
+
+
 if __name__ == "__main__":
+    import threading
+    threading.Thread(target=_ingest_loop, name="llm-ingest", daemon=True).start()
     print("🚀 Starting jm-ai-dash...")
     print("📊 Dashboard: http://localhost:5555")
     print("🔌 API:       http://localhost:5555/api/stats")
