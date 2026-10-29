@@ -55,7 +55,7 @@ AGE_MIN=$(( (NOW_EPOCH - LAST_TS) / 60 ))
 # heartbeat. And right after the Mac wakes, cron hasn't had a turn yet, so
 # don't judge until it has been awake for a full threshold window. Both
 # were the source of the daily 07:00 false "sync_stalled" (2026-10-26).
-HB_FILE="$HOME/i446-monorepo/tools/ai-dashboard/.periodic-sync.heartbeat"
+HB_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/ai-dashboard/periodic-sync.heartbeat"  # written by periodic-sync.sh, per host
 HB_TS=$(cat "$HB_FILE" 2>/dev/null)
 if [ -n "$HB_TS" ]; then
   HB_AGE=$(( (NOW_EPOCH - HB_TS) / 60 ))
