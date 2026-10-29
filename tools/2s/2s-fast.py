@@ -41,6 +41,9 @@ SHEET_1S = "1分+1s"
 SRC_COLS = ["AQ", "AR", "AS", "AT", "AU", "AV", "AW", "AX", "AY", "AZ", "BA"]
 DST_COLS = ["C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N"]  # I skipped
 SRC_EXTRA, DST_EXTRA = "BC", "Y"
+# C sd-neon, D com0, E ∀clr are day-fractions (0.0-1.0, e.g. 0.71), not 分:
+# rounding them to int pastes 0/1 (2026-10-29: Oct C 0.714 -> 1, E 0.464 -> 0).
+RATE_COLS = {"C", "D", "E"}
 
 MONTHS = {m.lower(): i for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july",
@@ -126,7 +129,7 @@ end tell'''
     return out
 
 
-def normalize_value(v: str) -> str:
+def normalize_value(v: str, rate: bool = False) -> str:
     """Excel cell text -> the literal to SET in the scorecard. 分 (and 分-
     derived rates like 分/d) are measured as integers everywhere else in this
     system (janus.py, the 0分 sheet); this pasted str(float(v)) straight
@@ -139,6 +142,8 @@ def normalize_value(v: str) -> str:
     if v in ("missing value", ""):
         return '""'
     try:
+        if rate:
+            return f"{round(float(v), 2):g}"
         return str(int(round(float(v))))
     except ValueError:
         return '"' + v.replace('"', '') + '"'
@@ -165,7 +170,8 @@ def main() -> None:
     if len(vals) != 12:
         sys.exit(f"ERROR: expected 12 values, got {len(vals)}: {vals}")
     # Normalize: AppleScript renders missing as "missing value"
-    norm = [normalize_value(v) for v in vals]
+    norm = [normalize_value(v, rate=c in RATE_COLS)
+            for c, v in zip(DST_COLS + [DST_EXTRA], vals)]
     empty = sum(1 for v in norm if v == '""')
     if empty >= len(norm):
         sys.exit(f"ERROR: {SHEET_1S} row {src_row} ({month}.1) is empty — "
