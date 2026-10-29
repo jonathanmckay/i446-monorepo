@@ -125,5 +125,70 @@ class TestSnapshotFilter(unittest.TestCase):
         self.assertEqual(out["total_commits"], 2)
 
 
+class TestSyntheticSessionsExcluded(unittest.TestCase):
+    """Bug (2026-10-29, Dream v172 E14): claude.daily_activity.sessionCount
+    sat at a constant 49/day (09-30..10-16) and total_sessions was inflated.
+    Root cause: every keychain-less headless `claude --print` (the hourly
+    d357-auto-file cron, 2 calls/run) left a session JSONL whose only
+    assistant record is model "<synthetic>" ("Not logged in · Please run
+    /login"); _parse_jsonl_daily_stats counted each as a session+message."""
+
+    def _write(self, root, name, records):
+        import json
+        d = root / "-Users-mckay-vault"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{name}.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+    def _asst(self, sid, ts, model, text="ok"):
+        return {"type": "assistant", "sessionId": sid, "timestamp": ts,
+                "message": {"model": model, "content": [{"type": "text", "text": text}],
+                            "usage": {"input_tokens": 0 if model == "<synthetic>" else 10,
+                                      "output_tokens": 0 if model == "<synthetic>" else 5}}}
+
+    def _run(self, records_by_file):
+        import tempfile
+        m = _load_dashboard_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td) / "projects"
+            for name, recs in records_by_file.items():
+                self._write(root, name, recs)
+            m._PROJECTS_ROOTS = [(root, "straylight-refit")]
+            return m._parse_jsonl_daily_stats.__wrapped__("2026-10-01")
+
+    def test_not_logged_in_sessions_are_not_counted(self):
+        files = {
+            f"junk{i}": [
+                {"type": "user", "sessionId": f"j{i}", "timestamp": "2026-10-14T16:17:00Z",
+                 "message": {"role": "user", "content": "Follow the d357 skill..."}},
+                self._asst(f"j{i}", "2026-10-14T16:17:02Z", "<synthetic>",
+                           "Not logged in · Please run /login"),
+            ]
+            for i in range(49)
+        }
+        files["real"] = [
+            self._asst("r1", "2026-10-14T18:00:00Z", "claude-opus-4-7"),
+            self._asst("r1", "2026-10-14T18:05:00Z", "claude-opus-4-7"),
+        ]
+        activity, tokens, _ = self._run(files)
+        self.assertEqual(activity["2026-10-14"]["sessionCount"], 1)
+        self.assertEqual(activity["2026-10-14"]["messageCount"], 2)
+        self.assertNotIn("<synthetic>", tokens["2026-10-14"]["tokensByModel"])
+
+    def test_day_with_only_synthetic_sessions_has_no_activity_entry(self):
+        files = {"junk": [self._asst("j", "2026-10-15T16:17:02Z", "<synthetic>",
+                                     "Credit balance is too low")]}
+        activity, _, _ = self._run(files)
+        self.assertNotIn("2026-10-15", activity)
+
+    def test_session_spanning_days_counts_once_per_day(self):
+        files = {"long": [
+            self._asst("L", "2026-10-14T20:00:00Z", "claude-opus-4-7"),  # 10-14 PT
+            self._asst("L", "2026-10-15T20:00:00Z", "claude-opus-4-7"),  # 10-15 PT
+        ]}
+        activity, _, _ = self._run(files)
+        self.assertEqual(activity["2026-10-14"]["sessionCount"], 1)
+        self.assertEqual(activity["2026-10-15"]["sessionCount"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

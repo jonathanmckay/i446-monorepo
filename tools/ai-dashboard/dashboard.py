@@ -206,6 +206,21 @@ _TIMING_FILE = Path.home() / ".claude" / "timing" / "turns.jsonl"
 _LAST_TURN_FILE = Path("/tmp/claude-turn-last")
 
 
+# Claude Code writes a placeholder assistant record with model "<synthetic>"
+# when a run never reached the API ("Not logged in · Please run /login",
+# "Credit balance is too low", "Prompt is too long"). A headless run that dies
+# that way leaves a whole session file whose only assistant record is
+# synthetic. The hourly d357-auto-file cron (2 calls/run, keychain-less) did
+# exactly that ~48x/day from 2026-08 on: 3,967 such files on ix by 10-29,
+# which pinned claude.daily_activity.sessionCount at a floor of 49/day and
+# inflated total_sessions. Synthetic records are not usage; never count them.
+SYNTHETIC_MODEL = "<synthetic>"
+
+
+def _is_synthetic(msg) -> bool:
+    return isinstance(msg, dict) and msg.get("model") == SYNTHETIC_MODEL
+
+
 @_cached(
     "_parse_jsonl_daily_stats",
     lambda since_date_str: (
@@ -251,13 +266,16 @@ def _parse_jsonl_daily_stats(since_date_str):
                         continue
 
                     msg = obj.get("message", {})
-                    if not isinstance(msg, dict):
+                    if not isinstance(msg, dict) or _is_synthetic(msg):
                         continue
 
                     daily_activity[day]["messageCount"] += 1
                     session_id = obj.get("sessionId", str(fpath))
-                    if session_id not in session_counted:
-                        session_counted.add(session_id)
+                    # Key on (session, day): a session active on several days
+                    # counts once on each (the documented semantics below),
+                    # not only on the first day it appears.
+                    if (session_id, day) not in session_counted:
+                        session_counted.add((session_id, day))
                         daily_activity[day]["sessionCount"] += 1
 
                     usage = msg.get("usage", {})
@@ -334,6 +352,11 @@ def ingest_claude_sessions():
                         continue
 
                 if not messages:
+                    continue
+                # A session whose every assistant record is synthetic never
+                # reached the API (see SYNTHETIC_MODEL) — not a session.
+                asst = [m for m in messages if m.get("type") == "assistant"]
+                if asst and all(_is_synthetic(m.get("message")) for m in asst):
                     continue
 
                 # Timestamps
