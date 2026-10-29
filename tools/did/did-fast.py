@@ -51,7 +51,10 @@ def _tz() -> ZoneInfo:
     /did defer-date resolution were landing on Ix's Pacific "today"
     instead of the traveler's actual current day."""
     return _daytime.active_zone()
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
+_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
+TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
+                 else os.environ.get("TODOIST_API_KEY", ""))
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS_MAX_AGE_HOURS = 24
 

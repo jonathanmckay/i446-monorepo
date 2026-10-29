@@ -31,7 +31,10 @@ VAULT = Path.home() / "vault"
 STATE_FILE = VAULT / "h335/d358/.mtg-state.json"
 CONFIG_FILE = VAULT / "h335/d358/.mtg-config.json"
 D359_DIR = VAULT / "d359"
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
+_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
+TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
+                 else os.environ.get("TODOIST_API_KEY", ""))
 
 MTG_CONFIG_DIR = Path.home() / ".config/mtg"
 # OAuth client from workspace-mcp (scoped to m5c7.com)
