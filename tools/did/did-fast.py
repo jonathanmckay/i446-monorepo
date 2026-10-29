@@ -111,7 +111,7 @@ _DF_SPEC.loader.exec_module(_df)  # type: ignore[union-attr]
 # ---------------------------------------------------------------------------
 
 STOPWORDS = {"the", "a", "an", "to", "with", "and", "of"}
-ALIASES = {"math": "问学", "skin2skin": "问学", "stats m5x2": "stats m5x2",
+ALIASES = {"skin2skin": "问学", "stats m5x2": "stats m5x2",
            # The daily 夜neon card is named "evening hcmc"; the 0n header is
            # "night hcmc" (registry alias since 2026-07-25 — mirrored here so
            # DIRECT did-fast invocations, e.g. dtd's worker, route it too).
@@ -215,7 +215,16 @@ VARIABLE_DOMAIN: dict[str, tuple[str, str]] = {
     "lunch": ("家", "X"),
     "dinner": ("家", "X"),
     "bball": ("hcbp", "W"),
+    "math": ("xk87", "X"),
+    "english": ("xk87", "X"),
+    "中文": ("xk87", "X"),
 }
+# Teaching sessions with the kids (fen.md xk87, 2026-10-29): 1分/min plus a
+# fixed bonus per session, added on top of the minutes. "math" used to alias
+# to the retired 问学 0n habit. These skip the by-name Todoist match: "math"
+# would otherwise fully overlap "goodnight math & lights out [15]" and close
+# that card instead of pricing the session.
+VARIABLE_SESSION_BONUS: dict[str, int] = {"math": 5, "english": 5, "中文": 5}
 
 # Habits that also write to the hcbi sheet (append +N to formula).
 # key = habit name (lowercase), value = hcbi column letter
@@ -1676,7 +1685,9 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             continue
 
         # Step 0.3: Todoist match
-        matched = None if skip_todoist else match_todoist_task(item.name, all_tasks, preferred_id=preferred_id)
+        session_only = name_lower in VARIABLE_SESSION_BONUS and not preferred_id
+        matched = (None if skip_todoist or session_only
+                   else match_todoist_task(item.name, all_tasks, preferred_id=preferred_id))
         if matched and str(matched.get("id")) in claimed_task_ids:
             # Same task already matched+credited by an earlier item in this
             # batch (e.g. a comma inside the task's own name split it into
@@ -1709,7 +1720,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
         # Step 0.35: Live Todoist search (fallback when cache misses)
         # Searches all open tasks by text, not just neon-labeled ones.
-        live_matched = None if skip_todoist else _live_todoist_search(item.name)
+        live_matched = None if skip_todoist or session_only else _live_todoist_search(item.name)
         if live_matched and str(live_matched.get("id")) in claimed_task_ids:
             results.append(RouteResult(
                 item=item, step="skipped",
@@ -1813,6 +1824,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             pts = item.time_value or 0
             if pts == 0 and item.time_range:
                 pts = time_range_minutes(item.time_range[0], item.time_range[1])
+            pts += VARIABLE_SESSION_BONUS.get(name_lower, 0)
         if item.bonus_points:
             pts += item.bonus_points
 
@@ -2404,7 +2416,8 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
             # Without this they log 0 when completed from dtd with a timer up.
-            r.fen_points = mins + (r.item.bonus_points or 0)
+            r.fen_points = (mins + VARIABLE_SESSION_BONUS.get(r.item.name.lower(), 0)
+                            + (r.item.bonus_points or 0))
             r.item.time_value = mins
 
 
