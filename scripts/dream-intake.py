@@ -415,6 +415,21 @@ def _appfolio_rent_roll():
 # Source 5: appfolio_work_orders
 # ---------------------------------------------------------------------------
 
+# AppFolio's work_order report status enum. A WO counts as "open" unless it is
+# in a terminal (closed) state. See _appfolio_work_orders for the full history.
+_WO_CLOSED_STATUSES = {"completed", "complete", "canceled", "cancelled", "closed"}
+
+
+def _wo_is_open(status: str) -> bool:
+    """True if an AppFolio work-order status represents an open WO.
+
+    The open statuses (New/Scheduled/Assigned/Estimated/In Progress/On Hold)
+    share no common substring, so detection is by exclusion of the closed set.
+    """
+    s = (status or "").strip().lower()
+    return bool(s) and s not in _WO_CLOSED_STATUSES
+
+
 @source("appfolio_work_orders", "AppFolio open/overdue work orders by property")
 def _appfolio_work_orders():
     vhost = _CREDS.get("af_vhost", "")
@@ -431,6 +446,11 @@ def _appfolio_work_orders():
     results = data.get("results", [])
 
     today = datetime.date.today()
+    # The old filter tested for the substrings "open"/"in progress"/"pending",
+    # which match NONE of the actual open statuses (New/Scheduled/Assigned/
+    # Estimated) -> reported total_open=0 against ~1,270 genuinely-open WOs
+    # (v162 fix; same diagnosis first staged on the unmerged dream/2026.06.03
+    # branch). _wo_is_open inverts the test. See _WO_CLOSED_STATUSES above.
     by_property: dict[str, dict] = {}
     for row in results:
         prop = row.get("property_name", row.get("property", "Unknown"))
@@ -439,14 +459,19 @@ def _appfolio_work_orders():
         p = by_property[prop]
         p["total"] += 1
 
-        status = (row.get("status", "") or "").lower()
-        if "open" in status or "in progress" in status or "pending" in status:
+        if _wo_is_open(row.get("status", "")):
             p["open"] += 1
-            # Check overdue
-            due = row.get("due_date", "")
+            # Check overdue. AppFolio's work_order report has no generic
+            # due_date; fall back through the SLA-ish date fields it does expose.
+            due = (
+                row.get("scheduled_end")
+                or row.get("follow_up_on")
+                or row.get("due_date")
+                or ""
+            )
             if due:
                 try:
-                    due_date = datetime.date.fromisoformat(due[:10])
+                    due_date = datetime.date.fromisoformat(str(due)[:10])
                     if due_date < today:
                         p["overdue"] += 1
                 except ValueError:
@@ -825,8 +850,36 @@ def _imessage_recent():
 # Source 12: slack
 # ---------------------------------------------------------------------------
 
+def _on_ix() -> bool:
+    """True on the ix mac mini (same test as did-fast/_on_ix)."""
+    import socket
+    host = socket.gethostname().lower()
+    return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
+
+
+def _outlook_skip(server_name: str):
+    """Skip result for an Agency source that cannot authenticate here, or None.
+
+    On ix the dream run is headless: MSAL's keychain read fails (-61) and
+    Agency falls back to interactive sign-in that nobody completes, so every
+    Outlook source sat until the 30s source timeout (v160-v166). Unless an
+    AGENCY_REMOTE_<NAME>_PORT tunnel delegates to a host that can auth,
+    return immediately instead of hanging."""
+    if not _on_ix():
+        return None
+    env_key = f"AGENCY_REMOTE_{server_name.upper()}_PORT"
+    if os.environ.get(env_key):
+        return None
+    return {"status": "skipped",
+            "reason": f"on ix without {env_key}: headless MSAL (keychain -61) "
+                      f"cannot complete interactive auth"}
+
+
 @source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
 def _outlook_inbox():
+    skip = _outlook_skip("mail")
+    if skip:
+        return skip
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
     from datetime import timezone
@@ -898,6 +951,9 @@ def _outlook_inbox():
 
 @source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
 def _outlook_calendar():
+    skip = _outlook_skip("calendar")
+    if skip:
+        return skip
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
     from datetime import timezone
@@ -946,37 +1002,119 @@ def _annual_goals_4g():
     nits — see dream-ai-context.md 'Goal-leverage orientation'."""
     import openpyxl  # available in the intake env
     path = Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
-    if not path.exists():
-        return {"error": f"{path} not found", "goals": []}
-    yy = datetime.date.today().strftime("%y")
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
-        sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
-                     wb.sheetnames[0])
-        ws = wb[sheet]
-        goals, tldr = [], None
-        for row in ws.iter_rows(values_only=True):
-            cells = list(row)
-            c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
-            c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
-            blob = (c0 + " " + c1).lower()
-            if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
-                tldr = (c1 or c0)
-                continue
-            # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
-            if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
-                pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
-                earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
-                goals.append({
-                    "domain": c0,
-                    "goal": c1,
-                    "target_fen": cells[2],
-                    "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
-                    "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
-                })
-        return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
-    finally:
-        wb.close()
+        if not path.exists():
+            raise FileNotFoundError(path)
+        yy = datetime.date.today().strftime("%y")
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
+                         wb.sheetnames[0])
+            ws = wb[sheet]
+            goals, tldr = [], None
+            for row in ws.iter_rows(values_only=True):
+                cells = list(row)
+                c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
+                c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
+                blob = (c0 + " " + c1).lower()
+                if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
+                    tldr = (c1 or c0)
+                    continue
+                # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
+                if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
+                    pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
+                    earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
+                    goals.append({
+                        "domain": c0,
+                        "goal": c1,
+                        "target_fen": cells[2],
+                        "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
+                        "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
+                    })
+            return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
+        finally:
+            wb.close()
+    except Exception as e:
+        # OneDrive under macOS TCC routinely denies headless/cron reads
+        # ("Operation not permitted") — which left Dream with NO annual frame
+        # at all (source returned null). Degrade gracefully to the readable
+        # vault narrative so every run still anchors to the year's bets.
+        # Permanent fix: grant Full Disk Access to the intake's python on ix
+        # (one setting that also unlocks Safari history, screen-time, iMessage).
+        return _annual_goals_4g_vault_fallback(str(e))
+
+
+def _annual_goals_4g_vault_fallback(err):
+    """Coarse annual frame from the vault Current-State note when the OneDrive
+    4g workbook is unreadable. Narrative only (no per-goal 分 targets)."""
+    year = datetime.date.today().year
+    doc = Path.home() / "vault" / "g245" / "5e4" / f"4⎡{year} Current State.md"
+    out = {"error": f"4g xlsx unreadable ({err}); using vault fallback",
+           "source": "vault-fallback", "tldr": None, "year_bets": [], "goals": []}
+    if not doc.exists():
+        return out
+    try:
+        lines = doc.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return out
+    # tl;dr line (e.g. "**tl;dr:** ...")
+    for ln in lines:
+        low = ln.lower()
+        if "tl;dr" in low:
+            out["tldr"] = ln.split(":", 1)[-1].strip(" *") if ":" in ln else ln.strip(" *")
+            break
+    # Current-year bullet block under "# Years" (a top-level "- <year>" item
+    # followed by indented sub-bullets).
+    collecting = False
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("-") and stripped.lstrip("- ").startswith(str(year)):
+            collecting = True
+            continue
+        if collecting:
+            # stop at the next top-level bullet or a new heading
+            if (ln and not ln[0].isspace() and stripped.startswith("-")) or stripped.startswith("#"):
+                break
+            if stripped.startswith("-"):
+                out["year_bets"].append(stripped.lstrip("- ").strip())
+    return out
+
+
+@source("weekly_goals_1g", "this week's 1g goals from the g245 2g+1g narrative (the authoritative mirror; the Neon 1g tab is a stale template)")
+def _weekly_goals_1g(today=None, root=None):
+    """Return the current week's block (and next week's, if set) from
+    vault/g245/5e2/<YYYY.MM> 2g+1g-narrative.md. Week headers look like
+    `- **Oct 18 – Oct 24** —`. Without this, every Dream run spent a subagent
+    rediscovering the goals (v163 needed 3 subagents to resolve one bullet)."""
+    today = today or datetime.date.today()
+    root = Path(root) if root else Path.home() / "vault" / "g245" / "5e2"
+    hdr = re.compile(r"^\s*- \*\*([A-Z][a-z]{2}) (\d{1,2}) [–-] ([A-Z][a-z]{2}) (\d{1,2})\*\*")
+    weeks = []
+    for f in sorted(root.glob("*2g+1g-narrative.md"))[-2:]:
+        year = int(f.name[:4])
+        cur = None
+        for line in f.read_text().splitlines():
+            m = hdr.match(line)
+            if m:
+                try:
+                    start = datetime.datetime.strptime(f"{m[1]} {m[2]} {year}", "%b %d %Y").date()
+                    end = datetime.datetime.strptime(f"{m[3]} {m[4]} {year}", "%b %d %Y").date()
+                except ValueError:
+                    cur = None
+                    continue
+                if end < start:  # week crosses New Year
+                    end = end.replace(year=year + 1)
+                cur = {"start": start.isoformat(), "end": end.isoformat(), "lines": [], "file": f.name}
+                weeks.append(cur)
+            elif line.startswith("#"):
+                cur = None
+            elif cur is not None and line.strip() and line.strip() != "-":
+                cur["lines"].append(line.rstrip())
+    iso = today.isoformat()
+    current = next((w for w in weeks if w["start"] <= iso <= w["end"]), None)
+    nxt = next((w for w in weeks if w["start"] > iso), None)
+    return {"current": current, "next": nxt,
+            "next_is_empty": nxt is not None and not nxt["lines"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1002,8 +1140,9 @@ def run_sources(selected=None, timeout=30):
         try:
             data = info["fn"]()
             elapsed = time.time() - t0
+            skipped = isinstance(data, dict) and data.get("status") == "skipped"
             return name, {
-                "status": "ok",
+                "status": "skipped" if skipped else "ok",
                 "elapsed_ms": round(elapsed * 1000),
                 "data": data,
             }
@@ -1086,7 +1225,7 @@ def print_test_table(results):
                 elif "conversation_count" in d:
                     notes = f"conversations={d['conversation_count']}"
                 elif "status" in d:
-                    notes = d["status"]
+                    notes = d.get("reason", d["status"])[:50]
                 else:
                     notes = f"keys={list(d.keys())[:3]}"
 
@@ -1102,7 +1241,7 @@ def print_test_table(results):
         print(f"{name:<25} {status_str:<19} {elapsed:>8}  {notes}")
 
     ok = sum(1 for r in results.values() if r["status"] == "ok")
-    err = sum(1 for r in results.values() if r["status"] != "ok")
+    err = sum(1 for r in results.values() if r["status"] not in ("ok", "skipped"))
     total_ms = sum(r["elapsed_ms"] for r in results.values())
     print("-" * 70)
     print(f"Total: {ok} ok, {err} failed, {total_ms}ms cumulative\n")

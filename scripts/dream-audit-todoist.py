@@ -32,6 +32,15 @@ from pathlib import Path
 TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 BASE = "https://api.todoist.com/api/v1"
 MUTATION_CAP_DEFAULT = 10
+# The neon emitter (neon-task-checksum) mints the 😈 block-ritual tasks every 2h,
+# including ~11:00 UTC inside the Dream window. Their "added" events are not
+# Dream's (false-positive banner on v163 + v165, pattern 1161). Activity-log
+# "added" extra_data carries only client/content/note_count — no labels — so
+# match on the emitter's client + 😈 prefix. Dream's MCP writes show
+# client "todoist-mcp/*" and are never exempt.
+def is_emitter_task(extra: dict) -> bool:
+    return ((extra.get("client") or "").startswith("Python-urllib")
+            and (extra.get("content") or "").startswith("😈"))
 
 
 def _api(url: str):
@@ -70,7 +79,7 @@ def main() -> int:
     until = args.until or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
     counts: dict[str, int] = {}
-    restorable, no_prior, created = [], [], []
+    restorable, no_prior, created, emitter = [], [], [], []
     # "added" is monitored because creation is PROHIBITED entirely (not budgeted):
     # any task Dream created is a policy violation to flag, not a mutation to count.
     for etype in ("added", "updated", "deleted", "completed"):
@@ -84,9 +93,10 @@ def main() -> int:
         if etype == "added":
             for e in evs:
                 x = e.get("extra_data", {})
-                created.append({"id": str(e.get("object_id", "")),
-                                "content": (x.get("content", "") or "")[:100],
-                                "event_date": e.get("event_date", "")})
+                rec = {"id": str(e.get("object_id", "")),
+                       "content": (x.get("content", "") or "")[:100],
+                       "event_date": e.get("event_date", "")}
+                (emitter if is_emitter_task(x) else created).append(rec)
         if etype == "updated":
             for e in evs:
                 x = e.get("extra_data", {})
@@ -100,11 +110,11 @@ def main() -> int:
     mapping_path = run_dir / "revert-mapping.json"
     mapping_path.write_text(json.dumps(
         {"window": {"since": args.since, "until": until}, "counts": counts,
-         "created": created, "restorable": restorable, "no_prior": no_prior},
+         "created": created, "emitter_added": emitter, "restorable": restorable, "no_prior": no_prior},
         indent=1, ensure_ascii=False))
 
     mutations = max(counts.get("updated", 0), 0) + max(counts.get("deleted", 0), 0)
-    print(f"audit: {counts} | created: {len(created)} "
+    print(f"audit: {counts} | created: {len(created)} (+{len(emitter)} emitter, ignored) "
           f"| due-date changes: {len(restorable) + len(no_prior)} "
           f"| mutations vs cap: {mutations}/{args.cap}")
 

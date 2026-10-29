@@ -396,3 +396,65 @@ def test_dtd_defer_binding_passes_id_not_name():
     # Since 2026-07-23 the defer script loops over a {+2} batch; each worker
     # still resolves by id (\$tid, one loop element), never by name.
     assert r'"\$DEFER_FAST" --id "\$tid"' in dtd
+
+
+# ── absorbed defer: target on/after next occurrence → no duplicate copy ───
+
+def _capture(df, monkeypatch, today):
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return today
+    monkeypatch.setattr(df, "date", _D)
+    created, advance = [], {}
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, labels, proj, due, *a, **k:
+                        (created.append((content, due)), {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api",
+                        lambda method, path, body=None: advance.update(body or {}))
+    return created, advance
+
+
+@pytest.mark.parametrize("target", ["2026-10-23", "2026-10-26"])
+def test_defer_onto_or_past_next_occurrence_makes_no_clone(df, monkeypatch, target):
+    """Bug (2026-10-23): a daily non-habit recurring task due 10-22, deferred to
+    10-23 (= its next occurrence), produced a one-off copy due 10-23 AND the
+    parent advanced to 10-23 — two identical same-day tasks. The posthoc read
+    "→ 2026-10-23 (recurring; next 2026-10-23)". The parent's next occurrence
+    already carries it: no copy."""
+    created, advance = _capture(df, monkeypatch, date(2026, 10, 22))
+    task = {"id": "t1", "content": "review inbox (10) [5]", "labels": ["g245"],
+            "due": {"is_recurring": True, "date": "2026-10-22",
+                    "string": "every day"}}
+    out = df.handle_recurring(task, target, 2)
+    # Only the posthoc — no task copy
+    assert len(created) == 1 and created[0][0].startswith("deferred:")
+    assert "next occurrence 2026-10-23" in created[0][0]
+    assert advance == {"due_date": "2026-10-23", "due_string": "every day"}
+    assert out["stubs"]["deferred_copy"] is None
+    assert out["absorbed"] is True
+    assert out["target_date"] == "2026-10-23"
+
+
+def test_defer_before_next_occurrence_still_clones(df, monkeypatch):
+    """A target strictly before the next occurrence still needs the copy."""
+    created, advance = _capture(df, monkeypatch, FRI)
+    task = {"id": "t1", "content": "hcmr (15) [10]", "labels": ["g245"],
+            "due": {"is_recurring": True, "date": "2026-06-05",
+                    "string": "every Friday"}}
+    out = df.handle_recurring(task, "2026-06-11", 2)
+    assert created[0] == ("hcmr (15) [10]", "2026-06-11")
+    assert out["absorbed"] is False
+    assert advance["due_date"] == "2026-06-12"
+
+
+def test_habit_dated_copy_past_next_occurrence_still_created(df, monkeypatch):
+    """Dated habit catch-up copies are distinct by design — not absorbed."""
+    created, _ = _capture(df, monkeypatch, date(2026, 10, 22))
+    task = {"id": "t1", "content": "xk20 (20) [15]", "labels": ["0neon"],
+            "due": {"is_recurring": True, "date": "2026-10-22",
+                    "string": "every day"}}
+    out = df.handle_recurring(task, "2026-10-23", 2)
+    assert created[0] == ("xk20 10.22 (20) [15]", "2026-10-23")
+    assert out["absorbed"] is False

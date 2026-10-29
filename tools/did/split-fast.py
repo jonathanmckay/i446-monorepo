@@ -126,8 +126,9 @@ def plan(content: str, *, pts=None, bonus=None, minutes=None, done_name="", rem_
         "keep": bool(keep),
         "today": today,
         # did-fast splits on , and ; -- a name holding one scattered the
-        # points (split.sh regression 2026-06-06)
-        "safe_name": re.sub(r"[,;]+", " ", clean),
+        # points (split.sh regression 2026-06-06). Fullwidth ，； too: did-fast
+        # has split on them since 2026-10-22 (45c6b881).
+        "safe_name": re.sub(r"[,;，；]+", " ", clean),
     }
 
 
