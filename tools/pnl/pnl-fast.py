@@ -91,13 +91,27 @@ API_PASS = "4920d4f8c58a8e9fbcaf22268ec0689a"
 BASE_URL = f"https://{VHOST}.appfolio.com/api/v2/reports"
 
 VAULT = Path.home() / "vault"
-REPORTS_BASE = VAULT / "m5x2" / "reports"
+# PNL_REPORTS_BASE overrides the output root (used to regenerate into a scratch
+# dir without touching the live vault reports).
+REPORTS_BASE = Path(os.environ["PNL_REPORTS_BASE"]) if os.environ.get("PNL_REPORTS_BASE") \
+    else VAULT / "m5x2" / "reports"
 
 # ---------------------------------------------------------------------------
 # Property registry
 # ---------------------------------------------------------------------------
 
 # Cap rates from SREO: q1 sreo tab, col L, Google Sheet 1noFafK85LLhd4Umzh84XVOqT3tR42Om0Wf4jBc3ShSU
+#
+# Unit counts: AppFolio unit_directory (active), pulled 2026-10-29, counting
+# dwelling units only. A row with no unit_type AND no market rent is a storage
+# room / maintenance garage, not a dwelling, and is excluded (k104 x2, kn47 x3,
+# c313, m221 G-D). Rows with a blank type but a market rent (h604; tc68 D082,
+# D088) are dwellings and are counted. Non-rentable units under renovation
+# (w225, l912 MF) are counted: they are owned units. l912 = the Multi-Family
+# entity (533) only; the Community Association (1132) is the HOA, not ours.
+#
+# fund: "personal" marks a property AppFolio carries that is not an m5x2 fund
+# asset. Fund rollups skip it (see is_fund_property / portfolio all_funds()).
 PROPERTIES = {
     "a916": {"fund": "fund-0", "units": 12, "ids": ["2"], "cap": 0.080, "addr": "916 W Augusta Ave, Spokane WA 99205"},
     "a210": {"fund": "fund-0", "units": 10, "ids": ["39"], "cap": 0.078, "addr": "4210 N Avalon Rd, Spokane Valley WA 99216"},
@@ -109,32 +123,43 @@ PROPERTIES = {
     "m405": {"fund": "fund-i", "units": 26, "ids": ["50"], "cap": 0.085, "addr": "405 S Maple St, Spokane WA 99201"},
     "h731": {"fund": "fund-i", "units": 8, "ids": ["228"], "cap": 0.070, "addr": "731 S Hatch St, Spokane WA 99202"},
     "hl73": {"fund": "fund-i", "units": 6, "ids": ["49"], "cap": 0.080, "addr": "730 N Jackson St, Helena MT 59601"},
-    "k104": {"fund": "fund-i", "units": 59, "ids": ["220"], "cap": 0.070, "addr": "314 N LeFevre St, Medical Lake WA 99022"},
-    "m221": {"fund": "fund-i", "units": 14, "ids": ["223"], "cap": 0.080, "addr": "1221 N Monroe St, Spokane WA 99201"},
+    "k104": {"fund": "fund-i", "units": 58, "ids": ["220"], "cap": 0.070, "addr": "314 N LeFevre St, Medical Lake WA 99022"},
+    "m221": {"fund": "fund-i", "units": 13, "ids": ["223"], "cap": 0.080, "addr": "1221 N Monroe St, Spokane WA 99201"},
     "ms22": {"fund": "fund-i", "units": 8, "ids": ["46"], "cap": 0.080, "addr": "2252 W Central Ave, Missoula MT 59801"},
     "ms43": {"fund": "fund-i", "units": 15, "ids": ["43"], "cap": 0.070, "addr": "430 Washington, Missoula MT 59802"},
     "ps17": {"fund": "fund-i", "units": 18, "ids": ["222"], "cap": 0.078, "addr": "1740 N 5th Ave, Pasco WA 99301"},
     "ps25": {"fund": "fund-i", "units": 44, "ids": ["221"], "cap": 0.070, "addr": "2524 W Sylvester St, Pasco WA 99301"},
     "ps91": {"fund": "fund-i", "units": 14, "ids": ["227"], "cap": 0.078, "addr": "908 W Ruby, Pasco WA 99301"},
     "w117": {"fund": "fund-ii", "units": 10, "ids": ["225"], "cap": 0.080, "addr": "1117 W 5th Ave, Spokane WA 99204"},
-    "w226": {"fund": "fund-ii", "units": 10, "ids": ["224"], "cap": 0.075, "addr": "1226 W 5th Ave, Spokane WA 99204"},
-    "hl65": {"fund": "fund-ii", "units": 13, "ids": ["44"], "cap": 0.085, "addr": "645 N Ewing, Helena MT 59601"},
-    "c313": {"fund": "fund-iii", "units": 45, "ids": ["603"], "cap": 0.070, "addr": "3131 S Cook St, Spokane WA 99223"},
+    "w226": {"fund": "fund-ii", "units": 11, "ids": ["224"], "cap": 0.075, "addr": "1226 W 5th Ave, Spokane WA 99204"},
+    "hl65": {"fund": "fund-ii", "units": 10, "ids": ["44"], "cap": 0.085, "addr": "645 N Ewing, Helena MT 59601"},
+    "c313": {"fund": "fund-iii", "units": 39, "ids": ["603"], "cap": 0.070, "addr": "3131 S Cook St, Spokane WA 99223"},
     "e328": {"fund": "fund-iii", "units": 7, "ids": ["490"], "cap": 0.070, "addr": "3128 E 28th Ave, Spokane WA 99223"},
-    "j312": {"fund": "fund-iii", "units": 20, "ids": ["521"], "cap": 0.070, "addr": "3102 E Jackson Ave, Spokane WA 99207"},
-    "k308": {"fund": "fund-iii", "units": 8, "ids": ["617"], "cap": 0.070, "addr": "308 N Washington St, Medical Lake WA 99022"},
-    "l912": {"fund": "fund-iii", "units": 10, "ids": ["533"], "cap": 0.065, "addr": "912 W Lincoln Pl, Spokane WA 99204"},
-    "rl16": {"fund": "fund-iii", "units": 100, "ids": ["414"], "cap": 0.070, "addr": "1621 George Washington Way, Richland WA 99354"},
-    "rl21": {"fund": "fund-iii", "units": 14, "ids": ["648"], "cap": 0.085, "addr": "2153 Stevens Dr, Richland WA 99354"},
+    "j312": {"fund": "fund-iii", "units": 18, "ids": ["521"], "cap": 0.070, "addr": "3102 E Jackson Ave, Spokane WA 99207"},
+    "k308": {"fund": "fund-iii", "units": 6, "ids": ["617"], "cap": 0.070, "addr": "308 N Washington St, Medical Lake WA 99022"},
+    "l912": {"fund": "fund-iii", "units": 8, "ids": ["533"], "cap": 0.065, "addr": "912 W Lincoln Pl, Spokane WA 99204"},
+    "rl16": {"fund": "fund-iii", "units": 96, "ids": ["414"], "cap": 0.070, "addr": "1621 George Washington Way, Richland WA 99354"},
+    "rl21": {"fund": "fund-iii", "units": 22, "ids": ["648"], "cap": 0.085, "addr": "2153 Stevens Dr, Richland WA 99354"},
     "s129": {"fund": "fund-iii", "units": 20, "ids": ["461"], "cap": 0.070, "addr": "12903 E Sprague Ave, Spokane Valley WA 99216"},
-    "w225": {"fund": "fund-iii", "units": 25, "ids": ["415"], "cap": 0.080, "addr": "225 S Wall St, Spokane WA 99201"},
+    "w225": {"fund": "fund-iii", "units": 36, "ids": ["415"], "cap": 0.080, "addr": "225 S Wall St, Spokane WA 99201"},
     "a511": {"fund": "fund-iv", "units": 10, "ids": ["676"], "cap": 0.070, "addr": "511 E Augusta Ave, Spokane WA 99207"},
-    "kn47": {"fund": "fund-iv", "units": 18, "ids": ["1057", "1121", "1130"], "cap": 0.061, "addr": "4711 W Metaline + 632 N Arthur, Kennewick WA 99336"},
-    "o155": {"fund": "fund-iv", "units": 40, "ids": ["1224", "1183"], "cap": 0.070, "addr": "155 S Oak + 1905 W 2nd, Spokane WA 99201"},
-    "tc34": {"fund": "fund-iv", "units": 20, "ids": ["735"], "cap": 0.068, "addr": "3401 Pacific Ave, Tacoma WA 98418"},
-    "tc68": {"fund": "fund-iv", "units": 176, "ids": ["1993"], "cap": 0.068, "addr": "6830 Tacoma Mall Blvd, Tacoma WA 98409"},
-    "v202": {"fund": "fund-iv", "units": 15, "ids": ["719"], "cap": 0.065, "addr": "12002 E Valleyway Ave, Spokane Valley WA 99206"},
+    "kn47": {"fund": "fund-iv", "units": 245, "ids": ["1057", "1121", "1130"], "cap": 0.061, "addr": "4711 W Metaline + 632 N Arthur, Kennewick WA 99336"},
+    "o155": {"fund": "fund-iv", "units": 52, "ids": ["1224", "1183"], "cap": 0.070, "addr": "155 S Oak + 1905 W 2nd, Spokane WA 99201"},
+    "tc34": {"fund": "fund-iv", "units": 24, "ids": ["735"], "cap": 0.068, "addr": "3401 Pacific Ave, Tacoma WA 98418"},
+    "tc68": {"fund": "fund-iv", "units": 108, "ids": ["1993"], "cap": 0.068, "addr": "6830 Tacoma Mall Blvd, Tacoma WA 98409"},
+    "v202": {"fund": "fund-iv", "units": 16, "ids": ["719"], "cap": 0.065, "addr": "12002 E Valleyway Ave, Spokane Valley WA 99206"},
+    # c702: acquired Aug 2026, Fund IV per AppFolio owner field + 2026 Q4 PFS.
+    # Not in the Q1 SREO, so no cap / SREO value / debt here yet (shown as
+    # unknown rather than guessed). 178 units, 8 flagged not-rentable.
+    "c702": {"fund": "fund-iv", "units": 178, "ids": ["2431"], "cap": None, "addr": "7024 N Colton St, Spokane WA 99208"},
+    # sf21: JM's personal SFH. AppFolio's owner field says Fund III; it is not.
+    "sf21": {"fund": "personal", "units": 1, "ids": ["604"], "cap": None, "addr": "3494 21st St, San Francisco CA 94110"},
 }
+
+
+def is_fund_property(code):
+    """True for m5x2 fund assets; False for personal / non-fund entries."""
+    return PROPERTIES[code]["fund"].startswith("fund-")
 
 # SREO Values from q1 sreo tab, column E (in thousands)
 SREO_VALUES = {
@@ -167,6 +192,17 @@ SREO_VALUES_1YR_AGO = {
 # Equity = SREO Value - debt. Properties absent here carry no listed debt
 # (e.g. w225), so equity can't be computed and is shown as unknown.
 DEBT_AS_OF = "May 31, 2026"
+DEBT_AS_OF_ISO = "2026-05-31"
+DEBT_STALE_DAYS = 90  # warn when the balances are older than this
+
+
+def debt_as_of_note(today=None):
+    """'May 31, 2026' plus a staleness tag when older than DEBT_STALE_DAYS."""
+    today = today or date.today()
+    age = (today - date.fromisoformat(DEBT_AS_OF_ISO)).days
+    if age > DEBT_STALE_DAYS:
+        return f"{DEBT_AS_OF} ({age} days old — STALE, refresh from current PFS/lender statements)"
+    return DEBT_AS_OF
 DEBT_BALANCES = {
     "a916": 545_924, "m608": 472_141 + 249_700, "h604": 115_354,
     "a210": 596_017, "p705": 1_948_147,
@@ -211,9 +247,18 @@ OPEX_MAP = {
 }
 OPEX_OTHER_CODES = {"53001", "50800", "50003"}  # 50003 = Lease Bonus Fee
 
+# Mortgage GLs, verified against AppFolio chart_of_accounts 2026-10-29:
+#   800200 "Mortgage - Interest Expense", 800100 "Mortgage - Principal Paydown".
+# 80310 / 80210 are legacy codes that no longer exist in the chart; they are
+# kept so archived pre-restatement data still classifies. Interest was mapped
+# to 80310 only, so every post-cutover month (Jun 2026+) booked $0 interest and
+# overstated cashflow and DSCR.
+MORTGAGE_INTEREST_CODES = {"800200", "80310"}
+MORTGAGE_PRINCIPAL_CODES = {"800100", "80210"}
+
 BELOW_NOI_MAP = {
-    "Mortgage Interest": {"80310"},
-    "Mortgage Principal": {"80210"},
+    "Mortgage Interest": MORTGAGE_INTEREST_CODES,
+    "Mortgage Principal": MORTGAGE_PRINCIPAL_CODES,
     "Legal": {"80410"},
     "CapEx Turns": {"80121"},
     "CapEx Appliances": {"80122"},
@@ -499,6 +544,12 @@ def compute_months(end_month_str):
     return months, labels
 
 
+# Non-zero GL lines that matched no P&L label, accumulated across parses. They
+# are silently excluded from NOI/cashflow, so main() warns about them: a
+# re-coded GL (as with interest 80310 -> 800200) shows up here first.
+UNMAPPED_GL = defaultdict(float)
+
+
 def parse_api_rows(rows, months):
     """Parse API response into monthly[month][label] and appfolio_totals."""
     monthly = defaultdict(lambda: defaultdict(float))
@@ -540,6 +591,8 @@ def parse_api_rows(rows, months):
             if code_str in ACCOUNT_LOOKUP:
                 _, label = ACCOUNT_LOOKUP[code_str]
                 monthly[mk][label] += val
+            elif abs(val) > 0.005:
+                UNMAPPED_GL[(code_str, name)] += val
 
     return dict(monthly), dict(af_totals), dict(gl_lines), dict(gpr_monthly)
 
@@ -957,6 +1010,7 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow,
 
     lines.append(f"| SREO Value | {dollars(sreo_dollars)} |")
     lines.append(f"| Outstanding Debt | {dollars(debt)} |")
+    lines.append(f"| Debt As Of | {DEBT_AS_OF if debt is not None else '—'} |")
     lines.append(f"| **Equity** | **{dollars(equity)}** |")
     lines.append(f"| Sale Cost (9%) | {dollars(sale_cost)} |")
     lines.append(f"| **Net Realizable Equity** | **{dollars(realizable_equity)}** |")
@@ -997,7 +1051,7 @@ def build_equity(code, sreo_value, sreo_value_1yr, debt, t12_cashflow,
     lines.append(
         "Equity = SREO Value − outstanding debt. SREO value from 2026 Q1 "
         "PFS + SREO (q1 sreo tab, col E). Debt = outstanding mortgage balance(s) "
-        f"from M5x2 Outstanding Mortgages as of {DEBT_AS_OF} (includes "
+        f"from M5x2 Outstanding Mortgages as of {debt_as_of_note()} (includes "
         "construction loans / LOC where applicable). Net Realizable Equity = "
         "Equity − sale cost (9% of SREO Value), the net cash from a disposition."
     )
@@ -1938,6 +1992,15 @@ def main():
         prior_t12_noi = (sum(prior_summaries[m]["NOI"] for m in prior_months)
                          if prior_complete else None)
 
+    if not is_fund_property(code):
+        print(f"Note: {code} is not an m5x2 fund asset (fund={prop['fund']}); "
+              f"fund rollups exclude it.", file=sys.stderr)
+    if UNMAPPED_GL:
+        for (gc, gn), v in sorted(UNMAPPED_GL.items()):
+            print(f"Warning: GL {gc} {gn} (${v:,.0f}) is not mapped to any P&L "
+                  f"line and is excluded from NOI/cashflow.", file=sys.stderr)
+    print(f"Debt balances as of {debt_as_of_note()}.", file=sys.stderr)
+
     # Compute
     summaries = compute_summaries(monthly, months, prop["units"])
     cap_rate = prop["cap"]
@@ -2039,6 +2102,7 @@ def main():
         "implied_value": round(t12_noi / cap_rate) if cap_rate else None,
         "sreo_value": SREO_VALUES.get(code) * 1000 if SREO_VALUES.get(code) else None,
         "debt": DEBT_BALANCES.get(code),
+        "debt_as_of": DEBT_AS_OF_ISO if DEBT_BALANCES.get(code) is not None else None,
         "equity": (SREO_VALUES.get(code) * 1000 - DEBT_BALANCES.get(code))
                   if (SREO_VALUES.get(code) and DEBT_BALANCES.get(code) is not None) else None,
         "realizable_equity": (SREO_VALUES.get(code) * 1000 * 0.91 - DEBT_BALANCES.get(code))
