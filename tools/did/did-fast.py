@@ -1942,9 +1942,15 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
         body.append({"col": neon_cols.col_letter(w.col_num), "value": w.write_value,
                      "mode": "add" if w.item.name in CUMULATIVE_0N else "set"})
     try:
+        # fallback=False: this caller keeps its own raw-script fallback. With
+        # the default, a daemon outage made batch_write do per-cell ssh writes
+        # AND return fallback=True, so the raw script below ran on top of
+        # them: every cell written twice, the second time unjournaled
+        # (Dream v172 neon-audit triage, 2026-10-29).
         resp = neon_excel.batch_write(
             "0n", body, date=target_date,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
@@ -2051,9 +2057,13 @@ def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
         else:
             body.append({"col": w.col_letter, "value": w.write_value or 1, "mode": "set"})
     try:
+        # fallback=False (see write_0n_via_daemon): here the double write was
+        # a double CREDIT — cumulative/variable 1n+ items are appends, so the
+        # ssh fallback appended once and the raw script appended again.
         resp = neon_excel.batch_write(
             "1n+", body, date=week_mw,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
@@ -3698,7 +3708,7 @@ def main():
         # the sub-1000 checks compare it numerically); /write quotes strings.
         _ol_resp = neon_excel.batch_write(
             "0n", [{"col": neon_cols.col_letter(32), "value": _ol_now.hour * 100 + _ol_now.minute}],
-            date=target_date, src="did 0l completion time")
+            date=target_date, src="did 0l completion time", fallback=False)
         if _ol_resp.get("ok") and not _ol_resp.get("fallback"):
             _ol_r = (_ol_resp.get("results") or [{}])[0]
             print(f"0l completion: N Color={_ol_r.get('value')} row={_ol_resp.get('row')}",
