@@ -37,6 +37,7 @@ def _resolve_part_fn(loggable):
         "re": re,
         "view_now": lambda: _dt.datetime(2026, 9, 27, 23, 59, 59),
         "_is_loggable_on_past_day": loggable,
+        "_is_direct_0n_write": _load_tui()._is_direct_0n_write,   # added 2026-10-25
     }
     exec(compile(body, "<_resolve_part>", "exec"), ns)
     return ns["_resolve_part"], calls
