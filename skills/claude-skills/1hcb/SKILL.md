@@ -1,6 +1,6 @@
 ---
 name: "1hcb"
-description: "Weekly health/body review. Survey (lowest weight, what I learned, goals) written to hcbi BG/BH/BJ, plus a food-log analysis with 6 suggestions that inform the goals. Enter on the dtd '1 hcb' card runs the survey alone."
+description: "Weekly health/body review. Survey (lowest weight, what I learned, goals) written to hcbi BG/BH/BJ, plus a food-log analysis with 6 suggestions that inform the goals. Enter on the dtd '1 hcb' card runs the survey alone, under an automated report on the week just ended (hcbp, calories, food groups, year ledger)."
 user-invocable: true
 ---
 
@@ -18,8 +18,29 @@ the week's food logs so the goals answer is informed by data.
 The date picks the hcb week containing it (default: this week).
 
 **From dtd:** Enter on the `1 hcb` card opens the survey form directly
-(`tools/1hcb/1hcb.py`): the three questions, the write, and the habit close.
-No analysis. That path is for when JM just wants to record the week.
+(`tools/1hcb/1hcb.py`): the weekly report, then the three questions, the
+write, and the habit close. No suggestions. That path is for when JM just
+wants to record the week.
+
+## The weekly report (printed above the survey)
+
+`1hcb.py` (and `--print-context`) prints a report on the week just ended,
+the previous Thursday through Wednesday, read in one `excel.read_range` call
+(the excel-http daemon's `/read_range`):
+
+- **hcbp**: week total vs 45分/day (315), days with any hcbp out of 7, and
+  s+hcbp (social, `1n+!F`) vs 60 for each fiscal week the hcb week touches.
+  Last week's goals (BJ) print just above it for the specific-goal check.
+- **cal**: average over logged days vs 1800, days over 1800, protein vs 100g.
+- **food**: food 分/day vs 86, Daily Dozen servings vs 21/day, groups short
+  of target (worst first) and groups hit.
+- **ledger**: the year hcb ledger (hcbi `X384`) at the start and end of the
+  week. Rebuilt from the sheet's own formula: per day, food 分 − 86 unless
+  the day is unlogged (−50), plus hcbp − 45 unless hcbp is 0, with Excel's
+  COUNTIF semantics (text and blanks count).
+
+The report never blocks the survey: a failed read prints
+`(report unavailable: …)` and the questions follow.
 
 ## The survey and where it lands
 
@@ -46,8 +67,10 @@ Never write these cells by hand or through excel-mcp.
 python3 ~/i446-monorepo/tools/1hcb/1hcb.py [YYYY-MM-DD] --print-context
 ```
 
-Shows the week's Thursday, last week's lowest weight and goals, and anything
-already recorded for this week (if so, confirm before overwriting).
+Shows the week's Thursday, last week's lowest weight and goals, the weekly
+report (see above), and anything already recorded for this week (if so,
+confirm before overwriting). Use the report's numbers in Step 5 instead of
+recomputing them.
 
 ### Step 2: Survey questions 1 and 2
 
@@ -64,7 +87,7 @@ hcb week's 7 day rows (Thu-Wed). Column map (row 1 headers, verified
 
 - **A**: week label (周), **B**: date
 - **D**: ∑ (food points)
-- **E-N**: food group servings (bn beans, br bread, fr fruit, cr crackers, gr grains, vg vegetables, fx flax, g greens, nt nuts, sp spices)
+- **E-N**: food group servings, Daily Dozen (bn beans 3, br berries 1, fr fruit 3, cr cruciferous 1, gr grains 3, vg vegetables 2, fx flax 1, g greens 2, nt nuts 1, sp spices 1; with water 3 they sum to the score's 21)
 - **O**: water, **P**: protein (g), **Q**: caffeine (mg), **R**: alcohol (g)
 - **U**: calories
 - **AK-BE**: meals by 地支 block, three columns each (卯 AK, 辰 AN, 巳 AQ, 午 AT, 未 AW, 申 AZ, 戌 BC): food, calories, protein

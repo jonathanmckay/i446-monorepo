@@ -623,3 +623,33 @@ def test_recalc_guard_compares_sigma_to_the_live_sum_and_only_then_recalcs():
     assert "repeat with i from 1 to count of row1" in src                  # indexed (refs break `as real`)
     i_cmp, i_calc = src.index("(d - s) > 0.5 or (s - d) > 0.5"), src.index("calculate full")
     assert i_cmp < i_calc < src.index('return "STALE ')                    # full recalc only on mismatch
+
+
+class TestReadRange:
+    """/read_range (2026-10-30, the 1hcb report): one Apple Event for a block."""
+
+    @pytest.fixture()
+    def srv(self, monkeypatch):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("excel_http_server", os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    @pytest.mark.parametrize("rng", ['A1:B2" & (do shell script "x")', "B9:A1", "B9:B1", "A1", "", "A1:ZZ99999"])
+    def test_rejects_bad_or_huge_ranges_without_running_osascript(self, srv, monkeypatch, rng):
+        monkeypatch.setattr(srv, "osascript", lambda s: pytest.fail("osascript ran for " + rng))
+        assert srv.do_read_range({"sheet": "hcbi", "range": rng})["ok"] is False
+
+    def test_splits_rows_and_cells_and_blanks_missing_values(self, srv, monkeypatch):
+        seen = {}
+
+        def fake(script):
+            seen["s"] = script
+            return 0, "Th\x1f2340.0\x1fmissing value\x1eF\x1f\x1f1.2345E+4", ""
+        monkeypatch.setattr(srv, "osascript", fake)
+        r = srv.do_read_range({"sheet": "hcbi", "range": "c297:e298"})
+        assert r == {"ok": True, "range": "C297:E298", "row": 297,
+                     "rows": [["Th", "2340.0", ""], ["F", "", "1.2345E+4"]]}
+        assert 'range ("C297:E298") of sheet "hcbi"' in seen["s"]
+        assert "/read_range" in srv.ROUTES
