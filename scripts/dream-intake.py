@@ -609,7 +609,8 @@ def _appfolio_rent_roll():
 
 # AppFolio's work_order report status enum. A WO counts as "open" unless it is
 # in a terminal (closed) state. See _appfolio_work_orders for the full history.
-_WO_CLOSED_STATUSES = {"completed", "complete", "canceled", "cancelled", "closed"}
+_WO_CLOSED_STATUSES = {"completed", "complete", "completed no need to bill", "work done",
+                       "canceled", "cancelled", "closed"}
 
 
 def _wo_is_open(status: str) -> bool:
@@ -634,16 +635,24 @@ def _appfolio_work_orders():
         "Content-Type": "application/json",
     }
 
-    data = _http_request(url, method="POST", headers=headers, body={})
+    # AppFolio's default work_order report omits some statuses (e.g. Waiting),
+    # and its statuses are New/Assigned/Scheduled/Waiting/Estimated/Work Done/
+    # Completed/Canceled -- none contain "open", so the old substring test
+    # always reported 0 open. Ask for every status (0-9) over a 60-day window (120 days hit the 5,000-row page cap)
+    # and treat anything not closed as open.
+    today = datetime.date.today()
+    body = {
+        "work_order_statuses": [str(i) for i in range(10)],
+        "status_date": "created_at",
+        "status_date_range_from": (today - datetime.timedelta(days=60)).isoformat(),
+        "status_date_range_to": today.isoformat(),
+    }
+    data = _http_request(url, method="POST", headers=headers, body=body)
     results = data.get("results", [])
 
-    today = datetime.date.today()
-    # The old filter tested for the substrings "open"/"in progress"/"pending",
-    # which match NONE of the actual open statuses (New/Scheduled/Assigned/
-    # Estimated) -> reported total_open=0 against ~1,270 genuinely-open WOs
-    # (v162 fix; same diagnosis first staged on the unmerged dream/2026.06.03
-    # branch). _wo_is_open inverts the test. See _WO_CLOSED_STATUSES above.
     by_property: dict[str, dict] = {}
+    open_by_status: dict[str, int] = {}
+    urgent_open = []
     for row in results:
         prop = row.get("property_name", row.get("property", "Unknown"))
         if prop not in by_property:
@@ -651,23 +660,29 @@ def _appfolio_work_orders():
         p = by_property[prop]
         p["total"] += 1
 
-        if _wo_is_open(row.get("status", "")):
-            p["open"] += 1
-            # Check overdue. AppFolio's work_order report has no generic
-            # due_date; fall back through the SLA-ish date fields it does expose.
-            due = (
-                row.get("scheduled_end")
-                or row.get("follow_up_on")
-                or row.get("due_date")
-                or ""
-            )
-            if due:
-                try:
-                    due_date = datetime.date.fromisoformat(str(due)[:10])
-                    if due_date < today:
-                        p["overdue"] += 1
-                except ValueError:
-                    pass
+        status = (row.get("status", "") or "").strip()
+        if not _wo_is_open(status):
+            continue
+        p["open"] += 1
+        open_by_status[status] = open_by_status.get(status, 0) + 1
+        # "overdue" = open and either scheduled in the past or created > 7 days ago
+        ref = row.get("scheduled_start") or row.get("created_at") or ""
+        try:
+            ref_date = datetime.date.fromisoformat(str(ref)[:10])
+            if (row.get("scheduled_start") and ref_date < today) or (
+                not row.get("scheduled_start") and (today - ref_date).days > 7
+            ):
+                p["overdue"] += 1
+        except ValueError:
+            pass
+        if (row.get("priority", "") or "").lower() in ("urgent", "emergency"):
+            urgent_open.append({
+                "property": prop,
+                "unit": row.get("unit_name") or row.get("unit") or "",
+                "status": status,
+                "summary": (row.get("job_description") or row.get("description") or "")[:80],
+                "created": str(row.get("created_at", ""))[:10],
+            })
 
     total_open = sum(p["open"] for p in by_property.values())
     total_overdue = sum(p["overdue"] for p in by_property.values())
@@ -676,6 +691,9 @@ def _appfolio_work_orders():
         "total_work_orders": len(results),
         "total_open": total_open,
         "total_overdue": total_overdue,
+        "open_by_status": open_by_status,
+        "truncated": len(results) >= 5000,
+        "urgent_open": urgent_open[:40],
         "by_property": by_property,
     }
 
