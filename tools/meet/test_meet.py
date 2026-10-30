@@ -15,6 +15,7 @@ from meet import (
     channel_peak,
     check_one_sided,
     format_level_line,
+    recording_slug,
 )
 
 
@@ -291,3 +292,17 @@ def test_mic_has_no_speech_warning_suppressed():
     # don't over-suppress: the real recording-problem warnings stay
     assert 'f"NO SPEECH on either channel' in src
     assert 'f"CALL AUDIO HAS NO SPEECH' in src
+
+
+def test_recording_slug_strips_colon_and_pipe():
+    """2026-10-30 (Dream v173): `ja:-jm-1:1` / `im|jm-1|1` filenames looped the
+    d357 auto-filer for months; recording filenames must be vault-safe."""
+    assert recording_slug("JA: JM 1:1") == "ja-jm-1-1"
+    assert recording_slug("IM|JM 1|1") == "im-jm-1-1"
+    assert recording_slug("m5x2 strat (1|1|1)") == "m5x2-strat-1-1-1"
+    assert recording_slug("Game Pass + Subscriptions | XT") == "game-pass-subscriptions-xt"
+    assert recording_slug("会议 周报") == "会议-周报"
+    assert recording_slug("::") == "meeting"
+    slug = recording_slug("a very long meeting name that goes on and on")
+    assert len(slug) <= 30 and not slug.endswith("-")
+

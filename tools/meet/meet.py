@@ -21,6 +21,7 @@ Teams/Zoom setup (one-time):
 """
 
 import os
+import re
 import sys
 import wave
 import json
@@ -41,6 +42,20 @@ import anthropic
 
 _TERM_COLOR = os.path.expanduser("~/i446-monorepo/scripts/term-color.sh")
 _IMESSAGE_RECIPIENT = "jonathan.b.mckay@gmail.com"
+
+
+# Characters that break vault filenames, Obsidian links/tables or shell
+# quoting. 2026-10-30: `ja:-jm-1:1.txt` / `im|jm-1|1.txt` broke the d357
+# auto-filer's matcher and looped it for months (Dream v173).
+_UNSAFE_SLUG_CHARS = re.compile(r'[:|/\\?*"<>#^\[\]()&+]+')
+
+
+def recording_slug(meeting_name: str) -> str:
+    """Recording filename slug: lowercase, spaces and unsafe punctuation to
+    single hyphens, max 30 chars. Non-ASCII (e.g. 中文 names) is kept."""
+    slug = _UNSAFE_SLUG_CHARS.sub("-", meeting_name.lower().replace(" ", "-"))
+    slug = re.sub(r'-{2,}', '-', slug).strip('-')[:30].rstrip('-')
+    return slug or "meeting"
 
 
 def _notify(title, body, critical=False):
@@ -792,7 +807,7 @@ def main():
         recordings_dir = VAULT_DIR / "h335" / "i9" / "recordings"
         recordings_dir.mkdir(parents=True, exist_ok=True)
         date_slug = datetime.now().strftime("%Y.%m.%d-%H%M")
-        name_slug = meeting_name.lower().replace(" ", "-")[:30]
+        name_slug = recording_slug(meeting_name)
         wav_path = recordings_dir / f"{date_slug}-{name_slug}.wav"
         with defer_termination("wav save"):
             save_wav(audio, wav_path)
