@@ -113,8 +113,9 @@ _TAG = re.compile(r"@(\S+)")
 
 def strip_ann(s: str) -> str:
     # Markdown links (/todo stores URLs as "[(link)](https://…)") collapse to
-    # their visible text so the card shows "(link)" instead of the raw URL.
-    s = _MDLINK.sub(lambda m: m.group(1) or "(link)", s)
+    # their visible text so the card shows a 🔗 instead of the raw URL
+    # (was "(link)" until 2026-10-30, shortened to match terminal dtd).
+    s = _MDLINK.sub(lambda m: (m.group(1) or "(link)").replace("(link)", "🔗"), s)
     return re.sub(r"  +", " ", _ANN.sub("", s)).strip()
 
 # Variable-input tasks (2026-08-11): terminal dtd prompts for a value on

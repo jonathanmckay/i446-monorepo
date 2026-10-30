@@ -143,9 +143,9 @@ def split_links(text: str) -> tuple[str, list[str]]:
 
 
 def show_links(text: str) -> str:
-    """[text](url) -> text, bare url -> (link): for one-line display."""
-    text = dtd_link.MD_LINK.sub(lambda m: m.group(1) or "(link)", text or "")
-    return dtd_link.URL.sub("(link)", text)
+    """[text](url) -> text, bare url -> 🔗: for one-line display."""
+    text = dtd_link.MD_LINK.sub(lambda m: m.group(1) or "🔗", text or "")
+    return dtd_link.URL.sub("🔗", text).replace("(link)", "🔗")
 
 
 def remainder(total: str, time_: str, done_pts: str, done_min: str) -> tuple[str, str]:

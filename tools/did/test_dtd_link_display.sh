@@ -23,8 +23,8 @@ echo '{"date":"'$TODAY'","names":[]}' > "$TMP/done.json"
 : > "$TMP/rm"; : > "$TMP/sk"; : > "$TMP/tm"; echo default > "$TMP/v"
 out=$(HOME="$TMP" PYTHONPATH="$REAL_LIB_DIR" python3 "$TMP/gen.py" "$TMP/c.json" "$TMP/done.json" "$TMP/rm" \
   "$TODAY" 80 "$TMP/sk" "$TMP/tm" "$TMP/v" "$TMP/np")
-printf '%s' "$out" | grep -q '(link)' || fail "visible text must be (link)"
+printf '%s' "$out" | grep -q '🔗' || fail "visible text must be 🔗"
 printf '%s' "$out" | grep -qF $']8;;https://example.com/x?a=1&b=2' \
   || fail "row must carry an OSC 8 hyperlink to the URL"
 printf '%s' "$out" | grep -q '](http' && fail "raw markdown link syntax must not render"
-echo "PASS: markdown links render as clickable (link)"
+echo "PASS: markdown links render as clickable 🔗"

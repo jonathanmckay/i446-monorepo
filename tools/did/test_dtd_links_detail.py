@@ -101,7 +101,7 @@ def test_result_untouched_name_keeps_original_edited_name_keeps_links():
 
 def test_title_row_shows_link_not_markdown():
     ef = _ef()
-    assert ef.show_links(f"pay [(link)]({SP}) (5)") == "pay (link) (5)"
+    assert ef.show_links(f"pay [(link)]({SP}) (5)") == "pay 🔗 (5)"
     assert ef.show_links("read https://x.com/a now") == "read (link) now"
 
 

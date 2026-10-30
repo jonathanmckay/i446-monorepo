@@ -115,8 +115,8 @@ def test_every_link_shows_as_link():
                     short="review storage tier design doc (30) [20]"),
                  _t("N", "call [Bob](https://bob.com) re lease (15) [10]")])
     b, s, n = (_row_for_id(out, i) for i in "BSN")
-    assert "(link)" in b and "example.com" not in re.sub(r"\x1b\]8;;[^\x1b]*", "", b)
+    assert "🔗" in b and "example.com" not in re.sub(r"\x1b\]8;;[^\x1b]*", "", b)
     # the click target opens the task's profile (i9 -> Profile 1) in a new window
     assert "\x1b]8;;hammerspoon://dtdlink?p=Profile%201&u=https%3A%2F%2Fexample.com%2Fvery%2Flong%2Fpath%3Fx%3D1\x1b" in b
-    assert "(link)" in s and s.index("(link)") < s.index("(30)")      # short name dropped it; re-added before estimates
-    assert "Bob" in n and "(link)" in n
+    assert "🔗" in s and s.index("🔗") < s.index("(30)")      # short name dropped it; re-added before estimates
+    assert "Bob" in n and "🔗" in n
