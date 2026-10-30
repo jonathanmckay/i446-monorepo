@@ -58,60 +58,29 @@ def noi_budget_flag(actual, budget, units):
 # ---------------------------------------------------------------------------
 
 VAULT = Path.home() / "vault"
-REPORTS_BASE = VAULT / "m5x2" / "reports"
+REPORTS_BASE = Path(os.environ["PNL_REPORTS_BASE"]) if os.environ.get("PNL_REPORTS_BASE") \
+    else VAULT / "m5x2" / "reports"
 PNL_SCRIPT = Path(__file__).parent / "pnl-fast.py"
 
 # ---------------------------------------------------------------------------
-# Property registry (same as pnl-fast.py)
+# Property registry: imported from pnl-fast.py (single source of truth). This
+# file used to carry a hand-synced copy, which is how unit counts and fund
+# membership drifted.
 # ---------------------------------------------------------------------------
 
-PROPERTIES = {
-    "a916": {"fund": "fund-0", "units": 12, "ids": ["2"], "cap": 0.080, "addr": "916 W Augusta Ave, Spokane WA 99205"},
-    "a210": {"fund": "fund-0", "units": 10, "ids": ["39"], "cap": 0.078, "addr": "4210 N Avalon Rd, Spokane Valley WA 99216"},
-    "h604": {"fund": "fund-0", "units": 1, "ids": ["36"], "cap": None, "addr": "604 E Hartson Ave, Spokane WA 99202"},
-    "m608": {"fund": "fund-0", "units": 9, "ids": ["35"], "cap": 0.075, "addr": "1608 W Main Ave, Spokane WA 99201"},
-    "p705": {"fund": "fund-0", "units": 20, "ids": ["47"], "cap": 0.075, "addr": "2705 N Pines Rd, Spokane Valley WA 99206"},
-    "s300": {"fund": "fund-i", "units": 14, "ids": ["8"], "cap": 0.083, "addr": "9300 E Sprague Ave, Spokane Valley WA 99206"},
-    "b101": {"fund": "fund-i", "units": 17, "ids": ["42"], "cap": 0.080, "addr": "1010 W Boone Ave, Spokane WA 99201"},
-    "m405": {"fund": "fund-i", "units": 26, "ids": ["50"], "cap": 0.085, "addr": "405 S Maple St, Spokane WA 99201"},
-    "h731": {"fund": "fund-i", "units": 8, "ids": ["228"], "cap": 0.070, "addr": "731 S Hatch St, Spokane WA 99202"},
-    "hl73": {"fund": "fund-i", "units": 6, "ids": ["49"], "cap": 0.080, "addr": "730 N Jackson St, Helena MT 59601"},
-    "k104": {"fund": "fund-i", "units": 59, "ids": ["220"], "cap": 0.070, "addr": "314 N LeFevre St, Medical Lake WA 99022"},
-    "m221": {"fund": "fund-i", "units": 14, "ids": ["223"], "cap": 0.080, "addr": "1221 N Monroe St, Spokane WA 99201"},
-    "ms22": {"fund": "fund-i", "units": 8, "ids": ["46"], "cap": 0.080, "addr": "2252 W Central Ave, Missoula MT 59801"},
-    "ms43": {"fund": "fund-i", "units": 15, "ids": ["43"], "cap": 0.070, "addr": "430 Washington, Missoula MT 59802"},
-    "ps17": {"fund": "fund-i", "units": 18, "ids": ["222"], "cap": 0.078, "addr": "1740 N 5th Ave, Pasco WA 99301"},
-    "ps25": {"fund": "fund-i", "units": 44, "ids": ["221"], "cap": 0.070, "addr": "2524 W Sylvester St, Pasco WA 99301"},
-    "ps91": {"fund": "fund-i", "units": 14, "ids": ["227"], "cap": 0.078, "addr": "908 W Ruby, Pasco WA 99301"},
-    "w117": {"fund": "fund-ii", "units": 10, "ids": ["225"], "cap": 0.080, "addr": "1117 W 5th Ave, Spokane WA 99204"},
-    "w226": {"fund": "fund-ii", "units": 10, "ids": ["224"], "cap": 0.075, "addr": "1226 W 5th Ave, Spokane WA 99204"},
-    "hl65": {"fund": "fund-ii", "units": 13, "ids": ["44"], "cap": 0.085, "addr": "645 N Ewing, Helena MT 59601"},
-    "c313": {"fund": "fund-iii", "units": 45, "ids": ["603"], "cap": 0.070, "addr": "3131 S Cook St, Spokane WA 99223"},
-    "e328": {"fund": "fund-iii", "units": 7, "ids": ["490"], "cap": 0.070, "addr": "3128 E 28th Ave, Spokane WA 99223"},
-    "j312": {"fund": "fund-iii", "units": 20, "ids": ["521"], "cap": 0.070, "addr": "3102 E Jackson Ave, Spokane WA 99207"},
-    "k308": {"fund": "fund-iii", "units": 8, "ids": ["617"], "cap": 0.070, "addr": "308 N Washington St, Medical Lake WA 99022"},
-    "l912": {"fund": "fund-iii", "units": 10, "ids": ["533"], "cap": 0.065, "addr": "912 W Lincoln Pl, Spokane WA 99204"},
-    "rl16": {"fund": "fund-iii", "units": 100, "ids": ["414"], "cap": 0.070, "addr": "1621 George Washington Way, Richland WA 99354"},
-    "rl21": {"fund": "fund-iii", "units": 14, "ids": ["648"], "cap": 0.085, "addr": "2153 Stevens Dr, Richland WA 99354"},
-    "s129": {"fund": "fund-iii", "units": 20, "ids": ["461"], "cap": 0.070, "addr": "12903 E Sprague Ave, Spokane Valley WA 99216"},
-    "w225": {"fund": "fund-iii", "units": 25, "ids": ["415"], "cap": 0.080, "addr": "225 S Wall St, Spokane WA 99201"},
-    "a511": {"fund": "fund-iv", "units": 10, "ids": ["676"], "cap": 0.070, "addr": "511 E Augusta Ave, Spokane WA 99207"},
-    "kn47": {"fund": "fund-iv", "units": 18, "ids": ["1057", "1121", "1130"], "cap": 0.061, "addr": "4711 W Metaline + 632 N Arthur, Kennewick WA 99336"},
-    "o155": {"fund": "fund-iv", "units": 40, "ids": ["1224", "1183"], "cap": 0.070, "addr": "155 S Oak + 1905 W 2nd, Spokane WA 99201"},
-    "tc34": {"fund": "fund-iv", "units": 20, "ids": ["735"], "cap": 0.068, "addr": "3401 Pacific Ave, Tacoma WA 98418"},
-    "tc68": {"fund": "fund-iv", "units": 176, "ids": ["1993"], "cap": 0.068, "addr": "6830 Tacoma Mall Blvd, Tacoma WA 98409"},
-    "v202": {"fund": "fund-iv", "units": 15, "ids": ["719"], "cap": 0.065, "addr": "12002 E Valleyway Ave, Spokane Valley WA 99206"},
-}
+def _load_pnl_fast():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pnl_fast", PNL_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-SREO_VALUES = {
-    "a210": 1111, "a511": 974, "a916": 1100, "b101": 1450, "c313": 5570,
-    "e328": 825, "h731": 1150, "hl65": 1250, "hl73": 591, "j312": 2174,
-    "k104": 8000, "k308": 1220, "kn47": 25400, "l912": 2188, "m221": 1800,
-    "m405": 2000, "m608": 1123, "ms22": 875, "ms43": 1850, "o155": 4300,
-    "p705": 2700, "ps17": 1600, "ps25": 6300, "ps91": 1650, "rl16": 14000,
-    "rl21": 1600, "s129": 2574, "s300": 1350, "tc34": 3300, "tc68": 15800,
-    "v202": 2600, "w117": 800, "w225": 900, "w226": 1345,
-}
+
+_PF = _load_pnl_fast()
+PROPERTIES = _PF.PROPERTIES
+SREO_VALUES = _PF.SREO_VALUES
+DEBT_AS_OF = _PF.DEBT_AS_OF
+debt_as_of_note = _PF.debt_as_of_note
 
 # GL row ordering (must match pnl-fast.py output)
 INCOME_ROWS = ["Rent Income", "Concessions", "Utility Reimb", "Late Fees", "Laundry",
@@ -662,7 +631,8 @@ def build_fund_report(fund, fund_gl, prop_metrics, months, labels, report_date, 
                  f"**{fmt_k(t_equity)}** | **{fmt_k(t_sale_cost)}** | **{fmt_k(t_realizable)}** |")
         r.append("")
         r.append(f"LTV = {ltv:.1f}% | Equity % = {eq_pct:.1f}%. Net Realizable Equity = "
-                 "Equity − sale cost (9% of SREO Value), the net cash from a disposition.")
+                 "Equity − sale cost (9% of SREO Value), the net cash from a disposition. "
+                 f"**Debt balances as of {debt_as_of_note()}.**")
         missing = [c for c in props if prop_metrics[c].get("equity") is None]
         if missing:
             r.append("")
@@ -852,7 +822,9 @@ ROLLUP_PNL_ORDER = [
 
 def all_funds():
     """Funds in canonical order (0, i, ii, iii, iv)."""
-    return sorted(set(p["fund"] for p in PROPERTIES.values()))
+    # Only real funds: "personal" entries (e.g. sf21, JM's SFH) are excluded.
+    return sorted(set(p["fund"] for p in PROPERTIES.values()
+                      if p["fund"].startswith("fund-")))
 
 
 def _run_one_fund(fund, args):
@@ -980,7 +952,13 @@ def generate_rollup(args):
     tot_impl_k = sum(meta[f]["implied_value_K"] or 0 for f in funds)
     tot_equity = sum(meta[f]["equity"] for f in funds)
     tot_realiz = sum(meta[f]["realizable_equity"] for f in funds)
-    debt = tot_sreo_k * 1000 - tot_equity
+    # Sum actual debt. Deriving it as SREO - equity overstated debt by the SREO
+    # value of properties with no debt on file (w225, c702), whose equity is
+    # unknown and so absent from tot_equity.
+    if all("debt" in meta[f] for f in funds):
+        debt = sum(meta[f]["debt"] for f in funds)
+    else:
+        debt = tot_sreo_k * 1000 - tot_equity
     # weighted_cap_rate from JSON is already a percentage.
     wcap = sum(meta[f]["SREO_value_K"] * meta[f]["weighted_cap_rate"] for f in funds) / tot_sreo_k
     noi_unit_mo = tot_noi / tot_units / 12 if tot_units else 0
@@ -1011,6 +989,7 @@ def generate_rollup(args):
     out.append(f"| Portfolio DSCR | {dscr:.2f} |")
     out.append(f"| Equity | ${_rollup_fmt(tot_equity)} |")
     out.append(f"| Net Realizable Equity | ${_rollup_fmt(tot_realiz)} |")
+    out.append(f"| Debt As Of | {debt_as_of_note()} |")
     out.append("")
 
     out.append("## Fund Breakdown")
@@ -1070,10 +1049,15 @@ def generate_rollup(args):
     out.append("|--------|------:|")
     out.append(f"| SREO Value | ${_rollup_fmt(tot_sreo_k)}K |")
     out.append(f"| Outstanding Debt | ${_rollup_fmt(debt)} |")
+    out.append(f"| Debt As Of | {DEBT_AS_OF} |")
     out.append(f"| **Equity** | **${_rollup_fmt(tot_equity)}** |")
     out.append(f"| Net Realizable Equity | ${_rollup_fmt(tot_realiz)} |")
     out.append(f"| LTV | {debt/(tot_sreo_k*1000)*100:.1f}% |")
     out.append(f"| Equity % | {tot_equity/(tot_sreo_k*1000)*100:.1f}% |")
+    out.append("")
+    out.append("_Equity sums only properties with both an SREO value and debt on file "
+               "(w225 and c702 have no debt in the registry; h604 has no SREO value), "
+               "so SREO − Debt need not equal Equity._")
     out.append("")
 
     out.append(f"## All-Funds Consolidated P&L ({span})")
@@ -1275,6 +1259,8 @@ def main():
         "fund_DSCR": None,
         "equity": round(sum(prop_metrics[c]["equity"] for c in prop_metrics
                             if prop_metrics[c].get("equity") is not None)),
+        "debt": round(sum(prop_metrics[c]["debt"] for c in prop_metrics
+                          if prop_metrics[c].get("debt") is not None)),
         "realizable_equity": round(sum(prop_metrics[c]["realizable_equity"] for c in prop_metrics
                                        if prop_metrics[c].get("realizable_equity") is not None)),
         "file": str(out_path),
