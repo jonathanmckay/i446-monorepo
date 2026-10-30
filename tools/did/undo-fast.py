@@ -212,6 +212,12 @@ def strip_fen_terms(strips: list[tuple[str, str]], target_md: str | None,
         new_formula = _strip_or_negate(r.get("formula") or "", term)
         if new_formula is None:
             continue
+        if new_formula == "" and sheet == "0分":
+            # The neon ledger classifies a write of "" as `text`, invisible
+            # to the strict 0分 rule (last `set` literals + credits after
+            # it), which would keep counting the undone credit. "=0" lands
+            # as a `set` with literal sum 0, and reads the same in Excel.
+            new_formula = "=0"
         try:
             w = excel.write(sheet, col, row=row, value=new_formula, src=src)
         except Exception as e:

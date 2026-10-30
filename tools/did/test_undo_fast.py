@@ -603,6 +603,42 @@ def test_strip_fen_terms_skips_empty_and_records_errors(monkeypatch):
     assert errors2 and "date_not_found" in errors2[0]
 
 
+def _strict_literals(formula: str) -> float:
+    """Signed numeric literals of a 0分 formula, cell refs dropped: the
+    strict ledger rule's view of a `set` ("='0n'!BK5 + 0+30-5" → 25)."""
+    import re
+    body = re.sub(r"(?:'[^']*'|[A-Za-z0-9_]+)!\$?[A-Z]+\$?\d+", "", (formula or "").lstrip("="))
+    return sum(float(m) for m in re.findall(r"[+-]?\s*\d+(?:\.\d+)?", body.replace(" ", "")))
+
+
+@pytest.mark.parametrize("before,term,expect_after,expect_strict", [
+    ("=45", "+45", "=0", 0.0),                                   # whole-term credit
+    ("='0n'!BK5 + 0+30+45", "+45", "='0n'!BK5 + 0+30", 30.0),    # tail strip
+    ("='0n'!BK5 + 0+45+30", "+45", "='0n'!BK5 + 0+45+30-45", 30.0),  # negate
+])
+def test_undo_of_0fen_credit_is_a_ledger_set_the_strict_rule_reproduces(
+        monkeypatch, before, term, expect_after, expect_strict):
+    """Neon-off-Excel strict rule: a 0分 column = literals of the last daemon
+    `set` + credits after it. undo-fast's reversal goes through the daemon as a
+    /write of the full new formula; the ledger must classify it as `set`
+    (not `text`, which an empty-string clear used to be) with literals equal
+    to the post-undo value."""
+    sys.path.insert(0, str(HERE.parents[1] / "lib"))
+    from neon import ledger
+    writes = []
+    monkeypatch.setattr(uf.excel, "read", lambda sheet, col, **kw: {
+        "ok": True, "row": 7, "col": col, "formula": before})
+    monkeypatch.setattr(uf.excel, "write", lambda sheet, col, **kw: (
+        writes.append(kw["value"]), {"ok": True})[1])
+    errors = []
+    uf.strip_fen_terms([("R", term)], "10/22", "0分", errors, "undo x")
+    assert errors == [] and writes == [expect_after]
+    sem = ledger.classify({"kind": "write", "sheet": "0分", "col": "R",
+                           "value": writes[0], "src": "undo x"})
+    assert sem["kind"] == "set"
+    assert _strict_literals(writes[0]) == expect_strict
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
