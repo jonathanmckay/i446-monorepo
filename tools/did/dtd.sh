@@ -2583,14 +2583,16 @@ for t in unique:
     if not link_url:
         _rl = re.search(r'https?://[^\s)\]]+', raw)
         link_url = _rl.group(0) if _rl else None
-    # Shown as a 🔗 rather than "(link)" (2026-10-30: "that way it's shorter").
-    display = display.replace('(link)', '🔗')
+    # Shown as a chain emoji rather than (link) (2026-10-30, shorter).
+    # Escaped, not literal: this body must stay ASCII-safe under any locale.
+    _chain = '\U0001F517'
+    display = display.replace('(link)', _chain)
     if link_url:
-        link_text = '🔗'
-        if '🔗' not in display:
+        link_text = _chain
+        if _chain not in display:
             _em = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
             _cut = _em.start() if _em else len(display)
-            display = display[:_cut].rstrip() + ' 🔗' + display[_cut:]
+            display = display[:_cut].rstrip() + ' ' + _chain + display[_cut:]
 
     # Middle-truncate if needed (fallback; short names usually fit). cols - 7
     # keeps the whole row ~5 cols thinner, matching the estimate margin above.
