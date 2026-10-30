@@ -5608,7 +5608,7 @@ def dtd_task_for_desc(desc: str) -> dict | None:
 def mark_dtd_started(desc: str) -> None:
     """A timer just started on `desc`. When it names a dtd task, tell dtd it is
     running (the shared hint) AND log it as started today, so the card leads
-    with the spinner now and keeps 🧮 once the timer moves on (bug 2026-10-19:
+    with the spinner now and keeps its top slot once the timer moves on (bug 2026-10-19:
     "abacus emoji is not on tasks that I start"). Only dtd's own Enter/ctrl-s
     and janus's /d wrote that log before, so an ordinary janus switch -- how
     most work actually starts -- left the card bare. Unknown description: drop
@@ -7136,7 +7136,7 @@ def _on_enter(event):
             desc = " ".join(w for w in bare.split()
                             if not w.startswith("@") and not re.fullmatch(r"[+\[(]\d+[\])]?", w))
             if desc:
-                # dtd: spinner on this card now, 🧮 once the timer moves on
+                # dtd: spinner + 🧮 on this card now, the old card loses its 🧮
                 # (clears the old hint when the name matches no dtd task).
                 mark_dtd_started(desc)
                 _optimistic_start(desc, raw=bare)

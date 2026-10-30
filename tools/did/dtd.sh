@@ -775,7 +775,8 @@ python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
 # hitting) the Toggl poll (feature 2026-07-24).
 printf '%s\t%s\t%s\t%s\n' "\$clean" "\$(date +%s)" "\$1" "\$project" > "\$TIMER"
 # Started-today log (2026-10-13): the list keeps every task started today and
-# not yet done at the top with 🧮, even after the timer moves to another task.
+# not yet done at the top, even after the timer moves to another task (🧮 is
+# the running timer's alone since 2026-10-30).
 _sd="\${XDG_STATE_HOME:-\$HOME/.local/state}/jm"
 mkdir -p "\$_sd" 2>/dev/null
 printf '%s\t%s\t%s\n' "\$(date +%Y-%m-%d)" "\$1" "\$(date +%s)" >> "\$_sd/dtd-started" 2>/dev/null
@@ -2046,7 +2047,7 @@ try:
 except Exception: pass
 # Started-today set (2026-10-13: Enter means working on it, so the task gets
 # 🧮 and goes to the top; when the timer moves on and it isn't done, it stays
-# at the top). start.sh appends date/id/epoch to dtd-started on every Enter
+# at the top, without the 🧮 since 2026-10-30). start.sh appends date/id/epoch to dtd-started on every Enter
 # and ctrl-s; id -> latest start today. Completion hides the row as usual.
 started_at = {}
 try:
@@ -2631,8 +2632,10 @@ for t in unique:
     #      plus 🧮 after the minutes (2026-10-22: 'what happened to the abacus
     #      for tasks that I'm doing myself'; the spinner was meant to add
     #      motion, not to take the abacus away)
-    #   A2 JM started it today (Enter/ctrl-s), timer moved on, not done: 🧮
-    #      ('if I started but didn't finish, it can just show the abacus')
+    #   A2 JM started it today (Enter/ctrl-s), timer moved on, not done: keeps
+    #      its top slot, no glyph (2026-10-30: 'make sure that if I start
+    #      another task ... abacus is only ever on one task at a time'; the
+    #      2026-10-16 'it can just show the abacus' left one per started task)
     #   C  agent claim working: spinner + 😈, grey
     #   B  agent claim waiting on JM (idle): 🕐, domain color (2026-10-28: no
     #      🧮: 'it should only have abacus if it's my current task in janus')
@@ -2649,7 +2652,7 @@ for t in unique:
         elapsed = max(0, int((time.time() - running_started) // 60)) if running_started else 0
         prefix = f'{_agent_frame} {elapsed}m · 🧮 {dom_tag}'
     elif is_started:
-        prefix = '🧮 ' + repeat + dom_tag
+        prefix = repeat + dom_tag
     else:
         prefix = repeat + dom_tag
     _pane = _claim_pane.get(str(t.get('id', '')), '')
@@ -2657,13 +2660,9 @@ for t in unique:
         # Drop the tier-A/A2 lead glyph (spinner or abacus) so it isn't doubled.
         _lead = prefix.split(' ', 1)
         _rest = _lead[1] if len(_lead) == 2 and _lead[0] in ('🧮', _agent_frame) else prefix
-        # A2 + working (2026-10-21: 'shouldn't dtd have the abacus for the
-        # project that I'm working on currently? Right now it's not there'):
-        # JM started it today and an agent is on it now, so the agent's
-        # spinner + N😈 lead and his 🧮 stays, right before the title. A
-        # running row already carries its 🧮 after the minutes (2026-10-22).
-        if str(t.get('id', '')) in started_at and not is_running and not is_skipped:
-            _rest = '🧮 ' + _rest
+        # A running row keeps its 🧮 after the minutes (2026-10-22). A2 +
+        # working no longer adds one (2026-10-30: one abacus, on the live
+        # timer only; the 10-21 started-task abacus made a second one).
         prefix = _agent_frame + ' ' + _pane + '😈 ' + _rest
         color = AGENT_GREY
     elif str(t.get('id', '')) in _done_ids:

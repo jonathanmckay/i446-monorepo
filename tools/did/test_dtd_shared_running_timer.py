@@ -94,7 +94,8 @@ def test_stale_pane_follows_the_shared_reading():
     out = _run("TEAMS", "teams", _obs("-1g"),
                started=[("2026-10-11", "TEAMS", int(time.time()) - 300)])
     assert _running(out) == "GOAL", out
-    assert "🧮" in _row(out, "TEAMS"), "the abandoned task keeps its abacus"
+    # 2026-10-30: only the live timer keeps 🧮; the abandoned task loses it.
+    assert "🧮" not in _row(out, "TEAMS") and "🧮" in _row(out, "GOAL"), out
 
 
 def test_shared_reading_of_idle_clears_a_stale_running_row():

@@ -2,8 +2,8 @@
 """Regression: dtd's in-progress tiers (2026-10-11).
 
 2026-10-13 order, top down: JM's running timer (spinner Nm since 2026-10-16,
-was 🧮 Nm), tasks JM started today (Enter/ctrl-s) that aren't done (🧮, most
-recent start first), agent
+was 🧮 Nm), tasks JM started today (Enter/ctrl-s) that aren't done (no glyph
+since 2026-10-30, most recent start first), agent
 claims mid-turn (spinner + 😈, grey), agent claims waiting on JM (🕐, no 🧮 since 2026-10-28),
 then everything else. A task JM is timing stays on top even if an agent
 also holds it; a WORKING claim on it swaps the abacus for spinner + 😈
@@ -105,7 +105,7 @@ def test_started_not_done_stays_on_top_after_timer_moves():
     assert ids[:3] == ["R1", "N2", "N1"], ids          # running, then latest start first
     for i in ("N1", "N2"):
         row = _row_for_id(out, i)
-        assert "🧮 " in row and "m · " not in row and "🕐" not in row, row
+        assert "🧮" not in row and "m · " not in row and "🕐" not in row, row
     assert "😈" in _row_for_id(out, "W1")                 # yesterday's start ignored; claim wins
 
 
@@ -158,16 +158,15 @@ def test_working_claim_replaces_abacus_on_timed_task():
     assert "😈" in row and "5m · 🧮 " in row and row.startswith(GREY), row
 
 
-def test_working_claim_on_started_task_keeps_abacus():
-    """2026-10-21: "shouldn't dtd have the abacus for the project that I'm
-    working on currently? Right now it's not there." JM hit Enter on a task
-    today, his timer moved on, and an agent now works on it: the row leads
-    with the agent's spinner + 😈 and keeps his 🧮 right before the title.
-    (The running-timer case is unchanged: spinner + 😈, no 🧮, per 10-16.)"""
+def test_working_claim_on_started_task_has_no_abacus():
+    """JM hit Enter on a task today, his timer moved on, and an agent now
+    works on it: the row leads with the agent's spinner + 😈, no 🧮 (the
+    2026-10-21 abacus here was a second one; since 2026-10-30 only the live
+    timer's row has it). The running-timer case keeps its 🧮 after the minutes."""
     now = int(time.time())
     out = _run("R1", started=[("2026-10-11", "W1", now - 600)])
     row = _row_for_id(out, "W1")
-    assert _lead_glyph(row) in SPIN and "😈 🧮 agent working" in row and row.startswith(GREY), row
+    assert _lead_glyph(row) in SPIN and "😈 agent working" in row and "🧮" not in row and row.startswith(GREY), row
     rc = _row_for_id(_run("RC", started=[("2026-10-11", "RC", now - 600)]), "RC")
     assert "😈" in rc and "5m · 🧮 " in rc, rc
 
@@ -181,17 +180,17 @@ def test_idle_claim_loses_to_running_timer():
     assert "5m · 🧮 " in row and "🕐" not in row and "😈" not in row and GREY not in row, row
 
 
-def test_running_timer_moves_started_keeps_abacus():
+def test_running_timer_moves_started_keeps_top_slot():
     """2026-10-16: "when my time is on a certain task, it should be a clock
     ticker or something that is like the claude snowflake that shows movement.
     If I started but didn't finish, it can just show the abacus." The timed
     row leads with a spinner frame (domain color, no 😈); a started-not-done
-    row keeps the still 🧮; the frame advances between renders."""
+    row stays second, without 🧮 since 2026-10-30; the frame advances."""
     now = int(time.time())
     out = _run("R1", started=[("2026-10-11", "N1", now - 600)])
     r1, n1 = _row_for_id(out, "R1"), _row_for_id(out, "N1")
     assert _lead_glyph(r1) in SPIN and "5m · 🧮 " in r1 and "😈" not in r1, r1
-    assert "🧮 " in n1 and _lead_glyph(n1) == "🧮", n1
+    assert "🧮" not in n1, n1
     assert _ids(out)[:2] == ["R1", "N1"]
     # the glyph is a function of time, so two renders ~0.5s apart differ
     time.sleep(0.55)
@@ -224,3 +223,18 @@ def test_resolver_strips_tier_prefixes():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_abacus_only_on_running_task_after_switch():
+    """2026-10-30 bug: "the abacus emoji is not clearing out when I start
+    another task ... abacus is only ever on one task at a time". Start N1,
+    then N2, then switch the timer to R1: R1 alone carries 🧮; N1 and N2 stay
+    on top (started, not done) without it."""
+    now = int(time.time())
+    out = _run("R1", started=[("2026-10-11", "N1", now - 900),
+                              ("2026-10-11", "N2", now - 600),
+                              ("2026-10-11", "R1", now - 300),
+                              ("2026-10-11", "W1", now - 200)])
+    abacus = [i for i in _ids(out) if "🧮" in _row_for_id(out, i)]
+    assert abacus == ["R1"], abacus
+    assert _ids(out)[:3] == ["R1", "N2", "N1"], _ids(out)
