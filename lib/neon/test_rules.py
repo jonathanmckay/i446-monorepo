@@ -161,3 +161,60 @@ def test_week_refs_resolve_from_1n_row5_snapshot(db, monkeypatch):
     ledger.record(_snap("S", 5, "='0n'!BH292 +'1n+'!ZZ5"), db)        # unobserved ref stays unknown
     s_ = rules.derive_day("2026-10-18", db)["cols"]["S"]
     assert "+'1n+'!ZZ5" in s_["unknown"] and s_["status"] == "partial"
+
+
+# ── strict (ledger-as-source) check ──────────────────────────────────────────
+
+def _base(col, formula, value):
+    return _e(ts="2026-10-18T03:50:00", kind="baseline", col=col, value=None, before=None,
+              after=formula, after_value=str(value), before_value=None, src="baseline")
+
+
+def _reconcile(col, value, formula, sheet="0分", ts="2026-10-18T23:55:00"):
+    return _e(ts=ts, kind="reconcile", sheet=sheet, col=col, value=None, before=formula,
+              after=formula, after_value=str(value), before_value=None, src="reconcile")
+
+
+def test_strict_credits_come_from_events_not_the_excel_formula(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    ledger.record(_base("Y", "=0", 0), db)
+    ledger.record(_e(col="Y", value="+30", before="=0", after="=0+30", after_value="30"), db)
+    ledger.record(_reconcile("Y", 210, "=0+30 + 180"), db)          # +180 typed into Excel
+    assert rules.derive_day("2026-10-18", db)["cols"]["Y"]["status"] == "ok"   # loose absorbs it
+    chk = rules.strict_check("2026-10-18", db)
+    (miss,) = [m for m in chk["misses"] if m["col"] == "Y"]
+    assert miss["derived"] == 30 and miss["observed"] == 210
+    assert any("+180 in Excel formula" in w for w in miss["why"])
+
+
+def test_strict_set_resets_base_so_daemon_undo_reconciles(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    ledger.record(_base("Y", "=0", 0), db)
+    ledger.record(_e(ts="2026-10-18T09:00:00", col="Y", value="+2028", before="=0", after="=0+2028",
+                     after_value="2028"), db)
+    ledger.record(_e(ts="2026-10-18T10:00:00", kind="write", col="Y", value="=0+20", before="=0+2028",
+                     after="=0+20", after_value="20", src="undo-fast"), db)
+    ledger.record(_snap("Y", 20, "=0+20"), db)
+    assert all(m["col"] != "Y" for m in rules.strict_check("2026-10-18", db)["misses"])
+
+
+def test_strict_ignores_0n_reconcile_and_names_the_cell(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    ledger.record(_base("X", "='0n'!AZ292", 0), db)
+    ledger.record(_reconcile("AJ", 45, "=20+25", sheet="0n"), db)    # kid minutes typed into 0n
+    ledger.record(_snap("X", 45, "='0n'!AZ292"), db)
+    assert rules.derive_day("2026-10-18", db)["cols"]["X"]["derived"] == 45
+    (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "X"]
+    assert miss["derived"] == 0 and any(w.startswith("0n!AJ") for w in miss["why"])
+
+
+def test_strict_evaluates_same_row_sum_cells():
+    on = {"N": {"value": 1.0, "text": None, "formula": "1"},
+          "AX": {"value": 0.0, "text": None, "formula": "=N300+O300 + 0"}}
+    assert rules._eval_row_formulas(on)["AX"]["value"] == 1.0
+
+
+def test_streak_counts_trailing_passes():
+    days = {"2026-10-27": {"pass": True}, "2026-10-28": {"pass": False},
+            "2026-10-29": {"pass": True}, "2026-10-30": {"pass": True}}
+    assert rules.streak(days) == 2

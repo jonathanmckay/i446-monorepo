@@ -4,6 +4,7 @@
 #
 #   run   : tools/neon-ledger/neon.py diff <yesterday> --write
 #           → ~/vault/g245/neon-ledger/rules-diff/<date>.json + rules-diff-latest.json
+#   strict: tools/neon-ledger/neon.py strict <yesterday> --write → strict-streak.json (/0t reads it)
 #   alert : non-zero exit -> ~/vault/z_ibx/alerts.jsonl via bin/cron-alert.sh
 #   read  : the Saturday /1-i446 vault-health card (check_neon_rules) reports
 #           mismatched columns and job liveness, so JM never has to remember.
@@ -27,5 +28,13 @@ if /usr/bin/python3 "$MONO/tools/neon-ledger/neon.py" diff "$YDAY" --write >> "$
     log "ok"
 else
     fail "diff_failed" "neon.py diff $YDAY exited non-zero"
+    exit 1
+fi
+# Strict cutover gate (ledger alone vs Excel) → g245/neon-ledger/strict-streak.json,
+# reported every morning by /0t until JM holds a 5-day streak.
+if /usr/bin/python3 "$MONO/tools/neon-ledger/neon.py" strict "$YDAY" --write >> "$LOG" 2>&1; then
+    log "strict ok"
+else
+    fail "strict_failed" "neon.py strict $YDAY exited non-zero"
     exit 1
 fi

@@ -45,10 +45,20 @@ The script handles everything:
    (`junk`, `economist`, ...; mapping in `LABEL_CATEGORY` in media_audit.py).
    The Economist is its own `economist` category, never junk; report its
    minutes on their own line when non-zero.
-6. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
-7. Saves Excel on Ix, refreshes dashboard points cache
+6. **Neon ledger streak** (`ledger_streak`, added 2026-10-30): yesterday's
+   strict cutover check (does the ledger alone, without Excel, reproduce
+   the 0分 row?) from `g245/neon-ledger/strict-streak.json`, written by the
+   Ix 04:05 job. JM asked for this daily until he holds a **5-day streak**.
+   Always report one line: `Ledger: ✅/❌ yesterday · streak N/5`. On a fail,
+   list each `misses` line (they name the cell and the cause: a +N typed into
+   Excel, a credit removed by hand, a 0n habit cell typed directly) and turn
+   it into the fix: "log it through /did or a 分 log next time". When the
+   streak first reaches 5, say the cutover gate is met (plan step 4 in
+   `i447/i446/neon-off-excel-plan.md`).
+7. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
+8. Saves Excel on Ix, refreshes dashboard points cache
 
-Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `did`, `dashboard`.
+Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `ledger_streak`, `did`, `dashboard`.
 
 Note: the dashboard points cache only keeps positive day-values, so on the rare
 night where the dock pushes hcb net-negative the dashboard shows a blank for

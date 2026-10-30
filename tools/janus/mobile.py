@@ -1496,11 +1496,15 @@ def _run_did_fast(text: str, flags: tuple[str, ...] = ()) -> dict:
         tag_steps = [f"{r.get('name')}→{r.get('step')}"
                      for r in data["results"][1:]]
     needs_agent = bool(data and data.get("agent_needed"))
-    ok = proc.returncode == 0 and step is not None
-    return {"ok": ok, "step": step, "tag_steps": tag_steps,
-            "credits": _credits(data) if ok else [],
-            "needs_agent": needs_agent,
-            "stderr_tail": proc.stderr.strip()[-200:]}
+    refused = janus_done.refusal(data)  # inferred 分 over the cap (lib/janus_done.py)
+    ok = proc.returncode == 0 and step is not None and refused is None
+    out = {"ok": ok, "step": step, "tag_steps": tag_steps,
+           "credits": _credits(data) if ok else [],
+           "needs_agent": needs_agent,
+           "stderr_tail": proc.stderr.strip()[-200:]}
+    if refused:
+        out["error"] = refused
+    return out
 
 
 def _crossed_off_today(desc: str, today: _dt.date) -> bool:
@@ -1841,6 +1845,9 @@ def _did_summary(stdout_text: str) -> str:
     bits = []
     for r in data.get("results", []):
         name = r.get("name", "?")
+        if r.get("step") == "refused":
+            bits.append(f"✋ {r.get('reason') or name + ': refused'}")
+            continue
         fen = r.get("0fen") or {}
         pts = (fen.get("points", 0) or 0) + (fen.get("bonus", 0) or 0)
         pts += (r.get("hcbi") or {}).get("pts", 0) or 0
@@ -1869,7 +1876,7 @@ def _run_did_cmd(text: str) -> dict:
     else:
         lines = (proc.stdout or proc.stderr or "").strip().splitlines()
         msg = lines[-1] if lines else ""
-    if proc.returncode != 0:
+    if proc.returncode != 0 or msg.startswith("✋"):
         return {"ok": False, "error": msg or f"did-fast exit {proc.returncode}"}
     return {"ok": True, "msg": msg}
 

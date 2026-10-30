@@ -210,21 +210,105 @@ def week_ref_values(conn) -> dict:
     return {col: float(v) for col, v in rows}
 
 
-def derive_day(date_iso: str, conn=None) -> dict:
+_CELL_REF = re.compile(r"^[+-]?([A-Z]{1,3})\d+$")
+
+
+def _eval_row_formulas(on: dict) -> dict:
+    """Strict mode: a 0n cell holding a same-row sum (=N298+O298 + 0, the
+    media AX column) is recomputed from the ledger's own values of the cells
+    it names instead of trusting Excel's cached result. Anything fancier is
+    left as observed."""
+    out = dict(on)
+    for col, cell in on.items():
+        f = (cell.get("formula") or "").strip()
+        if not f.startswith("=") or "!" in f or "(" in f:
+            continue
+        total, ok, has_ref = 0.0, True, False
+        for t in split_terms(f):
+            body = t[1:] if t[:1] in "+-" else t
+            sign = -1.0 if t[:1] == "-" else 1.0
+            m = _CELL_REF.match(t)
+            if _NUM.match(body):
+                total += sign * float(body)
+            elif m:
+                has_ref = True
+                ref = on.get(m.group(1)) or {}
+                total += sign * float(ref.get("value") or 0.0)
+            else:
+                ok = False
+                break
+        if ok and has_ref:
+            out[col] = {**cell, "value": total, "text": None}
+    return out
+
+
+def _strict_credits(c, date_iso: str, col: str, week5: dict) -> tuple:
+    """Ledger-as-source credits for one 0分 cell: literals (+ resolved 1n+
+    refs) of the last daemon `set` — or the 03:50 day-start baseline when no
+    set came first — plus Σ credit/credit_ref points journaled after it.
+    Reconcile/snapshot observations are ignored, so an edit typed into Excel
+    shows up as a mismatch instead of being absorbed. → (value, unknown, comp)"""
+    rows = c.execute(
+        """SELECT kind, jsonl_kind, points, after_formula, src FROM events
+            WHERE date=? AND sheet='0分' AND col=?
+              AND (kind IN ('set','credit','credit_ref')
+                   OR (kind='observe' AND jsonl_kind='baseline'))
+            ORDER BY ts, id""", (date_iso, col)).fetchall()
+    base, credits, unknown, seen_write = 0.0, 0.0, [], False
+
+    def literal_base(formula: str) -> float:
+        t = classify_terms(formula or "")
+        v = t["literals"]
+        for ref in t["week_refs"]:
+            m = _WEEK_REF.match(ref)
+            if m and m.group(2) == "5" and m.group(1) in week5:
+                v += (-1.0 if ref.startswith("-") else 1.0) * week5[m.group(1)]
+            else:
+                unknown.append(ref)
+        return v
+
+    for kind, jkind, pts, formula, src in rows:
+        if kind == "observe":
+            if not seen_write:                 # baseline only seeds the day
+                unknown.clear()
+                base, credits = literal_base(formula), 0.0
+            continue
+        seen_write = True
+        if kind == "set":
+            unknown.clear()
+            base, credits = literal_base(formula), 0.0
+        elif pts is None:
+            unknown.append(f"credit without points ({(src or '?')[:40]})")
+        else:
+            credits += float(pts)
+    return base + credits, unknown, {"base": base, "ledger_credits": credits}
+
+
+def derive_day(date_iso: str, conn=None, strict: bool = False) -> dict:
     """{"date", "cols": {col: {derived, observed, delta, status, components, unknown}},
     "blocks": {...}, "weights_source": ...}. status ∈ ok | mismatch | partial
-    (unknown inputs) | observe-only | no-observation."""
+    (unknown inputs) | observe-only | no-observation.
+
+    strict=True is the cutover test: credits come from journaled credit
+    events (not Excel's formula), 0n marks only from daemon writes, and a
+    0n cell the ledger never saw written counts as blank."""
     own = conn is None
     c = conn or ledger.connect()
+    strict_cr: dict = {}
     try:
         fen = ledger.state(date_iso, "0分", c)
-        on = ledger.state(date_iso, "0n", c)
+        on = ledger.state(date_iso, "0n", c, writes_only=strict)
+        if strict:
+            on = _eval_row_formulas(on)
         weights = load_weights(c)
         week5 = week_ref_values(c)
         p_events = c.execute(
             """SELECT kind, ts, after_formula, value FROM events
                 WHERE date=? AND sheet='0分' AND col='P' AND kind IN ('set','credit')
                 ORDER BY ts, id""", (date_iso,)).fetchall()
+        if strict:
+            strict_cr = {col: _strict_credits(c, date_iso, col, week5)
+                         for col in POINT_COLS if col not in ("P",) + tuple(OBSERVE_ONLY)}
     finally:
         if own:
             c.close()
@@ -233,6 +317,8 @@ def derive_day(date_iso: str, conn=None) -> dict:
         total, unknown = 0.0, []
         for col in cols_:
             m = marked(on.get(col))
+            if m is None and strict:
+                m = False
             if m is None:
                 unknown.append(f"0n!{col}")
             elif m:
@@ -280,7 +366,7 @@ def derive_day(date_iso: str, conn=None) -> dict:
                 for k, w in MEDIA_EXTRA.items():
                     v = _num_or_none(on.get(k))
                     if v is None:
-                        if on.get(k) is None:
+                        if on.get(k) is None and not strict:
                             unk.append(f"0n!{k}")
                         continue
                     extra += w * v
@@ -290,7 +376,7 @@ def derive_day(date_iso: str, conn=None) -> dict:
                 for k, w in MIND_COLS.items():
                     v = _num_or_none(on.get(k))
                     if v is None:
-                        if on.get(k) is None:
+                        if on.get(k) is None and not strict:
                             unk.append(f"0n!{k}")
                         continue
                     fl += w * v
@@ -299,14 +385,16 @@ def derive_day(date_iso: str, conn=None) -> dict:
                 for k in KID_COLS:
                     v = _num_or_none(on.get(k))
                     if v is None:
-                        if on.get(k) is None:
+                        if on.get(k) is None and not strict:
                             unk.append(f"0n!{k}")
                         continue
                     fl += v
                 comp["flow"] = fl
             if col == "Q":
                 t = on.get(Q_BONUS_COL)
-                if t is None:
+                if t is None and strict:
+                    bonus = 0.0
+                elif t is None:
                     unk.append(f"0n!{Q_BONUS_COL}")
                     bonus = 0.0
                 else:
@@ -315,7 +403,15 @@ def derive_day(date_iso: str, conn=None) -> dict:
                 comp["bonus"] = bonus
                 fl += bonus
             unknown += unk
-            derived = fl + terms["literals"] + week_pts
+            if strict:
+                cr, cr_unk, cr_comp = strict_cr[col]
+                comp.pop("literals", None)
+                comp.pop("week_refs", None)
+                comp.update(cr_comp)
+                unknown = unk + cr_unk
+                derived = fl + cr
+            else:
+                derived = fl + terms["literals"] + week_pts
             status = None
         if status is None:
             if observed is None:
@@ -352,7 +448,7 @@ def derive_day(date_iso: str, conn=None) -> dict:
                       "observed": _num_or_none(fen.get(col))}
               for col, glyph in BLOCK_COLS.items()}
     return {"date": date_iso, "cols": result, "blocks": blocks,
-            "weights_known": len(weights)}
+            "weights_known": len(weights), "strict": strict}
 
 
 def event_blocks(date_iso: str, conn=None) -> dict:
@@ -382,3 +478,125 @@ def summarize(day: dict) -> dict:
         "no_observation": sorted(c for c, r in cols.items() if r["status"] == "no-observation"),
         "unknown_inputs": sorted({u for r in cols.values() for u in r["unknown"]}),
     }
+
+
+# ── strict (ledger-as-source) check ──────────────────────────────────────────
+
+STRICT_COLS = [c for c in POINT_COLS if c not in OBSERVE_ONLY]
+INPUT_CELLS = {col: list(FLOW_RANGES.get(col, [])) for col in POINT_COLS}
+INPUT_CELLS["U"] += list(MEDIA_EXTRA)
+INPUT_CELLS["V"] = list(MIND_COLS)
+INPUT_CELLS["X"] = list(KID_COLS)
+INPUT_CELLS["Q"] = [Q_BONUS_COL]
+
+
+def _literal_terms(formula: str) -> list:
+    out = []
+    for t in split_terms(formula or ""):
+        body = t[1:] if t[:1] in "+-" else t
+        v = float(body) if _NUM.match(body) else _eval_arith(t) if _eval_arith(t) is not None else None
+        if v is not None:
+            v = -v if (t[:1] == "-" and _NUM.match(body)) else v
+            if v != 0:
+                out.append(round(v, 3))
+    return out
+
+
+def _ledger_terms(c, date_iso: str, col: str) -> list:
+    """Literal terms the ledger can account for: the seeding set/baseline
+    formula's literals + each journaled credit's points."""
+    rows = c.execute(
+        """SELECT kind, points, after_formula FROM events
+            WHERE date=? AND sheet='0分' AND col=?
+              AND (kind IN ('set','credit','credit_ref') OR (kind='observe' AND jsonl_kind='baseline'))
+            ORDER BY ts, id""", (date_iso, col)).fetchall()
+    terms, seen_write = [], False
+    for kind, pts, formula in rows:
+        if kind == "observe":
+            if not seen_write:
+                terms = _literal_terms(formula)
+            continue
+        seen_write = True
+        if kind == "set":
+            terms = _literal_terms(formula)
+        elif pts is not None and pts != 0:
+            terms.append(round(float(pts), 3))
+    return terms
+
+
+def _header(sheet: str, col: str) -> Optional[str]:
+    try:
+        return neon_cols.header_for(sheet, col)
+    except Exception:
+        return None
+
+
+def _fmt(v) -> str:
+    return "blank" if v in (None, "") else f"{v:g}" if isinstance(v, float) else str(v)
+
+
+def strict_check(date_iso: str, conn=None) -> dict:
+    """The cutover gate for one day: does the ledger alone reproduce Excel's
+    0分 point columns? → {"date", "pass", "complete", "misses": [{col, field,
+    derived, observed, delta, why: [...]}]}. `why` names the cause JM can act
+    on: a +N in the Excel formula the ledger never saw (typed into Excel), a
+    credit the ledger has that Excel lost, or a 0n habit cell whose Excel
+    value no daemon write explains (typed into 0n)."""
+    from collections import Counter
+    own = conn is None
+    c = conn or ledger.connect()
+    try:
+        strict = derive_day(date_iso, c, strict=True)
+        on_x = ledger.state(date_iso, "0n", c)
+        on_l = ledger.state(date_iso, "0n", c, writes_only=True)
+        misses = []
+        complete = True
+        for col in STRICT_COLS:
+            r = strict["cols"][col]
+            if r["status"] == "no-observation":
+                complete = False
+                continue
+            if r["status"] == "ok":
+                continue
+            why = []
+            if col != "P":
+                excel = Counter(_literal_terms(r["formula"]))
+                led = Counter(_ledger_terms(c, date_iso, col))
+                for v, n in (excel - led).items():
+                    why += [f"{v:+g} in Excel formula, never journaled (typed into Excel?)"] * n
+                for v, n in (led - excel).items():
+                    why += [f"{v:+g} journaled but gone from Excel (removed by hand?)"] * n
+            else:
+                why.append("P (-1₦) edited after the last ritual write")
+            for k in INPUT_CELLS.get(col, []):
+                xv = (on_x.get(k) or {}).get("value")
+                lv = (on_l.get(k) or {}).get("value")
+                xt = (on_x.get(k) or {}).get("text")
+                lt = (on_l.get(k) or {}).get("text")
+                flow_cell = k in FLOW_RANGES.get(col, []) or k == Q_BONUS_COL
+                if not flow_cell:                # value-weighted: blank ≡ 0
+                    if (xv or 0.0) == (lv or 0.0) and not (xt or lt):
+                        continue
+                if (xv, xt or None) != (lv, lt or None):
+                    hdr = _header("0n", k)
+                    why.append(f"0n!{k}{f'({hdr})' if hdr else ''}: Excel {_fmt(xv if xv is not None else xt)}, "
+                               f"ledger {_fmt(lv if lv is not None else lt)} (typed into 0n?)")
+            if r["unknown"]:
+                why += [f"unknown: {u}" for u in r["unknown"]]
+            misses.append({"col": col, "field": _header("0分", col),
+                           "derived": r["derived"], "observed": r["observed"], "delta": r["delta"], "why": why})
+        return {"date": date_iso, "pass": complete and not misses, "complete": complete,
+                "misses": misses, "excluded": list(OBSERVE_ONLY)}
+    finally:
+        if own:
+            c.close()
+
+
+def streak(days: dict) -> int:
+    """Consecutive passing days ending at the newest evaluated day."""
+    n = 0
+    for d in sorted(days, reverse=True):
+        if not days[d].get("pass"):
+            break
+        n += 1
+    return n

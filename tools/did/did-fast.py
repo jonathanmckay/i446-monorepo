@@ -268,6 +268,13 @@ def target_date_iso(target_date: Optional[str], today: date) -> str:
     return date(year, month, day).isoformat()
 PUNCT_RE = re.compile(r"[^\w\s一-鿿]+", re.UNICODE)
 TIME_RANGE_RE = re.compile(r"(\d{4})-(\d{4})")
+# A single credit above this is only taken when explicit ([N], {N}, +N, a 分
+# log): inferred minutes-as-points this large is a parse slip or a forgotten
+# timer (2026-10-22: +2028 from a year in the task text). Shared with janus.
+try:
+    from janus_done import MAX_INFERRED_POINTS  # noqa: E402
+except Exception:  # noqa: BLE001
+    MAX_INFERRED_POINTS = 500
 # SQUARE brackets only. {N} is the 0g bonus and flows via item.curly_points →
 # column Q; matching braces here made every completed {N} goal credit its
 # DOMAIN column too — a silent double-count on top of the Q credit (bug
@@ -729,9 +736,15 @@ def parse_input(raw: str) -> list[ParsedItem]:
             chunk = chunk[:tr_match.start()] + chunk[tr_match.end():]
             chunk = chunk.strip()
 
-        # Extract trailing number as time value
+        # Extract trailing number as time value. Not when a HHMM-HHMM range
+        # was given: the range IS the time, so a trailing number left over is
+        # part of the task's own text (2026-10-22: janus /done sent "set up
+        # quarterly readjustment 2028 1922-1956 @i9" and the year was
+        # credited as +2028 分 to 0分!R).
         name_parts = chunk.split()
-        if len(name_parts) >= 2 and name_parts[-1].isdigit():
+        if item.time_range is not None:
+            pass
+        elif len(name_parts) >= 2 and name_parts[-1].isdigit():
             num = int(name_parts[-1])
             remaining_name = " ".join(name_parts[:-1]).lower()
             # 4-digit HHMM for variable 0₦ habits (e.g. "xk22 1823" = started at 18:23)
@@ -1825,6 +1838,15 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             if pts == 0 and item.time_range:
                 pts = time_range_minutes(item.time_range[0], item.time_range[1])
             pts += VARIABLE_SESSION_BONUS.get(name_lower, 0)
+            if pts > MAX_INFERRED_POINTS:
+                # Sanity guard: an inferred (minutes-as-points) credit this
+                # large is a parse slip or a forgotten timer, never a real
+                # session. Explicit [N] / {N} / +N still go through.
+                results.append(RouteResult(
+                    item=item, step="refused",
+                    error=(f"{item.name}: inferred {pts}分 > {MAX_INFERRED_POINTS} "
+                           f"— refused; give the points explicitly as [N]")))
+                continue
         if item.bonus_points:
             pts += item.bonus_points
 
@@ -3219,55 +3241,72 @@ def run_ritual(tag: str) -> dict:
     #    append instead, so P can still grow but never drops.
     pts = int(r.get("points") or 0)
     if pts and changed:
-        now = _daytime.local_now()
-        _, computed_total, computed_formula = nb.score_day(new_text)
-
-        # Read + write via the excel-http daemon (audit ledger + chain check)
-        # — never raw AppleScript against 0分 (2026-07-28 migration).
-        try:
-            read_res = neon_excel.read("0分", "P", date=f"{now.month}/{now.day}")
-            if not read_res.get("ok") or not read_res.get("row"):
-                raise RuntimeError(
-                    str(read_res.get("error") or "ERR: no 0分 row")[:120])
-            p_row = int(read_res["row"])
-            f = str(read_res.get("formula") or "")
-            v = read_res.get("value")
-            live_total = float(v or 0)
-
-            if computed_total >= live_total:
-                new_formula = computed_formula
-                regrouped = True
-            else:
-                # Fall back to a safe append — never decreases P.
-                # No literal leading "0" term (see neon_blocks.score_day) —
-                # each block gets exactly one term, so term-count == block-count.
-                if f in ("", "0", "=0"):
-                    terms = []
-                elif f.startswith("="):
-                    inner = f[1:]
-                    terms = inner.split("+") if inner else []
-                    if terms == ["0"]:
-                        terms = []
-                else:
-                    terms = [f]
-                terms.append(str(pts))
-                new_formula = "=" + "+".join(terms)
-                regrouped = False
-
-            # SET the composed formula (recompute or safe append) on col P.
-            write_res = neon_excel.write("0分", "P", row=p_row,
-                                         value=new_formula,
-                                         src=f"ritual {block} -1n")
-            _warn_chain_broken(write_res)
-            out["p_credit"] = {"points": pts, "ok": bool(write_res.get("ok")),
-                               "regrouped": regrouped,
-                               "excel": (f"P={write_res.get('value')}"
-                                         if write_res.get("ok")
-                                         else str(write_res.get("error") or ""))[:60]}
-        except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
-            out["p_credit_error"] = str(e)
+        out.update(_credit_ritual_p(new_text, pts, block, nb))
     _log_ritual(out)
     return out
+
+
+def _credit_ritual_p(new_text: str, pts: int, block: str, nb) -> dict:
+    """Step 4 of run_ritual: SET 0分!P (today's row) to the guarded
+    recompute, or a safe `+pts` append. Returns {"p_credit": ...} or
+    {"p_credit_error": ...}; never raises.
+
+    The write is addressed by row (the row the read just resolved) AND
+    carries the date. The excel-http daemon chains a cell under its date key
+    when the request has one, else under r<row>; the block-turnover -1n
+    reconcile writes P date-addressed, so a row-only ritual write was
+    chain-checked against the previous RITUAL entry (r-key) and flagged
+    "broken" on the first ritual of nearly every block, even though the
+    before-formula matched the reconcile's after exactly (2026-10-24..30:
+    e.g. 申 =13+13+13+7+13+1, chain_expected the prior ritual's =…+7+10).
+    With the date on the request both writers share one chain key."""
+    now = _daytime.local_now()
+    p_date = f"{now.month}/{now.day}"
+    _, computed_total, computed_formula = nb.score_day(new_text)
+    # Read + write via the excel-http daemon (audit ledger + chain check)
+    # — never raw AppleScript against 0分 (2026-07-28 migration).
+    try:
+        read_res = neon_excel.read("0分", "P", date=p_date)
+        if not read_res.get("ok") or not read_res.get("row"):
+            raise RuntimeError(
+                str(read_res.get("error") or "ERR: no 0分 row")[:120])
+        p_row = int(read_res["row"])
+        f = str(read_res.get("formula") or "")
+        v = read_res.get("value")
+        live_total = float(v or 0)
+
+        if computed_total >= live_total:
+            new_formula = computed_formula
+            regrouped = True
+        else:
+            # Fall back to a safe append — never decreases P.
+            # No literal leading "0" term (see neon_blocks.score_day) —
+            # each block gets exactly one term, so term-count == block-count.
+            if f in ("", "0", "=0"):
+                terms = []
+            elif f.startswith("="):
+                inner = f[1:]
+                terms = inner.split("+") if inner else []
+                if terms == ["0"]:
+                    terms = []
+            else:
+                terms = [f]
+            terms.append(str(pts))
+            new_formula = "=" + "+".join(terms)
+            regrouped = False
+
+        # SET the composed formula (recompute or safe append) on col P.
+        write_res = neon_excel.write("0分", "P", row=p_row, date=p_date,
+                                     value=new_formula,
+                                     src=f"ritual {block} -1n")
+        _warn_chain_broken(write_res)
+        return {"p_credit": {"points": pts, "ok": bool(write_res.get("ok")),
+                             "regrouped": regrouped,
+                             "excel": (f"P={write_res.get('value')}"
+                                       if write_res.get("ok")
+                                       else str(write_res.get("error") or ""))[:60]}}
+    except Exception as e:  # noqa: BLE001 — never fail the ritual on a P write
+        return {"p_credit_error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -3562,6 +3601,7 @@ def main():
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
     agent_needed = [r for r in routes if r.step == "needs_agent"]
     threshold_skipped = [r for r in routes if r.step == "skipped"]
+    refused = [r for r in routes if r.step == "refused"]
 
     # 3a-ii. d359 outreach tasks (😈-labelled `d359/<slug>`): completing one
     # via /did (and hence dtd) means contact happened — divert to the same
@@ -4276,6 +4316,11 @@ def main():
         else:
             print(f"  ⏸ {r.error}", file=sys.stderr)
         output["results"].append(entry)
+
+    for r in refused:
+        print(f"  ✋ {r.error}", file=sys.stderr)
+        output["results"].append({"name": r.item.name, "step": "refused",
+                                  "reason": r.error})
 
     for r in agent_needed:
         output["agent_needed"].append({

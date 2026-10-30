@@ -10,6 +10,9 @@ Usage:
   neon.py day [YYYY-MM-DD] [--sheet S] # per-column credits vs last observed value
   neon.py log [--n 20]                 # newest events
   neon.py diff [YYYY-MM-DD] [--write]  # rule engine vs Excel for one day (step 3 parallel run)
+  neon.py strict [YYYY-MM-DD] [--since D] [--write]
+                                       # cutover gate: ledger ALONE vs Excel; --write updates
+                                       # ~/vault/g245/neon-ledger/strict-streak.json (read by /0t)
                                        # --write → ~/vault/g245/neon-ledger/rules-diff/<date>.json + rules-diff-latest.json
 
 History: this file was the 2026-06 prototype (events(domain, points) with a
@@ -31,6 +34,40 @@ from neon import ledger, rules  # noqa: E402
 
 LEDGER_DIR = Path(os.path.expanduser("~/vault/g245/neon-ledger"))
 DIFF_DIR = LEDGER_DIR / "rules-diff"
+STREAK_PATH = LEDGER_DIR / "strict-streak.json"
+STREAK_TARGET = 5
+
+
+def run_strict(dates: list, write: bool) -> dict:
+    """Strict-check each date; with write, merge into the streak file."""
+    import json as _json
+    ledger.repair_dates()
+    state = {"target": STREAK_TARGET, "days": {}}
+    if STREAK_PATH.exists():
+        try:
+            state = _json.loads(STREAK_PATH.read_text())
+        except ValueError:
+            pass
+    for d in dates:
+        state["days"][d] = rules.strict_check(d)
+    state["streak"] = rules.streak(state["days"])
+    state["target"] = STREAK_TARGET
+    state["generated"] = _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    if write:
+        STREAK_PATH.write_text(_json.dumps(state, ensure_ascii=False, indent=1) + "\n")
+    return state
+
+
+def print_strict(state: dict, dates: list) -> None:
+    for d in dates:
+        r = state["days"][d]
+        mark = "✅" if r["pass"] else ("…" if not r["complete"] else "❌")
+        print(f"{mark} {d}")
+        for m in r["misses"]:
+            print(f"   {m['col']} {m.get('field') or ''}: ledger {m['derived']:g} vs Excel {m['observed']:g}")
+            for w in m["why"]:
+                print(f"      · {w}")
+    print(f"streak {state['streak']}/{state['target']}")
 
 
 def run_diff(date_iso: str, write: bool) -> dict:
@@ -74,6 +111,8 @@ def main(argv=None) -> int:
     pi = sub.add_parser("import-jsonl"); pi.add_argument("files", nargs="*")
     pd = sub.add_parser("day"); pd.add_argument("date", nargs="?"); pd.add_argument("--sheet", default="0分")
     pl = sub.add_parser("log"); pl.add_argument("--n", type=int, default=20)
+    ps = sub.add_parser("strict"); ps.add_argument("date", nargs="?"); ps.add_argument("--since")
+    ps.add_argument("--write", action="store_true")
     pf = sub.add_parser("diff"); pf.add_argument("date", nargs="?"); pf.add_argument("--write", action="store_true")
     a = p.parse_args(argv)
 
@@ -102,6 +141,11 @@ def main(argv=None) -> int:
     elif a.cmd == "diff":
         d = a.date or (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
         print_diff(run_diff(d, a.write))
+    elif a.cmd == "strict":
+        end = _dt.date.fromisoformat(a.date) if a.date else _dt.date.today() - _dt.timedelta(days=1)
+        start = _dt.date.fromisoformat(a.since) if a.since else end
+        dates = [(start + _dt.timedelta(days=i)).isoformat() for i in range((end - start).days + 1)]
+        print_strict(run_strict(dates, a.write), dates)
     elif a.cmd == "log":
         for ts, date, sheet, col, field, kind, pts, av, src, block in ledger.recent(a.n):
             pts_s = "" if pts is None else f"{pts:+g}"

@@ -62,11 +62,17 @@ sys.path.insert(0, str(HERE.parent.parent / "lib"))
 import neon_blocks as nb  # noqa: E402
 
 
-def _run_ritual_body() -> str:
-    src = DID_FAST.read_text(encoding="utf-8")
-    i_start = src.index("def run_ritual(")
+def _func(src: str, name: str) -> str:
+    i_start = src.index(f"def {name}(")
     i_end = src.index("\ndef ", i_start + 10)
     return src[i_start:i_end]
+
+
+def _run_ritual_body() -> str:
+    """run_ritual plus its step-4 P-credit helper (_credit_ritual_p,
+    extracted 2026-10-30 so the write can be tested behaviourally)."""
+    src = DID_FAST.read_text(encoding="utf-8")
+    return _func(src, "run_ritual") + _func(src, "_credit_ritual_p")
 
 
 def test_no_early_return_before_stamping_for_auto_mode():
@@ -111,7 +117,7 @@ def test_p_credit_prefers_recompute_guarded_by_live_total():
 
 def test_p_credit_falls_back_to_append_never_decreases():
     body = _run_ritual_body()
-    i_else = body.index("else:\n                # Fall back to a safe append")
+    i_else = body.index("else:\n            # Fall back to a safe append")
     fallback = body[i_else:i_else + 650]
     assert "terms.append(str(pts))" in fallback, (
         "the guard-triggered fallback must still credit this ritual's own "

@@ -1050,6 +1050,53 @@ end tell
     return {"ok": True, "row": row, "col": col, "value": value, "formula": formula}
 
 
+_RANGE_RE = re.compile(r"^([A-Z]{1,3})([0-9]{1,5}):([A-Z]{1,3})([0-9]{1,5})$")
+MAX_RANGE_CELLS = 20000
+
+
+def _col_num(letters: str) -> int:
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n
+
+
+def do_read_range(req: dict) -> dict:
+    """Values of a rectangular range in ONE Apple Event (2026-10-30, the 1hcb
+    report: ~100 cells as single /read calls cost a round trip each). Rows
+    come back as lists of strings; an empty cell is "" and AppleScript renders
+    reals in its own text form (1.2345E+4), so callers parse numbers."""
+    sheet, rng = req.get("sheet"), str(req.get("range") or "").upper()
+    m = _RANGE_RE.match(rng)
+    if not sheet or not m:
+        return {"ok": False, "error": "missing_sheet_or_bad_range"}
+    c1, r1, c2, r2 = m.group(1), int(m.group(2)), m.group(3), int(m.group(4))
+    if r2 < r1 or _col_num(c2) < _col_num(c1):
+        return {"ok": False, "error": "bad_range"}
+    if (r2 - r1 + 1) * (_col_num(c2) - _col_num(c1) + 1) > MAX_RANGE_CELLS:
+        return {"ok": False, "error": "range_too_large"}
+    # Unit (0x1f) between cells, record (0x1e) between rows, as in do_read.
+    script = f'''
+tell application "Microsoft Excel"
+    set v to value of range ("{rng}") of sheet "{safe_str(sheet)}" of workbook "{WORKBOOK}"
+end tell
+if class of v is not list then set v to {{{{v}}}}
+set out to {{}}
+set AppleScript's text item delimiters to (character id 31)
+repeat with r in v
+    set end of out to ((contents of r) as text)
+end repeat
+set AppleScript's text item delimiters to (character id 30)
+return out as text
+'''
+    rc, out, err = osascript(script)
+    if rc != 0:
+        return {"ok": False, "error": err}
+    rows = [[("" if c == "missing value" else c) for c in ln.split("\x1f")]
+            for ln in out.split("\x1e")]
+    return {"ok": True, "range": rng, "row": r1, "rows": rows}
+
+
 def do_lookup(req: dict) -> dict:
     sheet = req.get("sheet")
     date_str = req.get("date")
@@ -1063,6 +1110,7 @@ ROUTES = {
     "/append": do_append,
     "/write":  do_write,
     "/read":   do_read,
+    "/read_range": do_read_range,
     "/lookup": do_lookup,
     "/batch":  do_batch,
     "/batch_write": do_batch_write,

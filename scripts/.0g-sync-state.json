@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-10-30T14:00:01.294136-07:00"
+  "tasks": {
+    "productive flight back": {
+      "todoist_id": "6hv2g9cvC2cJmMQ2",
+      "minutes": 50
+    },
+    "enjoy the time with ren": {
+      "todoist_id": "6hv2g9cqmFMQjWFR",
+      "minutes": 40
+    },
+    "tasks below 40": {
+      "todoist_id": "6hv2g9jH4cHMXXXR",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-10-30T16:00:03.241218-07:00"
 }

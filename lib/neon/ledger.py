@@ -389,24 +389,32 @@ def _cell_value(kind: str, after_value, raw_value, after_formula) -> tuple:
     return None, raw_value if raw_value not in (None, "") else ""
 
 
-def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None) -> dict:
+def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None,
+          writes_only: bool = False) -> dict:
     """What the ledger last saw in each cell of `sheet` on `date_iso`:
     {col: {"value": float|None, "text": str|None, "kind": str, "ts": str,
     "field": str|None, "formula": str|None}}. The newest event per column
     wins. A column with no event is ABSENT — callers must treat absence as
     UNKNOWN, not blank (cells marked before the double-write began have no
     event). Row-addressed events that landed before their row's date was
-    learned (date NULL) are included via row_dates."""
+    learned (date NULL) are included via row_dates.
+
+    writes_only=True is the ledger-as-source view: only what writers sent
+    through the daemon (plus the 03:50 day-start baseline) counts; Excel-side
+    observations (reconcile/snapshot) are ignored, so a hand edit in Excel is
+    invisible here by design."""
     own = conn is None
     c = conn or connect()
+    obs = ("AND (e2.kind != 'observe' OR e2.jsonl_kind = 'baseline')" if writes_only else "")
     try:
         rows = c.execute(
-            """SELECT e.col, e.field, e.kind, e.ts, e.after_value, e.value, e.after_formula
+            f"""SELECT e.col, e.field, e.kind, e.ts, e.after_value, e.value, e.after_formula
                  FROM events e
                  JOIN (SELECT e2.col, MAX(e2.id) AS mid FROM events e2
                         LEFT JOIN row_dates rd ON rd.sheet = e2.sheet AND rd.row = e2.row
                         WHERE e2.sheet=? AND COALESCE(e2.date, rd.date) = ?
                           AND e2.kind IN ('set','observe','text','lock','credit','credit_ref')
+                          {obs}
                         GROUP BY e2.col) m ON m.mid = e.id
                 ORDER BY e.col""", (sheet, date_iso)).fetchall()
         out = {}

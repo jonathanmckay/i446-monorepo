@@ -519,6 +519,27 @@ def mark_done() -> dict:
     return {"error": proc.stderr.strip()}
 
 
+STREAK_PATH = Path.home() / "vault/g245/neon-ledger/strict-streak.json"
+
+
+def ledger_streak(day: date) -> dict:
+    """Summarize strict-streak.json for `day`: streak/target, pass|fail|pending,
+    and one line per cause (e.g. "R i9: +180 in Excel formula, never journaled")."""
+    try:
+        st = json.loads(STREAK_PATH.read_text())
+    except Exception as e:
+        return {"error": f"no streak file ({e})"}
+    r = st.get("days", {}).get(day.isoformat())
+    out = {"streak": st.get("streak", 0), "target": st.get("target", 5)}
+    if r is None:
+        out["yesterday"] = "pending (Ix 04:05 job hasn't written it, or vault not synced)"
+        return out
+    out["yesterday"] = "pass" if r.get("pass") else ("incomplete" if not r.get("complete") else "fail")
+    out["misses"] = [f"{m['col']} {m.get('field') or ''}: {w}"
+                     for m in r.get("misses", []) for w in m.get("why", [])]
+    return out
+
+
 def main():
     today = date.today()
 
@@ -587,6 +608,12 @@ def main():
         output["media_audit"] = audit
     except Exception as e:
         output["media_audit"] = f"FAILED: {e}"
+
+    # 4d. Neon ledger cutover gate (2026-10-30): yesterday's strict check —
+    # does the ledger ALONE reproduce Excel's 0分 row — plus the pass streak.
+    # Written nightly on Ix (bin/run_neon_rules_diff.sh, 04:05) and synced via
+    # the vault. Informational; reported every morning until a 5-day streak.
+    output["ledger_streak"] = ledger_streak(yesterday)
 
     # 5. Mark 0t done (0₦ + Todoist + stop timer)
     did_result = mark_done()

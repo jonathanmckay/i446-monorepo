@@ -5930,6 +5930,9 @@ def _did_summary(stdout_text: str) -> str:
     bits = []
     for r in data.get("results", []):
         name = r.get("name", "?")
+        if r.get("step") == "refused":  # inferred 分 over janus_done.MAX_INFERRED_POINTS
+            bits.append(f"✋ {r.get('reason') or name + ': refused'}")
+            continue
         fen = r.get("0fen") or {}
         pts = fen.get("points", 0) or 0
         pts += fen.get("bonus", 0) or 0

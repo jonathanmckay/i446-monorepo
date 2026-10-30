@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import run_bounded  # noqa: E402
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WEEK_CALC = Path.home() / ".claude/skills/1i9/week_calc.py"
@@ -165,7 +166,30 @@ def write_script(row: int, rating: str, done: str, exceed: str, minutes: int) ->
     ])
 
 
-def write_row(row: int, rating: str, done: str, exceed: str, minutes: int) -> str:
+def daemon_items(rating: str, done: str, exceed: str, minutes: int) -> list[dict]:
+    """B/D/E as prose (mode "text": never a formula, newlines kept), F a number."""
+    return [{"col": "B", "value": rating, "mode": "text"},
+            {"col": "D", "value": done, "mode": "text"},
+            {"col": "E", "value": exceed, "mode": "text"},
+            {"col": "F", "value": int(minutes)}]
+
+
+def write_row(row: int, rating: str, done: str, exceed: str, minutes: int,
+              label: str | None = None) -> str:
+    # Daemon first (journaled, row-anchored with the week label); the raw
+    # ix-osa script is the daemon-down fallback only (Neon-off-Excel step 2c
+    # deferred item, 2026-10-30). The row was verified against col A already.
+    try:
+        r = neon_excel.batch_write(I9_SHEET, daemon_items(rating, done, exceed, minutes),
+                                   row=row, date=label, src="1i9", fallback=False)
+        if r.get("ok"):
+            return f"OK: {I9_SHEET}!row {row}"
+        if not r.get("fallback"):
+            raise RuntimeError(f"{I9_SHEET} write failed: {r.get('error') or r}")
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        print(f"1i9 daemon path failed ({e}); using ix-osa", file=sys.stderr)
     return _osa(write_script(row, rating, done, exceed, minutes), timeout=120)
 
 
@@ -243,7 +267,7 @@ def main(argv=None) -> int:
         print("aborted: no 'got done' answer, nothing written")
         return 1
     try:
-        write_row(row, rating, done, exceed, minutes)
+        write_row(row, rating, done, exceed, minutes, label=sheet_label or label)
     except Exception as e:  # noqa: BLE001
         print(f"✗ Excel write failed: {str(e).strip()[:300]}")
         print("answers were not saved; rerun /1-i9 to try again")

@@ -67,3 +67,43 @@ def test_ack_requires_note():
     assert server.do_ack({"sheet": "0分", "col": "R", "date": "7/28"}) == {
         "ok": False, "error": "ack_requires_note"}
     assert server.do_ack({"sheet": "0分", "col": "R", "note": "  "})["ok"] is False
+
+
+def test_ritual_p_write_with_date_chains_after_date_keyed_reconcile(ledger, monkeypatch):
+    """2026-10-24..30: 0分!P went "broken" on the first ritual of nearly every
+    block. The build-order daemon's block-turnover -1n reconcile writes P
+    date-addressed (key 10/27); did-fast's ritual write was row-only (key
+    r298), so its chain check compared against the previous RITUAL entry
+    and missed the reconcile in between, though the before-formula matched
+    the reconcile's after exactly. A write carrying row AND date (did-fast's
+    fix) chains under the shared date key."""
+    monkeypatch.setattr(server, "neon_ledger", None)  # never touch the SQLite ledger
+
+    def entry(**kw):
+        base = {"ts": "2026-10-27T12:00:00", "kind": "write", "sheet": "0分",
+                "col": "P", "row": 298}
+        base.update(kw)
+        return base
+
+    server.journal(entry(date=None, before="=13+13+13+1", after="=13+13+13+4",
+                         src="ritual 午 -1n"))
+    server.journal(entry(date="10/27", before="=13+13+13+4", after="=13+13+13+7",
+                         src="block-turnover -1n reconcile"))
+
+    # Old shape (row only): falsely broken, expected = the stale ritual entry.
+    old = server._journal_and_respond(
+        "write", {"sheet": "0分", "col": "P", "row": 298,
+                  "value": "=13+13+13+7+1", "src": "ritual 未 -1n"},
+        298, "=13+13+13+7", "47.0", "=13+13+13+7+1")
+    assert old["chain"] == "broken" and old["chain_expected"] == "=13+13+13+4"
+
+    server.journal(entry(date="10/27", before="=13+13+13+7+1", after="=13+13+13+7+13",
+                         src="block-turnover -1n reconcile"))
+    # Fixed shape (row + date): ok against the reconcile's after.
+    new = server._journal_and_respond(
+        "write", {"sheet": "0分", "col": "P", "row": 298, "date": "10/27",
+                  "value": "=13+13+13+7+13+1", "src": "ritual 申 -1n"},
+        298, "=13+13+13+7+13", "60.0", "=13+13+13+7+13+1")
+    assert new["chain"] == "ok"
+    # ...and the next reconcile (date-keyed) chains after the ritual write.
+    assert server.check_chain(("0分", "P", "10/27"), "=13+13+13+7+13+1")[0] == "ok"

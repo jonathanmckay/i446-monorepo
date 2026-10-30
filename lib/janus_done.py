@@ -21,6 +21,22 @@ from typing import Callable
 
 TASK, TIME, CREDITED, ASK = "task", "time", "credited", "ask"
 
+# Largest single credit taken without explicit points ([N], {N}, +N, a typed
+# answer). Above it, inferred minutes-as-points is a parse slip or a forgotten
+# timer: did-fast refuses it (result step "refused"), and both janus clients
+# surface the refusal instead of logging. 2026-10-22: a year in task text
+# ("... readjustment 2028") was credited as +2028 分.
+MAX_INFERRED_POINTS = 500
+
+
+def refusal(did_fast_output: dict | None) -> str | None:
+    """The reason text when did-fast refused an item (step "refused"), else
+    None. Both janus clients treat a refusal as a failed log."""
+    for r in (did_fast_output or {}).get("results") or []:
+        if r.get("step") == "refused":
+            return r.get("reason") or f"{r.get('name', '?')}: refused"
+    return None
+
 
 def classify(*, task_points: int | None, time_based: bool, crossed_off: bool) -> str:
     if task_points is not None:

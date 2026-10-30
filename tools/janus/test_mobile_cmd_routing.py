@@ -180,6 +180,26 @@ def test_did_summary_formats_points_and_agent_needed(jm):
     assert jm._did_summary("noise\n" + out) == "✓ xtech +45分 · todoist ✓  ⚠ foo: needs domain"
 
 
+_REFUSED = json.dumps({"results": [{
+    "name": "set up quarterly readjustment 2028", "step": "refused",
+    "reason": "set up quarterly readjustment 2028: inferred 2028分 > 500 — refused; "
+              "give the points explicitly as [N]"}], "agent_needed": []})
+
+
+def test_did_fast_refusal_is_a_failed_log_not_a_credit(jm, monkeypatch):
+    """2026-10-22: a year in task text was credited as +2028 分. did-fast now
+    refuses inferred credits over janus_done.MAX_INFERRED_POINTS (exit 0,
+    step "refused"); the phone must report it, not ledger the entry."""
+    monkeypatch.setattr(jm.subprocess, "run", lambda a, **k: subprocess.CompletedProcess(
+        a, 0, stdout=_REFUSED, stderr=""))
+    r = jm._run_did_fast("set up quarterly readjustment 2028 1922-1956 @i9")
+    assert r["ok"] is False
+    assert "500" in r["error"] and r["credits"] == []
+    assert jm._did_summary(_REFUSED).startswith("✋")
+    typed = jm._run_did_cmd("x 2028 1922-1956 [5]")
+    assert typed["ok"] is False and typed["error"].startswith("✋")
+
+
 def test_plain_switch_clears_dtd_running_hint(jm, calls):
     jm.DTD_RUNNING_HINT.write_text("cook\t1\t42")
     jm.run_command("coffee @epcn")

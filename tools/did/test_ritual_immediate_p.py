@@ -76,7 +76,8 @@ def test_boundary_reconcile_is_the_sole_validating_p_writer():
 # the guard itself and the fragmentation bug it fixes.
 
 def test_run_ritual_credits_p_immediately():
-    src = _func_src(DIDFAST, "run_ritual")
+    src = _func_src(DIDFAST, "run_ritual") + _func_src(DIDFAST, "_credit_ritual_p")
+    assert "_credit_ritual_p(" in _func_src(DIDFAST, "run_ritual")
     # 2026-07-28: the P write goes through the excel-http daemon client
     # (journaled + chain-checked), no longer raw AppleScript.
     assert 'neon_excel.write("0分", "P"' in src, (

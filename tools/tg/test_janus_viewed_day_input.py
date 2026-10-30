@@ -188,6 +188,17 @@ def test_did_summary_pulls_points_and_agent_reasons_not_closing_brace():
     assert out != "}", "the old last-line flash showed literally '}'"
 
 
+def test_did_summary_shows_refusal_not_a_checkmark():
+    """did-fast's step "refused" (inferred 分 over janus_done.MAX_INFERRED_POINTS,
+    2026-10-22 +2028 bug) must flash as a refusal, never "✓ name"."""
+    mod = _load_tui()
+    blob = json.dumps({"results": [{"name": "readjust 2028", "step": "refused",
+                                    "reason": "readjust 2028: inferred 2028分 > 500 — refused"}],
+                       "agent_needed": []})
+    out = mod._did_summary(blob)
+    assert out.startswith("✋") and "2028分 > 500" in out and "✓" not in out
+
+
 def test_alt_enter_binding_exists_and_skips_when_already_recorded():
     src = (HERE / "janus.py").read_text()
     assert 'kb.add("escape", "enter")' in src

@@ -225,6 +225,14 @@ def read(sheet: str, col: str, *, date: str | None = None,
     return _ssh_fallback("read", sheet, col, date, row, None)
 
 
+def read_range(sheet: str, rng: str) -> dict[str, Any]:
+    """Values of `rng` ("B297:AA400") as {"ok", "row": first row, "rows":
+    [[str, ...], ...]}, one daemon round trip. No osascript fallback: callers
+    that need a block of cells degrade on their own when this fails."""
+    out = _curl("/read_range", {"sheet": sheet, "range": rng})
+    return out or {"ok": False, "error": "excel-http unreachable"}
+
+
 def lookup_row(sheet: str, date_str: str) -> int | None:
     out = _curl("/lookup", {"sheet": sheet, "date": date_str})
     if out and out.get("ok"):

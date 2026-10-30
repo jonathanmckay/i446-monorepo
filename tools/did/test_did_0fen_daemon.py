@@ -142,3 +142,48 @@ def test_client_exception_surfaces_as_nonzero_rc(monkeypatch):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_ritual_p_credit_write_carries_date_and_row(monkeypatch):
+    """Regression (2026-10-30): the ritual P SET was row-only, so the daemon
+    chained it under r<row> while the block-turnover reconcile chains P under
+    its date — every first ritual after a reconcile logged chain "broken".
+    The write must carry the date (shared chain key) plus the read's row."""
+    import types
+
+    class _Now:
+        month, day = 10, 27
+
+    monkeypatch.setattr(df._daytime, "local_now", lambda: _Now)
+    reads, writes = [], []
+
+    def fake_read(sheet, col, *, date=None, row=None):
+        reads.append((sheet, col, date, row))
+        return {"ok": True, "row": 298, "value": "59", "formula": "=13+13+13+7+13"}
+
+    def fake_write(sheet, col, *, date=None, row=None, value, src=None):
+        writes.append({"sheet": sheet, "col": col, "date": date, "row": row,
+                       "value": value, "src": src})
+        return {"ok": True, "row": row, "value": "60", "chain": "ok"}
+
+    monkeypatch.setattr(df.neon_excel, "read", fake_read)
+    monkeypatch.setattr(df.neon_excel, "write", fake_write)
+    nb = types.SimpleNamespace(score_day=lambda text: (None, 60, "=13+13+13+7+13+1"))
+
+    out = df._credit_ritual_p("header text", 1, "申", nb)
+
+    assert out["p_credit"]["ok"] is True
+    assert reads == [("0分", "P", "10/27", None)]
+    assert writes == [{"sheet": "0分", "col": "P", "date": "10/27", "row": 298,
+                       "value": "=13+13+13+7+13+1", "src": "ritual 申 -1n"}]
+
+
+def test_ritual_p_credit_error_never_raises(monkeypatch):
+    import types
+    monkeypatch.setattr(df.neon_excel, "read",
+                        lambda *a, **k: {"ok": False, "error": "daemon down"})
+    monkeypatch.setattr(df.neon_excel, "write",
+                        lambda *a, **k: pytest.fail("must not write without a row"))
+    nb = types.SimpleNamespace(score_day=lambda text: (None, 1, "=1"))
+    out = df._credit_ritual_p("x", 1, "申", nb)
+    assert "daemon down" in out["p_credit_error"]
