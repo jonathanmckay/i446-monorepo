@@ -58,8 +58,16 @@ Then, with each question, offer a drafted answer the user can accept with "ok" o
 5. **Ask the 3 questions** in chat: rating (`MM`/`MA`/`EE`), review of last
    week, goals for next week. Offer the week's biggest Toggl m5x2 blocks as the
    suggested review text.
-6. **Write** via `ix-osa.sh` (never local osascript): G=rating, H=review,
-   I=goals, K=minutes. Do not touch J.
+6. **Write** through the excel-http daemon (journaled; never raw AppleScript).
+   Put the two free-text answers in `/tmp/1m5x2-review.txt` and
+   `/tmp/1m5x2-goals.txt` with the Write tool, then:
+   ```bash
+   python3 ~/i446-monorepo/scripts/neon-review-write.py --sheet i9+m5x2 \
+     --row <row> --label <label> --src 1m5x2 \
+     G=<RATING> H=@/tmp/1m5x2-review.txt I=@/tmp/1m5x2-goals.txt K=<weekly_minutes>
+   ```
+   It re-checks col A against the label and writes nothing on a mismatch
+   (exit 1; surface it). Do not touch J (formula into `1分+1s`).
 7. **Complete the habit:** `python3 ~/i446-monorepo/tools/did/did-fast.py "1 m5x2"`
    then `did-fast.py --refresh-cache` in the foreground.
    Then release the dtd claim the `/1m5x2` prompt took (no-op if none):

@@ -6,7 +6,7 @@ user-invocable: true
 
 # Mark Habit Done (/did)
 
-Write to Neon spreadsheet + close Todoist task. AppleScript templates are in `applescript-ref.md` (same directory) — read that file when you need a template.
+Write to Neon spreadsheet + close Todoist task. Daemon write recipes (`lib/neon/excel.py`, journaled) are in `applescript-ref.md` (same directory); read that file when you need one.
 
 ## Excel host
 
@@ -165,7 +165,7 @@ The `--create-excel-col` flag adds the column to the 0n/1n+ sheet via the daemon
 
 **1b. Auto-detect time:** No `[time]` provided → check Toggl today for matching entries (description substring or project code match via /tg shortcode mapping). Sum minutes. No match → `1`.
 
-**2. Write to 0₦:** Use "Write to 0₦" template from `applescript-ref.md`. Run via `osascript -e '...'`.
+**2. Write to 0₦:** Use the "Write to 0₦" recipe from `applescript-ref.md` (excel-http daemon via `neon.excel`; never raw AppleScript or local `osascript`).
 
 **2b. 0l special case:** If habit is `0l`, run "0l completion time" template.
 

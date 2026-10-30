@@ -1,256 +1,105 @@
-# /did AppleScript Reference
+# /did Neon write reference
 
-Templates for Excel operations. Read this file only when executing /did steps in the background agent.
+Write recipes for the /did background agent (Steps 2, 2b, 5, 1n). Read this
+file only when executing /did steps in the agent; `run.py` / `did-fast.py`
+already do all of this on the fast path.
 
-**Execution policy.** Every template here MUST be executed on Ix via
-`~/.claude/skills/_lib/ix-osa.sh` (or the `ix_osa.run()` Python helper).
-NEVER pipe these into local `osascript -e` — local writes create
-OneDrive merge conflicts against the canonical workbook on Ix. If Ix
-is unreachable the helper exits with code 3 and a clear error; the
-calling /did step must propagate that failure (do not silently
-degrade).
+**Daemon only (Neon-off-Excel step 2, 2026-10-19; this file migrated
+2026-10-30).** Every write to 0分, 0n, 1n+ and hcbi goes through the
+excel-http daemon client `lib/neon/excel.py` with a `src` label, so it is
+journaled in the neon ledger (`~/vault/g245/neon-ledger/`). The client falls
+back to a journaled ssh+osascript write on its own when the daemon is down.
+Never pipe raw AppleScript for these sheets through `ix-osa.sh`, and never
+run local `osascript`: a raw write is invisible to the ledger and trips the
+chain check as "cell modified outside the daemon". To bless a deliberate
+manual edit: `python3 ~/i446-monorepo/scripts/neon-ledger-audit.py --ack '0分!R' --date M/D --note '<why>'`.
+Column letters come from `neon.cols` (never hard-code them).
 
-**0分 writes: daemon only.** Any write to the 0分 sheet MUST go through the
-excel-http daemon (`ssh ix curl localhost:9876/append|/write`, or the
-`lib/neon/excel.py` client) with a `src` label — never through the raw
-AppleScript templates below. Daemon writes are journaled in the neon audit
-ledger (`~/vault/g245/neon-ledger/`); a raw AppleScript write to 0分 is
-invisible to the ledger and trips the chain check as "cell modified outside
-the daemon". The templates below remain valid for the OTHER sheets (0n, 1n+,
-hcbi, review sheets). If you must bless a deliberate manual 0分 edit:
-`python3 ~/i446-monorepo/scripts/neon-ledger-audit.py --ack '0分!R' --date M/D --note '<why>'`.
+Every snippet starts with:
 
-## Substitution variables (all templates)
-
-- `TARGET_MONTH` → month integer from targetDate (e.g. `4`)
-- `TARGET_DAY` → day integer from targetDate (e.g. `7`)
-- `HABIT_PLACEHOLDER` → habit name
-- `TIME_PLACEHOLDER` → time value (number)
-- `TARGET_DATE` → M/D format date string
-
-## Template: Write to 0₦ (Step 2)
-
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set theSheet to sheet "0n" of wb
-    set targetMonth to TARGET_MONTH
-    set targetDay to TARGET_DAY
-    set habitName to "HABIT_PLACEHOLDER"
-    set habitCol to 0
-    repeat with c from 1 to 60
-        set cellVal to value of cell c of row 1 of theSheet
-        if cellVal is not missing value then
-            set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-            if trimmed = habitName then
-                set habitCol to c
-                exit repeat
-            end if
-        end if
-    end repeat
-    if habitCol = 0 then
-        return "ERROR: habit '" & habitName & "' not found in row 1"
-    end if
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of theSheet
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = targetMonth and d = targetDay then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then
-        return "ERROR: date " & targetMonth & "/" & targetDay & " not found in column C"
-    end if
-    set value of cell habitCol of row todayRow of theSheet to TIME_PLACEHOLDER
-    set writtenVal to value of cell habitCol of row todayRow of theSheet
-    return "OK: wrote TIME_PLACEHOLDER to col " & habitCol & " row " & todayRow & " (verify=" & (writtenVal as text) & ")"
-end tell
+```python
+import sys; sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+from neon import excel, cols, weeks
 ```
 
-### Cumulative variant (for 问学 column)
+## Substitution variables
 
-Replace the `set value` line with:
-```applescript
-set oldVal to value of cell habitCol of row todayRow of theSheet
-if oldVal is missing value or (oldVal as text) = "" or (oldVal as text) = "0" then
-    set newVal to TIME_PLACEHOLDER
-else
-    set newVal to (oldVal as number) + TIME_PLACEHOLDER
-end if
-set value of cell habitCol of row todayRow of theSheet to newVal
+- `TARGET_DATE` → M/D date string (e.g. `4/7`)
+- `HABIT` → habit header exactly as in row 1 (e.g. `hiit`, `1 xk88`)
+- `TIME` → number written to the habit cell
+- `POINTS` → number appended to 0分
+
+## Write to 0₦ (Step 2)
+
+```python
+r = excel.batch_write("0n", [{"col": cols.col("0n", "HABIT"), "value": TIME}],
+                      date="TARGET_DATE", src="did HABIT")
+print(r["results"][0]["value"] if r.get("ok") else r)
 ```
 
-## Template: 0l completion time (Step 2b)
+Cumulative columns (问学 and other `mode: "add"` habits): add `"mode": "add"`
+to the write item; the daemon adds onto the existing number (a blank/0 cell
+is just set). `add` needs the daemon; on `fallback: True` with an
+`add_mode_needs_daemon` error, stop and report rather than overwriting.
 
-Only runs when habit is `0l`. Checks if 0t is done, writes HHMM to the 0l⌚ column.
+## 0l completion time (Step 2b)
 
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set theSheet to sheet "0n" of wb
-    set targetMonth to TARGET_MONTH
-    set targetDay to TARGET_DAY
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellDate to value of cell 3 of row r of theSheet
-        if cellDate is not missing value then
-            try
-                set m to (month of (cellDate as date)) as integer
-                set d to day of (cellDate as date)
-                if m = targetMonth and d = targetDay then
-                    set todayRow to r
-                    exit repeat
-                end if
-            end try
-        end if
-    end repeat
-    if todayRow = 0 then return "SKIP: date not found"
-    set otCol to 0
-    repeat with c from 1 to 60
-        set cellVal to value of cell c of row 1 of theSheet
-        if cellVal is not missing value then
-            set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-            if trimmed = "0t" then
-                set otCol to c
-                exit repeat
-            end if
-        end if
-    end repeat
-    if otCol = 0 then return "SKIP: 0t column not found"
-    set otVal to value of cell otCol of row todayRow of theSheet
-    if otVal is not missing value and (otVal as text) is not "0" and (otVal as text) is not "" then
-        set afCol to 0
-        repeat with c from 1 to 60
-            set cellVal to value of cell c of row 1 of theSheet
-            if cellVal is not missing value then
-                set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-                if trimmed = "0l⌚" or trimmed = "AF" then
-                    set afCol to c
-                    exit repeat
-                end if
-            end if
-        end repeat
-        if afCol = 0 then set afCol to 32
-        set h to hours of (current date)
-        set mn to minutes of (current date)
-        set timeStr to (h * 100 + mn)
-        set value of cell afCol of row todayRow of theSheet to timeStr
-        return "OK: wrote " & timeStr & " to col " & afCol & " row " & todayRow
-    else
-        return "SKIP: 0t not done yet"
-    end if
-end tell
+Only for habit `0l`, only for today's row, only when 0t is already done:
+
+```python
+from datetime import datetime
+ot = excel.read("0n", cols.col("0n", "0t"), date="TARGET_DATE")
+if ot.get("ok") and ot.get("value") not in ("", "0", "0.0"):
+    now = datetime.now()
+    excel.batch_write("0n", [{"col": cols.col("0n", "N color"), "value": now.hour * 100 + now.minute}],
+                      date="TARGET_DATE", src="did 0l time")
 ```
 
-## Template: Append to 0分 (Step 5)
+## Append to 0分 (Step 5)
 
-```applescript
-tell application "Microsoft Excel"
-    set theSheet to sheet "0分" of workbook "Neon分v12.2.xlsx"
-    set today to "TARGET_DATE"
-    set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of cell ("B" & i) of theSheet) = today then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow > 0 then
-        set theCell to range ("COL" & todayRow) of theSheet
-        set oldFormula to formula of theCell
-        set formula of theCell to oldFormula & "+POINTS"
-        delay 0.1
-        set newFormula to formula of theCell
-        set newVal to string value of theCell
-        if newFormula does not contain "+POINTS" then
-            set formula of theCell to oldFormula & "+POINTS"
-            delay 0.3
-            set newFormula to formula of theCell
-            set newVal to string value of theCell
-        end if
-        return "OK: appended +POINTS to COL" & todayRow & " (verify=" & newVal & ", formula=" & newFormula & ")"
-    else
-        return "ERROR: date TARGET_DATE not found in 0分 col B"
-    end if
-end tell
+```python
+col = cols.domain_col("0分", "<domain>")
+r = excel.append("0分", col, date="TARGET_DATE", value="+POINTS", src="did <task>")
+print(r.get("formula"), r.get("chain"))
 ```
 
-Substitute `COL` with the target column letter (e.g. `AA`, `AB`) and `POINTS` with the number.
+The daemon normalizes the formula append (blank cell, bare number, existing
+chain). If the response has `"chain": "broken"`, report it: the cell was
+edited outside the daemon.
 
-## Template: 1n+ write (Step 1n)
+## 1n+ write (Step 1n)
 
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set sheet1n to sheet "1n+" of wb
-    set colLetters to {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AP"}
-    set habitName to "HABIT_PLACEHOLDER"
-    set habitCol to 0
-    set habitColLetter to ""
-    repeat with c from 3 to count of colLetters
-        set colRef to (item c of colLetters) & "1"
-        set cellVal to do shell script "printf '%s' " & quoted form of (string value of range colRef of sheet1n) & " | sed 's/[[:space:]]*$//'"
-        if cellVal = habitName then
-            set habitCol to c
-            set habitColLetter to item c of colLetters
-            exit repeat
-        end if
-    end repeat
-    if habitCol = 0 then return "ERROR: habit not found in 1n+ row 1"
-    set pointsVal to string value of range (habitColLetter & "3") of sheet1n
-    set weekRow to 0
-    set targetMW to "MW_PLACEHOLDER"
-    repeat with r from 4 to 100
-        set bVal to string value of range ("B" & r) of sheet1n
-        if bVal = targetMW then
-            set weekRow to r
-            exit repeat
-        end if
-    end repeat
-    if weekRow = 0 then return "ERROR: week row not found for " & targetMW
-    set value of range (habitColLetter & weekRow) of sheet1n to (pointsVal as number)
-    return "OK: " & habitColLetter & " pts=" & pointsVal & " weekRow=" & weekRow
-end tell
+The week row is addressed by its fiscal M.W label in 1n+ col B
+(`weeks.fiscal_week_label`, a 4-4-5 ladder; never `ceil(day/7)`). The cell
+gets the habit's row-3 point value:
+
+```python
+from datetime import date
+col = cols.col("1n+", "HABIT")
+mw = weeks.habit_week_label("HABIT", date.today())
+pts = excel.read("1n+", col, row=3)["value"]
+r = excel.batch_write("1n+", [{"col": col, "value": float(pts)}], date=mw, src="did HABIT")
+week_row = r.get("row")
 ```
 
-MW_PLACEHOLDER = month (no leading zero) + "." + ceil(day/7) (e.g. `4.2` for April 8-14).
+## 1n+ → 0分 cell reference (Step 1n, part 2)
 
-## Template: 1n+ → 0分 cell reference (Step 1n, part 2)
-
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set sheet0fen to sheet "0分" of wb
-    set today to "TARGET_DATE"
-    set todayRow to 0
-    repeat with i from 2 to 500
-        if (string value of range ("B" & i) of sheet0fen) = today then
-            set todayRow to i
-            exit repeat
-        end if
-    end repeat
-    if todayRow > 0 then
-        set theCell to range ("ZEROFEN_COL" & todayRow) of sheet0fen
-        set oldFormula to formula of theCell
-        set formula of theCell to oldFormula & "+'1n+'!HABIT_COL_LETTER" & weekRow
-        set newVal to string value of theCell
-        return "OK: appended +'1n+'!HABIT_COL_LETTER" & weekRow & " to ZEROFEN_COL" & todayRow & " (verify=" & newVal & ")"
-    else
-        return "ERROR: date TARGET_DATE not found in 0分 col B"
-    end if
-end tell
+```python
+excel.append("0分", cols.to_0fen_col("HABIT"), date="TARGET_DATE",
+             value=f"+'1n+'!{col}{week_row}", src="did HABIT")
 ```
 
 ## Todoist API
 
-Auth header: `Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5`
+Token: never paste it here. Read it the way `lib/todoist.py` does:
+`~/.config/todoist/token`, else `$TODOIST_TOKEN` / `$TODOIST_API_TOKEN`
+(scripts on Ix also take `$TODOIST_API_KEY` or the `todoist-api-key`
+keychain item). Prefer `lib/todoist.py`'s helpers over raw HTTP.
+
+```bash
+TOKEN=$(cat ~/.config/todoist/token)
+curl -s -H "Authorization: Bearer $TOKEN" "https://api.todoist.com/api/v1/tasks?label=0neon&limit=200"
+```
 
 - Search 0neon: `GET /api/v1/tasks?label=0neon&limit=200`
 - Search 1neon: `GET /api/v1/tasks?label=1neon&limit=200`

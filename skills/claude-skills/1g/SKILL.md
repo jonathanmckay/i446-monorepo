@@ -116,7 +116,7 @@ Read the source, parse the goals, estimate 分 and focus bonus, then **show a dr
 | hcmc | 38 | 39 | hcmc |
 | s897 | 40 | 41-44 | s897 |
 
-**Important:** These row numbers may drift over time. Before writing, scan col A to find the actual row containing the domain header. Use the mapping above as a starting hint, but always verify by reading the sheet.
+**Important:** These row numbers drift (2026-10-30: i9 4, m5c7 13, hcmp 17, hcb 20, g245 26, hci 30, xk87 34, hcmc 38, s897 41, totals row 46). `1g_set.py` scans col A itself; the table is only a hint.
 
 ## Steps
 
@@ -133,15 +133,12 @@ Strip leading numbers, bullets, whitespace. Each item becomes one goal.
 
 ### Step 2: Find section in 1g
 
-Use AppleScript to scan col A (cell index 1) of the `1g` sheet for the domain header. Use this mapping for col A values:
-
-| User domain | Col A value |
-|------------|-------------|
-| m5x2 | m5c7 |
-| hcmp | hcmp |
-| (all others) | same as domain code |
-
-Find the header row. Goal rows start at header+1 and continue until the next non-empty col A value (the next section header).
+`1g_set.py` (Step 4) finds the section itself: the row whose col A, stripped
+of surrounding whitespace, equals the domain (`m5x2` is spelled `m5c7`; A34
+reads `" xk87"` with a leading space). Goal rows run from header+1 to the next
+non-blank col A or the first row holding a formula in D..G (the totals row
+under the last section, s897), whichever comes first. For domain-only mode,
+`--dry-run` shows the section's rows without writing.
 
 ### Step 3: Estimate 分 and focus bonus
 
@@ -160,77 +157,28 @@ Use judgment based on the goal text. When in doubt, lean toward the middle of th
 
 ### Step 4: Write to 1g sheet
 
-Use AppleScript to write each goal. For each goal at index `i` (0-based):
-- Row = headerRow + 1 + i
-- Col D (cell 4): goal text
-- Col E (cell 5): 分 value
-- Col F (cell 6): focus bonus value
+Write the goals as JSON with the Write tool, in order, to `/tmp/1g-goals.json`:
 
-Clear any remaining old goal rows in the section (set cols D, E, F to empty) up to the next section header.
-
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set theSheet to sheet "1g" of wb
-
-    -- Find section header row by scanning col A
-    set headerRow to 0
-    set sectionName to "SECTION_PLACEHOLDER"
-    repeat with r from 1 to 50
-        set cellVal to value of cell 1 of row r of theSheet
-        if cellVal is not missing value then
-            set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-            if trimmed = sectionName then
-                set headerRow to r
-                exit repeat
-            end if
-        end if
-    end repeat
-
-    if headerRow = 0 then return "ERROR: section " & sectionName & " not found"
-
-    -- Find next section header (to know where to stop clearing)
-    set nextHeader to 50
-    repeat with r from (headerRow + 1) to 50
-        set cellVal to value of cell 1 of row r of theSheet
-        if cellVal is not missing value then
-            set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-            if trimmed is not "" then
-                set nextHeader to r
-                exit repeat
-            end if
-        end if
-    end repeat
-
-    -- Write goals (GOAL_WRITES_PLACEHOLDER)
-
-    -- Clear remaining rows
-    repeat with r from (headerRow + 1 + GOAL_COUNT) to (nextHeader - 1)
-        set value of cell 4 of row r of theSheet to ""
-        set value of cell 5 of row r of theSheet to ""
-        set value of cell 6 of row r of theSheet to ""
-        set value of cell 7 of row r of theSheet to ""
-    end repeat
-
-    return "OK: wrote GOAL_COUNT goals to rows " & (headerRow + 1) & "-" & (headerRow + GOAL_COUNT)
-end tell
+```json
+[{"text": "Close out Janowski", "fen": 80, "focus": 150},
+ {"text": "AI usage handed off to Matt", "fen": 30, "focus": 60}]
 ```
 
-Before running, substitute:
-- `SECTION_PLACEHOLDER` — the col A value for the domain
-- `GOAL_WRITES_PLACEHOLDER` — one write block per goal:
-  ```applescript
-  set value of cell 4 of row (headerRow + N) of theSheet to "GOAL_TEXT"
-  set value of cell 5 of row (headerRow + N) of theSheet to FEN_VALUE
-  set value of cell 6 of row (headerRow + N) of theSheet to FOCUS_VALUE
-  ```
-- `GOAL_COUNT` — number of goals
+then:
 
-Pipe the resulting AppleScript through `~/.claude/skills/_lib/ix-osa.sh`
-(reads from stdin, runs on Ix). NEVER call local `osascript` —
-local writes cause OneDrive merge conflicts against the canonical
-workbook on Ix. If Ix is unreachable the helper exits 3 and this
-step must surface the failure.
+```bash
+python3 ~/i446-monorepo/tools/1g/1g_set.py <domain> /tmp/1g-goals.json
+```
+
+Each goal goes to row header+1+i: D = text, E = 分, F = focus bonus. The
+section's leftover rows are blanked (D..G), but a cell holding a formula is
+never touched. Every cell goes through the excel-http daemon (journaled in
+the neon ledger, `src` = `1g <domain>`; Neon-off-Excel step 2c, 2026-10-30);
+the section scan is a read-only ix-osa bulk read. More goals than the section
+has rows is an error (exit 1, nothing written) rather than spilling into the
+next section's header: tell JM and ask which to drop or whether to add a row
+in Excel. Surface any non-zero exit verbatim; never fall back to local
+`osascript` or a hand-written AppleScript.
 
 ### Step 5: Report
 

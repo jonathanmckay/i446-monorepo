@@ -89,41 +89,19 @@ Use `toggl_date` to fetch entries for `yesterday_date` (YYYY-MM-DD format). If a
 
 **2c. Total sleep = 2a + 2b**
 
-**2d. Write to 0₦ sheet** via the ix helper (NEVER local osascript):
+**2d. Write to 0₦ sheet** through the excel-http daemon (journaled; numbers
+stay numbers; never raw AppleScript or local osascript):
 
 ```bash
-~/.claude/skills/_lib/ix-osa.sh <<'AS'
-tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
-
-    set m to ((month of (current date)) * 1) as text
-    set d to ((day of (current date)) * 1) as text
-    set today to m & "/" & d
-
-    -- Find today's row in column C (use range references, not cell(r,c))
-    set todayRow to 0
-    repeat with r from 3 to 500
-        set cellRef to "C" & r
-        set cellVal to string value of range cellRef of theSheet
-        if cellVal = today then
-            set todayRow to r
-            exit repeat
-        end if
-    end repeat
-
-    if todayRow = 0 then
-        return "ERROR: date " & today & " not found in column C"
-    end if
-
-    -- Write sleep minutes to column D (睡觉)
-    set targetRef to "D" & todayRow
-    set value of range targetRef of theSheet to SLEEP_MINUTES
-    return "OK: wrote SLEEP_MINUTES to " & targetRef
-end tell
-AS
+python3 - <SLEEP_MINUTES> <<'PY2'
+import sys, datetime as dt
+sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
+from neon import excel
+mins = int(sys.argv[1]); t = dt.date.today()
+r = excel.batch_write("0n", [{"col": "D", "value": mins}], date=f"{t.month}/{t.day}", src="0t sleep")
+print("OK: wrote %d to D%s" % (mins, r.get("row")) if r.get("ok") else "ERROR: %s" % (r.get("error") or r))
+PY2
 ```
-
-Substitute `SLEEP_MINUTES` with the computed total before piping.
 
 **Note:** The date used for step 2d is always **today** (the actual current date when `/0t` is run), not `yesterday_date`. This is because /0t runs in the morning for yesterday, and last night's sleep is recorded under today.
 
@@ -152,7 +130,7 @@ Sleep logged: N min → 0₦ D (睡觉), today's row
 ## Notes
 
 - Sleep column: 0₦ sheet, column D, header = 睡觉
-- All Excel writes go through Ix via `~/.claude/skills/_lib/ix-osa.sh`. NEVER write locally.
+- All Excel writes go through the excel-http daemon on Ix (`lib/neon/excel.py`). NEVER write locally.
 - If Ix is unreachable: the helper exits non-zero. Surface the failure, do NOT silently mark complete.
 - If sleep entries are mislabeled (wrong project), the total will be off; fix in Toggl first.
 - **Daily safety net on Ix:** cron `0 14 * * *` runs `~/bin/run_0t.sh` (in `i446-monorepo/bin`, sibling of `run_0r_archive.sh`). It skips if `tools/0t/0t_done_today.py` says 0t is already done today (completed-today mirror after absorbing other hosts, OR the Todoist `0t` daily task's due date already advanced past today), otherwise runs `0t-fast.py` directly and only escalates to headless `claude -p "/0t"` (prompt: `bin/0t-prompt.txt`) if the script fails. Failures append to `~/vault/z_ibx/alerts.jsonl` via `bin/cron-alert.sh`. Logs: `~/.cache/0t/YYYY-MM-DD.log` on Ix. 14:00 is chosen because the sleep window (yesterday >=20:00 + today <14:00) is closed by then.

@@ -88,39 +88,29 @@ Total: {sum_minutes}m ({hours}h {mins}m)
 
 ### Step 4: Write raw data to Neon 0s897 sheet
 
-Find the correct row in the `0s897` sheet of `Neon分v12.2.xlsx`:
-- Scan column B for a date matching `week_end` (the Tuesday).
-- That row gets the data.
+The week's row in the `0s897` sheet of `Neon分v12.2.xlsx` is the one whose
+column B date is `week_start` (the Wednesday, top of the week's merged block).
 
 Write the formatted activity list + total to **column AA** ("Event Review") of that row.
 Write the total minutes (as a number) to **column Z** ("Time") of that row.
 
-**Important — merged cells**: Columns Z, AA, and AB are merged across each week (7 rows per week, top row is the **Wednesday** = `week_start`). You must write to the **top-left cell** of the merged range, not the Tuesday row directly. Use AppleScript to find the merge area first:
+**Important — merged cells**: Columns Z, AA, and AB are merged across each week (7 rows per week, top row is the **Wednesday** = `week_start`). Write to the **top-left cell** of the merged range, i.e. the `week_start` row, never the Tuesday row.
 
-**Sanity check before writing**: after resolving `topRow`, verify that the date in `B{topRow}` equals `week_start` (the Wednesday you computed in Step 1). If it does not match, abort — you have the wrong row.
+Write through the excel-http daemon (journaled in the neon ledger;
+Neon-off-Excel step 2c, 2026-10-30), never raw AppleScript. Save the
+formatted list to `/tmp/1s897-aa.txt` with the Write tool (newlines and
+quotes kept verbatim), then:
 
 ```bash
-~/.claude/skills/_lib/ix-osa.sh <<'AS'
-tell application "Microsoft Excel"
-  set wb to workbook "Neon分v12.2.xlsx"
-  set ws to worksheet "0s897" of wb
-  -- Get the top of the merge range for the target row
-  set mergeArea to merge area of range "Z{ROW}" of ws
-  set topRow to first row index of mergeArea
-  -- Write to the top of the merged cells
-  set value of range ("Z" & topRow) of ws to TOTAL_MINUTES_PLACEHOLDER
-  set value of range ("AA" & topRow) of ws to "EVENT_REVIEW_PLACEHOLDER"
-end tell
-AS
+python3 ~/i446-monorepo/scripts/neon-review-write.py --sheet 0s897 \
+  --date <week_start> --merge-col Z --src 1s897 \
+  Z=<TOTAL_MINUTES> AA=@/tmp/1s897-aa.txt
 ```
 
-Substitute placeholders before piping. Writes go through Ix; do NOT
-fall back to local `osascript` if Ix is unreachable.
-
-Replace:
-- `{ROW}` with the Tuesday row number (e.g. 98)
-- `EVENT_REVIEW_PLACEHOLDER` with the formatted activity list (escape quotes/newlines for AppleScript)
-- `TOTAL_MINUTES_PLACEHOLDER` with the numeric total
+`--date` finds the `week_start` row by its real date (year-aware, so the
+sheet's two Januaries cannot collide); `--merge-col Z` is the sanity check:
+it aborts with nothing written (exit 1) unless that row is the top of the
+Z merge. Surface any error verbatim; do NOT fall back to local `osascript`.
 
 **Important**: Display the raw data to the user immediately after writing it. The user will be adding their own analysis in parallel.
 
@@ -148,7 +138,8 @@ Format as bullet points matching the existing style:
 • Specific suggestion for next week
 ```
 
-Use the same AppleScript pattern as Step 4 — write to column AB at the top of the merge range (same `topRow`).
+Save the bullets to `/tmp/1s897-ab.txt` and rerun Step 4's command with
+`AB=@/tmp/1s897-ab.txt` as the only cell (same `--date <week_start> --merge-col Z`).
 
 ### Step 7: Report
 

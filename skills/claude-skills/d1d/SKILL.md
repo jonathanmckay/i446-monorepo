@@ -6,7 +6,7 @@ user-invocable: true
 /I have 
 # Mark Habit Done (/did)
 
-Write to Neon spreadsheet + close Todoist task. AppleScript templates are in `applescript-ref.md` (same directory) — read that file when you need a template.
+Write to Neon spreadsheet + close Todoist task. Daemon write recipes (`lib/neon/excel.py`, journaled) are in `applescript-ref.md` (same directory); read that file when you need one.
 
 ## Execution Model
 
@@ -90,7 +90,7 @@ Word overlap: tokenize both sides (lowercase, strip `[N]`/`(N)`/stopwords, **str
 
 **1b. Auto-detect time:** No `[time]` provided → check Toggl today for matching entries (description substring or project code match via /tg shortcode mapping). Sum minutes. No match → `1`.
 
-**2. Write to 0₦:** Use "Write to 0₦" template from `applescript-ref.md`. Run via `~/.claude/skills/_lib/ix-osa.sh` (or the `ix_osa.run()` Python helper for the background agent). NEVER call local `osascript` — writes must land on Ix to avoid OneDrive merge conflicts.
+**2. Write to 0₦:** Use the "Write to 0₦" recipe from `applescript-ref.md` (excel-http daemon via `neon.excel`, journaled). NEVER raw AppleScript through ix-osa.sh, never local `osascript`.
 
 **2b. 0l special case:** If habit is `0l`, run "0l completion time" template.
 

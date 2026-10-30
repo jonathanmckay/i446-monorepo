@@ -130,25 +130,24 @@ dedicated TUI):
 
 ### Step 6: Write to the `i9` sheet
 
-Via `ix-osa.sh` (never local `osascript` — same OneDrive merge-conflict
-risk as every other Neon write):
+Through the excel-http daemon (journaled in the neon ledger; Neon-off-Excel
+step 2c, 2026-10-30), never raw AppleScript. Put the two free-text answers in
+files with the Write tool (`/tmp/1i9-done.txt`, `/tmp/1i9-exceed.txt`; newlines
+and quotes are kept verbatim), then:
 
-```applescript
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set s to sheet "i9+m5x2" of wb
-    set value of cell 2 of row ROW_PLACEHOLDER of s to "RATING_PLACEHOLDER"
-    set value of cell 4 of row ROW_PLACEHOLDER of s to "GOT_DONE_PLACEHOLDER"
-    set value of cell 5 of row ROW_PLACEHOLDER of s to "EXCEEDING_PLACEHOLDER"
-    set value of cell 6 of row ROW_PLACEHOLDER of s to MINUTES_PLACEHOLDER
-    if (string value of cell 6 of row 2 of s) is "" then
-        set value of cell 6 of row 2 of s to "min"
-    end if
-    return "OK"
-end tell
+```bash
+python3 ~/i446-monorepo/scripts/neon-review-write.py --sheet i9+m5x2 \
+  --row <row> --label <label> --src 1i9 \
+  B=<RATING> D=@/tmp/1i9-done.txt E=@/tmp/1i9-exceed.txt F=<weekly_minutes>
 ```
 
-Escape quotes/newlines in the free-text answers for AppleScript. `MINUTES_PLACEHOLDER` is a plain number, unquoted. Never write column C: it is a formula into `1分+1s` (fixed 2026-10-05 after earlier runs overwrote rows 39–40 with hand sums, and rows 17–47 had drifted to `G<row-3>`, two weeks stale). Report the `0分` col R sum alongside the sheet's C value if they differ.
+It re-checks that col A of `<row>` is `<label>` and writes nothing if not
+(exit 1). `F` is a plain number. Never write column C: it is a formula into
+`1分+1s` (fixed 2026-10-05 after earlier runs overwrote rows 39–40 with hand
+sums, and rows 17–47 had drifted to `G<row-3>`, two weeks stale). Report the
+`0分` col R sum alongside the sheet's C value if they differ. If the daemon is
+down the client falls back to a journaled ssh write on its own; on a non-zero
+exit, surface the error verbatim and stop.
 
 ### Step 7: Complete the `1 i9` habit
 
@@ -186,8 +185,9 @@ Written to i9!row {row} (cols B, D, E, F; C is a formula). 1 i9 habit marked don
 
 ## Notes
 
-- All Excel writes/reads go through `~/.claude/skills/_lib/ix-osa.sh`. Never
-  call local `osascript`.
+- The Step 6 write goes through the excel-http daemon
+  (`scripts/neon-review-write.py`); reads may use `~/.claude/skills/_lib/ix-osa.sh`.
+  Never call local `osascript`.
 - The `i9` sheet is lookup-only — it does not auto-append future weeks the
   way some other sheets do misbehave when appended to; if Step 4's
   verification fails, stop rather than inserting a row.
