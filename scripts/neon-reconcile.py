@@ -14,7 +14,7 @@ Sheets / ranges:
   0分  D..Z   (Σ, E/F, blocks, points)       for yesterday + today
   0n   D..BK  (habits, media AU..AX, Σ cells) for yesterday + today, + row 2 (weights)
   1n+  C..AL row 5 (expected points referenced by 0分 credits)
-  hcbi E..BD  (daily dozen, bands, 0s, caf…)  for yesterday + today
+  hcbi E..BE  (daily dozen, bands BC:BE incl., 0s…)  for yesterday + today
 """
 import datetime
 import json
@@ -43,7 +43,7 @@ def span(a: str, b: str) -> list:
     return [col_letter(i) for i in range(col_num(a), col_num(b) + 1)]
 
 
-RANGES = {"0分": span("D", "Z"), "0n": span("D", "BK"), "hcbi": span("E", "BD")}
+RANGES = {"0分": span("D", "Z"), "0n": span("D", "BK"), "hcbi": span("E", "BE")}
 WEEK_ROW5 = span("C", "AL")   # 1n+ row 5: expected points the 0分 credits reference
 
 

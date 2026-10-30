@@ -12,7 +12,11 @@ documents it, this module implements it):
   U (媒)   Σ weights of marked 0n N:P + (−AU + AV·0.01 + AW·0.5 + AX) + credits
   V (思)   0n AP·0.5 + Σ(AQ:AS)                  + credits
   X (xk)   Σ(0n AJ:AO)                           + credits
-  W (hcb)  hcbi composite → OBSERVE-ONLY in v0 (hand literals, no history)
+  W (hcb)  hcbi!AA<r> + hcbi!Y<r> (refs read from the cell's own formula)
+           + credits. The hcbi row is recomputed with formula.py from its
+           cells: AA = SUM(E:O)/21*75 + IF(AL,-MAX((U-1800)/10,-40)) + T + S
+           + (P-100)/2 + AI + W, Y = '0n'!AE<r'>*2 + tail, U/P = band sums;
+           each cell's formula is the one the ledger saw, not assumed.
   Y (社)   credits only
   D (Σ)    Σ P..Y
   G..O     per-block: Excel = lock snapshots; ledger = event timestamps. Both
@@ -43,6 +47,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import cols as neon_cols
+from . import formula as fx
 from . import ledger
 
 RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "neon-rules.json"
@@ -60,8 +65,9 @@ MIND_COLS = {"AP": 0.5, "AQ": 1.0, "AR": 1.0, "AS": 1.0}         # 0n!BA
 KID_COLS = ["AJ", "AK", "AL", "AM", "AN", "AO"]                   # 0n!AZ
 Q_BONUS_COL, Q_BONUS = "T", 9.0
 POINT_COLS = ["P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"]
-DERIVED_COLS = ["P", "Q", "R", "S", "T", "U", "V", "X", "Y"]
-OBSERVE_ONLY = ["W"]
+DERIVED_COLS = ["P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"]
+OBSERVE_ONLY: list = []
+REF_COLS = ["W"]          # 0分 columns whose formula refs are evaluated (hcbi composite)
 BLOCK_COLS = {"G": "卯", "H": "辰", "I": "巳", "J": "午", "K": "未",
               "L": "申", "M": "酉", "N": "戌", "O": "亥"}
 
@@ -197,6 +203,168 @@ def _num_or_none(cell: Optional[dict]) -> Optional[float]:
     return float(cell["value"])
 
 
+# ── cross-sheet cell book (hcbi composite behind W) ──────────────────────────
+
+def _content(raw) -> object:
+    """Literal cell content → float | str | None (blank)."""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s_ = str(raw).strip()
+    if not s_:
+        return None
+    try:
+        return float(s_)
+    except ValueError:
+        return s_
+
+
+class _Book:
+    """Values of any (sheet, col, row) the W formula reaches, recomputed from
+    the ledger. Rows map to dates via row_dates. Formula cells are evaluated
+    from the formula the ledger saw for that cell.
+
+    loose: a cell's newest event of any kind (reconcile/snapshot included);
+      a cell with no event, or a row with no known date, is UNKNOWN.
+    strict: per cell, the last daemon `set` (or the day's baseline when no
+      write came first) seeds the content, each journaled credit adds its
+      points, a text write/append makes it non-blank; a cell no writer ever
+      touched is blank. Excel-side observations are ignored."""
+
+    def __init__(self, c, strict: bool):
+        self.c, self.strict = c, strict
+        self.unknown: list = []
+        self.touched: dict = {}          # (sheet, col, row) → {"formula", "credits", "value"}
+        self._sheets: dict = {}
+        self._memo: dict = {}
+        self._stack: set = set()
+
+    def _row_date(self, sheet: str, row: int) -> Optional[str]:
+        r = self.c.execute("SELECT date FROM row_dates WHERE sheet=? AND row=?", (sheet, row)).fetchone()
+        return r[0] if r else None
+
+    def _cells(self, sheet: str, date_iso: str) -> dict:
+        """{col: {"content": str|float|None, "credits": [..], "unknown": [..]}}"""
+        key = (sheet, date_iso)
+        if key in self._sheets:
+            return self._sheets[key]
+        out: dict = {}
+        if not self.strict:
+            for col, st in ledger.state(date_iso, sheet, self.c).items():
+                f = st.get("formula")
+                if isinstance(f, str) and f.strip().startswith("="):
+                    content = f.strip()
+                elif st["value"] is not None:
+                    content = st["value"]
+                else:
+                    content = _content(st.get("text"))
+                out[col] = {"content": content, "credits": [], "unknown": [], "observed": st["value"]}
+        else:
+            rows = self.c.execute(
+                """SELECT e.col, e.kind, e.jsonl_kind, e.points, e.value, e.after_formula, e.src
+                     FROM events e LEFT JOIN row_dates rd ON rd.sheet = e.sheet AND rd.row = e.row
+                    WHERE e.sheet=? AND COALESCE(e.date, rd.date)=?
+                      AND (e.kind IN ('set','credit','credit_ref','text')
+                           OR (e.kind='observe' AND e.jsonl_kind='baseline'))
+                    ORDER BY e.ts, e.id""", (sheet, date_iso)).fetchall()
+            written: set = set()
+            for col, kind, jkind, pts, value, after, src in rows:
+                cell = out.setdefault(col, {"content": None, "credits": [], "unknown": [], "observed": None})
+                if kind == "observe":
+                    if col not in written:
+                        cell.update(content=_content(after), credits=[], unknown=[])
+                    continue
+                written.add(col)
+                if kind in ("set", "text"):
+                    raw = after if (after or "").strip() else value
+                    cell.update(content=_content(raw), credits=[], unknown=[])
+                elif pts is None:
+                    cell["unknown"].append(f"{sheet}!{col}: credit without points ({(src or '?')[:30]})")
+                else:
+                    cell["credits"].append(float(pts))
+        self._sheets[key] = out
+        return out
+
+    def get(self, sheet: str, col: str, row: int):
+        key = (sheet, col, row)
+        if key in self._memo:
+            return self._memo[key]
+        if key in self._stack:
+            raise fx.FormulaError(f"circular ref {sheet}!{col}{row}")
+        date_iso = self._row_date(sheet, row)
+        if date_iso is None:
+            self.unknown.append(f"{sheet}!{col}{row} (row date unknown)")
+            self._memo[key] = None
+            return None
+        cell = self._cells(sheet, date_iso).get(col)
+        if cell is None:
+            if not self.strict:
+                self.unknown.append(f"{sheet}!{col}{row}")
+            self.touched[key] = {"formula": None, "credits": [], "value": None}
+            self._memo[key] = None
+            return None
+        content = cell["content"]
+        self.unknown += cell["unknown"]
+        if isinstance(content, str) and content.startswith("="):
+            self._stack.add(key)
+            try:
+                val = fx.evaluate(content, sheet, self.get)
+            except fx.FormulaError:
+                if self.strict or cell["observed"] is None:
+                    raise
+                val = cell["observed"]          # loose: fall back to what Excel showed
+            finally:
+                self._stack.discard(key)
+        else:
+            val = content
+        if cell["credits"]:
+            val = fx.num(val) + sum(cell["credits"])
+        self.touched[key] = {"formula": content if isinstance(content, str) and content.startswith("=") else None,
+                             "credits": list(cell["credits"]), "value": val}
+        self._memo[key] = val
+        return val
+
+    def eval_refs(self, refs: list, sheet: str = "0分") -> float:
+        """Σ of signed ref terms ("hcbi!AA304", "+hcbi!Y304")."""
+        total = 0.0
+        for t in refs:
+            sign = -1.0 if t.startswith("-") else 1.0
+            total += sign * fx.num(fx.evaluate(t.lstrip("+-"), sheet, self.get))
+        return total
+
+
+def _seed_formula(c, date_iso: str, sheet: str, col: str) -> str:
+    """The formula strict mode starts a cell from: the last daemon `set`, or
+    the newest baseline when no write came first."""
+    seed, seen = "", False
+    for kind, after in c.execute(
+            """SELECT kind, after_formula FROM events WHERE date=? AND sheet=? AND col=?
+                 AND (kind IN ('set','credit','credit_ref') OR (kind='observe' AND jsonl_kind='baseline'))
+               ORDER BY ts, id""", (date_iso, sheet, col)).fetchall():
+        if kind == "observe":
+            if not seen:
+                seed = after or ""
+            continue
+        seen = True
+        if kind == "set":
+            seed = after or ""
+    return seed
+
+
+def _ref_flow(c, date_iso: str, col: str, formula: str, strict: bool) -> tuple:
+    """(value of the formula's cell refs, unknown, book) for a REF_COLS column."""
+    refs_ = classify_terms(formula)["other_refs"]
+    book = _Book(c, strict)
+    if not refs_:
+        return 0.0, ([] if strict else [f"0分!{col}: no refs in formula"]), book
+    try:
+        v = book.eval_refs(refs_)
+    except fx.FormulaError as e:
+        return 0.0, book.unknown + [f"0分!{col}: {e}"], book
+    return v, book.unknown, book
+
+
 # ── derivation ───────────────────────────────────────────────────────────────
 
 def week_ref_values(conn) -> dict:
@@ -309,6 +477,11 @@ def derive_day(date_iso: str, conn=None, strict: bool = False) -> dict:
         if strict:
             strict_cr = {col: _strict_credits(c, date_iso, col, week5)
                          for col in POINT_COLS if col not in ("P",) + tuple(OBSERVE_ONLY)}
+        ref_flow = {}
+        for col in REF_COLS:
+            f = _seed_formula(c, date_iso, "0分", col) if strict else (fen.get(col) or {}).get("formula") or ""
+            fl_, unk_, _ = _ref_flow(c, date_iso, col, f, strict)
+            ref_flow[col] = (fl_, unk_)
     finally:
         if own:
             c.close()
@@ -361,6 +534,10 @@ def derive_day(date_iso: str, conn=None, strict: bool = False) -> dict:
             if col in FLOW_RANGES:
                 fl, unk = flow(FLOW_RANGES[col])
                 comp["flow"] = fl
+            if col in REF_COLS:
+                fl, unk = ref_flow[col]
+                fl, unk = round(fl, 6), list(unk)
+                comp["refs"] = fl
             if col == "U":
                 extra = 0.0
                 for k, w in MEDIA_EXTRA.items():
@@ -426,7 +603,7 @@ def derive_day(date_iso: str, conn=None, strict: bool = False) -> dict:
                        "status": status, "components": comp, "unknown": unknown,
                        "formula": formula}
 
-    # Σ: derived from the derived point columns (W from observation), vs observed D
+    # Σ: derived from the derived point columns, vs observed D
     d_cell = fen.get("D")
     d_obs = _num_or_none(d_cell)
     parts, d_unknown = 0.0, []
@@ -531,6 +708,47 @@ def _header(sheet: str, col: str) -> Optional[str]:
         return None
 
 
+def _norm(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return round(float(v), 3)
+    return v
+
+
+def _ref_diffs(c, date_iso: str, col: str, excel_formula: str) -> list:
+    """Why a REF_COLS column (W) misses in strict: the cells its formula
+    reaches whose Excel content no daemon write explains. Literal cells are
+    compared by value; formula cells by their literal tail (a +5 typed after
+    '0n'!AE296*2)."""
+    from collections import Counter
+    _, _, loose = _ref_flow(c, date_iso, col, excel_formula, strict=False)
+    _, _, strict = _ref_flow(c, date_iso, col, _seed_formula(c, date_iso, "0分", col), strict=True)
+    why = []
+    for key in sorted(set(loose.touched) | set(strict.touched), key=lambda k: (k[0], fx.col_index(k[1]), k[2])):
+        sheet, k, row = key
+        lo, st = loose.touched.get(key), strict.touched.get(key)
+        hdr = _header(sheet, k)
+        name = f"{sheet}!{k}{row}{f'({hdr})' if hdr else ''}"
+        lf, sf = (lo or {}).get("formula"), (st or {}).get("formula")
+        if lf or sf:
+            ex = Counter(_literal_terms(lf or ""))
+            led = Counter(_literal_terms(sf or "")) + Counter(round(x, 3) for x in (st or {}).get("credits", []) if x)
+            for v, n in (ex - led).items():
+                why += [f"{v:+g} in {name} formula, never journaled (typed into {sheet}?)"] * n
+            for v, n in (led - ex).items():
+                why += [f"{v:+g} journaled to {name} but gone from Excel"] * n
+            if not ex and not led and (lf or "").replace(" ", "") != (sf or "").replace(" ", ""):
+                why.append(f"{name}: Excel `{lf or _fmt(lo and lo['value'])}`, ledger `{sf or _fmt(st and st['value'])}`")
+            continue
+        lv, sv = _norm((lo or {}).get("value")), _norm((st or {}).get("value"))
+        if lv != sv and not (lv in (None, 0.0) and sv in (None, 0.0) and not isinstance(lv, str)):
+            why.append(f"{name}: Excel {_fmt(lv)}, ledger {_fmt(sv)} (typed into {sheet}?)")
+    return why
+
+
 def _fmt(v) -> str:
     return "blank" if v in (None, "") else f"{v:g}" if isinstance(v, float) else str(v)
 
@@ -547,6 +765,7 @@ def strict_check(date_iso: str, conn=None) -> dict:
     c = conn or ledger.connect()
     try:
         strict = derive_day(date_iso, c, strict=True)
+        week5 = week_ref_values(c)
         on_x = ledger.state(date_iso, "0n", c)
         on_l = ledger.state(date_iso, "0n", c, writes_only=True)
         misses = []
@@ -561,6 +780,10 @@ def strict_check(date_iso: str, conn=None) -> dict:
             why = []
             if col != "P":
                 excel = Counter(_literal_terms(r["formula"]))
+                for ref in classify_terms(r["formula"])["week_refs"]:   # +'1n+'!U5 ≙ a credit_ref's points
+                    m = _WEEK_REF.match(ref)
+                    if m and m.group(2) == "5" and m.group(1) in week5 and week5[m.group(1)]:
+                        excel[round((-1.0 if ref.startswith("-") else 1.0) * week5[m.group(1)], 3)] += 1
                 led = Counter(_ledger_terms(c, date_iso, col))
                 for v, n in (excel - led).items():
                     why += [f"{v:+g} in Excel formula, never journaled (typed into Excel?)"] * n
@@ -568,6 +791,8 @@ def strict_check(date_iso: str, conn=None) -> dict:
                     why += [f"{v:+g} journaled but gone from Excel (removed by hand?)"] * n
             else:
                 why.append("P (-1₦) edited after the last ritual write")
+            if col in REF_COLS:
+                why += _ref_diffs(c, date_iso, col, r["formula"])
             for k in INPUT_CELLS.get(col, []):
                 xv = (on_x.get(k) or {}).get("value")
                 lv = (on_l.get(k) or {}).get("value")

@@ -118,15 +118,16 @@ def test_p_is_last_set_plus_later_appends(db, monkeypatch):
     assert p["components"] == {"last_set": 39.0, "appends_after": 0.0} and p["status"] == "ok"
 
 
-def test_w_is_observe_only_and_sigma_uses_observation(db, monkeypatch):
+def test_w_with_unseen_hcbi_row_is_partial_and_sigma_partial(db, monkeypatch):
     monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
     ledger.record(_snap("W", 20.93, "=hcbi!AA293+hcbi!Y293 + 20"), db)
     ledger.record(_snap("Y", 160, "=60 + 100"), db)
     ledger.record(_snap("D", 180.93, "=SUM(P289:Y289)"), db)
     day = rules.derive_day("2026-10-18", db)
-    assert day["cols"]["W"]["status"] == "observe-only"
+    assert day["cols"]["W"]["status"] == "partial"                     # hcbi row 293 never seen
+    assert any("hcbi!AA293" in u for u in day["cols"]["W"]["unknown"])
     assert day["cols"]["Y"]["derived"] == 160 and day["cols"]["Y"]["status"] == "ok"
-    assert day["cols"]["D"]["status"] == "partial"                     # P has no set yet → unknown part
+    assert day["cols"]["D"]["status"] == "partial"
 
 
 def test_summarize_and_blocks(db, monkeypatch):
@@ -218,3 +219,106 @@ def test_streak_counts_trailing_passes():
     days = {"2026-10-27": {"pass": True}, "2026-10-28": {"pass": False},
             "2026-10-29": {"pass": True}, "2026-10-30": {"pass": True}}
     assert rules.streak(days) == 2
+
+
+# ── W: hcbi composite ────────────────────────────────────────────────────────
+
+from neon import formula as fx
+
+AA_F = ("=SUM(E293:O293)/21*75 + IF(AL293, -(MAX((U293-1800)/10, -40)), 0)+T293 + S293"
+        " + (P293-100)*0.5+AI293 +W293")
+
+
+def _h(col, after, value=None, kind="baseline", ts="2026-10-18T03:50:00", src="baseline"):
+    """One hcbi row-293 (10/18) event; after = the cell's formula/content."""
+    av = None
+    try:
+        av = str(float(after)) if after not in (None, "") and not str(after).startswith("=") else None
+    except ValueError:
+        pass
+    return _e(ts=ts, kind=kind, sheet="hcbi", col=col, row=293, value=value, before="",
+              after=after, after_value=av, before_value=None, src=src)
+
+
+def _hcbi_day(db, reconcile_w=None):
+    """A 10/18 hcbi row seeded at 03:50, two /ate appends, one hiit mark."""
+    for col, f in (("AA", AA_F), ("Y", "='0n'!AE292*2  + 0"),
+                   ("U", "=SUM(AL293,AO293,AR293,AU293,AX293,BD293,BA293)"),
+                   ("P", "=SUM(AM293,AP293,AS293,AY293,BB293,BE293,AV293)"),
+                   ("T", "=IF(COUNTA(AK293,AN293,AQ293,AT293,AW293,AZ293,BC293)>=3,20,0)")):
+        ledger.record(_h(col, f), db)
+    for col in ("E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "S", "W", "AI",
+                "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR", "AS", "AT", "AU", "AV",
+                "AW", "AX", "AY", "AZ", "BA", "BB", "BC", "BD", "BE"):
+        ledger.record(_h(col, ""), db)
+    ledger.record(_on("AE", 5, ts="2026-10-18T07:00:00"), db)                  # did hiit 5 → Y = 10
+    for col, v in (("AR", "+400"), ("AS", "+30"), ("F", "+2"), ("M", "+1")):     # /ate (巳 band)
+        ledger.record(_h(col, "=" + v[1:], value=v, kind="append", ts="2026-10-18T10:00:00",
+                         src="ate eggs"), db)
+    ledger.record(_h("AQ", "eggs", value=", eggs", kind="append", ts="2026-10-18T10:00:00", src="ate eggs"), db)
+    ledger.record(_h("T", "10", value="10", kind="write", ts="2026-10-18T10:00:01", src="ate-tier"), db)
+    ledger.record(_base("W", "=hcbi!AA293+hcbi!Y293", -50), db)
+    ledger.record(_e(ts="2026-10-18T12:00:00", col="W", value="+20", before="=hcbi!AA293+hcbi!Y293",
+                     after="=hcbi!AA293+hcbi!Y293+20", after_value="0"), db)
+    if reconcile_w is not None:                                                 # caf typed into hcbi
+        ledger.record(_h("W", str(reconcile_w), kind="reconcile", ts="2026-10-18T23:55:00", src="reconcile"), db)
+
+
+def _expected_aa(caf=0.0):
+    groups = 2 + 1                                      # F, M
+    return groups / 21 * 75 + 0 + 10 + 0 + (30 - 100) * 0.5 + 0 + caf   # AL blank → no kcal term
+
+
+def test_formula_evaluator_excel_semantics():
+    cells = {("hcbi", "F", 1): 2.0, ("hcbi", "AL", 1): 2000.0, ("hcbi", "U", 1): 2000.0,
+             ("hcbi", "AK", 1): "eggs", ("hcbi", "AN", 1): None}
+    g = lambda s_, c_, r_: cells.get((s_, c_, r_))
+    aa = "=SUM(E1:O1)/21*75 + IF(AL1, -(MAX((U1-1800)/10, -40)), 0)+T1"
+    assert fx.evaluate(aa, "hcbi", g) == pytest.approx(2 / 21 * 75 - 20)       # blanks are 0, AL truthy
+    assert fx.evaluate("=COUNTA(AK1,AN1,AQ1)", "hcbi", g) == 1
+    assert fx.evaluate("=IF(0, \"x\"*2, 7)", "hcbi", g) == 7                     # untaken branch may error
+    with pytest.raises(fx.FormulaError):
+        fx.evaluate("=AK1*2", "hcbi", g)                                           # text in arithmetic
+    assert fx.refs("=hcbi!AA304+'0n'!AE303", "0分") == [("hcbi", "AA", 304), ("0n", "AE", 303)]
+
+
+def test_w_loose_recomputes_hcbi_composite(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _hcbi_day(db, reconcile_w=60)
+    obs = _expected_aa(caf=60) + 10 + 20
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293+20"), db)
+    w = rules.derive_day("2026-10-18", db)["cols"]["W"]
+    assert w["status"] == "ok" and w["derived"] == pytest.approx(obs, abs=1e-3)
+    assert w["components"]["literals"] == 20 and w["components"]["refs"] == pytest.approx(obs - 20, abs=1e-3)
+
+
+def test_w_strict_ignores_hcbi_typed_in_excel_and_names_it(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _hcbi_day(db, reconcile_w=60)
+    obs = _expected_aa(caf=60) + 10 + 20
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293+20"), db)
+    st = rules.derive_day("2026-10-18", db, strict=True)["cols"]["W"]
+    assert st["derived"] == pytest.approx(_expected_aa() + 10 + 20, abs=1e-3)    # caf 60 never journaled
+    (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "W"]
+    assert any(w_.startswith("hcbi!W293") and "Excel 60" in w_ for w_ in miss["why"])
+
+
+def test_w_strict_passes_when_every_hcbi_input_was_journaled(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _hcbi_day(db)
+    obs = _expected_aa() + 10 + 20
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293+20"), db)
+    assert rules.derive_day("2026-10-18", db, strict=True)["cols"]["W"]["status"] == "ok"
+    assert all(m["col"] != "W" for m in rules.strict_check("2026-10-18", db)["misses"])
+    assert "W" in rules.STRICT_COLS and rules.OBSERVE_ONLY == []
+
+
+def test_w_strict_flags_literal_typed_after_hcbi_formula(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _hcbi_day(db)
+    ledger.record(_h("Y", "='0n'!AE292*2  + 5", kind="reconcile", ts="2026-10-18T23:55:00", src="reconcile"), db)
+    obs = _expected_aa() + 15 + 20
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293+20"), db)
+    assert rules.derive_day("2026-10-18", db)["cols"]["W"]["status"] == "ok"
+    (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "W"]
+    assert any("+5 in hcbi!Y293 formula" in w_ for w_ in miss["why"])
