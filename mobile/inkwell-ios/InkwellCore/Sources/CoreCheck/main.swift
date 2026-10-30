@@ -367,7 +367,9 @@ final class StubNet: URLProtocol {
         }
         let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
-        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"# : #"{"ok":true}"#
+        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"#
+            : (body["desc"] as? String) == "ask-me" ? #"{"ok":true,"needs_points":true,"desc":"ask-me","minutes":30}"#
+            : #"{"ok":true}"#
         client?.urlProtocol(self, didLoad: reply.data(using: .utf8)!)
         client?.urlProtocolDidFinishLoading(self)
     }
@@ -409,6 +411,26 @@ do {
     eq(StubNet.seen[1].body["id"] as? String, "T1", "offline done keeps its task id")
     eq(StubNet.seen[2].body["id"] as? String, "NEW9", "local task's done gets the id its add returned")
     eq(onlineRun.refs, ["add:local-1", "hide:T1", "hide:local-1"], "refs returned so the UI retires local rows")
+    ob.clear()
+}
+
+// A replayed log the server answers needs_points (lib/janus_done.py "ask")
+// credited nothing: it must be reported, not counted as sent (v172 review).
+do {
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.protocolClasses = [StubNet.self]
+    let api = Api(configuration: cfg)
+    let ob = Outbox("corecheck-needs-points"); ob.clear()
+    StubNet.seen = []
+    ob.enqueue(url: "http://ix/api/log", body: ["id": "E1", "desc": "ask-me", "minutes": 30], label: "log ask-me")
+    ob.enqueue(url: "http://ix/api/log", body: ["id": "E2", "desc": "gym", "minutes": 40], label: "log gym")
+    let sema = DispatchSemaphore(value: 0)
+    var run: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    Task { StubNet.online = true; run = await ob.flush(api); sema.signal() }
+    sema.wait()
+    eq(run.sent, 1, "needs_points reply is not counted as sent")
+    eq(run.rejected, ["log ask-me: needs points — swipe it again"], "needs_points reply is reported")
+    eq(ob.count, 0, "queue still drains past it")
     ob.clear()
 }
 

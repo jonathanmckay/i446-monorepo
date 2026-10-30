@@ -250,7 +250,7 @@ end tell
 
 ## Todoist API
 
-Auth header: `Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5`
+Auth header: `Authorization: Bearer $(cat ~/.config/todoist/token)`
 
 - Search 0neon: `GET /api/v1/tasks?label=0neon&limit=200`
 - Search 1neon: `GET /api/v1/tasks?label=1neon&limit=200`

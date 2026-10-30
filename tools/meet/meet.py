@@ -91,7 +91,10 @@ from typing import Optional
 
 SAMPLE_RATE = 16000   # Whisper works best at 16kHz
 CHANNELS = 1
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
+_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
+TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
+                 else os.environ.get("TODOIST_API_KEY", ""))
 VAULT_DIR = Path.home() / "vault"
 WHISPER_MODEL = "base.en"  # fast, English-only. Use "small.en" for more accuracy.
 SPEECH_THRESH = 400

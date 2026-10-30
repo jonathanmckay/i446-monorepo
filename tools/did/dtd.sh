@@ -3062,9 +3062,9 @@ for s in d.values():
   # after a successful DELETE (a failed delete must not be undoable, or
   # ctrl-z would recreate a task that still exists)
   pre=\$(curl -s "https://api.todoist.com/api/v1/tasks/\$tid" \\
-    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
+    -H "Authorization: Bearer \$(cat ~/.config/todoist/token)" 2>/dev/null)
   code=\$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \\
-    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
+    -H "Authorization: Bearer \$(cat ~/.config/todoist/token)" 2>/dev/null)
   if [[ "\$code" == 2* ]]; then
     printf '%s' "\$pre" | python3 -c "
 import json, sys
@@ -3204,7 +3204,7 @@ trap '' HUP   # outlive the tty: a dtd exit (or a closing pane) mid-write must n
 python3 -c "
 import json, re, sys, urllib.request
 
-TOKEN = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+TOKEN = open(__import__('os').path.expanduser('~/.config/todoist/token')).read().strip()
 BASE = 'https://api.todoist.com/api/v1'
 HDR = {'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'}
 
@@ -3483,7 +3483,7 @@ python3 "$TOGGL_CLI" start "$clean" $project >/dev/null 2>&1
 python3 -c "
 import json, sys, urllib.request
 q = sys.argv[1].lower()
-TOKEN = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+TOKEN = open(__import__('os').path.expanduser('~/.config/todoist/token')).read().strip()
 try:
     with open(sys.argv[2]) as f:
         d = json.load(f)

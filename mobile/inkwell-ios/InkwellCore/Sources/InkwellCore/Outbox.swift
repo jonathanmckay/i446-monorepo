@@ -82,6 +82,13 @@ public final class Outbox {
                 if let id = ids[String(s.dropFirst(5))], !id.isEmpty { body[k] = id } else { body.removeValue(forKey: k) }
             }
             switch await api.post(it.url, body) {
+            case .ok(let j) where j.bool("needs_points"):
+                // A queued /api/log or /api/done-current for an entry with no
+                // task [N] and no time-based habit (lib/janus_done.py "ask"):
+                // the server credited nothing and is waiting for an answer the
+                // replay can't give. Counting it as sent showed ✓ and dropped
+                // the 分 silently (v172 review); report it instead.
+                rejected.append("\(it.label): needs points — swipe it again")
             case .ok(let j):
                 sent += 1
                 if let r = it.ref { ids[r] = j.string("id") }

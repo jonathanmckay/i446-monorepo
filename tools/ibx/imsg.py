@@ -14,6 +14,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore")
 from datetime import datetime
+import os
 from pathlib import Path
 
 import anthropic
@@ -29,7 +30,10 @@ DB_SNAPSHOT = Path("/tmp/imsg_snapshot.db")
 STATE_DIR = Path.home() / ".config/imsg"
 STATE_FILE = STATE_DIR / "processed.json"
 TASK_STATE_FILE = STATE_DIR / "todoist_task.json"
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
+_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
+TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
+                 else os.environ.get("TODOIST_API_KEY", ""))
 # Apple Core Data epoch offset: seconds between 2001-01-01 and Unix epoch
 APPLE_EPOCH_OFFSET = 978307200
 

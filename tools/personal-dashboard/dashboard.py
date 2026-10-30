@@ -1265,6 +1265,13 @@ def _fetch_tasks_for_day(day, token):
     return day.isoformat(), counts
 
 
+def _todoist_token() -> str:
+    """~/.config/todoist/token, else $TODOIST_API_KEY. Never hardcode it:
+    this repo is public (Dream v172, 2026-10-29)."""
+    p = Path.home() / ".config/todoist/token"
+    return p.read_text().strip() if p.exists() else os.environ.get("TODOIST_API_KEY", "")
+
+
 def load_tasks_data(n_days=DAYS, end=None):
     """Fetch completed tasks from Todoist, split by category tag in content.
     Returns {date_str: {"neon", "posthoc", "one_n", "neg1n", "other", "total"}}
@@ -1278,7 +1285,7 @@ def load_tasks_data(n_days=DAYS, end=None):
       shared across all callers regardless of n_days, so widening the window
       (e.g. for a monthly chart view) only pays the network cost once.
     """
-    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    token = _todoist_token()
     today = date.today()
     last = end or today
     all_days = [last - timedelta(days=n) for n in range(n_days, -1, -1)]
@@ -1328,7 +1335,7 @@ def load_tasks_by_block(n_days=GRANULAR_BLOCK_DAYS, end=None):
     window missing the key, not just today/yesterday. Bounded cost since the
     per-block view only spans GRANULAR_BLOCK_DAYS days.
     """
-    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    token = _todoist_token()
     today = end or date.today()
     day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
 

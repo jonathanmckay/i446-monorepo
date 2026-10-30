@@ -410,6 +410,11 @@ def _token() -> str:
     tok = os.environ.get("TODOIST_API_KEY")
     if tok:
         return tok
+    _tf = os.path.expanduser("~/.config/todoist/token")
+    if os.path.exists(_tf):
+        tok = open(_tf).read().strip()
+        if tok:
+            return tok
     try:
         r = subprocess.run(
             ["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
