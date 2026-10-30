@@ -114,7 +114,11 @@ def test_stamp_on_ix_undercount_scenario_fixed_by_returned_text(monkeypatch):
     # The stale local copy alone (pre-fix behavior) would stamp ✅ onto a
     # text that's missing 🎯, undercounting 巳 by 3.
     stale_new_text, _ = nb.stamp_emoji(stale_local_text, "巳", "✅")
-    _, stale_total, _ = nb.score_day(stale_new_text)
+    # Pin the clock past 巳's start: score_day drops not-yet-started blocks,
+    # so before 08:00 local this scored 0 and the test went red overnight.
+    import datetime as _dt
+    noon = _dt.datetime(2026, 8, 16, 12, 0)
+    _, stale_total, _ = nb.score_day(stale_new_text, now=noon)
     assert stale_total == 10, "sanity: the stale local copy undercounts, as observed live"
 
     # _stamp_on_ix's returned text is Ix's own copy, WITH 🎯 -- stamping ✅
@@ -122,7 +126,7 @@ def test_stamp_on_ix_undercount_scenario_fixed_by_returned_text(monkeypatch):
     result = df._stamp_on_ix("巳", "✅")
     changed, ix_text = result
     assert changed is True
-    _, fixed_total, _ = nb.score_day(ix_text)
+    _, fixed_total, _ = nb.score_day(ix_text, now=noon)
     assert fixed_total == 13, "the fix must score off Ix's authoritative text, not the stale local copy"
 
 

@@ -138,10 +138,11 @@ def test_legacy_two_field_timer_still_falls_back_to_name_match():
         out = _run_listgen(tmp, CACHE, timer_content)
         recur_row = _row_for_id(out, "AOS_RECUR")
         oneoff_row = _row_for_id(out, "AOS_ONEOFF")
-        # Documents the known (accepted) legacy limitation: without an id both
-        # same-named rows still light up until the timer file is next
-        # overwritten by the fixed DTD_START.
-        assert _is_running(recur_row) and _is_running(oneoff_row)
+        # 401ccba5 (2026-10-23): without an id, exactly ONE same-named card
+        # lights up (the first visible match), never both -- JM's "the
+        # recurrance should not also have an abacus". It must still be one,
+        # not zero (name fallback still works).
+        assert _is_running(recur_row) != _is_running(oneoff_row)
 
 
 if __name__ == "__main__":
