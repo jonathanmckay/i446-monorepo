@@ -103,7 +103,7 @@ commas are fine as long as every item is in this form.
 
 **Split:** `,` or `;` → separate items, process each independently.
 
-**Aliases:** `stats m5x2`→`stats m5x2`, `math`→`问学`, `skin2skin`→`问学`, `wake up`→`起`
+**Aliases:** `stats m5x2`→`stats m5x2`, `skin2skin`→`问学`, `wake up`→`起`
 
 **Split habit:** `bigs <minutes>` — time with both big kids. `did-fast.py` expands it into two 0₦ writes, splitting the minutes between `xk20` (Theo) and `xk22` (Ren). Odd minute goes to xk20. e.g. `did bigs 26` → xk20 +13, xk22 +13; `did bigs 31` → xk20 +16, xk22 +15. Accepts a time range too (`bigs 1430-1501`).
 
@@ -136,7 +136,7 @@ The dispatcher emits JSON with the routing decision. Use its output directly:
 | `"unknown"`  | Not in registry — one-off | Fall through to **0.3** (Todoist word-overlap) and **6** (variable). The dispatcher's `hint` field will say so. |
 
 The dispatcher has already:
-- handled aliases (`math` → 问学, `stats m5x2` → m5x2-stats, `wake up` → 起)
+- handled aliases (`stats m5x2` → m5x2-stats, `wake up` → 起)
 - stripped `@project` overrides into `toggl.project`
 - stripped `[N]`/`(N)`/`{N}` annotations from the routing query
 - resolved live column letters via neon-cols.json (so writes go to the right place even after a column reshuffle)
@@ -171,7 +171,7 @@ The `--create-excel-col` flag adds the column to the 0n/1n+ sheet via the daemon
 
 **2c. Verify:** Check `verify=` in AppleScript return. Flag `⚠ checksum mismatch` if wrong.
 
-**3. Close Todoist:** Search `0neon`-labeled tasks using **word overlap matching** (same algorithm as Step 0: tokenize both sides, ratio ≥ 0.6). Also search `夜neon`-labeled tasks (evening habits like `hcmc`). **Dash-normalization:** strip ` - ` from both sides before matching. **Alias expansion:** if the habit was resolved via alias (e.g. `math` → `问学`), search for BOTH the original input AND the alias. Close if found.
+**3. Close Todoist:** Search `0neon`-labeled tasks using **word overlap matching** (same algorithm as Step 0: tokenize both sides, ratio ≥ 0.6). Also search `夜neon`-labeled tasks (evening habits like `hcmc`). **Dash-normalization:** strip ` - ` from both sides before matching. **Alias expansion:** if the habit was resolved via alias (e.g. `skin2skin` → `问学`), search for BOTH the original input AND the alias. Close if found.
 
 **3b. Validation gate:** BLOCKING — confirm Step 3 was attempted. If not → go back. This is the most common failure mode.
 
@@ -271,7 +271,7 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | `/did ibx i9` — Todoist is "ibx - i9 [20]" | Step 3 dash-norm matches | Must NOT skip Todoist close |
 | `/did 30m session with lx` — Todoist has "30m lx session [30]" | Step 0 word-overlap → Step 5 | Must NOT create posthoc duplicate |
 | `/did stats m5x2` — Todoist is "m5x2 stats (4) [8]" | Step 3 word-overlap matches despite word order | Must NOT skip Todoist close |
-| `/did math` — alias→问学, Todoist is "math with kids (60) [70]" | Step 3 searches original "math" too, word-overlap matches | Must NOT skip Todoist close |
+| `/did math 30` (also `english`, `中文`) | Teaching session, not a habit: run.py hands it to did-fast (1分/min + 5 → 0分 xk87). No Todoist word-overlap match, which would close "goodnight math & lights out" | Must NOT close an unrelated card |
 | `/did hiit` then `/did 0l` | completed-today filters hiit from suggestions | Must NOT re-suggest completed recurring tasks |
 | `/did 1 xk88` — 1n+ header is "1 xk88" | Step 0.2 matches 1n+ header → Step 1n, closes 1neon Todoist task | Must NOT treat leading "1" as points and route to Step 6 |
 | `/did 1 i9` — 1n+ header is "1 i9" | Step 0.2 matches 1n+ header → Step 1n | Must NOT route to Step 6 as "1 point to i9" |
