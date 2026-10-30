@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dream-intake: Gather context from 12 sources into a single JSON snapshot.
+"""dream-intake: Gather context from ~15 sources into a single JSON snapshot.
 
 Used by dream-launch.sh to feed the daily briefing agent. Runs all sources
 concurrently with a 30s per-source timeout, targeting <60s total (<6s typical).
@@ -160,50 +160,242 @@ def _google_service(service_name, version, creds):
 
 
 # ---------------------------------------------------------------------------
+# Todoist + Pacific-time helpers
+# ---------------------------------------------------------------------------
+
+def _pt_tz():
+    from zoneinfo import ZoneInfo
+    return ZoneInfo("America/Los_Angeles")
+
+
+def _pt_today():
+    return datetime.datetime.now(_pt_tz()).date()
+
+
+def _pt_midnight(day):
+    """Aware datetime for 00:00 America/Los_Angeles on `day` (DST-correct)."""
+    return datetime.datetime.combine(day, datetime.time(0), tzinfo=_pt_tz())
+
+
+def _to_pt(iso):
+    """Parse an ISO timestamp (Z/offset/naive-UTC) to an aware PT datetime."""
+    if not iso:
+        return None
+    s = iso.replace("Z", "+00:00")
+    try:
+        dt = datetime.datetime.fromisoformat(s)
+    except ValueError:
+        # Python 3.9 fromisoformat rejects 6+ digit fractions with offsets oddly; trim
+        m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(.*)", s)
+        if not m:
+            return None
+        dt = datetime.datetime.fromisoformat(m.group(1) + (m.group(3) or ""))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(_pt_tz())
+
+
+def _utc_z(dt):
+    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_TODOIST_BASE = "https://api.todoist.com/api/v1"
+
+
+def _todoist_token():
+    p = Path.home() / ".config" / "todoist" / "token"
+    tok = p.read_text().strip() if p.exists() else ""
+    if not tok:
+        raise RuntimeError(f"Todoist token missing at {p}")
+    return tok
+
+
+def _todoist_get(path):
+    return _http_request(
+        f"{_TODOIST_BASE}{path}",
+        headers={"Authorization": f"Bearer {_todoist_token()}"},
+        timeout=20,
+    )
+
+
+def _todoist_completed_between(since_dt, until_dt, max_pages=5):
+    """Non-recurring completions (Todoist's completed ledger). Recurring tasks
+    never land here: completing one just reschedules it."""
+    items, cursor = [], None
+    for _ in range(max_pages):
+        q = f"since={_utc_z(since_dt)}&until={_utc_z(until_dt)}&limit=200"
+        if cursor:
+            q += f"&cursor={cursor}"
+        raw = _todoist_get(f"/tasks/completed/by_completion_date?{q}")
+        items.extend(raw.get("items", []))
+        cursor = raw.get("next_cursor")
+        if not cursor:
+            break
+    return items
+
+
+def _todoist_completion_events(since_dt, max_pages=5):
+    """Activity-log completion events since `since_dt` (includes recurring)."""
+    since = _utc_z(since_dt)
+    events, cursor = [], None
+    for _ in range(max_pages):
+        q = "object_type=item&event_type=completed&limit=100"
+        if cursor:
+            q += f"&cursor={cursor}"
+        raw = _todoist_get(f"/activities?{q}")
+        batch = raw.get("results", []) if isinstance(raw, dict) else raw
+        events.extend(batch)
+        if not batch or min(e.get("event_date", "") for e in batch) < since:
+            break
+        cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
+        if not cursor:
+            break
+    return [e for e in events if e.get("event_date", "") >= since]
+
+
+_POINTS_RE = re.compile(r"\[(\d+)\]")
+
+
+def _parse_points(content):
+    """[N] 分 value from task content; last bracket wins (matches /did)."""
+    m = _POINTS_RE.findall(content or "")
+    return int(m[-1]) if m else None
+
+
+# ---------------------------------------------------------------------------
 # Source 1: completed_today
 # ---------------------------------------------------------------------------
 
-@source("completed_today", "Today's completed tasks from ibx queue")
-def _completed_today():
+def _completed_today_file():
+    """The /did-maintained names list. It is only rewritten on the first
+    completion of a day, so at 04:00 PT it still holds YESTERDAY's names."""
     import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
     ct_path = _sp.COMPLETED_TODAY
     if not ct_path.exists():
-        return {"tasks": [], "note": "completed-today.json not found"}
-
+        return None, None, None
     with open(ct_path) as f:
         data = json.load(f)
+    names = data if isinstance(data, list) else data.get("names", data.get("tasks", data.get("items", [])))
+    file_date = data.get("date") if isinstance(data, dict) else None
+    age_hours = (time.time() - ct_path.stat().st_mtime) / 3600
+    return names, file_date, round(age_hours, 1)
 
-    tasks = data if isinstance(data, list) else data.get("tasks", data.get("items", []))
 
-    # Check for staleness (file older than 2 hours)
-    mtime = ct_path.stat().st_mtime
-    age_hours = (time.time() - mtime) / 3600
-    stale = age_hours > 2
+@source("completed_today", "Today's (PT) completed tasks, live from the Todoist activity log")
+def _completed_today():
+    today = _pt_today()
+    out = {"date": today.isoformat()}
+    try:
+        file_names, file_date, file_age = _completed_today_file()
+    except Exception as e:
+        file_names, file_date, file_age = None, None, None
+        out["file_error"] = f"{type(e).__name__}: {e}"
+    out.update({"file_date": file_date, "file_age_hours": file_age})
 
-    # Look for archive
-    archive_path = ct_path.with_name("completed-today-archive.json")
-    archive_count = 0
-    if archive_path.exists():
-        try:
-            with open(archive_path) as f:
-                archive = json.load(f)
-            archive_items = archive if isinstance(archive, list) else archive.get("tasks", [])
-            archive_count = len(archive_items)
-            # Merge: add archived items not already present
-            existing_ids = {t.get("id") for t in tasks if isinstance(t, dict)}
-            for item in archive_items:
-                if isinstance(item, dict) and item.get("id") not in existing_ids:
-                    tasks.append(item)
-        except Exception:
-            pass
+    try:
+        evs = _todoist_completion_events(_pt_midnight(today))
+        tasks = []
+        for e in sorted(evs, key=lambda e: e.get("event_date", "")):
+            ex = e.get("extra_data") or {}
+            content = ex.get("content", "")
+            tasks.append({
+                "id": e.get("object_id"),
+                "content": content,
+                "completed_at": e.get("event_date"),
+                "points": _parse_points(content),
+                "recurring": bool(ex.get("is_recurring")),
+                "labels": ex.get("labels", []),
+            })
+        out.update({"source": "todoist_live", "count": len(tasks), "tasks": tasks,
+                    "stale": False, "age_hours": 0.0})
+        return out
+    except Exception as e:
+        out["live_error"] = f"{type(e).__name__}: {e}"
 
-    return {
+    # Fallback: the local file, but only if it is actually today's.
+    if file_names is not None and file_date == today.isoformat():
+        out.update({"source": "file", "count": len(file_names), "tasks": file_names,
+                    "stale": (file_age or 0) > 2, "age_hours": file_age})
+    else:
+        out.update({"source": "none", "count": 0, "tasks": [], "stale": True,
+                    "age_hours": file_age,
+                    "note": (f"live Todoist failed; completed-today.json is from {file_date}, "
+                             f"not {today.isoformat()} — ignored")})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Source 1b: completed_yesterday_high_value
+# ---------------------------------------------------------------------------
+
+HIGH_VALUE_MIN_POINTS = 500
+# Created-and-completed-same-day is the "real work that appeared and got done"
+# signal. Automation churns out same-day tasks that are not that: 😈 block
+# rituals, `deferred:` posthoc eval records, and #-1g/#0g goal tasks.
+_NOISE_PREFIXES = ("😈", "deferred:")
+_NOISE_LABELS = {"#-1g", "#0g", "posthoc"}
+
+
+def _is_ritual_noise(content, labels):
+    return (content or "").lstrip().startswith(_NOISE_PREFIXES) or bool(_NOISE_LABELS & set(labels or []))
+
+
+@source("completed_yesterday_high_value",
+        "Todoist completions in the last 36h worth >=500 分 or created+completed the same PT day")
+def _completed_yesterday_high_value():
+    now = datetime.datetime.now(_pt_tz())
+    since = now - datetime.timedelta(hours=36)
+    tasks, seen = [], set()
+
+    def _add(tid, content, added_at, completed_at, recurring, labels, project_id):
+        if tid in seen:
+            return
+        pts = _parse_points(content)
+        a, c = _to_pt(added_at), _to_pt(completed_at)
+        same_day = bool(a and c and a.date() == c.date())
+        reasons = []
+        if pts is not None and pts >= HIGH_VALUE_MIN_POINTS:
+            reasons.append(f"points>={HIGH_VALUE_MIN_POINTS}")
+        if same_day and not recurring and not _is_ritual_noise(content, labels):
+            reasons.append("created_and_completed_same_day")
+        if not reasons:
+            return
+        seen.add(tid)
+        tasks.append({
+            "id": tid, "content": content, "points": pts,
+            "added_at": added_at, "completed_at": completed_at,
+            "completed_date_pt": c.date().isoformat() if c else None,
+            "recurring": recurring, "labels": labels or [], "project_id": project_id,
+            "reasons": reasons,
+        })
+
+    for it in _todoist_completed_between(since, now):
+        _add(it.get("id"), it.get("content", ""), it.get("added_at"), it.get("completed_at"),
+             bool((it.get("due") or {}).get("is_recurring")), it.get("labels"), it.get("project_id"))
+
+    # Recurring high-value completions are invisible to the completed ledger.
+    events_error = None
+    try:
+        for e in _todoist_completion_events(since):
+            ex = e.get("extra_data") or {}
+            if ex.get("is_recurring"):
+                _add(e.get("object_id"), ex.get("content", ""), ex.get("date_added"),
+                     e.get("event_date"), True, ex.get("labels"), None)
+    except Exception as e:
+        events_error = f"{type(e).__name__}: {e}"
+
+    tasks.sort(key=lambda t: t.get("completed_at") or "")
+    out = {
+        "window_start": since.isoformat(timespec="seconds"),
+        "window_end": now.isoformat(timespec="seconds"),
+        "min_points": HIGH_VALUE_MIN_POINTS,
         "count": len(tasks),
+        "total_points": sum(t["points"] or 0 for t in tasks),
         "tasks": tasks,
-        "stale": stale,
-        "age_hours": round(age_hours, 1),
-        "archive_merged": archive_count,
     }
+    if events_error:
+        out["recurring_events_error"] = events_error
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +607,21 @@ def _appfolio_rent_roll():
 # Source 5: appfolio_work_orders
 # ---------------------------------------------------------------------------
 
+# AppFolio's work_order report status enum. A WO counts as "open" unless it is
+# in a terminal (closed) state. See _appfolio_work_orders for the full history.
+_WO_CLOSED_STATUSES = {"completed", "complete", "canceled", "cancelled", "closed"}
+
+
+def _wo_is_open(status: str) -> bool:
+    """True if an AppFolio work-order status represents an open WO.
+
+    The open statuses (New/Scheduled/Assigned/Estimated/In Progress/On Hold)
+    share no common substring, so detection is by exclusion of the closed set.
+    """
+    s = (status or "").strip().lower()
+    return bool(s) and s not in _WO_CLOSED_STATUSES
+
+
 @source("appfolio_work_orders", "AppFolio open/overdue work orders by property")
 def _appfolio_work_orders():
     vhost = _CREDS.get("af_vhost", "")
@@ -431,6 +638,11 @@ def _appfolio_work_orders():
     results = data.get("results", [])
 
     today = datetime.date.today()
+    # The old filter tested for the substrings "open"/"in progress"/"pending",
+    # which match NONE of the actual open statuses (New/Scheduled/Assigned/
+    # Estimated) -> reported total_open=0 against ~1,270 genuinely-open WOs
+    # (v162 fix; same diagnosis first staged on the unmerged dream/2026.06.03
+    # branch). _wo_is_open inverts the test. See _WO_CLOSED_STATUSES above.
     by_property: dict[str, dict] = {}
     for row in results:
         prop = row.get("property_name", row.get("property", "Unknown"))
@@ -439,14 +651,19 @@ def _appfolio_work_orders():
         p = by_property[prop]
         p["total"] += 1
 
-        status = (row.get("status", "") or "").lower()
-        if "open" in status or "in progress" in status or "pending" in status:
+        if _wo_is_open(row.get("status", "")):
             p["open"] += 1
-            # Check overdue
-            due = row.get("due_date", "")
+            # Check overdue. AppFolio's work_order report has no generic
+            # due_date; fall back through the SLA-ish date fields it does expose.
+            due = (
+                row.get("scheduled_end")
+                or row.get("follow_up_on")
+                or row.get("due_date")
+                or ""
+            )
             if due:
                 try:
-                    due_date = datetime.date.fromisoformat(due[:10])
+                    due_date = datetime.date.fromisoformat(str(due)[:10])
                     if due_date < today:
                         p["overdue"] += 1
                 except ValueError:
@@ -519,74 +736,164 @@ def _gmail_inbox():
 # Source 7: google_calendar
 # ---------------------------------------------------------------------------
 
-@source("google_calendar", "Today + tomorrow events from Google Calendar")
+_SKIP_CAL_SUFFIXES = ("#holiday@group.v.calendar.google.com", "#weeknum@group.v.calendar.google.com")
+
+
+def _gcal_accounts():
+    """Account keys in the google-calendar-mcp tokens file (e.g. jbm, m5c7)."""
+    with open(_CREDS["gcal_tokens_path"]) as f:
+        data = json.load(f)
+    if isinstance(data, dict) and "access_token" not in data:
+        return [k for k, v in data.items() if isinstance(v, dict) and v.get("refresh_token")]
+    return [None]  # flat single-account token file
+
+
+def _gcal_event_start_pt_date(start):
+    """PT calendar date of an event start ('YYYY-MM-DD' all-day or RFC3339)."""
+    if len(start) == 10:
+        return start
+    dt = _to_pt(start)
+    return dt.date().isoformat() if dt else start[:10]
+
+
+@source("google_calendar", "Today + tomorrow (PT) events across every Google account and calendar")
 def _google_calendar():
-    creds = _build_google_creds(
-        _CREDS["gcal_tokens_path"],
-        _CREDS["gcal_secrets_path"],
-        scopes=["https://www.googleapis.com/auth/calendar.readonly"],
-        account_key="m5c7",
-    )
-    service = _google_service("calendar", "v3", creds)
+    today = _pt_today()
+    tomorrow = today + datetime.timedelta(days=1)
+    time_min = _pt_midnight(today).isoformat()
+    time_max = _pt_midnight(today + datetime.timedelta(days=2)).isoformat()
 
-    today = datetime.date.today()
-    day_after_tomorrow = today + datetime.timedelta(days=2)
-    time_min = f"{today.isoformat()}T00:00:00Z"
-    time_max = f"{day_after_tomorrow.isoformat()}T00:00:00Z"
-
-    calendar_ids = ["primary"]
-    # Try to find "Work" calendar
-    try:
-        cal_list = service.calendarList().list().execute()
-        for cal in cal_list.get("items", []):
-            summary = (cal.get("summary", "") or "").lower()
-            if summary == "work" or "work" in summary:
-                calendar_ids.append(cal["id"])
-                break
-    except Exception:
-        pass
-
-    all_events = []
-    for cal_id in calendar_ids:
+    accounts_out, calendars_out, errors = [], [], []
+    all_events, seen = [], set()
+    for acct in _gcal_accounts():
+        label = acct or "default"
         try:
-            events_resp = service.events().list(
-                calendarId=cal_id,
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy="startTime",
-                maxResults=50,
-            ).execute()
-            for ev in events_resp.get("items", []):
+            creds = _build_google_creds(
+                _CREDS["gcal_tokens_path"], _CREDS["gcal_secrets_path"],
+                scopes=["https://www.googleapis.com/auth/calendar.readonly"],
+                account_key=acct,
+            )
+            service = _google_service("calendar", "v3", creds)
+            cals, page = [], None
+            while True:
+                resp = service.calendarList().list(pageToken=page).execute()
+                cals.extend(resp.get("items", []))
+                page = resp.get("nextPageToken")
+                if not page:
+                    break
+        except Exception as e:
+            errors.append({"account": label, "error": f"{type(e).__name__}: {e}"})
+            accounts_out.append({"account": label, "ok": False})
+            continue
+
+        acct_count = 0
+        for cal in cals:
+            cal_id = cal.get("id", "")
+            name = cal.get("summaryOverride") or cal.get("summary") or cal_id
+            skip = None
+            if cal.get("deleted"):
+                skip = "deleted"
+            elif cal.get("hidden"):
+                skip = "hidden"
+            elif cal_id.endswith(_SKIP_CAL_SUFFIXES):
+                skip = "holidays/weeknum"
+            cal_rec = {"account": label, "id": cal_id, "name": name,
+                       "primary": bool(cal.get("primary")), "events": 0}
+            if skip:
+                cal_rec["skipped"] = skip
+                calendars_out.append(cal_rec)
+                continue
+            try:
+                items, page = [], None
+                while True:
+                    resp = service.events().list(
+                        calendarId=cal_id, timeMin=time_min, timeMax=time_max,
+                        singleEvents=True, orderBy="startTime", maxResults=250,
+                        pageToken=page,
+                    ).execute()
+                    items.extend(resp.get("items", []))
+                    page = resp.get("nextPageToken")
+                    if not page:
+                        break
+            except Exception as e:
+                cal_rec["error"] = f"{type(e).__name__}: {e}"
+                errors.append({"account": label, "calendar": cal_id, "error": cal_rec["error"]})
+                calendars_out.append(cal_rec)
+                continue
+
+            for ev in items:
+                if ev.get("status") == "cancelled":
+                    continue
+                attendees = ev.get("attendees", []) or []
+                me = next((a for a in attendees if a.get("self")), None)
+                if me and me.get("responseStatus") == "declined":
+                    continue
                 start = ev.get("start", {}).get("dateTime", ev.get("start", {}).get("date", ""))
                 end = ev.get("end", {}).get("dateTime", ev.get("end", {}).get("date", ""))
+                # Recurring instances share an iCalUID, so key on the instance start too.
+                orig = ev.get("originalStartTime", {})
+                inst = orig.get("dateTime", orig.get("date", "")) or start
+                key = (ev.get("iCalUID") or ev.get("id"), inst)
+                if key in seen:
+                    continue
+                seen.add(key)
+                cal_rec["events"] += 1
+                acct_count += 1
+                org = ev.get("organizer", {}) or {}
                 all_events.append({
+                    "account": label,
                     "calendar": cal_id,
+                    "calendar_name": name,
+                    "id": ev.get("id"),
+                    "ical_uid": ev.get("iCalUID"),
                     "summary": ev.get("summary", "(no title)"),
                     "start": start,
                     "end": end,
+                    "all_day": "date" in ev.get("start", {}) and "dateTime" not in ev.get("start", {}),
                     "status": ev.get("status", ""),
-                    "attendees": len(ev.get("attendees", [])),
+                    "location": ev.get("location", ""),
+                    "attendees": len(attendees),  # int, kept for backward compat
+                    "attendee_list": [
+                        {"email": a.get("email", ""), "responseStatus": a.get("responseStatus", ""),
+                         **({"self": True} if a.get("self") else {}),
+                         **({"organizer": True} if a.get("organizer") else {})}
+                        for a in attendees
+                    ],
+                    "organizer": org.get("email", ""),
+                    "self_response": (me or {}).get("responseStatus", ""),
                 })
-        except Exception:
-            pass
+            calendars_out.append(cal_rec)
+        accounts_out.append({"account": label, "ok": True, "calendars": len(cals), "events": acct_count})
 
-    # Split into today / tomorrow
-    today_events = []
-    tomorrow_events = []
-    tomorrow_str = (today + datetime.timedelta(days=1)).isoformat()
+    if accounts_out and not any(a["ok"] for a in accounts_out):
+        raise RuntimeError(f"all Google accounts failed: {errors}")
+
+    def _sort_key(e):
+        s = e["start"]
+        return (_gcal_event_start_pt_date(s), "" if len(s) == 10 else _to_pt(s).isoformat())
+    all_events.sort(key=_sort_key)
+    today_events, tomorrow_events = [], []
     for ev in all_events:
-        if ev["start"].startswith(tomorrow_str):
+        d = _gcal_event_start_pt_date(ev["start"])
+        if d == tomorrow.isoformat():
             tomorrow_events.append(ev)
         else:
-            today_events.append(ev)
+            today_events.append(ev)  # incl. multi-day events that began before today
 
-    return {
+    out = {
+        "date": today.isoformat(),
+        "time_min": time_min,
+        "time_max": time_max,
         "today_count": len(today_events),
         "tomorrow_count": len(tomorrow_events),
         "today": today_events,
         "tomorrow": tomorrow_events,
+        "accounts": accounts_out,
+        "calendars": calendars_out,
     }
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -825,8 +1132,36 @@ def _imessage_recent():
 # Source 12: slack
 # ---------------------------------------------------------------------------
 
+def _on_ix() -> bool:
+    """True on the ix mac mini (same test as did-fast/_on_ix)."""
+    import socket
+    host = socket.gethostname().lower()
+    return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
+
+
+def _outlook_skip(server_name: str):
+    """Skip result for an Agency source that cannot authenticate here, or None.
+
+    On ix the dream run is headless: MSAL's keychain read fails (-61) and
+    Agency falls back to interactive sign-in that nobody completes, so every
+    Outlook source sat until the 30s source timeout (v160-v166). Unless an
+    AGENCY_REMOTE_<NAME>_PORT tunnel delegates to a host that can auth,
+    return immediately instead of hanging."""
+    if not _on_ix():
+        return None
+    env_key = f"AGENCY_REMOTE_{server_name.upper()}_PORT"
+    if os.environ.get(env_key):
+        return None
+    return {"status": "skipped",
+            "reason": f"on ix without {env_key}: headless MSAL (keychain -61) "
+                      f"cannot complete interactive auth"}
+
+
 @source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
 def _outlook_inbox():
+    skip = _outlook_skip("mail")
+    if skip:
+        return skip
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
     from datetime import timezone
@@ -898,6 +1233,9 @@ def _outlook_inbox():
 
 @source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
 def _outlook_calendar():
+    skip = _outlook_skip("calendar")
+    if skip:
+        return skip
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
     from datetime import timezone
@@ -946,37 +1284,119 @@ def _annual_goals_4g():
     nits — see dream-ai-context.md 'Goal-leverage orientation'."""
     import openpyxl  # available in the intake env
     path = Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
-    if not path.exists():
-        return {"error": f"{path} not found", "goals": []}
-    yy = datetime.date.today().strftime("%y")
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
-        sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
-                     wb.sheetnames[0])
-        ws = wb[sheet]
-        goals, tldr = [], None
-        for row in ws.iter_rows(values_only=True):
-            cells = list(row)
-            c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
-            c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
-            blob = (c0 + " " + c1).lower()
-            if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
-                tldr = (c1 or c0)
-                continue
-            # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
-            if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
-                pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
-                earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
-                goals.append({
-                    "domain": c0,
-                    "goal": c1,
-                    "target_fen": cells[2],
-                    "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
-                    "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
-                })
-        return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
-    finally:
-        wb.close()
+        if not path.exists():
+            raise FileNotFoundError(path)
+        yy = datetime.date.today().strftime("%y")
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
+                         wb.sheetnames[0])
+            ws = wb[sheet]
+            goals, tldr = [], None
+            for row in ws.iter_rows(values_only=True):
+                cells = list(row)
+                c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
+                c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
+                blob = (c0 + " " + c1).lower()
+                if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
+                    tldr = (c1 or c0)
+                    continue
+                # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
+                if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
+                    pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
+                    earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
+                    goals.append({
+                        "domain": c0,
+                        "goal": c1,
+                        "target_fen": cells[2],
+                        "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
+                        "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
+                    })
+            return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
+        finally:
+            wb.close()
+    except Exception as e:
+        # OneDrive under macOS TCC routinely denies headless/cron reads
+        # ("Operation not permitted") — which left Dream with NO annual frame
+        # at all (source returned null). Degrade gracefully to the readable
+        # vault narrative so every run still anchors to the year's bets.
+        # Permanent fix: grant Full Disk Access to the intake's python on ix
+        # (one setting that also unlocks Safari history, screen-time, iMessage).
+        return _annual_goals_4g_vault_fallback(str(e))
+
+
+def _annual_goals_4g_vault_fallback(err):
+    """Coarse annual frame from the vault Current-State note when the OneDrive
+    4g workbook is unreadable. Narrative only (no per-goal 分 targets)."""
+    year = datetime.date.today().year
+    doc = Path.home() / "vault" / "g245" / "5e4" / f"4⎡{year} Current State.md"
+    out = {"error": f"4g xlsx unreadable ({err}); using vault fallback",
+           "source": "vault-fallback", "tldr": None, "year_bets": [], "goals": []}
+    if not doc.exists():
+        return out
+    try:
+        lines = doc.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return out
+    # tl;dr line (e.g. "**tl;dr:** ...")
+    for ln in lines:
+        low = ln.lower()
+        if "tl;dr" in low:
+            out["tldr"] = ln.split(":", 1)[-1].strip(" *") if ":" in ln else ln.strip(" *")
+            break
+    # Current-year bullet block under "# Years" (a top-level "- <year>" item
+    # followed by indented sub-bullets).
+    collecting = False
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("-") and stripped.lstrip("- ").startswith(str(year)):
+            collecting = True
+            continue
+        if collecting:
+            # stop at the next top-level bullet or a new heading
+            if (ln and not ln[0].isspace() and stripped.startswith("-")) or stripped.startswith("#"):
+                break
+            if stripped.startswith("-"):
+                out["year_bets"].append(stripped.lstrip("- ").strip())
+    return out
+
+
+@source("weekly_goals_1g", "this week's 1g goals from the g245 2g+1g narrative (the authoritative mirror; the Neon 1g tab is a stale template)")
+def _weekly_goals_1g(today=None, root=None):
+    """Return the current week's block (and next week's, if set) from
+    vault/g245/5e2/<YYYY.MM> 2g+1g-narrative.md. Week headers look like
+    `- **Oct 18 – Oct 24** —`. Without this, every Dream run spent a subagent
+    rediscovering the goals (v163 needed 3 subagents to resolve one bullet)."""
+    today = today or datetime.date.today()
+    root = Path(root) if root else Path.home() / "vault" / "g245" / "5e2"
+    hdr = re.compile(r"^\s*- \*\*([A-Z][a-z]{2}) (\d{1,2}) [–-] ([A-Z][a-z]{2}) (\d{1,2})\*\*")
+    weeks = []
+    for f in sorted(root.glob("*2g+1g-narrative.md"))[-2:]:
+        year = int(f.name[:4])
+        cur = None
+        for line in f.read_text().splitlines():
+            m = hdr.match(line)
+            if m:
+                try:
+                    start = datetime.datetime.strptime(f"{m[1]} {m[2]} {year}", "%b %d %Y").date()
+                    end = datetime.datetime.strptime(f"{m[3]} {m[4]} {year}", "%b %d %Y").date()
+                except ValueError:
+                    cur = None
+                    continue
+                if end < start:  # week crosses New Year
+                    end = end.replace(year=year + 1)
+                cur = {"start": start.isoformat(), "end": end.isoformat(), "lines": [], "file": f.name}
+                weeks.append(cur)
+            elif line.startswith("#"):
+                cur = None
+            elif cur is not None and line.strip() and line.strip() != "-":
+                cur["lines"].append(line.rstrip())
+    iso = today.isoformat()
+    current = next((w for w in weeks if w["start"] <= iso <= w["end"]), None)
+    nxt = next((w for w in weeks if w["start"] > iso), None)
+    return {"current": current, "next": nxt,
+            "next_is_empty": nxt is not None and not nxt["lines"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1002,8 +1422,9 @@ def run_sources(selected=None, timeout=30):
         try:
             data = info["fn"]()
             elapsed = time.time() - t0
+            skipped = isinstance(data, dict) and data.get("status") == "skipped"
             return name, {
-                "status": "ok",
+                "status": "skipped" if skipped else "ok",
                 "elapsed_ms": round(elapsed * 1000),
                 "data": data,
             }
@@ -1016,33 +1437,39 @@ def run_sources(selected=None, timeout=30):
                 "error": f"{type(e).__name__}: {e}",
             }
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {}
-        for name, info in sources_to_run.items():
-            fut = pool.submit(_run_one, name, info)
-            futures[fut] = name
+    # No `with` block: its __exit__ joins every worker, so one hung source
+    # (2026-10: an Agency start stuck in interactive auth) held the whole intake
+    # for 2h despite the per-source timeout. One shared deadline; stragglers are
+    # abandoned and main() exits with os._exit so atexit can't join them either.
+    pool = ThreadPoolExecutor(max_workers=8)
+    deadline = time.time() + timeout
+    futures = {}
+    for name, info in sources_to_run.items():
+        fut = pool.submit(_run_one, name, info)
+        futures[fut] = name
 
-        for fut in futures:
-            try:
-                name, result = fut.result(timeout=timeout)
-                results[name] = result
-            except FuturesTimeout:
-                name = futures[fut]
-                results[name] = {
-                    "status": "timeout",
-                    "elapsed_ms": timeout * 1000,
-                    "data": None,
-                    "error": f"Exceeded {timeout}s timeout",
-                }
-            except Exception as e:
-                name = futures[fut]
-                results[name] = {
-                    "status": "error",
-                    "elapsed_ms": 0,
-                    "data": None,
-                    "error": f"{type(e).__name__}: {e}",
-                }
+    for fut in futures:
+        try:
+            name, result = fut.result(timeout=max(deadline - time.time(), 0))
+            results[name] = result
+        except FuturesTimeout:
+            name = futures[fut]
+            results[name] = {
+                "status": "timeout",
+                "elapsed_ms": timeout * 1000,
+                "data": None,
+                "error": f"Exceeded {timeout}s timeout",
+            }
+        except Exception as e:
+            name = futures[fut]
+            results[name] = {
+                "status": "error",
+                "elapsed_ms": 0,
+                "data": None,
+                "error": f"{type(e).__name__}: {e}",
+            }
 
+    pool.shutdown(wait=False, cancel_futures=True)
     return results
 
 
@@ -1086,7 +1513,7 @@ def print_test_table(results):
                 elif "conversation_count" in d:
                     notes = f"conversations={d['conversation_count']}"
                 elif "status" in d:
-                    notes = d["status"]
+                    notes = d.get("reason", d["status"])[:50]
                 else:
                     notes = f"keys={list(d.keys())[:3]}"
 
@@ -1102,7 +1529,7 @@ def print_test_table(results):
         print(f"{name:<25} {status_str:<19} {elapsed:>8}  {notes}")
 
     ok = sum(1 for r in results.values() if r["status"] == "ok")
-    err = sum(1 for r in results.values() if r["status"] != "ok")
+    err = sum(1 for r in results.values() if r["status"] not in ("ok", "skipped"))
     total_ms = sum(r["elapsed_ms"] for r in results.values())
     print("-" * 70)
     print(f"Total: {ok} ok, {err} failed, {total_ms}ms cumulative\n")
@@ -1159,3 +1586,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Hard exit: concurrent.futures registers an atexit hook that joins all
+    # worker threads, which would re-block on any source that blew its timeout.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

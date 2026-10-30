@@ -471,10 +471,12 @@ def reverse_record(record: dict, errors: list[str]) -> None:
                 errors.append(f"reopen task {tid}: {e}")
         if tid:
             try:
-                _api("POST", f"/tasks/{tid}", {
-                    "content": record.get("prev_content", ""),
-                    "due_date": record.get("prev_due") or today_iso,
-                })
+                body = {"content": record.get("prev_content", "")}
+                # split never moved a recurring task's date; a bare due_date
+                # here would strip its cadence (v169 review)
+                if not record.get("recurring"):
+                    body["due_date"] = record.get("prev_due") or today_iso
+                _api("POST", f"/tasks/{tid}", body)
             except Exception as e:
                 errors.append(f"restore task {tid}: {e}")
         for key in ("didfast", "didfast_bonus"):
@@ -528,20 +530,29 @@ def _unmark_habit_deferred(task_id: str) -> None:
     a missing file or lost race just means the card stays hidden until the
     next day's marker file takes over."""
     from datetime import date as _date
-    p = os.path.expanduser(f"~/.cache/jm/habits-deferred-{_date.today().isoformat()}.ids")
-    if not os.path.exists(p):
-        return
-    try:
-        with open(p) as f:
-            lines = f.readlines()
-        kept = [l for l in lines if l.strip() != str(task_id)]
-        if len(kept) != len(lines):
-            tmp = p + ".tmp"
-            with open(tmp, "w") as f:
-                f.writelines(kept)
-            os.replace(tmp, p)
-    except OSError:
-        pass
+    day = _date.today().isoformat()
+    # Local marker AND this host's synced z_ibx mirror (defer-fast writes
+    # both since 2026-10-22; dtd.sh/dtd.py union every host's mirror). Undo
+    # clearing only the local file left the habit hidden all day everywhere.
+    # Only this host's mirror: each host is the sole writer of its own file,
+    # so Syncthing never sees two hosts editing one file.
+    import socket
+    host = re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
+    for p in (os.path.expanduser(f"~/.cache/jm/habits-deferred-{day}.ids"),
+              os.path.expanduser(f"~/vault/z_ibx/habits-deferred-{host}-{day}.ids")):
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p) as f:
+                lines = f.readlines()
+            kept = [l for l in lines if l.strip() != str(task_id)]
+            if len(kept) != len(lines):
+                tmp = p + ".tmp"
+                with open(tmp, "w") as f:
+                    f.writelines(kept)
+                os.replace(tmp, p)
+        except OSError:
+            pass
 
 
 def clean_filter_files(names: list[str], session: str | None,

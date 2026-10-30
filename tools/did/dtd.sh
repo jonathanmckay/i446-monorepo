@@ -3320,10 +3320,11 @@ if remaining_bonus > 0:
     _tags.append(f'{{{remaining_bonus}}}')
 new_content = ' '.join([remaining_desc or clean] + _tags)
 if keep_rem:
-    api('POST', f'/tasks/{tid}', {
-        'content': new_content,
-        'due_date': rem_date,
-    })
+    _body = {'content': new_content}
+    # a plain due_date strips a recurring task's cadence (v169 review)
+    if not (task.get('due') or {}).get('is_recurring'):
+        _body['due_date'] = rem_date
+    api('POST', f'/tasks/{tid}', _body)
 else:
     api('POST', f'/tasks/{tid}/close')
 if rem_short and keep_rem:
@@ -3372,7 +3373,7 @@ if not label_arg:
 # 'Rev on ground transit. Buy nightshade, 2' logged its 10 points as '2').
 # NB: NO bare double quotes in this comment — they terminate the enclosing
 # python -c string and silently break the whole split (see line ~551).
-safe_name = re.sub(r'[,;]+', ' ', clean)
+safe_name = re.sub(r'[,;，；]+', ' ', clean)  # fullwidth too: did-fast splits on them
 def _credit(item):
     df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py', '--points-only', item],
                         capture_output=True, text=True, timeout=30)
@@ -3406,6 +3407,7 @@ record = {
     'didfast': didfast_out,
     'didfast_bonus': didfast_bonus,
     'closed': not keep_rem,
+    'recurring': bool((task.get('due') or {}).get('is_recurring')),
 }
 subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
                 '--append', 'PLACEHOLDER_JOURNAL'],

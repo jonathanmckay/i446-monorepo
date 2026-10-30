@@ -46,6 +46,12 @@ SKILL_PATH = Path.home() / ".claude/skills/d357/SKILL.md"
 CLAUDE = "/opt/homebrew/bin/claude"
 LOCK = Path("/tmp/d357-auto-file.lock")
 LOG = Path("/tmp/d357-auto-file.log")
+# Headless auth: cron sessions cannot read the Claude Code login keychain, so a
+# bare `claude --print` exits 1 with "Not logged in" (every hourly run since this
+# cron was added did exactly that — zero meetings filed). dream-launch.sh solved
+# the same problem with a long-lived token from `claude setup-token` kept in
+# ~/.claude/oauth-token (mode 600); reuse that credential here.
+OAUTH_TOKEN_FILE = Path.home() / ".claude" / "oauth-token"
 
 MAX_PER_RUN = 2
 BUDGET_USD = "0.50"
@@ -62,6 +68,10 @@ CUTOFF_DATE = "2026.08.02"
 REC_STEM_RE = re.compile(r'^(\d{4}\.\d{2}\.\d{2})-\d{4}-(.+)$')
 # Filed docs: YYYY.MM.DD-<slug>.md (no HHMM — SKILL.md's filename format).
 DOC_STEM_RE = re.compile(r'^(\d{4}\.\d{2}\.\d{2})-(.+)$')
+# Side files meet.py/whisper leave next to the main transcript
+# (`<stem>.transcript.txt`, `<stem>.small-en.txt`): same meeting, never a
+# separate candidate when the main `<stem>.txt` is present.
+SIDE_SUFFIX_RE = re.compile(r'^(.+)\.([A-Za-z][A-Za-z-]*)$')
 
 
 def log(msg: str) -> None:
@@ -75,23 +85,51 @@ def log(msg: str) -> None:
 
 
 def _tokens(slug: str) -> set[str]:
-    """Same matching semantics as build-order-daemon.py's/janus.py's
-    _slug_tokens: meaningful (>=3 char, non-numeric) hyphen/underscore-split
-    tokens, lowercased."""
-    return {t.lower() for t in re.split(r'[-_]+', slug) if len(t) >= 3 and not t.isdigit()}
+    """Meaningful (>=3 char, non-numeric) lowercase tokens, split on ANY
+    non-alphanumeric run. Splitting only on -/_ (the original rule) left
+    meet.py punctuation glued on ("ja:", "1:1", "im|jm") so recordings like
+    `ja:-jm-1:1` shared no token with their filed doc `ja-jm-1-1`."""
+    return {t for t in re.split(r'[^0-9a-z]+', slug.lower())
+            if len(t) >= 3 and not t.isdigit()}
 
 
-def _is_filed(date_str: str, tokens: set[str]) -> bool:
-    """True if some vault/d357/**/{date_str}-*.md doc shares a slug token
-    with this recording — recursive glob (real files live in week
-    subfolders, see the 2026-08-02 find_meetings_for_date fix)."""
+def _compact(slug: str) -> str:
+    """Slug reduced to bare lowercase alphanumerics: `rr-:-jm-1:1` and
+    `rr-jm-1-1` both -> `rrjm11`; `m5x2-strat-(1|1|1)` -> `m5x2strat111`.
+    meet.py keeps the raw meeting title (':', '|', '(', '&'); the /d357 skill
+    files a kebab slug — compacting makes the two comparable."""
+    return re.sub(r'[^0-9a-z]+', '', slug.lower())
+
+
+# Prefix match floor: meet.py truncates titles at ~30 chars
+# ("lock-on-gaming-metrics-definit"), and filed docs sometimes drop a
+# trailing fragment ("cosmos-data-assets-migration" for "...-migration-p").
+# Below this length a prefix is too ambiguous to trust ("rr" vs "rrsync").
+MIN_PREFIX_LEN = 8
+
+
+def _slugs_match(rec_slug: str, doc_slug: str) -> bool:
+    a, b = _compact(rec_slug), _compact(doc_slug)
+    if a and a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    if len(short) >= MIN_PREFIX_LEN and long_.startswith(short):
+        return True
+    return bool(_tokens(rec_slug) & _tokens(doc_slug))
+
+
+def _is_filed(date_str: str, rec_slug: str) -> bool:
+    """True if some vault/d357/**/{date_str}-*.md doc matches this
+    recording's slug (normalized equality, prefix, or shared token) —
+    recursive glob (real files live in week subfolders, see the 2026-08-02
+    find_meetings_for_date fix)."""
     if not D357_DIR.exists():
         return False
     for path in D357_DIR.glob(f"**/{date_str}-*.md"):
         m = DOC_STEM_RE.match(path.stem)
         if not m:
             continue
-        if _tokens(m.group(2)) & tokens:
+        if _slugs_match(rec_slug, m.group(2)):
             return True
     return False
 
@@ -110,13 +148,16 @@ def find_unfiled(now: float | None = None) -> list[Path]:
         date_str, slug = m.group(1), m.group(2)
         if date_str < CUTOFF_DATE:
             continue
+        side = SIDE_SUFFIX_RE.match(txt.stem)
+        if side and (txt.parent / f"{side.group(1)}.txt").exists():
+            continue
         try:
             age = now - txt.stat().st_mtime
         except OSError:
             continue
         if age < MIN_AGE_SEC:
             continue
-        if _is_filed(date_str, _tokens(slug)):
+        if _is_filed(date_str, slug):
             continue
         out.append(txt)
     return out
@@ -189,12 +230,23 @@ def _release_lock() -> None:
         pass
 
 
+class NotLoggedIn(RuntimeError):
+    """claude --print reported "Not logged in": every further call in this
+    batch would fail identically, so the batch stops instead of burning
+    through the rest."""
+
+
 def file_meeting(txt_path: Path, dry_run: bool = False) -> bool:
     prompt = build_prompt(txt_path)
     if dry_run:
         log(f"[DRY RUN] would file {txt_path.name}")
         return True
     log(f"filing {txt_path.name}...")
+    env = os.environ.copy()
+    if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and OAUTH_TOKEN_FILE.is_file():
+        tok = OAUTH_TOKEN_FILE.read_text().strip()
+        if tok:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = tok
     try:
         r = subprocess.run(
             [CLAUDE, "--print", "--model", "sonnet",
@@ -204,6 +256,7 @@ def file_meeting(txt_path: Path, dry_run: bool = False) -> bool:
              "--add-dir", str(Path.home() / "i446-monorepo")],
             input=prompt, capture_output=True, text=True,
             timeout=CLAUDE_TIMEOUT_SEC, cwd=str(Path.home() / "vault"),
+            env=env,
         )
     except subprocess.TimeoutExpired:
         log(f"TIMEOUT filing {txt_path.name}")
@@ -211,6 +264,8 @@ def file_meeting(txt_path: Path, dry_run: bool = False) -> bool:
     out_lines = (r.stdout or "").strip().splitlines()
     log(f"claude exit={r.returncode} tail={out_lines[-5:]}")
     if r.returncode != 0:
+        if "not logged in" in f"{r.stdout or ''}\n{r.stderr or ''}".lower():
+            raise NotLoggedIn(txt_path.name)
         return False
     return any(line.startswith("FILED ") for line in out_lines)
 
@@ -234,8 +289,13 @@ def main() -> int:
             log(f"{len(unfiled) - len(batch)} more unfiled, deferred to next run")
         filed = 0
         for txt in batch:
-            if file_meeting(txt, dry_run=args.dry_run):
-                filed += 1
+            try:
+                if file_meeting(txt, dry_run=args.dry_run):
+                    filed += 1
+            except NotLoggedIn:
+                log(f"claude: Not logged in while filing {txt.name} — "
+                    f"stopping batch (check {OAUTH_TOKEN_FILE})")
+                return 1
         log(f"done: {filed}/{len(batch)} filed")
         return 0
     finally:

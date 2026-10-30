@@ -3,6 +3,7 @@
 the ctrl-z pre-image parser keep working; daemon-down falls back to ix-osa."""
 from __future__ import annotations
 
+from datetime import date
 import importlib.util
 import sys
 from pathlib import Path
@@ -172,3 +173,24 @@ def test_step4b_calls_daemon_before_raw_1n_script():
     i_raw = src.index("script = build_1n_script(group, week_mw)", i_daemon)
     assert "if one_n_result is None:" in src[i_daemon:i_raw]
     assert "build_hcbi_script" not in src.replace("# build_hcbi_script AppleScript", "")
+
+
+# ── step 4b per-batch rows (2026-10-27 review) ──────────────────────────────
+def test_1n_batches_keep_row_pre_and_success_per_week(df, monkeypatch):
+    """A Sunday `/did 1 -2g, 1 i9` writes two weeks (10.3 for the Monday-cycle
+    card, 10.4 for the rest). Each entry must carry ITS batch's row and PRE
+    map, and a failed batch must not count as written (no 0分 credit)."""
+    from types import SimpleNamespace as NS
+    a = _w1n(df, "1 -2g", "K")
+    b = _w1n(df, "1 i9", "M")
+
+    def fake(group, week_mw):
+        if week_mw == "10.3":
+            return NS(returncode=1, stdout="", stderr="osascript_timeout")
+        return NS(returncode=0, stdout="OK:weekRow=44|M=1|\nPRE:M=\n", stderr="")
+    monkeypatch.setattr(df, "write_1n_via_daemon", fake)
+    monkeypatch.setattr(df, "parse_pre_lines", lambda out: {"M": ""} if "PRE" in out else {})
+    res, row_of, pre_of = df.write_1n_batches([a, b], date(2026, 10, 25))
+    assert row_of == {id(b): "44"}          # failed 10.3 batch: no row, no credit
+    assert id(a) not in pre_of and pre_of[id(b)] == {"M": ""}
+    assert res.returncode == 1               # the failure is what gets reported
