@@ -106,3 +106,19 @@ tools/personal-dashboard/.toggl-daily-cache.json
 
 # per-host heartbeat now lives in ~/.cache/ai-dashboard (2026-10-29)
 tools/ai-dashboard/.periodic-sync.heartbeat
+
+# ── Generated private data: never commit (Dream v174 untrack-data, 2026-10-31) ──
+# Public repo. These hold tenant names + rents, m5x2 property financials, staff
+# PIP/status/grades, Microsoft ExP experiment data, or personal task history.
+# Producers write them to disk; servers read from disk. History still has them.
+tools/m5x2-occupancy-dashboard/data/
+tools/m5x2-occupancy-dashboard/index.html
+tools/m5x2-occupancy-dashboard/.publish/
+tools/pnl/data/
+skills/claude-skills/exp-weekly-dashboard/weekly_data.json
+skills/claude-skills/exp-weekly-dashboard/weekly_dashboard.html
+tools/m5x2-org-chart/roster.tsv
+tools/m5x2-org-chart/index.html
+tools/m5x2-weekly-reports/index.html
+tools/personal-dashboard/.tasks-cache.json
+tools/x954-g245.1/neon_agent_copy.xlsx
