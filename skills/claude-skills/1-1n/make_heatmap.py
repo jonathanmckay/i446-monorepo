@@ -6,7 +6,8 @@ showing which build-order ritual icons were hit. Multi-source:
   Todoist     -> ✓ task completed (completed_at bucketed by block)
 Usage: make_heatmap.py START END   (YYYY-MM-DD inclusive). Prints markdown.
 """
-import sys, os, json, datetime as dt, urllib.request, base64, re
+import sys, os, json, datetime as dt, urllib.request, base64, re, subprocess
+from pathlib import Path
 from collections import defaultdict
 
 sys.path.insert(0, str(os.path.expanduser('~/i446-monorepo/lib')))
@@ -132,8 +133,24 @@ def add_goals(grid, start, end):
         day += dt.timedelta(days=1)
 
 # ---------- Todoist completed -> ✓ ----------
+def _todoist_token() -> str:
+    """lib/todoist.py's lookup order (token file, then env), plus the keychain
+    item the Ix scripts use. The secret is never hard-coded (2026-10-30)."""
+    f = Path.home() / ".config/todoist/token"
+    if f.exists():
+        return f.read_text().strip()
+    for k in ("TODOIST_TOKEN", "TODOIST_API_TOKEN", "TODOIST_API_KEY"):
+        if os.environ.get(k):
+            return os.environ[k].strip()
+    try:
+        return subprocess.run(["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def add_todoist(grid, start, end):
-    token = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+    token = _todoist_token()
     # One query PER DAY (2026-10-05): the endpoint returns at most 200 items
     # for the whole since/until window and no next_cursor, so a busy week came
     # back as only its newest ~3 days and the early days showed no ✓ at all.

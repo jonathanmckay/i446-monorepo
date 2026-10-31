@@ -35,7 +35,7 @@ echo ""
 
 # ── todoist ──────────────────────────────────────────────────────────────
 echo "todoist:"
-curl -s -o /dev/null -w "%{http_code}" "https://api.todoist.com/rest/v2/tasks?limit=1" -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null | grep -q 200 && pass "Todoist API reachable" || warn "Todoist API unreachable"
+curl -s -o /dev/null -w "%{http_code}" "https://api.todoist.com/rest/v2/tasks?limit=1" -H "Authorization: Bearer $(cat ~/.config/todoist/token)" 2>/dev/null | grep -q 200 && pass "Todoist API reachable" || warn "Todoist API unreachable"
 echo ""
 
 # ── 0r ───────────────────────────────────────────────────────────────────

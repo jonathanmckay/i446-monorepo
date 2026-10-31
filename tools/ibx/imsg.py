@@ -14,6 +14,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore")
 from datetime import datetime
+import os
 from pathlib import Path
 
 import anthropic
@@ -29,7 +30,23 @@ DB_SNAPSHOT = Path("/tmp/imsg_snapshot.db")
 STATE_DIR = Path.home() / ".config/imsg"
 STATE_FILE = STATE_DIR / "processed.json"
 TASK_STATE_FILE = STATE_DIR / "todoist_task.json"
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+def _todoist_token() -> str:
+    """lib/todoist.py's lookup order (token file, then env), plus the keychain
+    item the Ix scripts use. The secret is never hard-coded (2026-10-30)."""
+    f = Path.home() / ".config/todoist/token"
+    if f.exists():
+        return f.read_text().strip()
+    for k in ("TODOIST_TOKEN", "TODOIST_API_TOKEN", "TODOIST_API_KEY"):
+        if os.environ.get(k):
+            return os.environ[k].strip()
+    try:
+        return subprocess.run(["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+TODOIST_TOKEN = _todoist_token()
 # Apple Core Data epoch offset: seconds between 2001-01-01 and Unix epoch
 APPLE_EPOCH_OFFSET = 978307200
 

@@ -53,7 +53,7 @@ curl -s -u "$TOGGL_API_KEY:api_token" "https://api.track.toggl.com/api/v9/me" 2>
 ### 4. Todoist API
 
 ```bash
-curl -s -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" "https://api.todoist.com/rest/v2/tasks?limit=1" 2>/dev/null | python3 -c "import json,sys; print('OK' if isinstance(json.load(sys.stdin), list) else 'FAIL')"
+curl -s -H "Authorization: Bearer $(cat ~/.config/todoist/token)" "https://api.todoist.com/rest/v2/tasks?limit=1" 2>/dev/null | python3 -c "import json,sys; print('OK' if isinstance(json.load(sys.stdin), list) else 'FAIL')"
 ```
 
 ### 5. iMessage response DB

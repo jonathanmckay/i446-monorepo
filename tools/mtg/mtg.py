@@ -13,6 +13,7 @@ Usage:
 
 import json
 import os
+import subprocess
 import sys
 import re
 import logging
@@ -31,7 +32,23 @@ VAULT = Path.home() / "vault"
 STATE_FILE = VAULT / "h335/d358/.mtg-state.json"
 CONFIG_FILE = VAULT / "h335/d358/.mtg-config.json"
 D359_DIR = VAULT / "d359"
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+def _todoist_token() -> str:
+    """lib/todoist.py's lookup order (token file, then env), plus the keychain
+    item the Ix scripts use. The secret is never hard-coded (2026-10-30)."""
+    f = Path.home() / ".config/todoist/token"
+    if f.exists():
+        return f.read_text().strip()
+    for k in ("TODOIST_TOKEN", "TODOIST_API_TOKEN", "TODOIST_API_KEY"):
+        if os.environ.get(k):
+            return os.environ[k].strip()
+    try:
+        return subprocess.run(["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+TODOIST_TOKEN = _todoist_token()
 
 MTG_CONFIG_DIR = Path.home() / ".config/mtg"
 # OAuth client from workspace-mcp (scoped to m5c7.com)
