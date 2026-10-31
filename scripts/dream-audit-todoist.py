@@ -139,6 +139,38 @@ def claude_start_from_log(run_dir: Path) -> str | None:
     local = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").astimezone()
     return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
+# Attribution of "added" events (v174, 2026-10-31). Every event carries the same
+# initiator_id (JM's account), so initiator cannot tell Dream from JM. The
+# activity log's extra_data.client can: Dream writes through the Todoist MCP
+# server ("todoist-mcp/13.8.0"); JM's own ritual emitter (😈 -1l/-1t/-1ibx/-1g,
+# s سمش at 04:00 PT), /defer and /0g use "Python-urllib/3.9" or
+# "python-requests/x". v173's brief opened with a false "DREAM CREATED 5 TASKS"
+# banner because every add in the window was counted. Only MCP-originated adds
+# (or adds with no client recorded, conservatively) are flagged now. Caveat: an
+# interactive Claude session JM runs during the window also uses todoist-mcp.
+DREAM_CLIENT_PREFIXES = ("todoist-mcp",)
+
+
+def is_dream_client(client: str | None) -> bool:
+    """True if an activity event's client could be Dream (todoist-mcp, or unknown)."""
+    if not client:
+        return True
+    return client.lower().startswith(DREAM_CLIENT_PREFIXES)
+
+
+def attribute_added(events: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split 'added' events into (dream_created, other_added) by extra_data.client."""
+    dream, other = [], []
+    for e in events:
+        x = e.get("extra_data") or {}
+        rec = {"id": str(e.get("object_id", "")),
+               "content": (x.get("content", "") or "")[:100],
+               "client": x.get("client") or "",
+               "initiator_id": str(e.get("initiator_id") or ""),
+               "event_date": e.get("event_date", "")}
+        (dream if is_dream_client(x.get("client")) else other).append(rec)
+    return dream, other
+
 
 def _api(url: str):
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
@@ -211,7 +243,9 @@ def main() -> int:
     mapping_path = run_dir / "revert-mapping.json"
     mapping_path.write_text(json.dumps(
         {"window": {"since": args.since, "until": until}, "counts": counts,
-         "created": created, "emitter_added": emitter, "other_added": other, "restorable": restorable, "no_prior": no_prior},
+         "created": created, "emitter_added": emitter, "other_added": other,
+         # dream-meta key (v174): every non-Dream add, emitter + other
+         "added_other": emitter + other, "restorable": restorable, "no_prior": no_prior},
         indent=1, ensure_ascii=False))
 
     mutations = max(counts.get("updated", 0), 0) + max(counts.get("deleted", 0), 0)
@@ -223,12 +257,14 @@ def main() -> int:
     alerts = []
     # Creation is an absolute violation — ANY created task gets flagged + listed to reap.
     if created:
-        rows = "\n".join(f"- `{c['id']}` — {c['content']}" for c in created[:50])
+        rows = "\n".join(f"- `{c['id']}` — {c['content']} ({c['client'] or 'no client recorded'})"
+                         for c in created[:50])
         alerts.append(
             f"# ⛔ DREAM CREATED {len(created)} TODOIST TASK(S) — POLICY VIOLATION\n\n"
             f"Dream must NEVER create Todoist tasks (dream-prompt-base.md §No autonomous "
             f"Todoist task creation; JM 2026-06-22: the morning brief is the ONLY channel "
-            f"to ask JM to do something). These were created this run and must be reaped:\n\n"
+            f"to ask JM to do something). These were created this run through todoist-mcp (Dream's client; an interactive "
+            f"Claude session in the same window would also show here) and must be reaped:\n\n"
             f"{rows}\n\n"
             f"Reap each id (todoist delete-object) or re-propose as `[APPROVAL]` cards.\n\n---\n\n"
         )
