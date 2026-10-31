@@ -125,7 +125,10 @@ if [[ "$BACKFILL_DATE" < "$BACKFILL_STOP" ]]; then
 else
   BACKFILL_MSG="Backfill date: $BACKFILL_DATE. Also scan AI transcripts from this date for loose threads."
   # Advance pointer one day back for next run
-  NEXT_BACKFILL=$(date -j -f '%Y-%m-%d' "$BACKFILL_DATE" -v-1d '+%Y-%m-%d')
+  # BSD date: -v must precede the operand, else it is ignored and the default
+  # format ("Fri Oct 30 03:00:01 PDT 2026") is written, which the next run reads
+  # as corrupt and resets to yesterday: the pointer never moved past yesterday.
+  NEXT_BACKFILL=$(date -j -v-1d -f '%Y-%m-%d' "$BACKFILL_DATE" '+%Y-%m-%d')
   echo "$NEXT_BACKFILL" > "$BACKFILL_STATE"
 fi
 
@@ -234,13 +237,12 @@ _run_claude() {
       return 124
     fi
 
-    # Activity check: any file in RUN_DIR modified in last STALL_THRESHOLD seconds?
-    NEWEST=$(find "$RUN_DIR" -type f -not -name "*.log" -newer "$RUN_DIR/PROMPT.md" -print -quit 2>/dev/null)
-    if [[ -z "$NEWEST" ]]; then
-      # No files newer than PROMPT.md at all — check log growth instead
-      NEWEST="$LOG"
-    fi
-    FILE_AGE=$(( $(date +%s) - $(stat -f %m "$NEWEST" 2>/dev/null || echo 0) ))
+    # Activity check: age of the NEWEST write in RUN_DIR (max mtime). `-print -quit`
+    # returned the first match in directory order — any file newer than PROMPT.md,
+    # often one written hours earlier — so a busy run read as stalled and was
+    # killed (v166-v168, 2026-10-26). The launcher LOG counts as activity too.
+    NEWEST_MTIME=$( { find "$RUN_DIR" -type f -not -name "*.log" -newer "$RUN_DIR/PROMPT.md" -exec stat -f '%m' {} + 2>/dev/null; stat -f '%m' "$LOG" 2>/dev/null; } | sort -n | tail -1)
+    FILE_AGE=$(( $(date +%s) - ${NEWEST_MTIME:-0} ))
     if [[ $FILE_AGE -gt $STALL_THRESHOLD ]]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] STALL detected ($label): no activity for ${FILE_AGE}s, killing" >> "$LOG"
       kill "$CLAUDE_PID" 2>/dev/null; sleep 2; kill -9 "$CLAUDE_PID" 2>/dev/null

@@ -948,6 +948,13 @@ def _annual_goals_4g():
     path = Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
     if not path.exists():
         return {"error": f"{path} not found", "goals": []}
+    if _is_dataless(path):
+        # v174 (2026-10-31): OneDrive Files-On-Demand had evicted the file to a
+        # cloud placeholder. A launchd-context read cannot hydrate it
+        # (PermissionError at 03:00; BadZipFile interactively), so say why.
+        return {"error": f"{path.name} is a OneDrive cloud-only placeholder (dataless); "
+                         "fix: Finder > right-click ~/OneDrive/vault-excel > Always Keep on This Device",
+                "dataless": True, "goals": []}
     yy = datetime.date.today().strftime("%y")
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
@@ -977,6 +984,91 @@ def _annual_goals_4g():
         return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
     finally:
         wb.close()
+
+
+_SF_DATALESS = 0x40000000  # <sys/stat.h>: file content lives in the cloud, not on disk
+
+
+def _is_dataless(path: Path) -> bool:
+    try:
+        return bool(getattr(os.stat(path), "st_flags", 0) & _SF_DATALESS)
+    except OSError:
+        return False
+
+
+_1G_HEADER = re.compile(r"^- \*\*([A-Z][a-z]{2}) (\d{1,2}) [–-] ([A-Z][a-z]{2}) (\d{1,2})\*\*(.*)$")
+_MON = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+
+
+def parse_1g_weeks(text: str, year: int) -> list[dict]:
+    """Parse '- **Oct 25 – Oct 31** — note' week blocks from a 2g+1g narrative doc.
+    Returns [{start, end, note, lines}] with dates as datetime.date; `lines` is the
+    indented goal outline under the header with <!--1g--> markers stripped."""
+    weeks, cur = [], None
+    for raw in text.splitlines():
+        m = _1G_HEADER.match(raw)
+        if m:
+            m1, d1, m2, d2, note = m.groups()
+            if m1 not in _MON or m2 not in _MON:
+                cur = None
+                continue
+            start = datetime.date(year, _MON[m1], int(d1))
+            end_year = year + 1 if _MON[m2] < _MON[m1] else year
+            cur = {"start": start, "end": datetime.date(end_year, _MON[m2], int(d2)),
+                   "note": note.strip(" —-").strip(), "lines": []}
+            weeks.append(cur)
+            continue
+        if cur is None:
+            continue
+        if raw.startswith(("#", "- ")) or (raw and not raw[0].isspace()):
+            cur = None  # next top-level bullet or heading ends the week block
+            continue
+        line = re.sub(r"\s*<!--1g-->", "", raw).rstrip()
+        if line.strip():
+            cur["lines"].append(line.replace("\t", "  "))
+    return weeks
+
+
+def current_1g_week(vault_dir: Path, today: datetime.date) -> dict:
+    """Find this week's 1g block in g245/5e2/<YYYY.MM> 2g+1g-narrative.md. Weeks
+    straddling a month live in the month they start in, so scan last, this and
+    next month's docs. Falls back to the latest week that has started."""
+    months = []
+    for delta in (-1, 0, 1):
+        y, m = today.year, today.month + delta
+        if m == 0:
+            y, m = y - 1, 12
+        elif m == 13:
+            y, m = y + 1, 1
+        months.append((y, m))
+    weeks, files = [], []
+    for y, m in months:
+        f = vault_dir / "g245" / "5e2" / f"{y}.{m:02d} 2g+1g-narrative.md"
+        if f.exists():
+            files.append(str(f))
+            for w in parse_1g_weeks(f.read_text(encoding="utf-8"), y):
+                w["file"] = str(f)
+                weeks.append(w)
+    if not weeks:
+        return {"error": "no 2g+1g narrative doc found", "files": files}
+    hit = next((w for w in weeks if w["start"] <= today <= w["end"]), None)
+    stale = hit is None
+    if stale:
+        started = [w for w in weeks if w["start"] <= today]
+        hit = max(started, key=lambda w: w["start"]) if started else min(weeks, key=lambda w: w["start"])
+    return {"week": f"{hit['start'].isoformat()}..{hit['end'].isoformat()}",
+            "note": hit["note"], "goals": hit["lines"], "empty": not hit["lines"],
+            "stale": stale, "source": hit["file"]}
+
+
+@source("weekly_goals_1g", "This week's 1g goals from the vault 2g+1g narrative doc (Neon 1g tab is stale)")
+def _weekly_goals_1g():
+    """The Excel 1g tab stopped updating (still shows a 'Dec.03' block on
+    2026-10-31); JM writes weekly goals in ~/vault/g245/5e2/<YYYY.MM>
+    2g+1g-narrative.md instead. `empty: true` = header exists but no goals yet
+    (e.g. Sunday before /1g). `stale: true` = no block covers today."""
+    return current_1g_week(Path.home() / "vault", datetime.date.today())
 
 
 # ---------------------------------------------------------------------------
