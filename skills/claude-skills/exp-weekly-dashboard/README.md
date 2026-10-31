@@ -23,7 +23,7 @@ sub-row indicator.
 |--|--|
 | **Copilot CLI or VS Code** | With GitHub Copilot Chat |
 | **ExP MCP server** | `exp.azure.net/mcp` configured with `useMicrosoftCredential: true` |
-| **Python** | 3.9+ on PATH. No third-party packages needed. |
+| **Python** | 3.9+ on PATH. Renderer is stdlib-only; the live generator needs `requests` and the Azure CLI (`az login`). |
 | **Access** | Microsoft corpnet or Azure sign-in for ExP authentication |
 
 ## Install
@@ -62,6 +62,14 @@ python generate_live_weekly_data.py --render
 python generate_live_weekly_data.py   # writes weekly_data.json
 python build_weekly_cards.py          # reads JSON, writes weekly_dashboard.html
 ```
+
+### Offline self-test (no ExP, no network)
+
+```bash
+python3 test_offline.py
+```
+
+Mocks the MCP, runs generate -> render in a temp dir, and checks outcome classification.
 
 ## Files
 

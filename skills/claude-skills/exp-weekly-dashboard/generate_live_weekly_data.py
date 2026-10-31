@@ -32,6 +32,7 @@ MCP_SCOPE = "api://d9473dd8-6329-4dcc-83fd-1bcbe4a531df/mcp"
 WORKSPACE_ID = "3e3b8347-c494-4f7e-a5aa-3e693ba7dd3c"
 PAGE_SIZE = 100
 MCP_TIMEOUT_SECONDS = 300
+MAX_STEPS_PER_QUERY = 5000
 
 
 def compute_week_window(today: date | None = None) -> tuple[str, str]:
@@ -86,10 +87,12 @@ def next_step_name(step: dict[str, Any], experiment_steps: list[dict[str, Any]])
     _, next_step = min(candidates, key=lambda item: item[0])
     display_name = next_step.get("displayName") or next_step.get("stepName") or ""
     analysis_type = next_step.get("analysisType") or ""
+    # Raw experimentSteps carry variantTrafficMaps, not a "splits" string.
+    splits = next_step.get("splits") or format_splits(next_step)
     if analysis_type == "AB":
-        return f"{display_name} (50/50 AB)" if "50/50" in (next_step.get("splits") or "") else f"{display_name} (AB)"
+        return f"{display_name} (50/50 AB)" if "50/50" in splits else f"{display_name} (AB)"
     if analysis_type == "DataCollection":
-        return f"{display_name} (100% DC)" if "100" in (next_step.get("splits") or "") else f"{display_name} (DC)"
+        return f"{display_name} (100% DC)" if "100" in splits else f"{display_name} (DC)"
     return display_name
 
 
@@ -99,7 +102,8 @@ def format_splits(step: dict[str, Any]) -> str:
     if not maps:
         return "100%" if step.get("analysisType") == "DataCollection" else "—"
 
-    values = sorted({int(round(float(item.get("trafficExposurePercentage", 0)))) for item in maps if item.get("trafficExposurePercentage") is not None})
+    # A list, not a set: a set collapses 50/50 to "50%" and 33/33/33 to "33%".
+    values = sorted(int(round(float(item.get("trafficExposurePercentage", 0)))) for item in maps if item.get("trafficExposurePercentage") is not None)
     if not values:
         return "—"
     if len(values) == 1:
@@ -119,7 +123,23 @@ def normalize_step(step: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_TOKEN_CACHE: dict[str, Any] = {}
+_TOKEN_LOCK = threading.Lock()
+TOKEN_TTL_SECONDS = 45 * 60  # az tokens live ~60-90 min; refresh well before.
+
+
 def get_access_token() -> str:
+    """Return a cached ExP bearer token (one az subprocess per ~45 min, not per call)."""
+    with _TOKEN_LOCK:
+        cached = _TOKEN_CACHE.get("token")
+        if cached and (datetime.now(timezone.utc) - _TOKEN_CACHE["at"]).total_seconds() < TOKEN_TTL_SECONDS:
+            return cached
+        token = _fetch_access_token()
+        _TOKEN_CACHE.update(token=token, at=datetime.now(timezone.utc))
+        return token
+
+
+def _fetch_access_token() -> str:
     az_path = shutil.which("az.cmd") or shutil.which("az")
     if not az_path:
         raise RuntimeError("Azure CLI was not found on PATH.")
@@ -187,6 +207,7 @@ def query_steps(odata_filter: str, step_type: str = "ExperimentStep") -> list[di
     # ACTUAL number of items returned and only stop on an empty response, so we
     # never assume the server honored our requested page size.
     results: list[dict[str, Any]] = []
+    seen_ids: set[Any] = set()
     skip = 0
     print(f"  query_steps({step_type}): {odata_filter}", flush=True)
     while True:
@@ -205,6 +226,17 @@ def query_steps(odata_filter: str, step_type: str = "ExperimentStep") -> list[di
         items = response.get("value") or []
         if not items:
             break
+        # Guard against a server that ignores `skip` (same family as the
+        # ignored-filter quirk): a page with no new ids would loop forever.
+        new_items = [item for item in items if (item.get("id") or item.get("stepId")) not in seen_ids]
+        if not new_items:
+            print("    page repeated already-seen ids; server ignoring skip, stopping", flush=True)
+            break
+        if skip >= MAX_STEPS_PER_QUERY:
+            print(f"    hit MAX_STEPS_PER_QUERY={MAX_STEPS_PER_QUERY}, stopping", flush=True)
+            break
+        seen_ids.update(item.get("id") or item.get("stepId") for item in new_items)
+        items = new_items
         results.extend(items)
         skip += len(items)
         print(f"    page returned {len(items)} (total so far: {len(results)})", flush=True)

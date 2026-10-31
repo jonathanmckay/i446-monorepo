@@ -141,13 +141,13 @@ def _compute_outcome(step: dict) -> str:
 
     # If nextStepName is explicitly set, use it
     if next_step:
-        lower = next_step.lower()
-        if "ab" in lower or "a/b" in lower:
+        # Word-boundary matches: a bare substring test for "ab" misfires on
+        # names like "Enable for all (100% DC)" or "Disable ..." and labels a
+        # rollout as Promoted. The generator suffixes "(AB)" / "(DC)".
+        if re.search(r"\bA/?B\b", next_step, re.IGNORECASE):
             return "Promoted"
-        if "dc" in lower or "datacollection" in lower or "100%" in lower or "100 %" in lower:
+        if re.search(r"\bDC\b|datacollection|100\s?%", next_step, re.IGNORECASE):
             return "Rolled out"
-        if "switch to" in lower or "%" in lower:
-            return "Promoted"
         return "Promoted"
 
     # Check if a later step exists for this experiment
