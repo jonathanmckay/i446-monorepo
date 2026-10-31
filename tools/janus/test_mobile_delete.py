@@ -63,6 +63,7 @@ def _ev_setup(m, tmp_path, monkeypatch):
 
 def test_delete_google_event_calls_api_and_hides(jm, tmp_path, monkeypatch):
     m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    m._remember_served_event({"id": "abc", "calendar_id": "jm@m5c7.com", "has_guests": False})
     r = m.delete_calendar_event("Standup", "2026-10-25T09:00:00-07:00", "2026-10-25T09:30:00-07:00",
                                 "abc", "jm@m5c7.com")
     assert r == {"ok": True, "mode": "deleted"} and calls == [("jm@m5c7.com", "abc")]
@@ -85,3 +86,115 @@ def test_hidden_events_are_filtered_from_the_timeline(jm, tmp_path, monkeypatch)
     assert len(m._filter_events(raw, [])) == 1
     m.delete_calendar_event("Standup", s.isoformat(), e.isoformat())
     assert m._filter_events(raw, []) == []
+
+
+# ── 2026-10-26 security fix: /api/delete-event is unauthenticated on 0.0.0.0,
+# so only ids this server itself served are API-deleted, and only guest-less.
+_S, _E = "2026-10-25T09:00:00-07:00", "2026-10-25T09:30:00-07:00"
+
+
+def test_delete_event_refuses_unserved_id(jm, tmp_path, monkeypatch):
+    m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    d = m.app.test_client().post("/api/delete-event", json={
+        "title": "Board", "start_iso": _S, "end_iso": _E,
+        "event_id": "victim", "calendar_id": "jm@m5c7.com"}).get_json()
+    assert d["ok"] and d["mode"] == "hidden" and calls == []
+
+
+def test_delete_event_with_guests_only_hides(jm, tmp_path, monkeypatch):
+    m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    m._remember_served_event({"id": "g", "calendar_id": "jm@m5c7.com", "has_guests": True})
+    r = m.delete_calendar_event("Board", _S, _E, "g", "jm@m5c7.com")
+    assert r["mode"] == "hidden" and r["reason"] == "has guests" and calls == []
+
+
+def test_delete_event_unknown_guests_only_hides(jm, tmp_path, monkeypatch):
+    """A gcal cache written before has_guests existed → treat as guests."""
+    m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    m._remember_served_event({"id": "u", "calendar_id": "jm@m5c7.com"})
+    assert m.delete_calendar_event("x", _S, _E, "u", "jm@m5c7.com")["mode"] == "hidden"
+    assert calls == []
+
+
+def test_delete_event_served_id_expires(jm, tmp_path, monkeypatch):
+    m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    m._remember_served_event({"id": "a", "calendar_id": "jm@m5c7.com", "has_guests": False})
+    m._SERVED_EVENTS[("jm@m5c7.com", "a")] = (False, 0.0)
+    assert m.delete_calendar_event("x", _S, _E, "a", "jm@m5c7.com")["mode"] == "hidden"
+    assert calls == []
+
+
+def test_filter_events_registers_served_ids(jm, tmp_path, monkeypatch):
+    m, calls = _ev_setup(jm, tmp_path, monkeypatch)
+    tz = m._tz()
+    s = dt.datetime(2026, 10, 25, 9, 0, tzinfo=tz); e = s + dt.timedelta(minutes=30)
+    m._filter_events([{"title": "Focus", "start_dt": s, "end_dt": e, "id": "f",
+                       "calendar_id": "jm@m5c7.com", "has_guests": False}], [])
+    r = m.delete_calendar_event("Focus", s.isoformat(), e.isoformat(), "f", "jm@m5c7.com")
+    assert r["mode"] == "deleted" and calls == [("jm@m5c7.com", "f")]
+
+
+# ── 2026-10-26: convert_event (swipe right on a past meeting) credits 分 via
+# did-fast; its Toggl entry must then count as logged, and re-converting the
+# same event must not credit again.
+def _convert_setup(jm, monkeypatch):
+    today = dt.datetime.now(jm.TZ).date()
+    s = dt.datetime.combine(today, dt.time(0, 5), jm.TZ)
+    e = s + dt.timedelta(minutes=25)
+    runs = []
+    monkeypatch.setattr(jm, "_run_did_fast", lambda text, flags=(): runs.append(text) or {
+        "ok": True, "step": "5", "tag_steps": [], "needs_agent": False, "stderr_tail": ""})
+    created = {"id": 4242, "description": "Sync", "start": s.isoformat(),
+               "stop": e.isoformat(), "duration": 1500}
+    deleted = []
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [created])
+    monkeypatch.setattr(jm.toggl_api, "delete_entry", lambda eid: deleted.append(eid) or True)
+    return s, e, runs, deleted
+
+
+def test_converted_event_entry_cannot_be_swipe_deleted(jm, monkeypatch):
+    s, e, runs, deleted = _convert_setup(jm, monkeypatch)
+    r = jm.convert_event("Sync", s.isoformat(), e.isoformat(), "i9", True)
+    assert r["ok"] and len(runs) == 1
+    d = jm.app.test_client().post("/api/delete", json={"id": "4242"}).get_json()
+    assert not d["ok"] and "logged" in d["error"] and deleted == []
+
+
+def test_reconvert_same_event_does_not_double_credit(jm, monkeypatch):
+    s, e, runs, _ = _convert_setup(jm, monkeypatch)
+    jm.convert_event("Sync", s.isoformat(), e.isoformat(), "i9", True)
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [])  # entry gone
+    r = jm.convert_event("Sync", s.isoformat(), e.isoformat(), "i9", True)
+    assert r["ok"] and r.get("already") and len(runs) == 1
+
+
+def test_failed_convert_is_not_ledgered(jm, monkeypatch):
+    s, e, runs, _ = _convert_setup(jm, monkeypatch)
+    monkeypatch.setattr(jm, "_run_did_fast", lambda text, flags=(): runs.append(text) or {
+        "ok": False, "step": None, "tag_steps": [], "needs_agent": True, "stderr_tail": ""})
+    jm.convert_event("Sync", s.isoformat(), e.isoformat(), "i9", True)
+    jm.convert_event("Sync", s.isoformat(), e.isoformat(), "i9", True)
+    assert len(runs) == 2 and jm._ledger(s.date()) == {}
+
+
+# ── 2026-10-27 merge (v169 + v170): a past-day convert credits and ledgers
+# under the VIEWED day with --past-ok, records the entry's 分 in the points
+# sidecar, and a re-convert from the neighbouring day (_ledger_near) is a no-op.
+def test_past_day_convert_ledgers_viewed_day_and_blocks_neighbour_reconvert(jm, monkeypatch):
+    day = dt.datetime.now(jm.TZ).date() - dt.timedelta(days=2)
+    s = dt.datetime.combine(day, dt.time(23, 40), jm.TZ)
+    e = s + dt.timedelta(minutes=40)  # crosses into day+1
+    runs = []
+    monkeypatch.setattr(jm, "_run_did_fast", lambda text, flags=(): runs.append((text, flags)) or {
+        "ok": True, "step": "5", "tag_steps": [], "needs_agent": False, "stderr_tail": "",
+        "credits": [{"col": "i9", "points": 40}]})
+    created = {"id": 777, "description": "Late", "start": s.isoformat(),
+               "stop": e.isoformat(), "duration": 2400}
+    monkeypatch.setattr(jm.toggl_api, "get_entries", lambda **kw: [created])
+    r = jm.convert_event("Late", s.isoformat(), e.isoformat(), "i9", True, day=day)
+    assert r["ok"] and runs[0][1] == ("--past-ok",) and runs[0][0].endswith(f"{day.month}/{day.day}")
+    assert "777" in jm._ledger(day)
+    assert jm._logged_points(day)["777"]["points"] == 40
+    r2 = jm.convert_event("Late", s.isoformat(), e.isoformat(), "i9", True,
+                          day=day + dt.timedelta(days=1))
+    assert r2.get("already") and len(runs) == 1

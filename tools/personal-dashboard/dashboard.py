@@ -469,44 +469,28 @@ def _toggl_api():
 
 
 def load_toggl_data():
-    """Fetch Toggl entries for last DAYS days, return {date_str: {project: minutes}}."""
-    api_key = os.environ.get("TOGGL_API_KEY", "")
-    if not api_key:
-        return {}
+    """Toggl minutes + entry counts for the last DAYS days →
+    ({date_str: {project: minutes}}, {date_str: {project: entry_count}}).
 
+    Daily cache (toggl-db export, complete through yesterday) plus a short
+    live tail, like the weekly/granular views. A single 30-day live v9 fetch
+    is truncated at ~1000 entries, which silently zeroed the oldest days of
+    the Time chart (v166: 09-24..09-27 at 0, 09-28 partial)."""
     today = date.today()
-    start = (today - timedelta(days=DAYS)).isoformat()
-    end = (today + timedelta(days=1)).isoformat()
+    floor = today - timedelta(days=DAYS)
+    minutes, counts = load_toggl_daily_cache()
+    live_minutes, live_counts = load_toggl_range(TOGGL_CACHE_TAIL_DAYS, return_counts=True)
+    minutes = {**minutes, **live_minutes}
+    counts = {**counts, **live_counts}
 
-    try:
-        entries = _toggl_api().get_entries(start, end, include_running=False)
-    except Exception as e:  # noqa: BLE001
-        print(f"load_toggl_data: toggl read failed: {e}", file=sys.stderr, flush=True)
-        return {}
-
-    result = defaultdict(lambda: defaultdict(int))
-    entry_counts = defaultdict(lambda: defaultdict(int))
-    for e in entries:
-        dur = e.get("duration", 0)
-        if dur <= 0:
-            continue
-        start_str = e.get("start", "")
-        if not start_str:
-            continue
+    def in_window(d):
         try:
-            start_dt = datetime.fromisoformat(start_str).astimezone(_tz())
-        except (ValueError, TypeError):
-            continue
-        d = start_dt.date()
-        if d <= (today - timedelta(days=DAYS)) or d > today:
-            continue
+            return floor < date.fromisoformat(d) <= today
+        except ValueError:
+            return False
 
-        proj_id = e.get("project_id")
-        code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
-        result[d.isoformat()][code] += dur // 60
-        entry_counts[d.isoformat()][code] += 1
-
-    return {k: dict(v) for k, v in result.items()}, {k: dict(v) for k, v in entry_counts.items()}
+    return ({d: v for d, v in minutes.items() if in_window(d)},
+            {d: v for d, v in counts.items() if in_window(d)})
 
 
 # ── Weekly (1s) aggregation ─────────────────────────────────────────────────────
@@ -1281,6 +1265,13 @@ def _fetch_tasks_for_day(day, token):
     return day.isoformat(), counts
 
 
+def _todoist_token() -> str:
+    """~/.config/todoist/token, else $TODOIST_API_KEY. Never hardcode it:
+    this repo is public (Dream v172, 2026-10-29)."""
+    p = Path.home() / ".config/todoist/token"
+    return p.read_text().strip() if p.exists() else os.environ.get("TODOIST_API_KEY", "")
+
+
 def load_tasks_data(n_days=DAYS, end=None):
     """Fetch completed tasks from Todoist, split by category tag in content.
     Returns {date_str: {"neon", "posthoc", "one_n", "neg1n", "other", "total"}}
@@ -1294,7 +1285,7 @@ def load_tasks_data(n_days=DAYS, end=None):
       shared across all callers regardless of n_days, so widening the window
       (e.g. for a monthly chart view) only pays the network cost once.
     """
-    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    token = _todoist_token()
     today = date.today()
     last = end or today
     all_days = [last - timedelta(days=n) for n in range(n_days, -1, -1)]
@@ -1344,7 +1335,7 @@ def load_tasks_by_block(n_days=GRANULAR_BLOCK_DAYS, end=None):
     window missing the key, not just today/yesterday. Bounded cost since the
     per-block view only spans GRANULAR_BLOCK_DAYS days.
     """
-    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    token = _todoist_token()
     today = end or date.today()
     day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
 

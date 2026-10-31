@@ -51,7 +51,10 @@ def _tz() -> ZoneInfo:
     /did defer-date resolution were landing on Ix's Pacific "today"
     instead of the traveler's actual current day."""
     return _daytime.active_zone()
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
+_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
+TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
+                 else os.environ.get("TODOIST_API_KEY", ""))
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS_MAX_AGE_HOURS = 24
 
@@ -1961,9 +1964,15 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
         body.append({"col": neon_cols.col_letter(w.col_num), "value": w.write_value,
                      "mode": "add" if w.item.name in CUMULATIVE_0N else "set"})
     try:
+        # fallback=False: this caller keeps its own raw-script fallback. With
+        # the default, a daemon outage made batch_write do per-cell ssh writes
+        # AND return fallback=True, so the raw script below ran on top of
+        # them: every cell written twice, the second time unjournaled
+        # (Dream v172 neon-audit triage, 2026-10-29).
         resp = neon_excel.batch_write(
             "0n", body, date=target_date,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
@@ -2006,6 +2015,50 @@ def _pre_image_text(r: dict) -> str:
     return bv
 
 
+def write_1n_batches(one_n_writes, week_date):
+    """Step 4b: write 1n+ items grouped by the week row each belongs to.
+    Returns (result, row_of, pre_of): `result` is the first failed batch's
+    result if any failed, else the last one's; row_of/pre_of map id(r) to its
+    own batch's weekRow / PRE-line map, for successful batches only."""
+    row_of: dict = {}
+    pre_of: dict = {}
+    one_n_result = None
+    by_week: dict[str, list] = {}
+    for r in one_n_writes:
+        _hname = ONENEON_ALIASES.get(r.item.name.lower(), r.item.name)
+        by_week.setdefault(neon_weeks.habit_week_label(_hname, week_date), []).append(r)
+    _1n_failed = None
+    for week_mw, group in by_week.items():
+        # Daemon first (journaled + semantic ledger); raw ix-osa script is
+        # the daemon-down fallback only (Neon-off-Excel step 2b).
+        one_n_result = write_1n_via_daemon(group, week_mw)
+        if one_n_result is None:
+            script = build_1n_script(group, week_mw)
+            if script:
+                one_n_result = ix_run(script, timeout=30.0)
+        # Row, pre-images and success are PER BATCH (2026-10-27 review):
+        # with one shared week_row, a Sunday `/did 1 -2g, 1 i9` (two
+        # weeks) tagged every entry with the last batch's row (undo then
+        # edited the wrong week), kept only the last batch's undo
+        # pre-images, and credited 0分 for a batch whose write failed.
+        _ok_row = None
+        if one_n_result is not None and one_n_result.returncode == 0:
+            import re as _re
+            m = _re.search(r"weekRow=(\d+)", one_n_result.stdout)
+            if m:
+                _ok_row = m.group(1)
+        if _ok_row:
+            _pre = parse_pre_lines(one_n_result.stdout)
+            for r in group:
+                row_of[id(r)] = _ok_row
+                pre_of[id(r)] = _pre
+        elif _1n_failed is None:
+            _1n_failed = one_n_result
+    if _1n_failed is not None:  # report the failure, not the last success
+        one_n_result = _1n_failed
+    return one_n_result, row_of, pre_of
+
+
 def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
                         src: Optional[str] = None):
     """1n+ week-cell writes through the daemon (POST /batch_write, one
@@ -2026,9 +2079,13 @@ def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
         else:
             body.append({"col": w.col_letter, "value": w.write_value or 1, "mode": "set"})
     try:
+        # fallback=False (see write_0n_via_daemon): here the double write was
+        # a double CREDIT — cumulative/variable 1n+ items are appends, so the
+        # ssh fallback appended once and the raw script appended again.
         resp = neon_excel.batch_write(
             "1n+", body, date=week_mw,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
@@ -3691,7 +3748,7 @@ def main():
         # the sub-1000 checks compare it numerically); /write quotes strings.
         _ol_resp = neon_excel.batch_write(
             "0n", [{"col": neon_cols.col_letter(32), "value": _ol_now.hour * 100 + _ol_now.minute}],
-            date=target_date, src="did 0l completion time")
+            date=target_date, src="did 0l completion time", fallback=False)
         if _ol_resp.get("ok") and not _ol_resp.get("fallback"):
             _ol_r = (_ol_resp.get("results") or [{}])[0]
             print(f"0l completion: N Color={_ol_r.get('value')} row={_ol_resp.get('row')}",
@@ -3705,6 +3762,8 @@ def main():
     one_n_writes = [r for r in fast if r.step == "1n" and r.col_letter]
     one_n_result = None
     week_row = None
+    _1n_row_of: dict = {}  # id(r) -> its batch's weekRow (successful batches only)
+    _1n_pre_of: dict = {}  # id(r) -> its batch's PRE-line map
     if one_n_writes:
         # A past-day write (past_ok) belongs to THAT date's week, which may
         # not be this week.
@@ -3714,25 +3773,9 @@ def main():
         # (neon_weeks.CYCLE_START_WEEKDAY, e.g. 1 -2g / 1 -1n run Monday to
         # Sunday) belongs to its cycle's week, so a Sunday run lands in the
         # week that is ending rather than the one that Sunday opens.
-        by_week: dict[str, list] = {}
-        for r in one_n_writes:
-            _hname = ONENEON_ALIASES.get(r.item.name.lower(), r.item.name)
-            by_week.setdefault(neon_weeks.habit_week_label(_hname, _week_date), []).append(r)
-        for week_mw, group in by_week.items():
-            # Daemon first (journaled + semantic ledger); raw ix-osa script is
-            # the daemon-down fallback only (Neon-off-Excel step 2b).
-            one_n_result = write_1n_via_daemon(group, week_mw)
-            if one_n_result is None:
-                script = build_1n_script(group, week_mw)
-                if script:
-                    one_n_result = ix_run(script, timeout=30.0)
-            if one_n_result is not None:
-                # Parse weekRow from output for 0分 cell references
-                if one_n_result.returncode == 0:
-                    import re as _re
-                    m = _re.search(r"weekRow=(\d+)", one_n_result.stdout)
-                    if m:
-                        week_row = m.group(1)
+        one_n_result, _1n_row_of, _1n_pre_of = write_1n_batches(one_n_writes, _week_date)
+        if _1n_row_of:
+            week_row = next(iter(_1n_row_of.values()))
 
     # 4c. Batch 1n+ → 0分 appends (via the excel-http daemon, one round-trip).
     # The week cell holds MINUTES (2026-07-27 redesign), so 0分 must NOT
@@ -3740,11 +3783,12 @@ def main():
     # points (a constant), variable habits and [N] overrides append literal
     # points via step 5's fen_appends.
     one_n_fen_result = None
-    if one_n_writes and week_row:
+    _ok_1n = [r for r in one_n_writes if id(r) in _1n_row_of]
+    if _ok_1n:
         ref_appends = []
         ref_names = []
         ref_idem = []
-        for r in one_n_writes:
+        for r in _ok_1n:
             if not r.fen_col:
                 continue
             if r.is_variable_1n:
@@ -4225,7 +4269,6 @@ def main():
 
     # Pre-image maps for undo (captured by the write scripts themselves)
     pre_0n = parse_pre_lines(on_result.stdout) if on_result and on_result.returncode == 0 else {}
-    pre_1n = parse_pre_lines(one_n_result.stdout) if one_n_result and one_n_result.returncode == 0 else {}
 
     for r in fast:
         entry = {
@@ -4240,8 +4283,9 @@ def main():
             entry["undo"] = {"prev_0n": pre_0n[str(r.col_num)]}
         if r.step == "1n" and r.col_letter:
             entry["col_letter"] = r.col_letter
-            entry["week_row"] = week_row
+            entry["week_row"] = _1n_row_of.get(id(r))
             entry["fen_col"] = r.fen_col
+            pre_1n = _1n_pre_of.get(id(r), {})
             if r.col_letter in pre_1n:
                 entry["undo"] = {"prev_1n_formula": pre_1n[r.col_letter]}
         if r.item.curly_points and r.item.curly_points > 0:

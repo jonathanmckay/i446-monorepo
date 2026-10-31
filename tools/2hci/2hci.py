@@ -70,11 +70,16 @@ def parse_month(s: str, today: date) -> tuple[int, int]:
     m = re.match(r"^(\d{4})[-./](\d{1,2})$", s)
     if m:
         return int(m.group(1)), int(m.group(2))
+    # A bare month names the most recent one: in January, "12" is last
+    # December, not a window eleven months ahead (which scored 0/30 and then
+    # closed the card on that report).
+    def _recent(mo: int) -> tuple[int, int]:
+        return (today.year - 1, mo) if mo > today.month else (today.year, mo)
     if s.isdigit() and 1 <= int(s) <= 12:
-        return today.year, int(s)
+        return _recent(int(s))
     for i, name in enumerate(MONTHS, 1):
         if s.startswith(name):
-            return today.year, i
+            return _recent(i)
     sys.exit(f"ERROR: cannot parse month {s!r}")
 
 

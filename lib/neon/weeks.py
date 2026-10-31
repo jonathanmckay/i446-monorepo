@@ -22,6 +22,7 @@ tools that already depend on lib/neon.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 # Rows per label-month, Jan..Dec. Sums to 52.
@@ -48,13 +49,20 @@ CYCLE_START_WEEKDAY = {"1 -2g": 0, "1 -1n": 0}
 
 
 def _cycle_key(name: str) -> str:
-    return " ".join((name or "").lower().split())
+    """Same folding as did-fast's header_normalize (hyphens/dashes/spaces →
+    one space, lowercase): did-fast matches `/did 1-2g` to the 1 -2g column
+    that way, so the cycle lookup must too, or a Sunday `1-2g` landed in the
+    sheet week Sunday opens instead of the ending cycle (2026-10-27 review)."""
+    return re.sub(r"[\s\-—–]+", " ", name or "").strip().lower()
+
+
+_CYCLE_START = {_cycle_key(k): v for k, v in CYCLE_START_WEEKDAY.items()}
 
 
 def cycle_start(name: str, d: date) -> date:
     """First day of the habit's cycle containing `d`: its own cycle start for a
     CYCLE_START_WEEKDAY card, the week's Sunday for every other card."""
-    wd = CYCLE_START_WEEKDAY.get(_cycle_key(name))
+    wd = _CYCLE_START.get(_cycle_key(name))
     if wd is None:
         return week_sunday(d)
     return d - timedelta(days=(d.weekday() - wd) % 7)

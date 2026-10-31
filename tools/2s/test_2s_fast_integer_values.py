@@ -52,3 +52,13 @@ def test_negative_fractional_rounds_correctly():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_rate_columns_keep_two_decimals():
+    """C/D/E are day-fractions; int rounding pasted 0.714 as 1 and 0.464 as 0."""
+    mod = _load()
+    assert mod.normalize_value("0.7142857142857143", rate=True) == "0.71"
+    assert mod.normalize_value("0.4642857142857143", rate=True) == "0.46"
+    assert mod.normalize_value("1", rate=True) == "1"
+    assert mod.normalize_value("missing value", rate=True) == '""'
+    assert mod.RATE_COLS == {"C", "D", "E"}

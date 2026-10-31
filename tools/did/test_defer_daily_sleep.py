@@ -29,15 +29,20 @@ def test_marker_written_for_daily_habit(monkeypatch, tmp_path):
     df = _load("defer_fast_marker", "defer-fast.py")
     marker = tmp_path / "habits-deferred.ids"
     monkeypatch.setattr(df, "deferred_marker_path", lambda when=None: marker)
+    mirror = tmp_path / "z_ibx" / "habits-deferred-host-x.ids"
+    mirror.parent.mkdir()
+    monkeypatch.setattr(df, "deferred_mirror_path", lambda when=None: mirror)
     df.mark_habit_deferred("TASK123", ["0neon", "xk26", "xk87"])
     df.mark_habit_deferred("TASK456", ["夜neon"])
     assert marker.read_text().splitlines() == ["TASK123", "TASK456"]
+    assert mirror.read_text().splitlines() == ["TASK123", "TASK456"]
 
 
 def test_marker_skipped_for_non_habit(monkeypatch, tmp_path):
     df = _load("defer_fast_marker2", "defer-fast.py")
     marker = tmp_path / "habits-deferred.ids"
     monkeypatch.setattr(df, "deferred_marker_path", lambda when=None: marker)
+    monkeypatch.setattr(df, "deferred_mirror_path", lambda when=None: tmp_path / "m.ids")
     df.mark_habit_deferred("TASK789", ["xk87"])  # ordinary task, not a daily habit
     assert not marker.exists()
 
@@ -113,6 +118,25 @@ def test_undo_unmarks_only_that_id(monkeypatch, tmp_path):
     monkeypatch.setattr(uf.os.path, "expanduser", lambda _: str(p))
     uf._unmark_habit_deferred("AAA")
     assert p.read_text() == "BBB\n"
+
+
+def test_undo_also_clears_this_hosts_synced_mirror(monkeypatch, tmp_path):
+    """2026-10-22 mirror regression: undo cleared only ~/.cache/jm, so the
+    habit stayed hidden all day via the z_ibx mirror dtd also reads. Undo-fast
+    must target the exact file defer-fast writes (same host slug)."""
+    df = _load("defer_fast_mirror", "defer-fast.py")
+    uf = _load("undo_fast_mirror", "undo-fast.py")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "vault/z_ibx").mkdir(parents=True)
+    (tmp_path / ".cache/jm").mkdir(parents=True)
+    monkeypatch.setattr(df.Path, "home", lambda: tmp_path)
+    df.mark_habit_deferred("AAA", ["0neon"])
+    df.mark_habit_deferred("BBB", ["0neon"])
+    mirror = df.deferred_mirror_path()
+    assert mirror.read_text() == "AAA\nBBB\n"
+    uf._unmark_habit_deferred("AAA")
+    assert mirror.read_text() == "BBB\n"
+    assert df.deferred_marker_path().read_text() == "BBB\n"
 
 
 def test_undo_defer_branch_calls_unmark():

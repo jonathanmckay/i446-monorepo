@@ -203,6 +203,9 @@ def hooked(tmp_path, monkeypatch):
     real_claim, real_release = ac.claim, ac.release
     monkeypatch.setattr(ac, "claim", lambda t, s, root=None, now=None: real_claim(t, s, root=tmp_path, now=now))
     monkeypatch.setattr(ac, "release", lambda s, root=None: real_release(s, root=tmp_path))
+    real_done = ac.mark_done
+    monkeypatch.setattr(ac, "mark_done",
+                        lambda s, ids=None, root=None, now=None: real_done(s, ids, root=tmp_path, now=now))
     return tmp_path
 
 
@@ -647,3 +650,11 @@ def test_stop_hook_launches_note_only_for_claimed_sessions():
     src = HOOK.read_text()
     assert 'agent_claims.py" note' in src and "DTD_NOTE_CHILD" in src
     assert src.index('agent_claims.py" note') < src.index('[[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0')
+
+
+def test_hook_d_done_marks_done_not_released(hooked):
+    """v169 review: `/d done` must mark the held task done (checkmark), not release it."""
+    _fast("/d source logging")
+    out = _fast("/d done")
+    assert "agent-finished" in out and "released" not in out
+    assert ac.load(hooked)["T1"]["state"] == "done"

@@ -67,3 +67,18 @@ def test_points_answer_total_rate_blank_and_garbage():
     assert janus._points_from_answer("2/min", 18) == 36
     assert janus._points_from_answer("", 18) == 0
     assert janus._points_from_answer("lots", 18) is None
+
+
+def test_past_day_row_is_never_credited_by_todays_cross_off(tmp_path, monkeypatch):
+    # completed-today.json is today's record: a past-day backfill of an entry
+    # whose name was crossed off TODAY must ask (or credit), not skip (v172).
+    _setup(tmp_path, monkeypatch, names=["call steve"])
+    assert janus._done_points_path("call steve") == "credited"
+    assert janus._done_points_path("call steve", past_day=True) == "ask"
+
+
+def test_row_done_handler_passes_past_day_flag():
+    # The ⌥↵ finished-row handler is the only past-day caller; it must pass
+    # the view's day, like mobile.py's _done_path(today=None).
+    src = (Path(__file__).parent / "janus.py").read_text()
+    assert "_done_points_path(desc, past_day=STATE.day_offset != 0)" in src

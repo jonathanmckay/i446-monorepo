@@ -103,3 +103,6 @@ skills/claude-skills/.trash/
 
 # derived nightly from ~/vault/i156/toggl.sqlite by tools/toggl-db (export-cache); not a source
 tools/personal-dashboard/.toggl-daily-cache.json
+
+# per-host heartbeat now lives in ~/.cache/ai-dashboard (2026-10-29)
+tools/ai-dashboard/.periodic-sync.heartbeat

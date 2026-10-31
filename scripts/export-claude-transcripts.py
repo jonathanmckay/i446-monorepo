@@ -5,8 +5,16 @@ Reads ~/.claude/projects/<project>/*.jsonl and writes .md files to
 vault/i447/i446/.ai-transcripts/<project>/. Idempotent: skips sessions
 already exported unless --force is passed.
 
-Large sessions (> SEGMENT_TURNS user turns) are split into multiple files
-named <date>_<slug>_p01.md, <date>_<slug>_p02.md, etc.
+Files are named <date>_<slug>_<sid8>.md, where sid8 is the first 8 chars of
+the session id. Large sessions (> SEGMENT_TURNS user turns) are split into
+<date>_<slug>_<sid8>_p01.md, _p02.md, etc.
+
+Regression (2026-10-27): files used to be <date>_<slug>[_pNN].md. Claude Code
+stopped writing a `slug` field (~Mar/Apr 2026), so every session became
+"untitled" and same-day sessions overwrote each other (Straylight 10-26: 14
+sessions, 2 files). A legacy-named file is still updated in place when its
+frontmatter session_id is this session's, so existing vault files keep their
+names; everything else gets the session-id suffix.
 """
 
 import argparse
@@ -207,22 +215,48 @@ def render_segment(session: dict, pairs: list, part, total_parts) -> str:
     return "\n".join(lines)
 
 
+def _legacy_paths(date: str, slug: str, n_segments: int, out_dir: Path):
+    if n_segments <= 1:
+        return [out_dir / f"{date}_{slug}.md"]
+    return [out_dir / f"{date}_{slug}_p{i+1:02d}.md" for i in range(n_segments)]
+
+
+def _file_session_id(path: Path):
+    """session_id from an exported file's frontmatter, or None."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = f.read(512)
+    except OSError:
+        return None
+    m = re.search(r"^session_id:\s*(\S+)", head, re.M)
+    return m.group(1) if m else None
+
+
 def output_paths_for_session(session: dict, out_dir: Path, segment_turns: int):
     """Return the list of output paths that would be written for this session."""
     pairs = session["pairs"]
     date = session["date"]
     slug = slugify(session["slug"])
+    sid = session["session_id"]
+    n_segments = max(1, -(-len(pairs) // segment_turns))
 
-    if len(pairs) <= segment_turns:
-        return [out_dir / f"{date}_{slug}.md"]
+    # Backward compat: keep updating a legacy-named file this session owns.
+    # Every existing legacy target must be ours, or we'd clobber a collided
+    # neighbour's shard.
+    probes = (out_dir / f"{date}_{slug}.md", out_dir / f"{date}_{slug}_p01.md")
+    if any(p.exists() and _file_session_id(p) == sid for p in probes):
+        legacy = _legacy_paths(date, slug, n_segments, out_dir)
+        if all((not p.exists()) or _file_session_id(p) == sid for p in legacy):
+            return legacy
 
-    # Split into segments
-    segments = [pairs[i:i + segment_turns] for i in range(0, len(pairs), segment_turns)]
-    total = len(segments)
-    return [out_dir / f"{date}_{slug}_p{i+1:02d}.md" for i in range(total)]
+    base = f"{date}_{slug}_{sid[:8]}"
+    if n_segments == 1:
+        return [out_dir / f"{base}.md"]
+    return [out_dir / f"{base}_p{i+1:02d}.md" for i in range(n_segments)]
 
 
-def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool, verbose: bool) -> int:
+def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool, verbose: bool,
+                   dry_run: bool = False) -> int:
     """Write .md files for a session. Returns number of files written."""
     pairs = session["pairs"]
     date = session["date"]
@@ -245,6 +279,12 @@ def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool
         if verbose:
             print(f"  skip (current):    {paths[0].name}")
         return 0
+
+    if dry_run:
+        todo = [p for p in paths if force or (not p.exists()) or p.stat().st_mtime < src_mtime]
+        for p in todo:
+            print(f"  would write:       {out_dir.name}/{p.name}")
+        return len(todo)
 
     if len(pairs) <= segment_turns:
         md = render_segment(session, pairs, part=None, total_parts=None)
@@ -273,13 +313,15 @@ def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool
 
 
 def export_project(project_dir: Path, out_base: Path, sessions_to_export: list,
-                   force: bool = False, verbose: bool = False) -> tuple[int, int]:
+                   force: bool = False, verbose: bool = False,
+                   dry_run: bool = False) -> tuple[int, int]:
     """Export the given pre-selected sessions in this project dir."""
     out_dir = out_base / project_dir.name
     exported = 0
     skipped = 0
     for session in sessions_to_export:
-        n = export_session(session, out_dir, SEGMENT_TURNS, force=force, verbose=verbose)
+        n = export_session(session, out_dir, SEGMENT_TURNS, force=force, verbose=verbose,
+                           dry_run=dry_run)
         if n > 0:
             exported += n
         else:
@@ -322,6 +364,10 @@ def main():
         "--project", metavar="PROJECT",
         help="Export only a specific project directory name"
     )
+    parser.add_argument("--since", metavar="YYYY-MM-DD",
+                        help="Only sessions whose date is on/after this date")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print the files that would be written; write nothing")
     args = parser.parse_args()
 
     chosen = discover_sessions()
@@ -331,6 +377,8 @@ def main():
         chosen = {sid: v for sid, v in chosen.items() if args.session in sid}
     if args.project:
         chosen = {sid: v for sid, v in chosen.items() if args.project in v[2].name}
+    if args.since:
+        chosen = {sid: v for sid, v in chosen.items() if v[3]["date"] >= args.since}
 
     # Group by (host, project_dir) for export
     out_by_host: dict[tuple[str, Path, Path], list] = {}
@@ -345,11 +393,13 @@ def main():
         if args.verbose:
             print(f"\n[{host}] Project: {proj_dir.name}")
         exp, skip = export_project(proj_dir, out_base, sessions,
-                                   force=args.force, verbose=args.verbose)
+                                   force=args.force, verbose=args.verbose,
+                                   dry_run=args.dry_run)
         total_exported += exp
         total_skipped += skip
 
-    print(f"Exported {total_exported} file(s), skipped {total_skipped} session(s).")
+    verb = "Would export" if args.dry_run else "Exported"
+    print(f"{verb} {total_exported} file(s), skipped {total_skipped} session(s).")
 
 
 if __name__ == "__main__":
