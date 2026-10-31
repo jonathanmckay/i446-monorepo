@@ -55,10 +55,15 @@ def main() -> int:
     today = f"{now.month}/{now.day}"
     col = cols.maybe_col("0n", "ص") or "AP"
 
+    # src labels the ledger entry. Without it every ص write journaled as
+    # src=None, the same tag the audit gives an unknown writer, so the 48
+    # 0n!AP chain breaks in the 2026-10-31 audit could not be told apart
+    # from hand edits.
     if count is None:
-        res = excel.append("0n", col, date=today, value="+1")
+        res = excel.append("0n", col, date=today, value="+1", src="salat +1")
     else:
-        res = excel.write("0n", col, date=today, value=str(count))
+        res = excel.write("0n", col, date=today, value=str(count),
+                          src=f"salat set {count}")
     if not res.get("ok"):
         print(f"ص: write failed — {res.get('error', 'unknown error')}")
         return 1

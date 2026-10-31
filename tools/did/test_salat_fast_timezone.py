@@ -47,7 +47,7 @@ def test_row_date_follows_daytime_not_a_different_machine_clock(monkeypatch):
 
     captured = {}
 
-    def fake_append(sheet, col, *, date=None, value=None):
+    def fake_append(sheet, col, *, date=None, value=None, **kw):
         captured["date"] = date
         return {"ok": True, "value": "1"}
 
@@ -74,3 +74,20 @@ def test_does_not_import_bare_datetime_now():
         "so an active /travel override or a non-traveling host (ix) doesn't "
         "silently write to the wrong day's row."
     )
+
+
+def test_writes_carry_a_ledger_src(monkeypatch):
+    """Every ص write must label itself in the neon ledger; src=None is what
+    the audit shows for writes it can't attribute (2026-10-31 triage)."""
+    mod = _load(monkeypatch, datetime(2026, 10, 31, 9, 0))
+    seen = []
+    monkeypatch.setattr(mod.excel, "append",
+                        lambda *a, **kw: seen.append(("append", kw)) or {"ok": True})
+    monkeypatch.setattr(mod.excel, "write",
+                        lambda *a, **kw: seen.append(("write", kw)) or {"ok": True})
+    monkeypatch.setattr(sys, "argv", ["salat-fast.py"])
+    assert mod.main() == 0
+    monkeypatch.setattr(sys, "argv", ["salat-fast.py", "12"])
+    assert mod.main() == 0
+    assert seen[0][0] == "append" and seen[0][1]["src"] == "salat +1"
+    assert seen[1][0] == "write" and seen[1][1]["src"] == "salat set 12"
