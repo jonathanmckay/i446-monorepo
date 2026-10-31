@@ -28,12 +28,26 @@ import sys
 import urllib.request
 from datetime import datetime, timezone
 import os
+import subprocess
 from pathlib import Path
 
-# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
-_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
-TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
-                 else os.environ.get("TODOIST_API_KEY", ""))
+def _todoist_token() -> str:
+    """lib/todoist.py's lookup order (token file, then env), plus the keychain
+    item the Ix scripts use. The secret is never hard-coded (2026-10-30)."""
+    f = Path.home() / ".config/todoist/token"
+    if f.exists():
+        return f.read_text().strip()
+    for k in ("TODOIST_TOKEN", "TODOIST_API_TOKEN", "TODOIST_API_KEY"):
+        if os.environ.get(k):
+            return os.environ[k].strip()
+    try:
+        return subprocess.run(["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+TODOIST_TOKEN = _todoist_token()
 BASE = "https://api.todoist.com/api/v1"
 MUTATION_CAP_DEFAULT = 10
 # The neon emitter (neon-task-checksum) mints the 😈 block-ritual tasks every 2h,

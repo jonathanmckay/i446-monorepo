@@ -22,6 +22,7 @@ Teams/Zoom setup (one-time):
 
 import os
 import re
+import subprocess
 import sys
 import wave
 import json
@@ -106,10 +107,23 @@ from typing import Optional
 
 SAMPLE_RATE = 16000   # Whisper works best at 16kHz
 CHANNELS = 1
-# Never hardcode the token: this repo is public (Dream v172, 2026-10-29).
-_TODOIST_TOKEN_FILE = Path.home() / ".config/todoist/token"
-TODOIST_TOKEN = (_TODOIST_TOKEN_FILE.read_text().strip() if _TODOIST_TOKEN_FILE.exists()
-                 else os.environ.get("TODOIST_API_KEY", ""))
+def _todoist_token() -> str:
+    """lib/todoist.py's lookup order (token file, then env), plus the keychain
+    item the Ix scripts use. The secret is never hard-coded (2026-10-30)."""
+    f = Path.home() / ".config/todoist/token"
+    if f.exists():
+        return f.read_text().strip()
+    for k in ("TODOIST_TOKEN", "TODOIST_API_TOKEN", "TODOIST_API_KEY"):
+        if os.environ.get(k):
+            return os.environ[k].strip()
+    try:
+        return subprocess.run(["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+TODOIST_TOKEN = _todoist_token()
 VAULT_DIR = Path.home() / "vault"
 WHISPER_MODEL = "base.en"  # fast, English-only. Use "small.en" for more accuracy.
 SPEECH_THRESH = 400
