@@ -68,7 +68,11 @@ fi
 # Heartbeat: this run got as far as the commit decision. A no-op run (no
 # Claude use since the last one) commits nothing, so commit age alone made
 # the watchdog cry "stalled" after every quiet stretch (2026-10-26).
-date +%s > "$SCRIPT_DIR/.periodic-sync.heartbeat"
+# Per-host and untracked (2026-10-29): in the repo it made ~60% of all
+# autopush commits, and Syncthing let one Mac's heartbeat mask a stall on
+# the other. watchdog.sh reads the same path.
+HB_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-dashboard"
+mkdir -p "$HB_DIR" && date +%s > "$HB_DIR/periodic-sync.heartbeat"
 git diff --cached --quiet && exit 0
 
 git commit -m "stats: $USER_ID periodic $(date '+%Y-%m-%d %H:%M')" -q

@@ -95,6 +95,15 @@ _MONTHS = {"jan", "feb", "mar", "apr", "may", "jun",
            "january", "february", "march", "april", "june",
            "july", "august", "september", "october", "november", "december"}
 DEFER_FAST = str(Path.home() / "i446-monorepo/tools/did/defer-fast.py")
+DID_FAST = str(Path.home() / "i446-monorepo/tools/did/did-fast.py")
+
+# Teaching sessions priced by did-fast's VARIABLE_SESSION_BONUS (1分/min + 5,
+# 0分 xk87, 2026-10-29). Mirror of that dict's keys. The registry has no habit
+# for them, so routing here would fall to run_one_off's word-overlap match and
+# close any open card containing the word ("english 30" closed "get kathy an
+# english language accent tutor [15]"), and "math" aliased to the retired
+# 问学 0n habit. Hand them to did-fast verbatim instead (Dream v173).
+SESSION_TASKS = {"math", "english", "中文"}
 
 
 def _today_md() -> str:
@@ -846,6 +855,30 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
     return 0
 
 
+def run_did_fast(item: str) -> int:
+    """Delegate one item to did-fast.py (it parses minutes/ranges/dates and
+    stops a matching Toggl timer itself). Any failure is rc 1, never 2: 2
+    here means "defer to the /did agent", which would re-credit the item."""
+    try:
+        r = subprocess.run(["python3", DID_FAST, item],
+                           capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print(f"  ✗ did-fast timed out for {item!r}", file=sys.stderr)
+        return 1
+    if r.stderr.strip():
+        print(r.stderr.rstrip(), file=sys.stderr)
+    try:
+        out = json.loads(r.stdout)
+        for res in out.get("results", []):
+            fen = res.get("0fen") or {}
+            print(f"  ✓ {res.get('name', item)} → {res.get('step', '?')}"
+                  + (f" +{fen.get('points')} → 0分!{fen.get('col')}" if fen else ""))
+    except (json.JSONDecodeError, AttributeError):
+        if r.stdout.strip():
+            print(r.stdout.rstrip())
+    return 0 if r.returncode == 0 else 1
+
+
 def run_defer(query: str, defer_date: str, claimed_points: int) -> int:
     """Defer path: reschedule task via defer-fast.py, don't write to Neon."""
     r = subprocess.run(
@@ -900,6 +933,9 @@ def main() -> int:
         if defer_date is not None:
             claimed = explicit_minutes or 5
             rc |= run_defer(query, defer_date, claimed)
+            continue
+        if query.strip().lower() in SESSION_TASKS:
+            rc |= run_did_fast(item)
             continue
         d = _route(query, target)
         d["query_after_strip"] = d.get("query_after_strip", query)

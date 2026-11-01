@@ -337,6 +337,19 @@ def _ledger(day: _dt.date) -> dict:
         return {}
 
 
+def _ledger_near(day: _dt.date) -> dict:
+    """The ledgers of `day` and both neighbours, merged. _fetch_today shows
+    every entry that OVERLAPS a day, so an entry crossing midnight appears on
+    both days, but it is ledgered only under the day it was logged from
+    (done-current always uses the current date). Checking one day let the
+    other day's view swipe it again and credit it twice (2026-10-27 review).
+    Toggl ids are unique, so merging neighbours can't mask another entry."""
+    out: dict = {}
+    for off in (-1, 1, 0):  # the day's own notes win
+        out.update(_ledger(day + _dt.timedelta(days=off)))
+    return out
+
+
 def _ledger_add(day: _dt.date, entry_id: str, note: str) -> None:
     d = _ledger(day)
     d[str(entry_id)] = note
@@ -681,26 +694,68 @@ def _hide_event_key(key: tuple) -> None:
     HIDDEN_EVENTS.write_text(json.dumps({"hidden": keep}))
 
 
+# Allowlist for /api/delete-event (2026-10-26 security fix): the server binds
+# 0.0.0.0 with no auth, so it only ever API-deletes an event id it handed out
+# itself in a recent timeline row. {(calendar_id, event_id): (has_guests, ts)}.
+# In-memory: a restart empties it, and until the phone's next timeline load
+# a swipe degrades to a local hide, never to a delete of an unvetted id.
+_SERVED_EVENTS: dict[tuple, tuple] = {}
+SERVED_EVENT_TTL_SEC = 6 * 3600
+
+
+def _remember_served_event(ev: dict) -> None:
+    eid, cid = ev.get("id") or "", ev.get("calendar_id") or ""
+    if eid and cid:
+        _SERVED_EVENTS[(cid, eid)] = (ev.get("has_guests"), time.time())
+
+
+def _api_deletable(calendar_id: str, event_id: str) -> tuple[bool, str]:
+    """Whether a swipe may delete this event from Google Calendar (vs. only
+    hiding it). Requires: Google-hosted, served by this process within
+    SERVED_EVENT_TTL_SEC, and known to have NO guests — an event with
+    attendees (or unknown attendee data, e.g. a pre-2026-10-26 gcal cache)
+    is hidden instead, since sendUpdates='none' would cancel it for everyone
+    without telling them."""
+    if not event_id or not calendar_id or gcal_client is None:
+        return False, "no event id"
+    if calendar_id.endswith("@import.calendar.google.com"):
+        return False, "read-only import calendar"
+    served = _SERVED_EVENTS.get((calendar_id, event_id))
+    if not served or time.time() - served[1] > SERVED_EVENT_TTL_SEC:
+        return False, "not in this server's recent timeline"
+    if served[0] is not False:
+        return False, "has guests" if served[0] else "guest list unknown"
+    return True, ""
+
+
 def delete_calendar_event(title: str, start_iso: str, end_iso: str,
                           event_id: str = "", calendar_id: str = "") -> dict:
-    """Swipe-left delete on an event row. Google-hosted events (an id and a
-    calendar that isn't the read-only Outlook ICS import) are deleted from the
-    calendar via the API, sendUpdates='none' like the terminal's ^X; Outlook
-    rows can't be deleted from here, so they're hidden from janus only. Either
-    way the hide key is written, so the row leaves at once even while the
-    calendar fetch is cached and a mirrored copy can't resurface it."""
+    """Swipe-left delete on an event row. A guest-less Google-hosted event
+    this server itself served (see _api_deletable) is deleted via the API,
+    sendUpdates='none' like the terminal's ^X; everything else (Outlook ICS
+    rows, events with guests, ids this server never handed out) is hidden
+    from janus only. Either way the hide key is written, so the row leaves at
+    once even while the calendar fetch is cached and a mirrored copy can't
+    resurface it."""
     if not title or not start_iso or not end_iso:
         return {"ok": False, "error": "title, start_iso, end_iso required"}
     mode = "hidden"
-    if event_id and calendar_id and not calendar_id.endswith("@import.calendar.google.com") \
-            and gcal_client is not None:
+    ok, why = _api_deletable(calendar_id, event_id)
+    if ok:
         try:
             gcal_client.delete_event(calendar_id, event_id)
             mode = "deleted"
+            _SERVED_EVENTS.pop((calendar_id, event_id), None)
         except Exception as e:  # noqa: BLE001 -- fall back to the local hide
             print(f"WARN delete_event {event_id}: {e}", file=sys.stderr)
+            why = "api error"
+    elif event_id:
+        print(f"delete-event {event_id!r}@{calendar_id!r}: hide only ({why})", file=sys.stderr)
     _hide_event_key(_event_key(title, start_iso, end_iso))
-    return {"ok": True, "mode": mode}
+    r = {"ok": True, "mode": mode}
+    if mode == "hidden" and why:
+        r["reason"] = why
+    return r
 
 
 def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
@@ -719,6 +774,7 @@ def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
         if _event_covered(ev, entries) or _event_tracked(ev, entries):
             continue
         code = gcal_project_code(ev)
+        _remember_served_event(ev)
         out.append({
             "title": _safe_title(ev.get("title") or "(no title)"),
             "start_dt": ev["start_dt"], "end_dt": ev["end_dt"],
@@ -898,7 +954,7 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
         events = []
     else:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
-    logged = _ledger(today)
+    logged = _ledger_near(today)
     logged_pts = _logged_points(today)
     # A task closed in dtd marks the LAST timer entry with its name as
     # logged (one completion = one entry; an earlier same-name session can
@@ -1303,7 +1359,7 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
                 return {"ok": False, "error": "bad end time (HH:MM)"}
             if new_end <= new_start:
                 return {"ok": False, "error": "end must be after start"}
-            ledger = _ledger(today)
+            ledger = _ledger_near(today)
             if str(entry_id) in ledger:
                 return {"ok": False, "error": "already logged — can't retime a logged entry"}
             if _would_touch_logged(entry_id, new_start, new_end, ledger):
@@ -1352,7 +1408,7 @@ def split_entry(entry_id: str, mode: str, day: _dt.date | None = None) -> dict:
     if duration_min <= chunk:
         return {"ok": False, "error": f"too short to split (need > {chunk}m)"}
 
-    if str(entry_id) in _ledger(today):
+    if str(entry_id) in _ledger_near(today):
         return {"ok": False, "error": "already logged — can't split a logged entry"}
 
     cut = (start + _dt.timedelta(minutes=chunk) if mode == "top"
@@ -1387,7 +1443,7 @@ def delete_entry(entry_id: str, day: _dt.date | None = None) -> dict:
     if (e.get("duration") or 0) < 0 or not e.get("stop"):
         return {"ok": False, "error": "can't delete a running timer — stop it first"}
     today = day or _dt.datetime.now(_tz()).date()
-    if str(entry_id) in _ledger(today):
+    if str(entry_id) in _ledger_near(today):
         return {"ok": False, "error": "already logged — can't delete a logged entry"}
     try:
         if _parse_iso(e["start"]).date() != today or _parse_iso(e["stop"]).date() != today:
@@ -1543,8 +1599,23 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     with the viewed M/D appended and --past-ok, so the 分 land on THAT day
     (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
     today = day or _dt.datetime.now(_tz()).date()
-    if str(entry_id) in _ledger(today):
+    if str(entry_id) in _ledger_near(today):
         return {"ok": True, "already": True}
+    # The ledger is written only after did-fast returns (seconds), so a
+    # double-tap or an iOS retry of a slow request passed the check above
+    # twice and credited twice. Same guard as convert_event/done-current.
+    key = f"log:{entry_id}"
+    if key in _INFLIGHT:
+        return {"ok": False, "error": "already logging"}
+    _INFLIGHT.add(key)
+    try:
+        return _log_entry_locked(entry_id, desc, minutes, project, tags, day, today, points)
+    finally:
+        _INFLIGHT.discard(key)
+
+
+def _log_entry_locked(entry_id, desc, minutes, project, tags, day, today,
+                      points=None) -> dict:
     # A dtd-started task carries its OWN point value (e.g. [30]), which is
     # generally NOT the same number as the entry's elapsed minutes. Passing
     # a bare number here only ever means anything to did-fast's Step 6
@@ -1558,7 +1629,8 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # (2026-08-15 user report: dtd-started points weren't reliably landing).
     pts = _resolvable_points(desc)
     if pts is None:
-        pts = _speedy_meeting_pts(desc, minutes)  # 25m meeting → [30] (2026-10-22)
+        # day=today: a past-day log must test THAT day's meeting titles.
+        pts = _speedy_meeting_pts(desc, minutes, day=today)  # 25m meeting → [30] (2026-10-22)
     # Same three paths as desktop janus (lib/janus_done.py, JM 2026-10-28):
     # a crossed-off task adds nothing; an unknown entry asks for a total or
     # a rate instead of crediting the minutes at 1x. `points` is the answer.
@@ -1607,6 +1679,40 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
 _INFLIGHT: set[str] = set()
 
 
+def _ledger_converted(key: str, start_dt: _dt.datetime, end_dt: _dt.datetime,
+                      note: str, day: _dt.date, points: int | None = None,
+                      credits: list[dict] | None = None) -> None:
+    """Record a credited event conversion in the same per-day ledger
+    log_entry/done_current use: the event key (so re-converting is a no-op)
+    plus the Toggl entry did-fast just created for that exact window (so the
+    swipe-delete/split/edit guards treat it as logged — 2026-10-26 fix: it was
+    deletable while its 分 stayed credited, and re-converting then
+    double-credited). The entry lookup is best-effort; the event key alone
+    already blocks the double credit. `day` = the day the 分 were credited
+    (the past-day view's date, else today), as log_entry ledgers; readers
+    use _ledger_near, so an event that crosses midnight is found from
+    either day (2026-10-27 merge of v169 + v170)."""
+    _ledger_add(day, key, note)
+    sday = start_dt.date()
+    try:
+        entries = toggl_api.get_entries(
+            start_date=(sday - _dt.timedelta(days=1)).isoformat(),
+            end_date=(sday + _dt.timedelta(days=2)).isoformat()) or []
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN convert ledger lookup: {e}", file=sys.stderr)
+        return
+    for e in entries:
+        if (e.get("duration") or 0) < 0 or not e.get("stop"):
+            continue
+        try:
+            st, en = _parse_iso(e["start"]), _parse_iso(e["stop"])
+        except Exception:
+            continue
+        if abs((st - start_dt).total_seconds()) <= 60 and abs((en - end_dt).total_seconds()) <= 60:
+            _ledger_add(day, str(e.get("id")), note)
+            _logged_points_add(day, str(e.get("id")), points, credits or [])
+
+
 def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: bool,
                   day: _dt.date | None = None) -> dict:
     """Convert a calendar event into Toggl — mirrors tools/tg/janus.py's
@@ -1628,6 +1734,12 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
         suffix = f" @{code}" if code else ""
         if is_past:
             end_dt = _parse_iso(end_iso)
+            # Idempotent re-convert (2026-10-26): a name-only did-fast item has
+            # no excel-http idempotency key, so converting the same event twice
+            # (e.g. after the Toggl entry was deleted) would credit it twice.
+            credit_day = day or _dt.datetime.now(_tz()).date()
+            if key in _ledger_near(credit_day):
+                return {"ok": True, "mode": "logged", "already": True, "step": "already logged"}
             text = f"{title} {start_dt:%H%M}-{end_dt:%H%M}{suffix}"
             # A 25/50-min speedy meeting credits its 30/60 slot (2026-10-22),
             # unless a dtd task's own [N] already resolves for the title.
@@ -1639,6 +1751,11 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
                 text += f" {day.month}/{day.day}"
                 flags = ("--past-ok",)
             r = _run_did_fast(text, flags)
+            if r["ok"]:
+                credits = r.get("credits") or []
+                r["points"] = _credited_total(credits, sp)
+                _ledger_converted(key, start_dt, end_dt, f"{text} → {r.get('step')}",
+                                  credit_day, r["points"], credits)
             return {"ok": r["ok"], "mode": "logged", "step": r.get("step"),
                     "credits": r.get("credits") or [],
                     "needs_agent": r.get("needs_agent"), "stderr_tail": r.get("stderr_tail")}

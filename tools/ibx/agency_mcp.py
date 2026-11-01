@@ -265,25 +265,50 @@ def _port_responsive(port):
         return False
 
 
-def _start_server(name):
-    """Start an agency MCP server on a random port and return (proc, port)."""
+START_TIMEOUT = float(os.environ.get("AGENCY_START_TIMEOUT", "30"))
+
+
+def _start_server(name, timeout=None):
+    """Start an agency MCP server on a random port and return (proc, port).
+
+    The deadline is enforced with select() on the raw fd. It used to loop on
+    proc.stdout.readline(), which blocks until Agency prints a line; with an
+    expired Entra token Agency sits ~30 min in interactive auth before printing
+    anything, so the "30s" deadline was never checked. Under the module _lock,
+    dream-intake's mail + calendar sources serialized four such starts every
+    night: intake took 2h01m (duration_ms ~7.26M) from 2026-10-15 onward."""
+    timeout = START_TIMEOUT if timeout is None else timeout
     proc = subprocess.Popen(
         [AGENCY_BIN, "mcp", name, "--transport", "http", "--port", "0"],
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        stderr=subprocess.DEVNULL,  # never read; a full PIPE would block Agency
     )
-    deadline = time.time() + 30
+    fd = proc.stdout.fileno()
+    deadline = time.time() + timeout
     port = None
-    while time.time() < deadline:
-        line = proc.stdout.readline().strip()
-        if line.isdigit():
-            port = int(line)
+    buf = b""
+    while port is None:
+        remaining = deadline - time.time()
+        if remaining <= 0:
             break
+        ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
+        if not ready:
+            continue
+        chunk = os.read(fd, 4096)
+        if not chunk:  # EOF: Agency exited before printing a port
+            break
+        buf += chunk
+        *lines, buf = buf.split(b"\n")
+        for line in lines:
+            line = line.strip()
+            if line.isdigit():
+                port = int(line)
+                break
     if port is None:
         proc.kill()
         _mark_login_pending(name, "server start failed")
-        raise RuntimeError(f"Failed to start agency mcp {name}")
+        raise RuntimeError(
+            f"Failed to start agency mcp {name} (no port within {timeout:.0f}s)")
     _write_pidfile(name, proc.pid, port)
     return proc, port
 

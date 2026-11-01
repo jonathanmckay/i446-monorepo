@@ -19,6 +19,8 @@ Check the input (case-insensitive, after stripping `(N)`, `[N]`, `@tag` annotati
 
 **0n (daily):** xk20, xk22, xk26, xk88, 冥想, o314, 其他人, hiit, bball, night hcmc (alias: evening hcmc), night hcmc
 
+**0分 sessions (xk87, 1分/min + 5 per session, priced by did-fast):** math, english, 中文
+
 **1n+ (weekly):** s897, 家 (alias for family), relax, s+hcbp
 
 **Start-bonus (variable, with a bonus granted for starting):**
@@ -53,6 +55,7 @@ Match → Variable mode. No match → Task mode.
    - s+hcbp → hcbp
    - xk20s, xk22s → xk87
    - 一起饭 → xk87
+   - math, english, 中文 → xk87
 
 3. **Stop any running timer** first:
    ```bash

@@ -638,7 +638,14 @@ def hook(payload: str) -> str:
     # paragraph used to become one long query that matched nothing and was
     # created as a new task (2026-10-22).
     query = TASK_COLON_RE.split(arg.split("\n", 1)[0], 1)[0].strip()
-    if query.lower() in ("off", "release", "done"):
+    if query.lower() == "done":
+        # SKILL.md contract: `/d done` marks held tasks ✅ (agent-finished);
+        # routing it to release() emptied the index first, so the ✅ and
+        # that turn's 😈 note never happened (v169 review).
+        mark_done(session)
+        push()
+        return "[claim hook] marked this session's claimed tasks ✅ (agent-finished)."
+    if query.lower() in ("off", "release"):
         release(session)
         push()
         return "[claim hook] released this session's claim."

@@ -87,6 +87,54 @@ def entry_key(e):
     return (e.get("sheet", ""), e.get("col", ""), str(anchor))
 
 
+# excel-http stripped osascript's leading "\t\t" echo for blank-cell writes
+# until d6d2f694 (2026-10-21 09:04), shifting every field left: the ledger
+# recorded before=<new value>, after="" (and, before before_value existed,
+# after_value=<new formula>). 404 Sep-Oct entries carry that shape; each
+# produced two false chain breaks (its own before, and the next write's
+# before vs its empty after). Read them as what actually happened: a write
+# onto a blank cell. Bounded by date so no post-fix entry is ever rewritten.
+STRIP_BUG_UNTIL = "2026-10-22T00:00:00"
+
+
+def unshift(e):
+    """Corrected copy of a strip-bug entry, else the entry unchanged."""
+    if (e.get("kind") not in ("write", "append")
+            or (e.get("ts") or "") >= STRIP_BUG_UNTIL
+            or e.get("after") != "" or e.get("before") in (None, "")
+            or str(e.get("value") or "") == ""):
+        return e
+    if "before_value" in e:
+        if e.get("after_value") not in (None, "") or e.get("before_value") in (None, ""):
+            return e
+        formula, value = e["before_value"], e["before"]
+    else:
+        if e.get("after_value") in (None, ""):
+            return e
+        formula, value = e["after_value"], e["before"]
+    fixed = dict(e)
+    fixed.update(before="", after=formula, after_value=value, unshifted=True)
+    if "before_value" in e:
+        fixed["before_value"] = ""
+    return fixed
+
+
+def is_replay_restore(e, prev_after):
+    """A `replay …` write that put back exactly what the ledger last recorded:
+    the cell was clobbered outside the daemon (sync fork / revert) and has
+    already been repaired, so the ledger and the cell agree again."""
+    return (str(e.get("src") or "").startswith("replay ")
+            and e.get("after") is not None and e.get("after") == prev_after)
+
+
+# do_reconcile / snapshot fill `before` from the daemon's own latest ledger
+# entry (latest_entry), not from Excel, so it can't witness an outside edit;
+# their `after` IS a fresh Excel read and still advances the chain. Checking
+# that before re-flagged every strip-bug cell a second time at the nightly
+# 23:55 reconcile (the daemon's latest after was the bugged "").
+LEDGER_DERIVED_BEFORE = {"reconcile", "snapshot"}
+
+
 def replay(entries):
     """→ (errors, warns, last_after {key: (entry, after)}).
 
@@ -97,6 +145,7 @@ def replay(entries):
     last = {}
     pending = {}  # key → break messages not yet covered by an ack
     for e in entries:
+        e = unshift(e)
         key = entry_key(e)
         cell = f"{key[0]}!{key[1]} @{key[2]}"
         prev = last.get(key)
@@ -105,8 +154,13 @@ def replay(entries):
                 warns.append(f"{msg} [acked {e.get('ts')}: {e.get('note')}]")
             last[key] = (e, e.get("after"))
             continue
-        if e.get("before") is None:  # fallback write, daemon was down
+        if e.get("kind") in LEDGER_DERIVED_BEFORE:
+            pass  # before was copied from the ledger, not read from Excel
+        elif e.get("before") is None:  # fallback write, daemon was down
             warns.append(f"{e.get('ts')} {cell}: fallback write (before unknown), src={e.get('src')}")
+        elif prev is not None and e["before"] != prev[1] and is_replay_restore(e, prev[1]):
+            warns.append(f"{e.get('ts')} {cell}: clobbered outside the daemon "
+                         f"(`{prev[1]}` → `{e['before']}`), restored by {e.get('src')}")
         elif prev is not None and e["before"] != prev[1]:
             pending.setdefault(key, []).append(
                 f"{e.get('ts')} {cell}: chain BREAK — expected before "
