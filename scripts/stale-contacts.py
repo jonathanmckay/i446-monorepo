@@ -34,7 +34,48 @@ DEFAULT_POINTS = 10  # [N] value on the default "Reach out to <name>" body
 THRESHOLDS = {
     "weekly": 10, "biweekly": 17, "monthly": 38, "quarterly": 100,
     "semi-annual": 200, "semiannual": 200, "annual": 400, "yearly": 400,
+    "biennial": 800,
 }
+# Spellings seen in d359 that mean a named cadence above.
+CADENCE_ALIASES = {
+    "6 months": "semi-annual", "six months": "semi-annual", "6-months": "semi-annual",
+    "every 6 months": "semi-annual", "bi-annual": "semi-annual", "biannual": "semi-annual",
+    "fortnightly": "biweekly", "bi-weekly": "biweekly", "every 2 weeks": "biweekly",
+    "every-2-weeks": "biweekly", "every year": "annual", "every 2 years": "biennial",
+    "1 year": "annual", "12 months": "annual", "3 months": "quarterly",
+    "1 month": "monthly", "1 week": "weekly", "2 weeks": "biweekly",
+    "24 months": "biennial", "2 years": "biennial",
+}
+# Cadences that mean "no scheduled outreach": silently not tracked.
+NO_CADENCE = {"none", "as-needed", "as needed", "ad-hoc", "adhoc", "ad hoc", "never", "n/a", ""}
+_UNIT_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
+_GENERIC = re.compile(r"^(?:every[\s-]+)?(\d+)[\s-]*(day|week|month|year)s?$")
+
+
+def cadence_threshold(raw: str | None) -> int | None:
+    """Days-since-last_contact threshold for a cadence string.
+
+    Returns None for "no cadence" values (none/as-needed/ad-hoc/blank).
+    Raises ValueError for strings it cannot interpret, so callers report them
+    instead of silently dropping the contact. Generic forms like
+    `every-5-days`, `3 weeks`, `every 2 months` get ~10% grace (min 3 days),
+    matching the slack baked into the named thresholds."""
+    c = (raw or "").split("#", 1)[0].strip().strip('"').strip("'").lower()
+    c = re.sub(r"\s+", " ", c)
+    if c in NO_CADENCE:
+        return None
+    c = CADENCE_ALIASES.get(c, c)
+    if c in THRESHOLDS:
+        return THRESHOLDS[c]
+    m = _GENERIC.match(c)
+    if m:
+        period = int(m.group(1)) * _UNIT_DAYS[m.group(2)]
+        if period <= 0:
+            raise ValueError(f"non-positive cadence: {raw!r}")
+        return period + max(3, -(-period // 10))
+    raise ValueError(f"unknown cadence: {raw!r}")
+
+
 SKIP_FILES = {"CLAUDE.md", "d359-index.md"}
 
 
@@ -74,34 +115,66 @@ def rollup_label(fm: dict) -> str:
     return next(iter(hits)) if hits else "s897"
 
 
-def overdue_contacts(today: date, d359_dir: Path = D359) -> list[dict]:
-    """Pure-ish: scan d359 files, return overdue contacts as dicts with the
-    fields needed to build a task. Skips files missing cadence/last_contact."""
+def contact_files(d359_dir: Path = D359) -> list[Path]:
+    """Every person doc under d359, recursing into subfolders. In a subfolder
+    only the folder note (`louisa-xu-d359/louisa-xu-d359.md`) is a person doc;
+    siblings are meeting notes/PSCs and are ignored."""
     out = []
-    for p in sorted(d359_dir.glob("*.md")):
-        if p.name in SKIP_FILES:
+    for p in sorted(d359_dir.rglob("*.md")):
+        rel = p.relative_to(d359_dir)
+        if p.name in SKIP_FILES or any(part.startswith(".") for part in rel.parts):
             continue
-        fm = parse_frontmatter(p.read_text())
-        cadence = (fm.get("cadence") or "").lower()
-        lc = fm.get("last_contact")
-        if not cadence or not lc or cadence not in THRESHOLDS:
+        if len(rel.parts) > 1 and p.stem != p.parent.name:
+            continue
+        out.append(p)
+    return out
+
+
+def scan(today: date, d359_dir: Path = D359) -> tuple[list[dict], list[dict]]:
+    """Scan d359 person docs. Returns (overdue, problems).
+
+    problems lists docs that carry a cadence but cannot be evaluated (missing
+    or malformed last_contact, unparseable cadence) so they are reported
+    rather than silently skipped."""
+    overdue, problems = [], []
+    for p in contact_files(d359_dir):
+        fm = parse_frontmatter(p.read_text(errors="replace"))
+        rel = str(p.relative_to(d359_dir))
+        raw = fm.get("cadence")
+        try:
+            threshold = cadence_threshold(raw)
+        except ValueError:
+            problems.append({"file": rel, "issue": "unknown cadence", "value": raw})
+            continue
+        if threshold is None:
+            continue
+        lc = (fm.get("last_contact") or "").split("#", 1)[0].strip()
+        if lc.lower() in ("", "null", "none", "~", "yyyy-mm-dd"):
+            problems.append({"file": rel, "issue": "no last_contact", "value": raw})
             continue
         try:
-            lc_date = datetime.strptime(lc, "%Y-%m-%d").date()
+            lc_date = datetime.strptime(lc[:10], "%Y-%m-%d").date()
         except ValueError:
+            problems.append({"file": rel, "issue": "bad last_contact", "value": lc})
             continue
         days = (today - lc_date).days
-        if days <= THRESHOLDS[cadence]:
+        if days <= threshold:
             continue  # not overdue (or future-dated)
         slug = slug_of(p)
         name = fm.get("title", slug).replace(" d359", "").strip()
-        out.append({
-            "slug": slug, "name": name, "cadence": cadence,
-            "last_contact": lc, "days": days,
+        overdue.append({
+            "slug": slug, "name": name,
+            "cadence": raw.split("#", 1)[0].strip().lower(),
+            "last_contact": lc_date.isoformat(), "days": days, "threshold": threshold,
             "outreach_task": fm.get("outreach_task"),
-            "rollup": rollup_label(fm),
+            "rollup": rollup_label(fm), "file": rel,
         })
-    return out
+    return overdue, problems
+
+
+def overdue_contacts(today: date, d359_dir: Path = D359) -> list[dict]:
+    """Overdue contacts only (see scan() for the problems list)."""
+    return scan(today, d359_dir)[0]
 
 
 def task_content(c: dict) -> str:
@@ -170,7 +243,7 @@ def main() -> int:
             pass
 
     today = date.today()
-    overdue = overdue_contacts(today)
+    overdue, problems = scan(today)
     token = _token()
     rollups = {c["rollup"] for c in overdue} | {"s897"}
     already = _open_label_set(token, rollups)
@@ -188,6 +261,10 @@ def main() -> int:
     print(f"{'CREATED' if args.apply else 'WOULD CREATE'} {len(created)} | skipped {len(skipped)} (already queued)")
     for c in created:
         print(f"  {c['content']}   [{c['days']}d overdue]")
+    if problems:
+        print(f"NOT EVALUATED {len(problems)} (cadence set but unusable):")
+        for pr in problems:
+            print(f"  {pr['file']}: {pr['issue']} ({pr['value']!r})")
     return 0
 
 

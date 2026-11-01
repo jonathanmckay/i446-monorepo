@@ -41,8 +41,11 @@ def test_threshold_is_strict(tmp_path):
 
 def test_future_and_unknown_cadence_skipped(tmp_path):
     _write(tmp_path, "future-d359", "weekly", "2026-12-01")     # future → skip
-    _write(tmp_path, "weird-d359", "fortnightly", "2026-01-01")  # unknown cadence → skip
-    assert sc.overdue_contacts(date(2026, 6, 14), tmp_path) == []
+    _write(tmp_path, "weird-d359", "whenever-ish", "2026-01-01")  # unknown → not overdue...
+    overdue, problems = sc.scan(date(2026, 6, 14), tmp_path)
+    assert overdue == []
+    # ...but reported, not silently dropped
+    assert [(p["file"], p["issue"]) for p in problems] == [("weird-d359.md", "unknown cadence")]
 
 
 def test_skip_files_ignored(tmp_path):
@@ -84,3 +87,68 @@ def test_outreach_task_override_wins_and_is_marked():
 def test_slug_strips_d359_suffix():
     assert sc.slug_of(Path("mark-mckay-d359.md")) == "mark-mckay"
     assert sc.slug_of(Path("carol-bryan-d359.md")) == "carol-bryan"
+
+
+# ---- v175: cadence parser, subfolders, missing last_contact ----
+
+import pytest
+
+
+@pytest.mark.parametrize("raw,days", [
+    ("weekly", 10), ("monthly", 38), ("quarterly", 100), ("semi-annual", 200),
+    ("annual", 400), ("yearly", 400), ("Yearly", 400), ("biennial", 800),
+    ("6 months", 200), ("six months", 200), ("fortnightly", 17),
+    ("every-5-days", 8), ("every 5 days", 8), ("3 weeks", 24), ("every 2 months", 66),
+    ("monthly        # weekly / monthly / quarterly", 38), ('"quarterly"', 100),
+])
+def test_cadence_threshold_forms(raw, days):
+    assert sc.cadence_threshold(raw) == days
+
+
+@pytest.mark.parametrize("raw", ["none", "as-needed", "ad-hoc", "", None, "None"])
+def test_no_cadence_values_return_none(raw):
+    assert sc.cadence_threshold(raw) is None
+
+
+def test_unknown_cadence_raises():
+    with pytest.raises(ValueError):
+        sc.cadence_threshold("when the moon is full")
+
+
+def test_yearly_family_doc_is_evaluated(tmp_path):
+    _write(tmp_path, "kelly-mckay-d359", "yearly", "2025-01-01")
+    assert [c["slug"] for c in sc.overdue_contacts(date(2026, 6, 14), tmp_path)] == ["kelly-mckay"]
+
+
+def test_every_5_days_and_6_months(tmp_path):
+    _write(tmp_path, "ian-d359", "every-5-days", "2026-06-05")      # 9d > 8
+    _write(tmp_path, "jenn-d359", "6 months", "2025-11-01")         # 225d > 200
+    _write(tmp_path, "arman-d359", "biennial", "2025-01-01")        # 529d ≤ 800
+    slugs = {c["slug"] for c in sc.overdue_contacts(date(2026, 6, 14), tmp_path)}
+    assert slugs == {"ian", "jenn"}
+
+
+def test_subfolder_folder_note_is_scanned(tmp_path):
+    # LX's doc lives at d359/louisa-xu-d359/louisa-xu-d359.md; the old glob missed it.
+    sub = tmp_path / "louisa-xu-d359"
+    sub.mkdir()
+    _write(sub, "louisa-xu-d359", "weekly", "2026-05-01", title="Louisa Xu")
+    # a sibling meeting note with cadence-like frontmatter is NOT a person doc
+    _write(sub, "2026-05-01-dinner", "weekly", "2026-01-01")
+    res = sc.overdue_contacts(date(2026, 6, 14), tmp_path)
+    assert [(c["slug"], c["name"], c["file"]) for c in res] == [
+        ("louisa-xu", "Louisa Xu", "louisa-xu-d359/louisa-xu-d359.md")]
+
+
+def test_missing_last_contact_is_reported(tmp_path):
+    (tmp_path / "hadi-d359.md").write_text("---\ntitle: Hadi\ncadence: quarterly\n---\n")
+    _write(tmp_path, "jay-d359", "quarterly", "null")
+    _write(tmp_path, "bad-d359", "quarterly", "last spring")
+    _write(tmp_path, "adhoc-d359", "ad-hoc", "null")   # no cadence → not a problem
+    overdue, problems = sc.scan(date(2026, 6, 14), tmp_path)
+    assert overdue == []
+    assert {(p["file"], p["issue"]) for p in problems} == {
+        ("hadi-d359.md", "no last_contact"),
+        ("jay-d359.md", "no last_contact"),
+        ("bad-d359.md", "bad last_contact"),
+    }

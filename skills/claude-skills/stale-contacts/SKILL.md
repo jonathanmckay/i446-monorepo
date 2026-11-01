@@ -47,7 +47,7 @@ This cuts false-positive overdues from stale manual `last_contact` fields. Run w
 
 ### Step 1: Scan d359 files
 
-Read all `.md` files in `~/vault/d359/`. For each file, parse YAML frontmatter and check for **both** `cadence` and `last_contact` fields. Skip files missing either field. Skip `CLAUDE.md`, `d359-index.md`, and any non-person docs.
+Read all person docs under `~/vault/d359/`, recursing into subfolders (in a subfolder only the folder note, e.g. `louisa-xu-d359/louisa-xu-d359.md`, is a person doc). Skip `CLAUDE.md`, `d359-index.md`. Cadence is parsed by `cadence_threshold()`: named forms (weekly … annual/yearly, biennial), aliases (`6 months`, `fortnightly`), and generic `every-N-days`/`N weeks`/`N months`; `none`/`as-needed`/`ad-hoc` mean untracked. Docs with a cadence but no usable `last_contact`, or an unparseable cadence, are printed under **NOT EVALUATED** rather than silently skipped.
 
 ### Step 2: Evaluate overdue status
 
