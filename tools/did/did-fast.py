@@ -2508,8 +2508,17 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
         elif r.step == "variable" and r.item.name.lower() in VARIABLE_DOMAIN:
             # bball/run/walk/nap/etc.: points = elapsed minutes (+ any bonus).
             # Without this they log 0 when completed from dtd with a timer up.
-            r.fen_points = (mins + VARIABLE_SESSION_BONUS.get(r.item.name.lower(), 0)
-                            + (r.item.bonus_points or 0))
+            pts = mins + VARIABLE_SESSION_BONUS.get(r.item.name.lower(), 0)
+            if pts > MAX_INFERRED_POINTS:
+                # Same cap as route_items: a forgotten timer (an 11h "walk")
+                # must not credit its minutes as 分. main() drops the item.
+                r.step = "refused"
+                r.fen_points = 0
+                r.error = (f"{r.item.name}: timer {mins}m → inferred {pts}分 > "
+                           f"{MAX_INFERRED_POINTS} — refused; give the points "
+                           f"explicitly as [N]")
+                continue
+            r.fen_points = pts + (r.item.bonus_points or 0)
             r.item.time_value = mins
 
 
@@ -3704,6 +3713,9 @@ def main():
     toggl_stop = (stop_matching_toggl(all_names)
                   if all_names and not points_log_run and not past_target else None)
     apply_timer_minutes(fast, toggl_stop)
+    # A timer-backfilled credit over the cap was refused in place: no write.
+    refused += [r for r in fast if r.step == "refused"]
+    fast = [r for r in fast if r.step != "refused"]
     # 3c. xk20 / xk22 domain cards -> kid-time minutes in their 0n column
     # (joins the step-4 0n batch below; see synth_kid_time_writes).
     fast.extend(synth_kid_time_writes(fast, toggl_stop, headers))
