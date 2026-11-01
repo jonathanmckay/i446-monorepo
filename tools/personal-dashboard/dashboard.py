@@ -854,7 +854,13 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS, offset=0):
             start_dt = datetime.fromisoformat(start_str).astimezone(_tz())
         except (ValueError, TypeError):
             continue
-        end_dt = start_dt + timedelta(seconds=dur)
+        # Overlap math runs in UTC. Aware datetimes sharing one tzinfo add,
+        # subtract and compare on WALL-CLOCK time, so on a DST day an entry
+        # crossing 01:00-02:00 gained (fall-back) or lost (spring-forward) an
+        # hour: 2026-11-01's 00:00 PDT-05:30 PST 睡觉 (6.5 h real) ended at
+        # 06:30 wall and put 150 min into 卯+辰 instead of 90 min into 卯.
+        start_utc = start_dt.astimezone(timezone.utc)
+        end_utc = start_utc + timedelta(seconds=dur)
         proj_id = e.get("project_id")
         code = PROJECT_ID_TO_CODE.get(proj_id, "no project") if proj_id else "no project"
 
@@ -872,9 +878,9 @@ def _build_block_chart_data(n_days=GRANULAR_BLOCK_DAYS, offset=0):
                 if idx is None:
                     continue
                 block_start_dt = datetime(d.year, d.month, d.day, block_start_hour, 0, tzinfo=_tz())
-                block_end_dt = block_start_dt + timedelta(hours=2)
-                overlap_start = max(start_dt, block_start_dt)
-                overlap_end = min(end_dt, block_end_dt)
+                block_end_dt = (block_start_dt + timedelta(hours=2)).astimezone(timezone.utc)
+                overlap_start = max(start_utc, block_start_dt.astimezone(timezone.utc))
+                overlap_end = min(end_utc, block_end_dt)
                 overlap_min = (overlap_end - overlap_start).total_seconds() / 60
                 if overlap_min > 0:
                     time_bucketed[code][idx] += round(overlap_min)
