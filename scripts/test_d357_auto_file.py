@@ -466,3 +466,67 @@ def test_side_file_variant_is_not_a_separate_candidate(tmp_path):
     assert mod.find_unfiled() == [main]
 
 
+
+
+# ---- v175 backfill guard: newest-first, no points for >7d, skip basketball ----
+
+def _mk(mod, tmp_path, *names):
+    mod.RECORDINGS_DIR = tmp_path / "recordings"
+    mod.D357_DIR = tmp_path / "d357"
+    mod.RECORDINGS_DIR.mkdir()
+    mod.D357_DIR.mkdir()
+    old = time.time() - mod.MIN_AGE_SEC - 10
+    paths = []
+    for n in names:
+        p = mod.RECORDINGS_DIR / n
+        p.write_text("transcript text")
+        os.utime(p, (old, old))
+        paths.append(p)
+    return paths
+
+
+def test_backlog_drains_newest_first(tmp_path):
+    """Bug (2026-11-01): oldest-first at 2/h put the 10-25 m5x2 notes ~17 h
+    behind August's backlog, after Monday's m5x2 block."""
+    mod = _load_mod()
+    aug, sep, octo = _mk(mod, tmp_path, "2026.08.07-1000-ja-jm-1-1.txt",
+                         "2026.09.15-1100-r203-weekly.txt",
+                         "2026.10.25-0900-m5x2-strat.txt")
+    assert mod.find_unfiled() == [octo, sep, aug]
+
+
+def test_basketball_recordings_are_never_candidates(tmp_path):
+    mod = _load_mod()
+    _, _, meeting = _mk(mod, tmp_path, "2026.09.27-1257-🚗-←-cais-basketball.txt",
+                        "2026.10.19-1838-basketball.txt",
+                        "2026.10.20-1000-m5x2-people.txt")
+    assert mod.find_unfiled() == [meeting]
+
+
+def test_old_recording_prompt_awards_no_points():
+    """Bug (2026-11-01): draining the Aug-Oct backlog would credit every
+    meeting's points to TODAY's 0分 row. >7 days old: file, no points."""
+    import datetime as dt
+    mod = _load_mod()
+    prompt = mod.build_prompt(Path("/tmp/2026.08.07-1000-ja:jm-1:1.txt"),
+                              today=dt.date(2026, 11, 1))
+    assert "Do NOT log points" in prompt
+    assert "excel-http" not in prompt
+    assert "points: not logged (backfill)" in prompt
+
+
+def test_recent_recording_prompt_credits_its_own_date_not_today():
+    import datetime as dt
+    mod = _load_mod()
+    prompt = mod.build_prompt(Path("/tmp/2026.10.30-1100-m5x2-people.txt"),
+                              today=dt.date(2026, 11, 1))
+    assert '"date":"10/30"' in prompt
+    assert "Do NOT log points" not in prompt
+
+
+def test_backfill_boundary_is_seven_days():
+    import datetime as dt
+    mod = _load_mod()
+    today = dt.date(2026, 11, 1)
+    assert not mod.is_backfill("2026.10.25", today)  # exactly 7 days: credit own date
+    assert mod.is_backfill("2026.10.24", today)

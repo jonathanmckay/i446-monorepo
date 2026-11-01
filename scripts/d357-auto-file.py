@@ -83,6 +83,15 @@ CLAUDE_TIMEOUT_SEC = 600  # 10 min — generous for one bounded extraction task
 # on for months-old meetings. Only transcripts dated on/after this line get
 # auto-filed; the backlog is left for a manual/deliberate pass if ever wanted.
 CUTOFF_DATE = "2026.08.02"
+# Backfill guard (2026-11-01, Dream v175): the auth fix un-sticks a 38-meeting
+# backlog (08-07..10-25). Step 6 of the skill logs points to 0分 and an
+# unattended run defaults to TODAY's row, so draining it would dump Aug-Oct
+# meeting points onto one day. Recordings older than BACKFILL_DAYS are filed
+# with NO points; newer ones credit their OWN date (the daemon's "date" field),
+# never today's.
+BACKFILL_DAYS = 7
+# Non-meetings: drive/practice recordings that janus captured by accident.
+NON_MEETING_RE = re.compile(r'basketball|bball', re.I)
 
 # Recording transcripts: YYYY.MM.DD-HHMM-<slug>.txt (meet.py's naming).
 REC_STEM_RE = re.compile(r'^(\d{4}\.\d{2}\.\d{2})-\d{4}-(.+)$')
@@ -260,7 +269,8 @@ def note_auth(state: dict, ok: bool, detail: str, pending: int) -> None:
 
 
 def find_unfiled(now: float | None = None, state: dict | None = None) -> list[Path]:
-    """Transcripts with no filed doc yet, oldest first (age-gated so a
+    """Transcripts with no filed doc yet, NEWEST first (so a backlog drain
+    files last week's meetings before August's; age-gated so a
     recording that JUST finished has a moment for state cleanup to settle),
     minus recordings retired in `state` (SKIPPED or failure cap hit)."""
     state = state or {}
@@ -268,12 +278,14 @@ def find_unfiled(now: float | None = None, state: dict | None = None) -> list[Pa
         return []
     now = time.time() if now is None else now
     out = []
-    for txt in sorted(RECORDINGS_DIR.glob("*.txt")):
+    for txt in sorted(RECORDINGS_DIR.glob("*.txt"), reverse=True):
         m = REC_STEM_RE.match(txt.stem)
         if not m:
             continue
         date_str, slug = m.group(1), m.group(2)
         if date_str < CUTOFF_DATE:
+            continue
+        if NON_MEETING_RE.search(slug):
             continue
         side = SIDE_SUFFIX_RE.match(txt.stem)
         if side and (txt.parent / f"{side.group(1)}.txt").exists():
@@ -292,7 +304,29 @@ def find_unfiled(now: float | None = None, state: dict | None = None) -> list[Pa
     return out
 
 
-def build_prompt(txt_path: Path) -> str:
+def is_backfill(date_str: str, today: dt.date | None = None) -> bool:
+    """True when the recording is more than BACKFILL_DAYS old: file it,
+    award no points."""
+    today = today or dt.date.today()
+    rec = dt.datetime.strptime(date_str, "%Y.%m.%d").date()
+    return (today - rec).days > BACKFILL_DAYS
+
+
+def points_step(date_str: str, name_guess: str, today: dt.date | None = None) -> str:
+    if is_backfill(date_str, today):
+        return ("6. Do NOT log points to 0分 (skip skill step 6 entirely): this "
+                f"recording is more than {BACKFILL_DAYS} days old and is a "
+                "backfill. Add the line `points: not logged (backfill)` to the "
+                "filed note instead.")
+    rec = dt.datetime.strptime(date_str, "%Y.%m.%d").date()
+    md = f"{rec.month}/{rec.day}"
+    return ("6. Log points to 0分 (skill step 6) via the excel-http daemon — NEVER raw "
+            "AppleScript. Credit the RECORDING's own date, "
+            f'`"date":"{md}"` — never today\'s row. Label the ledger entry '
+            f'`src: "d357-auto-file {name_guess}"`.')
+
+
+def build_prompt(txt_path: Path, today: dt.date | None = None) -> str:
     m = REC_STEM_RE.match(txt_path.stem)
     date_str, slug = m.group(1), m.group(2)
     name_guess = re.sub(r'\s+', ' ', re.sub(r'[-:|]+', ' ', slug)).strip()
@@ -326,8 +360,7 @@ documented format \
 (mic_only prefix `1S ` on title/H1 if this reads as a one-sided/mic-only \
 recording).
 5. Link the raw transcript (skill step 11): {txt_path}.
-6. Log points to 0分 (skill step 6) via the excel-http daemon — NEVER raw \
-AppleScript. Label the ledger entry `src: "d357-auto-file {name_guess}"`.
+{points_step(date_str, name_guess, today)}
 7. Print exactly one final line: `FILED <path>` on success, or \
 `SKIPPED <reason>` if you genuinely cannot file it (e.g. no real meeting \
 content, empty transcript).
