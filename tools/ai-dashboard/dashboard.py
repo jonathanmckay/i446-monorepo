@@ -497,8 +497,20 @@ def get_claude_stats():
         total_cost += cost
         model_costs[model_type] = model_costs.get(model_type, 0) + cost
 
+    # Headline totals: stats-cache.json stopped updating 2026-07-01, so its
+    # totalSessions/totalMessages froze at 660 / 237,402 while cost (above)
+    # kept growing from the JSONL supplement. Add the JSONL days the cache
+    # has never seen. Approximate: a session active on N days counts N times,
+    # and JSONL messageCount is assistant messages only.
+    total_sessions = data.get("totalSessions", 0)
+    for day, act in extra_activity.items():
+        if day > last_cached_date:
+            total_messages += act["messageCount"]
+            total_sessions += act["sessionCount"]
+    total_turns = total_messages // 6
+
     return {
-        "total_sessions": data.get("totalSessions", 0),
+        "total_sessions": total_sessions,
         "total_messages": total_messages,
         "total_turns": total_turns,
         "total_cost": total_cost,
