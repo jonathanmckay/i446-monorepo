@@ -6,6 +6,7 @@ Usage:
   toggl_cli.py stop
   toggl_cli.py current
   toggl_cli.py today
+  toggl_cli.py date <YYYY-MM-DD>
   toggl_cli.py create <description> <HH:MM> <HH:MM> [project] [--date YYYY-MM-DD]
   toggl_cli.py delete <entry_id>
 """
@@ -204,11 +205,34 @@ def cmd_current(args):
     print(f"Running: {_fmt(current)}")
 
 
-def cmd_today(_args):
-    today = datetime.datetime.now(_tz()).date()
+def _utc(dt):
+    return dt.astimezone(datetime.timezone.utc)
+
+
+def _day_bounds(day):
+    """[start, end) of a local calendar day as aware datetimes. Both ends are
+    built from the wall-clock midnight, so a DST day is 23 or 25 real hours
+    (2026-11-01 in America/Los_Angeles is 25h)."""
+    tz = _tz()
+    start = datetime.datetime.combine(day, datetime.time(0, 0), tzinfo=tz)
+    end = datetime.datetime.combine(day + datetime.timedelta(days=1),
+                                    datetime.time(0, 0), tzinfo=tz)
+    return start, end
+
+
+def _day_entries(day):
+    """Entries overlapping local `day`, clipped to the day barrier.
+
+    Cross-midnight entries (an overnight 睡觉 timer stopped this morning) are
+    included clipped to 00:00; entries that run past the next midnight are
+    clipped there, so adjacent days never double-count the same minutes.
+    Durations are computed in UTC: Python subtracts same-tzinfo aware
+    datetimes on wall-clock time, which is an hour off across a DST shift.
+    """
+    day_start, day_end = _day_bounds(day)
     raw = toggl_api.get_entries(
-        start_date=(today - datetime.timedelta(days=1)).isoformat(),
-        end_date=(today + datetime.timedelta(days=2)).isoformat(),
+        start_date=(day - datetime.timedelta(days=1)).isoformat(),
+        end_date=(day + datetime.timedelta(days=2)).isoformat(),
     ) or []
     entries = []
     for e in raw:
@@ -216,32 +240,56 @@ def cmd_today(_args):
             st = datetime.datetime.fromisoformat(e.get("start", "")).astimezone(_tz())
         except Exception:
             continue
-        if st.date() == today:
+        if st.date() > day:
+            continue
+        stop_raw = e.get("stop")
+        try:
+            en = (datetime.datetime.fromisoformat(stop_raw).astimezone(_tz())
+                  if stop_raw else datetime.datetime.now(_tz()))
+        except Exception:
+            continue
+        if st.date() < day and _utc(en) <= _utc(day_start):
+            continue  # fully before the day
+        clip_start = _utc(st) < _utc(day_start)
+        clip_end = _utc(en) > _utc(day_end)
+        if not (clip_start or clip_end):
             entries.append(e)
-        elif st.date() < today:
-            # Cross-midnight entry (e.g. an overnight 睡觉 timer stopped this
-            # morning): started before today but ends today / still running.
-            # Include it clipped to 00:00 — the day-barrier view — so today's
-            # coverage (gap checks, etc.) sees the morning portion.
-            stop_raw = e.get("stop")
-            try:
-                en = (datetime.datetime.fromisoformat(stop_raw).astimezone(_tz())
-                      if stop_raw else datetime.datetime.now(_tz()))
-            except Exception:
-                continue
-            if en.date() >= today:
-                midnight = datetime.datetime.combine(today, datetime.time(0, 0), tzinfo=_tz())
-                clipped = dict(e)
-                clipped["start"] = midnight.isoformat()
-                if e.get("duration", 0) > 0:
-                    clipped["duration"] = max(0, int((en - midnight).total_seconds()))
-                entries.append(clipped)
-    entries.sort(key=lambda e: e.get("start", ""))
+            continue
+        clipped = dict(e)
+        s = day_start if clip_start else st
+        if clip_start:
+            clipped["start"] = day_start.isoformat()
+        if e.get("duration", 0) > 0:
+            en_c = day_end if clip_end else en
+            if clip_end:
+                clipped["stop"] = day_end.isoformat()
+            clipped["duration"] = max(0, int((_utc(en_c) - _utc(s)).total_seconds()))
+        entries.append(clipped)
+    entries.sort(key=lambda e: _utc(datetime.datetime.fromisoformat(e["start"])))
+    return entries
+
+
+def _print_day(day):
+    entries = _day_entries(day)
     total = sum(e.get("duration", 0) for e in entries if e.get("duration", 0) > 0)
     for e in entries:
         print(_fmt(e))
     h, m = total // 3600, (total % 3600) // 60
     print(f"Total: {h}h {m}min across {len(entries)} entries")
+
+
+def cmd_today(_args):
+    _print_day(datetime.datetime.now(_tz()).date())
+
+
+def cmd_date(args):
+    if not args:
+        sys.exit("Usage: date <YYYY-MM-DD>")
+    try:
+        day = datetime.date.fromisoformat(args[0])
+    except ValueError:
+        sys.exit(f"Bad date {args[0]!r}: expected YYYY-MM-DD")
+    _print_day(day)
 
 
 def cmd_create(args):
@@ -311,6 +359,7 @@ COMMANDS = {
     "stop": cmd_stop,
     "current": cmd_current,
     "today": cmd_today,
+    "date": cmd_date,
     "create": cmd_create,
     "delete": cmd_delete,
 }
