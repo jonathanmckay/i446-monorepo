@@ -92,11 +92,23 @@ PRICING = {
 # build a fingerprint from each relevant file's (path, mtime_ns, size) tuple
 # and memoize results keyed by that fingerprint. A 1-hour TTL is a safety net
 # in case the fingerprint ever misses an update (e.g. clock skew on a network
-# fs). The cache is a plain dict — no threading primitives — because Flask's
-# dev server is single-threaded for this app.
+# fs). Flask's dev server IS threaded (app.run defaults to threaded=True), so
+# a miss is single-flight: one thread per cache key computes, the rest block on
+# that key's lock and then reuse the result instead of each re-reading 2.4 GB
+# of JSONL (the 2026-11-01 30/60/240 s /api/stats herd).
 
 _CACHE_TTL_S = 3600  # safety-net TTL; primary invalidation is mtime-based
 _CACHE = {}  # fn_name -> (fingerprint, timestamp, value)
+_CACHE_LOCKS = {}  # cache key -> RLock (single-flight per key)
+_CACHE_LOCKS_GUARD = threading.Lock()
+
+
+def _cache_key_lock(key):
+    with _CACHE_LOCKS_GUARD:
+        lock = _CACHE_LOCKS.get(key)
+        if lock is None:
+            lock = _CACHE_LOCKS[key] = threading.RLock()
+        return lock
 
 # Directory fingerprint cache: repeatedly scanning 297 JSONL files' stats in
 # the same request is ~10 ms each; memoize within a small window.
@@ -178,15 +190,27 @@ def _cached(name, fingerprint_fn):
             except Exception:
                 return fn(*args, **kwargs)
             key = (name, args, tuple(sorted(kwargs.items())))
-            now = time.time()
-            hit = _CACHE.get(key)
-            if hit is not None:
-                cached_fp, ts, value = hit
-                if cached_fp == fp and (now - ts) < _CACHE_TTL_S:
+
+            def fresh():
+                hit = _CACHE.get(key)
+                if hit is not None:
+                    cached_fp, ts, value = hit
+                    if cached_fp == fp and (time.time() - ts) < _CACHE_TTL_S:
+                        return True, value
+                return False, None
+
+            ok, value = fresh()
+            if ok:
+                return value
+            with _cache_key_lock(key):
+                # Another thread may have finished this computation while we
+                # waited on the lock: reuse it rather than recompute.
+                ok, value = fresh()
+                if ok:
                     return value
-            value = fn(*args, **kwargs)
-            _CACHE[key] = (fp, now, value)
-            return value
+                value = fn(*args, **kwargs)
+                _CACHE[key] = (fp, time.time(), value)
+                return value
         wrapper.__wrapped__ = fn
         wrapper.__name__ = fn.__name__
         return wrapper
@@ -221,6 +245,163 @@ def _is_synthetic(msg) -> bool:
     return isinstance(msg, dict) and msg.get("model") == SYNTHETIC_MODEL
 
 
+# ---------------------------------------------------------------------------
+# Incremental JSONL stats: per-file (path, mtime_ns, size) -> per-day aggregates
+# ---------------------------------------------------------------------------
+# ~/.claude/stats-cache.json stopped updating 2026-07-01, so every cache miss
+# used to re-read every JSONL under _PROJECTS_ROOTS (4,957 files / 2.4 GB on
+# 2026-11-01), and overnight agents writing logs made every request a miss.
+# Every aggregate _parse_jsonl_daily_stats returns is a sum over files (the
+# session de-dup key (sessionId, day) is per file), so we keep each file's
+# per-day contribution keyed by (mtime_ns, size), persist it in a sidecar
+# SQLite DB, and re-parse only new or changed files. The DB lives outside the
+# Syncthing-mirrored vault/monorepo; set AI_DASH_JSONL_CACHE_DB to move it
+# ("" = in-memory only).
+_JSONL_CACHE_DB = (
+    os.environ.get("AI_DASH_JSONL_CACHE_DB")
+    if "AI_DASH_JSONL_CACHE_DB" in os.environ
+    else str(Path.home() / ".cache" / "jm-ai-dash" / "jsonl-daily.sqlite")
+) or None
+# Bump when _parse_jsonl_file_daily's output semantics change: old rows are
+# discarded and every file is re-parsed once.
+_JSONL_PARSE_VERSION = 1
+_FILE_DAILY_MEM = None  # path -> (mtime_ns, size, {day: [msgs, sessions, {model: tok}, {model_type: cost}]})
+_FILE_DAILY_LOCK = threading.Lock()
+
+
+def _jsonl_cache_conn():
+    """Open (and migrate) the sidecar cache DB, or None if disabled/unavailable."""
+    if not _JSONL_CACHE_DB:
+        return None
+    try:
+        Path(_JSONL_CACHE_DB).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(_JSONL_CACHE_DB, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""CREATE TABLE IF NOT EXISTS file_daily (
+            path TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER,
+            version INTEGER, data TEXT)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS ingest_state (
+            path TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)""")
+        return conn
+    except Exception as e:  # noqa: BLE001 (cache is an optimization, never fatal)
+        print(f"[jsonl-cache] disabled: {e}", flush=True)
+        return None
+
+
+def _parse_jsonl_file_daily(fpath):
+    """One file's contribution to _parse_jsonl_daily_stats, for ALL days.
+
+    Same rules as the original whole-tree loop: assistant records only, skip
+    synthetic, (sessionId, day) de-dup within the file, and a malformed line
+    aborts the rest of the file while keeping what was counted before it.
+    """
+    pacific = pytz.timezone("America/Los_Angeles")
+    out = {}
+    try:
+        session_counted = set()
+        with open(fpath) as fh:
+            for line in fh:
+                obj = json.loads(line.strip())
+                if obj.get("type") != "assistant":
+                    continue
+                ts_str = obj.get("timestamp")
+                if not ts_str:
+                    continue
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+
+                msg = obj.get("message", {})
+                if not isinstance(msg, dict) or _is_synthetic(msg):
+                    continue
+
+                d = out.get(day)
+                if d is None:
+                    d = out[day] = [0, 0, {}, {}]
+                d[0] += 1
+                session_id = obj.get("sessionId", str(fpath))
+                # Key on (session, day): a session active on several days
+                # counts once on each, not only on the first day it appears.
+                if (session_id, day) not in session_counted:
+                    session_counted.add((session_id, day))
+                    d[1] += 1
+
+                usage = msg.get("usage", {})
+                model = msg.get("model", "unknown")
+
+                # Chart tokens: input + output only (matches stats-cache.json)
+                d[2][model] = d[2].get(model, 0) + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+                # Cost: full pricing including cache tokens
+                model_type = "opus" if "opus" in model.lower() else "sonnet"
+                prices = PRICING[model_type]
+                cost = (
+                    (usage.get("input_tokens", 0) / 1_000_000) * prices["input"] +
+                    (usage.get("output_tokens", 0) / 1_000_000) * prices["output"] +
+                    (usage.get("cache_read_input_tokens", 0) / 1_000_000) * prices["cache_read"] +
+                    (usage.get("cache_creation_input_tokens", 0) / 1_000_000) * prices["cache_write"]
+                )
+                d[3][model_type] = d[3].get(model_type, 0.0) + cost
+    except Exception:
+        pass
+    return out
+
+
+def _jsonl_file_daily_all():
+    """Return [per-file daily dict] for every JSONL under _PROJECTS_ROOTS,
+    re-parsing only files whose (mtime_ns, size) changed since last seen.
+    Serialized: concurrent callers wait and then hit the refreshed memo."""
+    global _FILE_DAILY_MEM
+    with _FILE_DAILY_LOCK:
+        conn = _jsonl_cache_conn()
+        try:
+            if _FILE_DAILY_MEM is None:
+                _FILE_DAILY_MEM = {}
+                if conn is not None:
+                    for path, mt, sz, data in conn.execute(
+                            "SELECT path, mtime_ns, size, data FROM file_daily WHERE version=?",
+                            (_JSONL_PARSE_VERSION,)):
+                        try:
+                            _FILE_DAILY_MEM[path] = (mt, sz, json.loads(data))
+                        except ValueError:
+                            continue
+            mem = _FILE_DAILY_MEM
+            seen = set()
+            changed = []
+            for projects_root, _host in _PROJECTS_ROOTS:
+                if not projects_root.exists():
+                    continue
+                for p in projects_root.rglob("*.jsonl"):
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    key = str(p)
+                    seen.add(key)
+                    ent = mem.get(key)
+                    if ent is not None and ent[0] == st.st_mtime_ns and ent[1] == st.st_size:
+                        continue
+                    data = _parse_jsonl_file_daily(p)
+                    mem[key] = (st.st_mtime_ns, st.st_size, data)
+                    changed.append(key)
+            gone = [k for k in mem if k not in seen]
+            for k in gone:
+                del mem[k]
+            if conn is not None and (changed or gone):
+                try:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO file_daily (path, mtime_ns, size, version, data) VALUES (?,?,?,?,?)",
+                        [(k, mem[k][0], mem[k][1], _JSONL_PARSE_VERSION, json.dumps(mem[k][2])) for k in changed])
+                    conn.executemany("DELETE FROM file_daily WHERE path=?", [(k,) for k in gone])
+                    conn.commit()
+                except sqlite3.Error as e:
+                    print(f"[jsonl-cache] write failed: {e}", flush=True)
+            return [ent[2] for ent in mem.values()]
+        finally:
+            if conn is not None:
+                conn.close()
+
+
 @_cached(
     "_parse_jsonl_daily_stats",
     lambda since_date_str: (
@@ -229,73 +410,30 @@ def _is_synthetic(msg) -> bool:
     ),
 )
 def _parse_jsonl_daily_stats(since_date_str):
-    """Parse JSONL session files to get daily activity/token stats after since_date_str (YYYY-MM-DD).
+    """Daily activity/token stats from JSONL session files for days after since_date_str (YYYY-MM-DD).
     Returns (activity_by_day, tokens_by_day, cost_by_model).
     cost_by_model uses full pricing (input+output+cache) for accurate cost totals.
     tokens_by_day uses input+output only to match stats-cache.json chart methodology.
-    Scans all _PROJECTS_ROOTS (local + mirrored from other hosts).
+    Scans all _PROJECTS_ROOTS (local + mirrored from other hosts), incrementally:
+    see _jsonl_file_daily_all.
     """
-    pacific = pytz.timezone("America/Los_Angeles")
-
     daily_activity = defaultdict(lambda: {"messageCount": 0, "sessionCount": 0})
     daily_tokens = defaultdict(lambda: defaultdict(int))
-    # model -> cost (for adding to total_cost)
     extra_model_costs = defaultdict(float)
 
-    all_jsonl = []
-    for projects_root, _host in _PROJECTS_ROOTS:
-        if projects_root.exists():
-            all_jsonl.extend(projects_root.rglob("*.jsonl"))
-    if not all_jsonl:
+    per_file = _jsonl_file_daily_all()
+    if not per_file:
         return {}, {}, {}
-
-    for fpath in all_jsonl:
-        try:
-            session_counted = set()
-            with open(fpath) as fh:
-                for line in fh:
-                    obj = json.loads(line.strip())
-                    if obj.get("type") != "assistant":
-                        continue
-                    ts_str = obj.get("timestamp")
-                    if not ts_str:
-                        continue
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    day = ts.astimezone(pacific).strftime("%Y-%m-%d")
-                    if day <= since_date_str:
-                        continue
-
-                    msg = obj.get("message", {})
-                    if not isinstance(msg, dict) or _is_synthetic(msg):
-                        continue
-
-                    daily_activity[day]["messageCount"] += 1
-                    session_id = obj.get("sessionId", str(fpath))
-                    # Key on (session, day): a session active on several days
-                    # counts once on each (the documented semantics below),
-                    # not only on the first day it appears.
-                    if (session_id, day) not in session_counted:
-                        session_counted.add((session_id, day))
-                        daily_activity[day]["sessionCount"] += 1
-
-                    usage = msg.get("usage", {})
-                    model = msg.get("model", "unknown")
-
-                    # Chart tokens: input + output only (matches stats-cache.json)
-                    daily_tokens[day][model] += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-
-                    # Cost: full pricing including cache tokens
-                    model_type = "opus" if "opus" in model.lower() else "sonnet"
-                    prices = PRICING[model_type]
-                    cost = (
-                        (usage.get("input_tokens", 0) / 1_000_000) * prices["input"] +
-                        (usage.get("output_tokens", 0) / 1_000_000) * prices["output"] +
-                        (usage.get("cache_read_input_tokens", 0) / 1_000_000) * prices["cache_read"] +
-                        (usage.get("cache_creation_input_tokens", 0) / 1_000_000) * prices["cache_write"]
-                    )
-                    extra_model_costs[model_type] += cost
-        except Exception:
-            continue
+    for file_days in per_file:
+        for day, (msgs, sessions, tok_by_model, cost_by_type) in file_days.items():
+            if day <= since_date_str:
+                continue
+            daily_activity[day]["messageCount"] += msgs
+            daily_activity[day]["sessionCount"] += sessions
+            for model, tok in tok_by_model.items():
+                daily_tokens[day][model] += tok
+            for model_type, cost in cost_by_type.items():
+                extra_model_costs[model_type] += cost
 
     activity_out = {
         day: {"date": day, "messageCount": v["messageCount"], "sessionCount": v["sessionCount"]}
@@ -331,10 +469,38 @@ def ingest_claude_sessions():
     conn = sqlite3.connect(str(LLM_DB))
     cur = conn.cursor()
 
+    # Incremental: skip files whose (mtime_ns, size) match the last ingest.
+    # Re-upserting an unchanged file writes an identical row, so skipping it is
+    # lossless. State is tied to LLM_DB's inode so a rebuilt DB is refilled.
+    state_conn = _jsonl_cache_conn()
+    prev_state, done_state = {}, []
+    if state_conn is not None:
+        try:
+            ino = str(LLM_DB.stat().st_ino)
+            row = state_conn.execute("SELECT v FROM meta WHERE k='ingest_db_ino'").fetchone()
+            if not row or row[0] != ino:
+                state_conn.execute("DELETE FROM ingest_state")
+                state_conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('ingest_db_ino', ?)", (ino,))
+                state_conn.commit()
+            prev_state = {p: (mt, sz) for p, mt, sz in
+                          state_conn.execute("SELECT path, mtime_ns, size FROM ingest_state")}
+        except (OSError, sqlite3.Error) as e:
+            print(f"[ingest-state] disabled: {e}", flush=True)
+            state_conn.close()
+            state_conn = None
+
     for projects_root, host in _PROJECTS_ROOTS:
         if not projects_root.exists():
             continue
         for fpath in projects_root.rglob("*.jsonl"):
+            try:
+                st = fpath.stat()
+            except OSError:
+                continue
+            sig = (st.st_mtime_ns, st.st_size)
+            if prev_state.get(str(fpath)) == sig:
+                continue
+            done_state.append((str(fpath), sig[0], sig[1]))
             # Prefix session_id with host for non-local roots to avoid
             # cross-host collisions on ON CONFLICT(session_id) upsert.
             raw_id = fpath.stem
@@ -432,6 +598,17 @@ def ingest_claude_sessions():
 
     conn.commit()
     conn.close()
+    # Record state only after the sessions commit, so a crash mid-ingest
+    # re-processes rather than silently skips.
+    if state_conn is not None:
+        try:
+            state_conn.executemany(
+                "INSERT OR REPLACE INTO ingest_state (path, mtime_ns, size) VALUES (?,?,?)", done_state)
+            state_conn.commit()
+        except sqlite3.Error as e:
+            print(f"[ingest-state] write failed: {e}", flush=True)
+        finally:
+            state_conn.close()
 
 
 @_cached(

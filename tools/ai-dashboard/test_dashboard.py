@@ -5,6 +5,9 @@ import pathlib
 import unittest
 
 SRC = pathlib.Path(__file__).parent / "dashboard.py"
+# Never let tests touch the real sidecar cache (~/.cache/jm-ai-dash).
+import os as _os
+_os.environ["AI_DASH_JSONL_CACHE_DB"] = ""
 
 
 class TestImports(unittest.TestCase):
@@ -215,6 +218,226 @@ class TestClaudeTotals(unittest.TestCase):
             out = m.get_claude_stats.__wrapped__()
         self.assertEqual(out["total_sessions"], 750)
         self.assertEqual(out["total_messages"], 700)
+
+
+def _reference_parse_jsonl_daily_stats(m, since_date_str):
+    """Verbatim pre-2026-11-01 whole-tree implementation (minus the cache
+    decorator), kept as the oracle for the incremental version."""
+    import json
+    from collections import defaultdict
+    from datetime import datetime
+    import pytz
+    pacific = pytz.timezone("America/Los_Angeles")
+    daily_activity = defaultdict(lambda: {"messageCount": 0, "sessionCount": 0})
+    daily_tokens = defaultdict(lambda: defaultdict(int))
+    extra_model_costs = defaultdict(float)
+    all_jsonl = []
+    for projects_root, _host in m._PROJECTS_ROOTS:
+        if projects_root.exists():
+            all_jsonl.extend(projects_root.rglob("*.jsonl"))
+    if not all_jsonl:
+        return {}, {}, {}
+    for fpath in all_jsonl:
+        try:
+            session_counted = set()
+            with open(fpath) as fh:
+                for line in fh:
+                    obj = json.loads(line.strip())
+                    if obj.get("type") != "assistant":
+                        continue
+                    ts_str = obj.get("timestamp")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+                    if day <= since_date_str:
+                        continue
+                    msg = obj.get("message", {})
+                    if not isinstance(msg, dict) or m._is_synthetic(msg):
+                        continue
+                    daily_activity[day]["messageCount"] += 1
+                    session_id = obj.get("sessionId", str(fpath))
+                    if (session_id, day) not in session_counted:
+                        session_counted.add((session_id, day))
+                        daily_activity[day]["sessionCount"] += 1
+                    usage = msg.get("usage", {})
+                    model = msg.get("model", "unknown")
+                    daily_tokens[day][model] += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                    model_type = "opus" if "opus" in model.lower() else "sonnet"
+                    prices = m.PRICING[model_type]
+                    extra_model_costs[model_type] += (
+                        (usage.get("input_tokens", 0) / 1_000_000) * prices["input"] +
+                        (usage.get("output_tokens", 0) / 1_000_000) * prices["output"] +
+                        (usage.get("cache_read_input_tokens", 0) / 1_000_000) * prices["cache_read"] +
+                        (usage.get("cache_creation_input_tokens", 0) / 1_000_000) * prices["cache_write"])
+        except Exception:
+            continue
+    a = {d: {"date": d, "messageCount": v["messageCount"], "sessionCount": v["sessionCount"]}
+         for d, v in daily_activity.items()}
+    t = {d: {"date": d, "tokensByModel": dict(ms)} for d, ms in daily_tokens.items()}
+    return a, t, dict(extra_model_costs)
+
+
+class TestIncrementalJsonlStats(unittest.TestCase):
+    """Perf fix (2026-11-01, Dream v175): /api/stats timed out at 30/60/240 s
+    because every cache miss re-read all 2.4 GB of JSONL. Per-file daily
+    aggregates are now cached by (mtime_ns, size); output must equal the old
+    whole-tree parse exactly (costs to float-summation tolerance)."""
+
+    def setUp(self):
+        import tempfile
+        self.td = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.td.name) / "projects"
+        self.db = pathlib.Path(self.td.name) / "cache.sqlite"
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _mod(self):
+        m = _load_dashboard_module()
+        m._PROJECTS_ROOTS = [(self.root, "straylight-refit")]
+        m._JSONL_CACHE_DB = str(self.db)
+        return m
+
+    def _write(self, rel, lines):
+        import json
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("".join((l if isinstance(l, str) else json.dumps(l)) + "\n" for l in lines))
+        return p
+
+    @staticmethod
+    def _a(sid, ts, model="claude-opus-4-7", i=10, o=5, cr=1000, cw=200):
+        return {"type": "assistant", "sessionId": sid, "timestamp": ts,
+                "message": {"model": model, "usage": {"input_tokens": i, "output_tokens": o,
+                            "cache_read_input_tokens": cr, "cache_creation_input_tokens": cw}}}
+
+    def _fixture(self):
+        self._write("-Users-mckay/s1.jsonl", [
+            {"type": "user", "sessionId": "s1", "timestamp": "2026-06-30T20:00:00Z"},
+            self._a("s1", "2026-06-30T20:00:01Z"),            # before cutoff
+            self._a("s1", "2026-07-02T06:30:00Z"),            # 07-01 PT (UTC rollover)
+            self._a("s1", "2026-07-02T08:00:00Z", "claude-sonnet-4-5", 3, 4, 0, 0),
+            self._a("s1", "2026-07-02T09:00:00Z"),
+        ])
+        self._write("-Users-mckay-vault/s2.jsonl", [
+            self._a("s2", "2026-10-31T23:00:00Z"),
+            self._a("other", "2026-10-31T23:01:00Z"),         # 2nd session id, same file
+            {"type": "assistant", "sessionId": "s2", "timestamp": "2026-10-31T23:02:00Z",
+             "message": {"model": "<synthetic>", "usage": {}}},
+            {"type": "assistant", "timestamp": "2026-11-01T10:00:00Z",   # no sessionId
+             "message": {"model": "claude-opus-4-7", "usage": {"input_tokens": 7}}},
+        ])
+        self._write("-Users-mckay-vault/broken.jsonl", [
+            self._a("b", "2026-10-15T18:00:00Z"),
+            "{not json",                                       # aborts rest of file
+            self._a("b", "2026-10-15T19:00:00Z"),
+        ])
+        self._write("-Users-mckay/sub/agent.jsonl", [
+            self._a("s1", "2026-07-02T10:00:00Z"),            # same sid, other file
+        ])
+
+    def _assert_same(self, got, want):
+        self.assertEqual(got[0], want[0])
+        self.assertEqual(got[1], want[1])
+        self.assertEqual(set(got[2]), set(want[2]))
+        for k in want[2]:
+            self.assertAlmostEqual(got[2][k], want[2][k], places=9)
+
+    def test_matches_reference_cold_warm_and_reloaded(self):
+        self._fixture()
+        m = self._mod()
+        for since in ("2026-06-30", "2026-07-01", "2000-01-01"):
+            want = _reference_parse_jsonl_daily_stats(m, since)
+            self._assert_same(m._parse_jsonl_daily_stats.__wrapped__(since), want)   # cold
+            self._assert_same(m._parse_jsonl_daily_stats.__wrapped__(since), want)   # warm (memo)
+            m2 = self._mod()                                                         # new process
+            self._assert_same(m2._parse_jsonl_daily_stats.__wrapped__(since), want)  # from sqlite
+
+    def test_reparses_only_changed_files_and_drops_deleted(self):
+        import os
+        self._fixture()
+        m = self._mod()
+        m._parse_jsonl_daily_stats.__wrapped__("2026-06-30")
+        calls = []
+        real = m._parse_jsonl_file_daily
+        m._parse_jsonl_file_daily = lambda p: (calls.append(p.name), real(p))[1]
+        m2 = self._mod()  # fresh memo, warm sqlite: nothing to parse
+        m2._parse_jsonl_file_daily = m._parse_jsonl_file_daily
+        m2._parse_jsonl_daily_stats.__wrapped__("2026-06-30")
+        self.assertEqual(calls, [])
+        p = self._write("-Users-mckay-vault/s2.jsonl", [self._a("s2", "2026-11-01T18:00:00Z")])
+        os.utime(p, ns=(1, 1))
+        os.remove(self.root / "-Users-mckay-vault" / "broken.jsonl")
+        got = m2._parse_jsonl_daily_stats.__wrapped__("2026-06-30")
+        self.assertEqual(calls, ["s2.jsonl"])
+        self._assert_same(got, _reference_parse_jsonl_daily_stats(m2, "2026-06-30"))
+        self.assertNotIn("2026-10-15", got[0])
+
+    def test_parse_version_bump_forces_reparse(self):
+        self._fixture()
+        m = self._mod()
+        m._parse_jsonl_daily_stats.__wrapped__("2026-06-30")
+        m2 = self._mod()
+        m2._JSONL_PARSE_VERSION = m._JSONL_PARSE_VERSION + 1
+        calls = []
+        real = m2._parse_jsonl_file_daily
+        m2._parse_jsonl_file_daily = lambda p: (calls.append(p.name), real(p))[1]
+        m2._parse_jsonl_daily_stats.__wrapped__("2026-06-30")
+        self.assertEqual(len(calls), 4)
+
+
+class TestSingleFlightCache(unittest.TestCase):
+    def test_concurrent_misses_share_one_computation(self):
+        """Overlapping /api/stats requests each re-ran the full parse (4 worker
+        threads seen in `sample` on 2026-11-01). A miss must be single-flight."""
+        import threading, time
+        m = _load_dashboard_module()
+        n = {"calls": 0}
+
+        @m._cached("slow", lambda: 1)
+        def slow():
+            n["calls"] += 1
+            time.sleep(0.2)
+            return 42
+
+        out = []
+        ts = [threading.Thread(target=lambda: out.append(slow())) for _ in range(6)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(out, [42] * 6)
+        self.assertEqual(n["calls"], 1)
+
+
+class TestIncrementalIngest(unittest.TestCase):
+    def test_second_ingest_skips_unchanged_files(self):
+        import json, sqlite3, tempfile
+        m = _load_dashboard_module()
+        with tempfile.TemporaryDirectory() as td:
+            td = pathlib.Path(td)
+            root = td / "projects" / "-Users-mckay"
+            root.mkdir(parents=True)
+            (root / "a.jsonl").write_text(json.dumps(
+                TestIncrementalJsonlStats._a("a", "2026-10-31T23:00:00Z")) + "\n")
+            db = td / "llm.db"
+            c = sqlite3.connect(db)
+            c.execute("""CREATE TABLE sessions (session_id TEXT PRIMARY KEY, provider, product, model,
+                start_time, end_time, message_count, input_tokens, output_tokens, total_tokens,
+                cached_tokens, cache_write_tokens, cost_usd, project_dir, user_id, status)""")
+            c.commit(); c.close()
+            m.LLM_DB = db
+            m._PROJECTS_ROOTS = [(td / "projects", "straylight-refit")]
+            m._JSONL_CACHE_DB = str(td / "cache.sqlite")
+            m.ingest_claude_sessions.__wrapped__()
+            c = sqlite3.connect(db)
+            self.assertEqual(c.execute("SELECT count(*) FROM sessions").fetchone()[0], 1)
+            c.execute("DELETE FROM sessions"); c.commit(); c.close()
+            m.ingest_claude_sessions.__wrapped__()   # unchanged file: skipped
+            c = sqlite3.connect(db)
+            self.assertEqual(c.execute("SELECT count(*) FROM sessions").fetchone()[0], 0)
+            c.close()
 
 
 if __name__ == "__main__":
