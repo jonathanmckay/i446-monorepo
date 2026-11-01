@@ -964,6 +964,72 @@ def _syncthing_status():
 
 
 # ---------------------------------------------------------------------------
+# Full Disk Access diagnostics (v175)
+# ---------------------------------------------------------------------------
+# Safari History.db, knowledgeC.db and chat.db are TCC-protected. Under cron
+# macOS attributes the read to the *responsible* process (cron), not to
+# python3, so granting FDA to python3 alone does nothing for the 03:00 run.
+# Every night since 10-25 these three sources returned "authorization denied"
+# / PermissionError with no hint of which binary needs the grant.
+
+FDA_SOURCES = ("browser_history", "screen_time", "imessage_recent")
+_FDA_MARKERS = ("authorization denied", "operation not permitted", "permissionerror")
+
+
+def _process_chain(pid=None, limit=12):
+    """[(pid, comm)] from this process up to (excluding) launchd."""
+    import subprocess
+    pid = pid or os.getpid()
+    chain = []
+    for _ in range(limit):
+        try:
+            out = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                                 capture_output=True, text=True, timeout=2).stdout.strip()
+        except Exception:
+            break
+        if not out:
+            break
+        ppid, comm = out.split(None, 1)
+        chain.append((pid, comm.strip()))
+        pid = int(ppid)
+        if pid <= 1:
+            break
+    return chain
+
+
+def fda_binary(chain=None):
+    """The binary that needs Full Disk Access for this run to read TCC DBs."""
+    chain = _process_chain() if chain is None else chain
+    for _, comm in chain:
+        if os.path.basename(comm) == "cron":
+            return "/usr/sbin/cron"
+    for _, comm in reversed(chain):  # outermost app (Terminal, iTerm, sshd...)
+        if ".app/" in comm:
+            return comm.split(".app/")[0] + ".app"
+    return os.path.realpath(chain[-1][1]) if chain else os.path.realpath(sys.executable)
+
+
+def _is_fda_denial(text) -> bool:
+    t = str(text or "").lower()
+    return any(m in t for m in _FDA_MARKERS)
+
+
+def fda_diagnostic(results):
+    """One line naming the binary to grant FDA, or None if nothing was denied."""
+    denied = []
+    for name in FDA_SOURCES:
+        r = results.get(name) or {}
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        if _is_fda_denial(r.get("error")) or _is_fda_denial(data.get("error")):
+            denied.append(name)
+    if not denied:
+        return None
+    return (f"FDA: {', '.join(denied)} denied by macOS privacy (TCC). Grant Full Disk "
+            f"Access to {fda_binary()} (System Settings > Privacy & Security > "
+            f"Full Disk Access), then re-run.")
+
+
+# ---------------------------------------------------------------------------
 # Source 9: browser_history
 # ---------------------------------------------------------------------------
 
@@ -973,9 +1039,14 @@ def _browser_history():
     if not src.exists():
         return {"error": "Safari History.db not found"}
 
-    # Copy to /tmp to avoid lock
+    # Copy to /tmp to avoid lock. A PermissionError here is TCC (no Full Disk
+    # Access), not a lock: report it as data so fda_diagnostic can name the
+    # binary, instead of a bare traceback string (v175).
     tmp_db = Path("/tmp/dream_safari_history.db")
-    shutil.copy2(src, tmp_db)
+    try:
+        shutil.copy2(src, tmp_db)
+    except PermissionError as e:
+        return {"error": f"authorization denied: {e}"}
 
     conn = sqlite3.connect(str(tmp_db))
     try:
@@ -1157,6 +1228,77 @@ def _on_ix() -> bool:
     return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
 
 
+def _outlook_cache_only() -> bool:
+    """Ix (and anything with JANUS_OUTLOOK_CACHE_ONLY=1) never talks to Agency.
+
+    Same rule as tools/tg/outlook_client.cache_only(); straylight's
+    outlook-cache-daemon pushes ~/.cache/janus/outlook-YYYY-MM-DD.json here
+    every ~5 min, so the calendar comes from that cache instead."""
+    return _on_ix() or os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1"
+
+
+OUTLOOK_CACHE_DIR = Path.home() / ".cache" / "janus"
+OUTLOOK_CACHE_STALE_MIN = 60
+
+
+def _outlook_calendar_from_cache(days):
+    """Events for `days` (date objects) from straylight's pushed janus cache."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_dream_outlook_client",
+        Path(__file__).resolve().parent.parent / "tools" / "tg" / "outlook_client.py")
+    events, missing, ages = [], [], []
+    oc = None
+    try:
+        oc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(oc)
+    except Exception:
+        oc = None
+    for day in days:
+        f = OUTLOOK_CACHE_DIR / f"outlook-{day.isoformat()}.json"
+        if not f.exists():
+            missing.append(day.isoformat())
+            continue
+        ages.append((time.time() - f.stat().st_mtime) / 60)
+        if oc is not None:
+            for ev in oc._parse_cache(f):
+                events.append({
+                    "subject": ev["title"],
+                    "start": ev["start_dt"].isoformat(),
+                    "end": ev["end_dt"].isoformat(),
+                    "all_day": ev.get("all_day", False),
+                })
+        else:  # raw Graph fields; times are in start_tz
+            for ev in json.loads(f.read_text() or "[]"):
+                events.append({"subject": ev.get("subject", ""),
+                               "start": ev.get("start", ""), "end": ev.get("end", ""),
+                               "all_day": ev.get("is_all_day", False)})
+    # De-dupe multi-day events that appear in several day files
+    seen, uniq = set(), []
+    for ev in events:
+        k = (ev["subject"], ev["start"], ev["end"])
+        if k not in seen:
+            seen.add(k)
+            uniq.append(ev)
+    uniq.sort(key=lambda e: e["start"])
+    # Freshest file = time since the daemon's last push (it stops rewriting
+    # past days, so yesterday's file is always hours old).
+    age = min(ages) if ages else None
+    out = {"events": uniq, "count": len(uniq), "source": f"cache:{OUTLOOK_CACHE_DIR}",
+           "cache_age_min": round(age, 1) if ages else None}
+    if missing:
+        out["missing_days"] = missing
+    if ages and age > OUTLOOK_CACHE_STALE_MIN:
+        out["stale"] = True
+        out["note"] = ("straylight outlook-cache-daemon has not pushed for "
+                       f"{age:.0f} min; calendar may be out of date")
+    if not ages:
+        out["status"] = "skipped"
+        out["reason"] = (f"cache-only: no outlook cache for {', '.join(missing)} in "
+                         f"{OUTLOOK_CACHE_DIR} (straylight daemon not pushing?)")
+    return out
+
+
 def _outlook_skip(server_name: str):
     """Skip result for an Agency source that cannot authenticate here, or None.
 
@@ -1177,6 +1319,10 @@ def _outlook_skip(server_name: str):
 
 @source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
 def _outlook_inbox():
+    if _outlook_cache_only() and not os.environ.get("AGENCY_REMOTE_MAIL_PORT"):
+        return {"status": "skipped",
+                "reason": "cache-only: inbox unavailable on ix (no straylight inbox "
+                          "snapshot; set AGENCY_REMOTE_MAIL_PORT to tunnel)"}
     skip = _outlook_skip("mail")
     if skip:
         return skip
@@ -1251,6 +1397,10 @@ def _outlook_inbox():
 
 @source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
 def _outlook_calendar():
+    if _outlook_cache_only():
+        today = datetime.date.today()
+        return _outlook_calendar_from_cache(
+            [today + datetime.timedelta(days=d) for d in (-1, 0, 1)])
     skip = _outlook_skip("calendar")
     if skip:
         return skip
@@ -1664,6 +1814,10 @@ def main():
             print(f"  {name}: {desc}")
         return
 
+    # Never let an intake timeout write ~/.config/agency/login-pending.json:
+    # it would refuse every Agency caller on this host for 3 h (v175).
+    os.environ["AGENCY_UNATTENDED"] = "1"
+
     load_credentials()
 
     selected = args.sources.split(",") if args.sources else None
@@ -1672,8 +1826,12 @@ def main():
     results = run_sources(selected=selected, timeout=30)
     duration_ms = round((time.time() - t0) * 1000)
 
+    diag = fda_diagnostic(results)
+
     if args.test:
         print_test_table(results)
+        if diag:
+            print(diag)
         return
 
     import socket
@@ -1683,6 +1841,9 @@ def main():
         "duration_ms": duration_ms,
         "sources": results,
     }
+    if diag:
+        output["diagnostics"] = [diag]
+        print(diag, file=sys.stderr)  # lands in .dream-launch.log / agent-run.log
 
     if args.output:
         out_path = Path(args.output)

@@ -10,6 +10,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import agency_mcp as am
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_real_marker(tmp_path, monkeypatch):
+    # A start timeout calls _mark_login_pending; without this the test wrote
+    # the live ~/.config/agency/login-pending.json and blocked Agency for 3 h.
+    monkeypatch.setattr(am, "_LOGIN_MARKER", tmp_path / "login-pending.json")
 
 
 def _fake_bin(tmp_path, body):
