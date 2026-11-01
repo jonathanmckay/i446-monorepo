@@ -27,19 +27,25 @@ def no_agency(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
 
-@pytest.mark.parametrize("fn,env", [
-    ("_outlook_inbox", "AGENCY_REMOTE_MAIL_PORT"),
-    ("_outlook_calendar", "AGENCY_REMOTE_CALENDAR_PORT"),
-])
-def test_ix_without_remote_port_skips(monkeypatch, no_agency, fn, env):
+def test_ix_inbox_skips_as_cache_only(monkeypatch, no_agency):
     monkeypatch.setattr(_di, "_on_ix", lambda: True)
-    out = getattr(_di, fn)()
+    out = _di._outlook_inbox()
     assert out["status"] == "skipped"
-    assert env in out["reason"]
+    assert out["reason"].startswith("cache-only: inbox unavailable on ix")
 
 
-def test_skip_surfaces_as_top_level_status(monkeypatch, no_agency):
+def test_ix_calendar_without_cache_skips(monkeypatch, no_agency, tmp_path):
+    # v175: calendar on ix reads straylight's cache; with no cache it skips.
     monkeypatch.setattr(_di, "_on_ix", lambda: True)
+    monkeypatch.setattr(_di, "OUTLOOK_CACHE_DIR", tmp_path)
+    out = _di._outlook_calendar()
+    assert out["status"] == "skipped"
+    assert "cache-only" in out["reason"]
+
+
+def test_skip_surfaces_as_top_level_status(monkeypatch, no_agency, tmp_path):
+    monkeypatch.setattr(_di, "_on_ix", lambda: True)
+    monkeypatch.setattr(_di, "OUTLOOK_CACHE_DIR", tmp_path)
     res = _di.run_sources(selected=["outlook_inbox", "outlook_calendar"], timeout=5)
     assert {r["status"] for r in res.values()} == {"skipped"}
 
