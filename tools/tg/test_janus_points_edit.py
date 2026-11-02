@@ -19,7 +19,7 @@ def test_adjust_cmd_is_signed_noted_and_in_the_entrys_block():
     assert janus._points_adjust_cmd("write memo [30]", "i9", -12, _t(8, 30), _t(9, 10), False) \
         == "-12 write memo adj @i9 巳"
     assert janus._points_adjust_cmd("XCORE", "i9", 20, _t(9, 18), _t(12, 41), False) \
-        == "+20 XCORE adj @i9 午"
+        == "+20 XCORE adj @i9 未"   # ended in 未 (JM 2026-11-01), not the 午 majority
 
 
 def test_adjust_cmd_on_a_past_day_carries_the_date_not_a_block():
