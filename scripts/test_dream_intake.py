@@ -168,3 +168,103 @@ def test_load_credentials_lists_m5c7_first():
     accts = di._CREDS["gmail_accounts"]
     assert [a["name"] for a in accts] == ["m5c7", "jbm"]
     assert accts[0]["tokens"].name == "tokens.json"
+
+
+# ── google_calendar: all calendars, local-midnight windows ─────────────────
+
+from zoneinfo import ZoneInfo
+
+PST = ZoneInfo("America/Los_Angeles")
+
+
+class _FakeGc:
+    CACHE_DIR = Path("/nonexistent")
+
+    def __init__(self, events, fail=False):
+        self.events, self.fail, self.windows = events, fail, []
+
+    def _tz(self):
+        return PST
+
+    def _hydrate(self, raw, start, end):
+        out = []
+        for ev in raw:
+            s = dt.datetime.fromisoformat(ev["start"].replace("Z", "+00:00"))
+            e = dt.datetime.fromisoformat(ev["end"].replace("Z", "+00:00"))
+            if e > start and s < end:
+                out.append({**ev, "start_dt": s, "end_dt": e})
+        return out
+
+    def list_events(self, start, end):
+        self.windows.append((start, end))
+        if self.fail:
+            raise OSError("network")
+        return self._hydrate(self.events, start, end)
+
+
+def _ev(title, cal, start, end, cal_id="x@group.calendar.google.com"):
+    return {"title": title, "calendar": cal, "calendar_id": cal_id,
+            "start": start, "end": end, "all_day": False, "transparency": "opaque"}
+
+
+EVENTS = [
+    # Sunday 11-01 19:30 PST = 11-02 03:30Z: the old UTC window called it "today".
+    _ev("CAIS Basketball (Sun)", "jonathan.b.mckay@gmail.com",
+        "2026-11-01T19:30:00-08:00", "2026-11-01T21:45:00-08:00"),
+    _ev("GDM interview", "jonathan.b.mckay@gmail.com",
+        "2026-11-02T08:00:00-08:00", "2026-11-02T08:45:00-08:00"),
+    _ev("r203 Weekly", "m5x2 Cal", "2026-11-02T11:30:00-08:00", "2026-11-02T12:00:00-08:00"),
+    _ev("Theo RSM", "3494 House", "2026-11-02T15:30:00-08:00", "2026-11-02T17:05:00-08:00"),
+    _ev("SPEAK", "CAIS School", "2026-11-02T19:00:00-08:00", "2026-11-02T20:30:00-08:00"),
+    _ev("Dinner", "家 Meals", "2026-11-02T18:30:00-08:00", "2026-11-02T19:00:00-08:00"),
+    _ev("Hold", "Calendar", "2026-11-02T16:00:00Z", "2026-11-02T18:00:00Z",
+        cal_id="l20n@import.calendar.google.com"),
+    _ev("XCORE readout", "jonathan.b.mckay@gmail.com",
+        "2026-11-03T14:30:00-08:00", "2026-11-03T15:00:00-08:00"),
+]
+
+
+@pytest.fixture
+def monday_3am(monkeypatch):
+    class _DT(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime(2026, 11, 2, 3, 20, tzinfo=PST).astimezone(tz) if tz else \
+                dt.datetime(2026, 11, 2, 3, 20)
+    monkeypatch.setattr(di.datetime, "datetime", _DT)
+
+
+def test_google_calendar_local_today_and_all_calendars(monkeypatch, monday_3am):
+    gc = _FakeGc(EVENTS)
+    monkeypatch.setattr(di, "_gcal_client", lambda: gc)
+    d = di._google_calendar()
+    today = [e["summary"] for e in d["today"]]
+    assert "CAIS Basketball (Sun)" not in today, "Sunday evening is not Monday"
+    assert d["today_date"] == "2026-11-02"
+    assert {"jonathan.b.mckay@gmail.com", "m5x2 Cal", "3494 House", "CAIS School",
+            "家 Meals"} <= set(d["calendars"])
+    assert "Calendar (Outlook ICS mirror)" in d["calendars"]
+    assert [e["summary"] for e in d["tomorrow"]] == ["XCORE readout"]
+    s, e = gc.windows[0]
+    assert s == dt.datetime(2026, 11, 2, tzinfo=PST) and e == dt.datetime(2026, 11, 3, tzinfo=PST)
+
+
+def test_google_calendar_falls_back_to_janus_cache(tmp_path, monkeypatch, monday_3am):
+    gc = _FakeGc([], fail=True)
+    gc.CACHE_DIR = tmp_path
+    (tmp_path / "gcal-2026-11-02.json").write_text(json.dumps(EVENTS))
+    (tmp_path / "gcal-2026-11-03.json").write_text(json.dumps(EVENTS))
+    monkeypatch.setattr(di, "_gcal_client", lambda: gc)
+    d = di._google_calendar()
+    assert d["today_count"] == 6
+    assert d["via"]["today"].startswith("janus cache fallback")
+
+
+def test_gcal_client_hydrate_accepts_trailing_z():
+    """The Outlook ICS mirror stores UTC times with 'Z'; python3.9's
+    fromisoformat rejects that and _hydrate silently dropped the events."""
+    gc = di._gcal_client()
+    ev = _ev("Hold", "Calendar", "2026-11-02T16:00:00Z", "2026-11-02T18:00:00Z")
+    out = gc._hydrate([ev], dt.datetime(2026, 11, 2, tzinfo=PST),
+                      dt.datetime(2026, 11, 3, tzinfo=PST))
+    assert len(out) == 1

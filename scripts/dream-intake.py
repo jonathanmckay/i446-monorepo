@@ -548,73 +548,77 @@ def _gmail_inbox():
 # Source 7: google_calendar
 # ---------------------------------------------------------------------------
 
-@source("google_calendar", "Today + tomorrow events from Google Calendar")
-def _google_calendar():
-    creds = _build_google_creds(
-        _CREDS["gcal_tokens_path"],
-        _CREDS["gcal_secrets_path"],
-        scopes=["https://www.googleapis.com/auth/calendar.readonly"],
-        account_key="m5c7",
-    )
-    service = _google_service("calendar", "v3", creds)
+# Bug (v176): the source queried only the m5c7 "primary" calendar (plus a
+# "work" one that does not exist) with a UTC window "today T00:00Z" ..
+# "+2d T00:00Z", i.e. 16:00 PST yesterday onward, so Sunday-evening events
+# were labelled "today" on Monday and jbm / m5x2 Cal / 3494 House / CAIS
+# School / 家 Meals were missing. Now delegates to janus's gcal_client: every
+# calendar on the m5c7 account (LX's filtered, same as janus), local-midnight
+# windows from lib/daytime, and it shares janus's 5-min cache
+# (~/.cache/janus/gcal-YYYY-MM-DD.json), which is also the fallback.
+_TG_DIR = Path(__file__).resolve().parent.parent / "tools" / "tg"
+_IMPORT_CAL_SUFFIX = "@import.calendar.google.com"
 
-    today = datetime.date.today()
-    day_after_tomorrow = today + datetime.timedelta(days=2)
-    time_min = f"{today.isoformat()}T00:00:00Z"
-    time_max = f"{day_after_tomorrow.isoformat()}T00:00:00Z"
 
-    calendar_ids = ["primary"]
-    # Try to find "Work" calendar
+def _gcal_client():
+    if str(_TG_DIR) not in sys.path:
+        sys.path.insert(0, str(_TG_DIR))
+    import gcal_client
+    return gcal_client
+
+
+def _gcal_day(gc, day_start, day_end):
     try:
-        cal_list = service.calendarList().list().execute()
-        for cal in cal_list.get("items", []):
-            summary = (cal.get("summary", "") or "").lower()
-            if summary == "work" or "work" in summary:
-                calendar_ids.append(cal["id"])
-                break
-    except Exception:
-        pass
+        return gc.list_events(day_start, day_end), "live-or-janus-cache"
+    except Exception as e:
+        cache = gc.CACHE_DIR / f"gcal-{day_start.date().isoformat()}.json"
+        if not cache.exists():
+            raise
+        return gc._hydrate(json.loads(cache.read_text()), day_start, day_end), \
+            f"janus cache fallback ({type(e).__name__})"
 
-    all_events = []
-    for cal_id in calendar_ids:
-        try:
-            events_resp = service.events().list(
-                calendarId=cal_id,
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy="startTime",
-                maxResults=50,
-            ).execute()
-            for ev in events_resp.get("items", []):
-                start = ev.get("start", {}).get("dateTime", ev.get("start", {}).get("date", ""))
-                end = ev.get("end", {}).get("dateTime", ev.get("end", {}).get("date", ""))
-                all_events.append({
-                    "calendar": cal_id,
-                    "summary": ev.get("summary", "(no title)"),
-                    "start": start,
-                    "end": end,
-                    "status": ev.get("status", ""),
-                    "attendees": len(ev.get("attendees", [])),
-                })
-        except Exception:
-            pass
 
-    # Split into today / tomorrow
-    today_events = []
-    tomorrow_events = []
-    tomorrow_str = (today + datetime.timedelta(days=1)).isoformat()
-    for ev in all_events:
-        if ev["start"].startswith(tomorrow_str):
-            tomorrow_events.append(ev)
-        else:
-            today_events.append(ev)
-
+def _gcal_slim(ev):
+    cal = ev.get("calendar", "")
+    if (ev.get("calendar_id") or "").endswith(_IMPORT_CAL_SUFFIX):
+        cal = f"{cal} (Outlook ICS mirror)"
     return {
-        "today_count": len(today_events),
-        "tomorrow_count": len(tomorrow_events),
-        "today": today_events,
-        "tomorrow": tomorrow_events,
+        "calendar": cal,
+        "summary": ev.get("title", "(no title)"),
+        "start": ev["start_dt"].isoformat(),
+        "end": ev["end_dt"].isoformat(),
+        "all_day": ev.get("all_day", False),
+        "transparency": ev.get("transparency", "opaque"),
+    }
+
+
+@source("google_calendar", "Today + tomorrow events, all JM calendars (local-day windows)")
+def _google_calendar():
+    gc = _gcal_client()
+    tz = gc._tz()
+    d0 = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    out, via = {}, {}
+    for label, off in (("today", 0), ("tomorrow", 1)):
+        # Midnight-to-midnight in the active zone, built from the date so a
+        # DST changeover day is 23/25h, not a fixed 24h offset.
+        day = (d0 + datetime.timedelta(days=off)).date()
+        start = datetime.datetime.combine(day, datetime.time(), tz)
+        end = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(), tz)
+        evs, via[label] = _gcal_day(gc, start, end)
+        out[label] = [_gcal_slim(e) for e in evs]
+        out[f"{label}_date"] = day.isoformat()
+    calendars = {}
+    for ev in out["today"] + out["tomorrow"]:
+        calendars[ev["calendar"]] = calendars.get(ev["calendar"], 0) + 1
+    return {
+        "today_date": out["today_date"],
+        "tomorrow_date": out["tomorrow_date"],
+        "today_count": len(out["today"]),
+        "tomorrow_count": len(out["tomorrow"]),
+        "calendars": calendars,
+        "via": via,
+        "today": out["today"],
+        "tomorrow": out["tomorrow"],
     }
 
 
