@@ -45,6 +45,9 @@ unset _py_err
 DID_FAST="$HOME/i446-monorepo/tools/did/did-fast.py"
 UNDO_FAST="$HOME/i446-monorepo/tools/did/undo-fast.py"
 DTD_RESOLVE="$HOME/i446-monorepo/tools/did/dtd_resolve.py"
+# /todo without a model: Enter on a query that matches no row and carries a [N]
+# value creates that task in Todoist (2026-11-01), see the pickenter router.
+DTD_TODO="$HOME/i446-monorepo/tools/did/todo-fast.py"
 DTD_OPEN_LINK="$HOME/i446-monorepo/tools/did/dtd-open-link.py"   # ctrl-l: task link -> its Chrome profile
 # Task detail (2026-10-06): full title, description, comments, links, fetched
 # live per task (the snapshot cache carries none of these). Shown at the top of
@@ -1659,6 +1662,24 @@ elif [[ "\$id" == BLOCK:custom ]]; then
   : > "$DTD_BLOCKPICK.custom"
   echo "✎ type a whole number of days, then Enter (esc = back)" > "$DTD_HDR"
   print -n 'change-prompt(📅 delay days > )'
+elif [[ -z "\$id" && ! -s "$DTD_BLOCKPICK" && "\$2" == *\[<->\]* ]]; then
+  # No row matched and the query carries a [N] value: it is a NEW task, the
+  # /todo quick-add typed straight into the box (2026-11-01: "if I enter a
+  # task that isn't a match to something in the fzf box and has points [xx]
+  # that gets translated as a /todo"). fzf hands an empty {2} when nothing
+  # matches, so a plain miss (no [N]) still does nothing. todo-fast.py keeps
+  # (N) [N] in the content, turns @code / a trailing 地支 glyph into labels,
+  # and refreshes the cache, which the watcher reload paints. It runs
+  # detached: the Todoist POST would otherwise sit on fzf's 1s Pause path.
+  # Guard: the same text within 10s is a double Enter, not a second task.
+  _nq="\$2"; _nf="$DTD_QUERY.newtask"; _now=\$EPOCHSECONDS
+  if [[ -r "\$_nf" ]] && { _last=("\${(@f)\$(<"\$_nf")}"); [[ "\$_last[1]" == "\$_nq" ]] && (( _now - \${_last[2]:-0} < 10 )); }; then
+    :
+  else
+    print -r -- "\$_nq"$'\n'"\$_now" > "\$_nf"
+    echo "＋ adding: \$_nq" > "$DTD_HDR"
+    ( _out=\$(python3 "$DTD_TODO" "\$_nq" 2>&1) && echo "\$_out" > "$DTD_HDR" || echo "✗ todo failed: \${_out:-?}" > "$DTD_HDR" ) </dev/null >/dev/null 2>&1 &!
+  fi
 elif [[ -n "\$id" ]]; then
   # Survey cards open their form inline (2026-10-16) instead of just starting
   # the timer: one jq pass (same shape as the done router's) turns the row id
@@ -3715,7 +3736,7 @@ clear
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) or new task if no match + [N] | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
