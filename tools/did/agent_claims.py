@@ -547,6 +547,7 @@ SKILL_NO_CLAIM = {
     "ibx0": "closes 8 inbox cards; a session holds one claim",
     "ate": "/早餐 already covers the 早餐 card",
     "inkwelltodo": "files and claims one task per note item itself",
+    "closeshell": "hand-off memo at terminal close; it files cards, it is not one",
 }
 SKILL_RE = __import__("re").compile(
     r"^\s*/(" + "|".join(map(__import__("re").escape, SKILL_CLAIMS)) + r")(?:\s.*)?$", __import__("re").S)
