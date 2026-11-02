@@ -681,6 +681,11 @@ class ParsedItem:
     # per-domain split, in order; a (n, None) entry is a bare [N] that takes
     # the item's own domain. points_override holds the total when set.
     points_split: Optional[list] = None
+    # "+10 Neon off ledger (5)" (JM 2026-11-01): a task typed into janus
+    # with its 分 and the minutes just spent on it. Not a 分 log: it gets a
+    # Toggl entry for the last (M) minutes, a posthoc record and the points,
+    # and with no @code the points go to 个.
+    quick_task: bool = False
     time_range: Optional[tuple[str, str]] = None  # (HHMM, HHMM)
     project_override: Optional[str] = None
     defer_date: Optional[str] = None  # ISO date (YYYY-MM-DD) for partial completion
@@ -730,6 +735,21 @@ def parse_input(raw: str) -> list[ParsedItem]:
             item.points_override = int(pl.group(1))
             chunk = chunk[pl.end():].strip()
             item.name = chunk
+            # Quick task (JM 2026-11-01): "+10 Neon off ledger (5)" = I did
+            # this for the last 5 minutes and it is worth 10分. A trailing
+            # (M) turns the 分 log into a real completion over now-M..now:
+            # Toggl entry, posthoc record, points (个 unless @code).
+            qm = re.search(r"\((\d+)\)\s*$", chunk)
+            if qm and item.points_override > 0 and int(qm.group(1)) > 0:
+                _now = _daytime.local_now()
+                _start = _now - timedelta(minutes=int(qm.group(1)))
+                if _start.date() != _now.date():
+                    _start = _now.replace(hour=0, minute=0)  # never cross midnight
+                item.time_range = (_start.strftime("%H%M"), _now.strftime("%H%M"))
+                item.points_log = False
+                item.quick_task = True
+                chunk = chunk[:qm.start()].strip()
+                item.name = chunk
 
         # Extract --defer flag (--tmrw, --tomorrow, --Mon, --Jun 15, etc.)
         defer_match = re.search(r"--(\S+(?:\s+\d{1,2})?)\s*$", chunk)
@@ -1940,6 +1960,11 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
                 # Q append below credit it.
                 results.append(RouteResult(item=item, step="variable"))
                 continue
+            elif item.quick_task:
+                # "+10 Neon off ledger (5)" with no @code: janus has no agent
+                # to ask, so the points go to 个, the same catch-all an
+                # untagged Todoist task gets (never a hardcoded letter).
+                domain_label, fen_col = None, neon_cols.domain_col("0分", "个")
             else:
                 r = RouteResult(item=item, step="needs_agent",
                                 error="no match, needs domain disambiguation")

@@ -113,6 +113,8 @@ commas are fine as long as every item is in this form.
 
 **@project override:** `@code` token → set `projectOverride`, strip from item.
 
+**Quick task (2026-11-01):** `+10 Neon off ledger (5)` typed into janus (desktop or phone) means "I did this for the last 5 minutes and it is worth 10分": did-fast turns it into a completion over now-5..now (Toggl entry, posthoc Todoist record, completed-today) and credits the 10 to 个, or to `@code` if one is typed (`+10 @i9 read COD deck (12)`). It is how JM adds an ad-hoc task without touching Excel. Without the trailing `(M)` a leading `+N` stays the ledger-only 分 log; a leading `-N` is always a log.
+
 **Multi-domain split (2026-11-01, `lib/fen_split.py`):** `[N] @code [N] @code` on the /did input or in the task's own content credits each share to its own 0分 column: `did mock WAU tree [30] @h335 [10] @i9` → +30 to h335's column, +10 to i9's. Each `[N]` binds to the `@code` directly after it; a bare `[N]` takes the task's own label; only the first code is a Todoist label. A lone `[N] @code` is NOT a split (it stays today's points + project override, which is what mobile janus sends as `[total] @project`); when that typed total equals a split task's own total, the task's split is kept. Shares are merged per column (i9 + i447 both → R) so the daemon's idempotency key never drops one. `--tmrw` on a split task credits exactly the shares it deducts, walking the pairs in order. Editing the points to a single `[N]` collapses the split. did-fast's JSON reports the other columns under `0fen.extra` (undo-fast strips them too). Always hand a split to `did-fast.py` (run.py's one-off path handles it as well).
 
 **Time range:** `HHMM-HHMM` pattern → extract start/end, compute duration as `[time]`, set `hasTimeRange`.
