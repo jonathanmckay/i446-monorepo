@@ -11,9 +11,11 @@ import json
 import re
 import glob
 import os
+import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -91,11 +93,23 @@ PRICING = {
 # build a fingerprint from each relevant file's (path, mtime_ns, size) tuple
 # and memoize results keyed by that fingerprint. A 1-hour TTL is a safety net
 # in case the fingerprint ever misses an update (e.g. clock skew on a network
-# fs). The cache is a plain dict — no threading primitives — because Flask's
-# dev server is single-threaded for this app.
+# fs). Flask's dev server IS threaded (app.run defaults to threaded=True), so
+# a miss is single-flight: one thread per cache key computes, the rest block on
+# that key's lock and then reuse the result instead of each re-reading 2.4 GB
+# of JSONL (the 2026-11-01 30/60/240 s /api/stats herd).
 
 _CACHE_TTL_S = 3600  # safety-net TTL; primary invalidation is mtime-based
 _CACHE = {}  # fn_name -> (fingerprint, timestamp, value)
+_CACHE_LOCKS = {}  # cache key -> RLock (single-flight per key)
+_CACHE_LOCKS_GUARD = threading.Lock()
+
+
+def _cache_key_lock(key):
+    with _CACHE_LOCKS_GUARD:
+        lock = _CACHE_LOCKS.get(key)
+        if lock is None:
+            lock = _CACHE_LOCKS[key] = threading.RLock()
+        return lock
 
 # Directory fingerprint cache: repeatedly scanning 297 JSONL files' stats in
 # the same request is ~10 ms each; memoize within a small window.
@@ -177,15 +191,27 @@ def _cached(name, fingerprint_fn):
             except Exception:
                 return fn(*args, **kwargs)
             key = (name, args, tuple(sorted(kwargs.items())))
-            now = time.time()
-            hit = _CACHE.get(key)
-            if hit is not None:
-                cached_fp, ts, value = hit
-                if cached_fp == fp and (now - ts) < _CACHE_TTL_S:
+
+            def fresh():
+                hit = _CACHE.get(key)
+                if hit is not None:
+                    cached_fp, ts, value = hit
+                    if cached_fp == fp and (time.time() - ts) < _CACHE_TTL_S:
+                        return True, value
+                return False, None
+
+            ok, value = fresh()
+            if ok:
+                return value
+            with _cache_key_lock(key):
+                # Another thread may have finished this computation while we
+                # waited on the lock: reuse it rather than recompute.
+                ok, value = fresh()
+                if ok:
                     return value
-            value = fn(*args, **kwargs)
-            _CACHE[key] = (fp, now, value)
-            return value
+                value = fn(*args, **kwargs)
+                _CACHE[key] = (fp, time.time(), value)
+                return value
         wrapper.__wrapped__ = fn
         wrapper.__name__ = fn.__name__
         return wrapper
@@ -205,6 +231,178 @@ _TIMING_FILE = Path.home() / ".claude" / "timing" / "turns.jsonl"
 _LAST_TURN_FILE = Path("/tmp/claude-turn-last")
 
 
+# Claude Code writes a placeholder assistant record with model "<synthetic>"
+# when a run never reached the API ("Not logged in · Please run /login",
+# "Credit balance is too low", "Prompt is too long"). A headless run that dies
+# that way leaves a whole session file whose only assistant record is
+# synthetic. The hourly d357-auto-file cron (2 calls/run, keychain-less) did
+# exactly that ~48x/day from 2026-08 on: 3,967 such files on ix by 10-29,
+# which pinned claude.daily_activity.sessionCount at a floor of 49/day and
+# inflated total_sessions. Synthetic records are not usage; never count them.
+SYNTHETIC_MODEL = "<synthetic>"
+
+
+def _is_synthetic(msg) -> bool:
+    return isinstance(msg, dict) and msg.get("model") == SYNTHETIC_MODEL
+
+
+# ---------------------------------------------------------------------------
+# Incremental JSONL stats: per-file (path, mtime_ns, size) -> per-day aggregates
+# ---------------------------------------------------------------------------
+# ~/.claude/stats-cache.json stopped updating 2026-07-01, so every cache miss
+# used to re-read every JSONL under _PROJECTS_ROOTS (4,957 files / 2.4 GB on
+# 2026-11-01), and overnight agents writing logs made every request a miss.
+# Every aggregate _parse_jsonl_daily_stats returns is a sum over files (the
+# session de-dup key (sessionId, day) is per file), so we keep each file's
+# per-day contribution keyed by (mtime_ns, size), persist it in a sidecar
+# SQLite DB, and re-parse only new or changed files. The DB lives outside the
+# Syncthing-mirrored vault/monorepo; set AI_DASH_JSONL_CACHE_DB to move it
+# ("" = in-memory only).
+_JSONL_CACHE_DB = (
+    os.environ.get("AI_DASH_JSONL_CACHE_DB")
+    if "AI_DASH_JSONL_CACHE_DB" in os.environ
+    else str(Path.home() / ".cache" / "jm-ai-dash" / "jsonl-daily.sqlite")
+) or None
+# Bump when _parse_jsonl_file_daily's output semantics change: old rows are
+# discarded and every file is re-parsed once.
+_JSONL_PARSE_VERSION = 1
+_FILE_DAILY_MEM = None  # path -> (mtime_ns, size, {day: [msgs, sessions, {model: tok}, {model_type: cost}]})
+_FILE_DAILY_LOCK = threading.Lock()
+
+
+def _jsonl_cache_conn():
+    """Open (and migrate) the sidecar cache DB, or None if disabled/unavailable."""
+    if not _JSONL_CACHE_DB:
+        return None
+    try:
+        Path(_JSONL_CACHE_DB).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(_JSONL_CACHE_DB, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""CREATE TABLE IF NOT EXISTS file_daily (
+            path TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER,
+            version INTEGER, data TEXT)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS ingest_state (
+            path TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)""")
+        return conn
+    except Exception as e:  # noqa: BLE001 (cache is an optimization, never fatal)
+        print(f"[jsonl-cache] disabled: {e}", flush=True)
+        return None
+
+
+def _parse_jsonl_file_daily(fpath):
+    """One file's contribution to _parse_jsonl_daily_stats, for ALL days.
+
+    Same rules as the original whole-tree loop: assistant records only, skip
+    synthetic, (sessionId, day) de-dup within the file, and a malformed line
+    aborts the rest of the file while keeping what was counted before it.
+    """
+    pacific = pytz.timezone("America/Los_Angeles")
+    out = {}
+    try:
+        session_counted = set()
+        with open(fpath) as fh:
+            for line in fh:
+                obj = json.loads(line.strip())
+                if obj.get("type") != "assistant":
+                    continue
+                ts_str = obj.get("timestamp")
+                if not ts_str:
+                    continue
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+
+                msg = obj.get("message", {})
+                if not isinstance(msg, dict) or _is_synthetic(msg):
+                    continue
+
+                d = out.get(day)
+                if d is None:
+                    d = out[day] = [0, 0, {}, {}]
+                d[0] += 1
+                session_id = obj.get("sessionId", str(fpath))
+                # Key on (session, day): a session active on several days
+                # counts once on each, not only on the first day it appears.
+                if (session_id, day) not in session_counted:
+                    session_counted.add((session_id, day))
+                    d[1] += 1
+
+                usage = msg.get("usage", {})
+                model = msg.get("model", "unknown")
+
+                # Chart tokens: input + output only (matches stats-cache.json)
+                d[2][model] = d[2].get(model, 0) + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+                # Cost: full pricing including cache tokens
+                model_type = "opus" if "opus" in model.lower() else "sonnet"
+                prices = PRICING[model_type]
+                cost = (
+                    (usage.get("input_tokens", 0) / 1_000_000) * prices["input"] +
+                    (usage.get("output_tokens", 0) / 1_000_000) * prices["output"] +
+                    (usage.get("cache_read_input_tokens", 0) / 1_000_000) * prices["cache_read"] +
+                    (usage.get("cache_creation_input_tokens", 0) / 1_000_000) * prices["cache_write"]
+                )
+                d[3][model_type] = d[3].get(model_type, 0.0) + cost
+    except Exception:
+        pass
+    return out
+
+
+def _jsonl_file_daily_all():
+    """Return [per-file daily dict] for every JSONL under _PROJECTS_ROOTS,
+    re-parsing only files whose (mtime_ns, size) changed since last seen.
+    Serialized: concurrent callers wait and then hit the refreshed memo."""
+    global _FILE_DAILY_MEM
+    with _FILE_DAILY_LOCK:
+        conn = _jsonl_cache_conn()
+        try:
+            if _FILE_DAILY_MEM is None:
+                _FILE_DAILY_MEM = {}
+                if conn is not None:
+                    for path, mt, sz, data in conn.execute(
+                            "SELECT path, mtime_ns, size, data FROM file_daily WHERE version=?",
+                            (_JSONL_PARSE_VERSION,)):
+                        try:
+                            _FILE_DAILY_MEM[path] = (mt, sz, json.loads(data))
+                        except ValueError:
+                            continue
+            mem = _FILE_DAILY_MEM
+            seen = set()
+            changed = []
+            for projects_root, _host in _PROJECTS_ROOTS:
+                if not projects_root.exists():
+                    continue
+                for p in projects_root.rglob("*.jsonl"):
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    key = str(p)
+                    seen.add(key)
+                    ent = mem.get(key)
+                    if ent is not None and ent[0] == st.st_mtime_ns and ent[1] == st.st_size:
+                        continue
+                    data = _parse_jsonl_file_daily(p)
+                    mem[key] = (st.st_mtime_ns, st.st_size, data)
+                    changed.append(key)
+            gone = [k for k in mem if k not in seen]
+            for k in gone:
+                del mem[k]
+            if conn is not None and (changed or gone):
+                try:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO file_daily (path, mtime_ns, size, version, data) VALUES (?,?,?,?,?)",
+                        [(k, mem[k][0], mem[k][1], _JSONL_PARSE_VERSION, json.dumps(mem[k][2])) for k in changed])
+                    conn.executemany("DELETE FROM file_daily WHERE path=?", [(k,) for k in gone])
+                    conn.commit()
+                except sqlite3.Error as e:
+                    print(f"[jsonl-cache] write failed: {e}", flush=True)
+            return [ent[2] for ent in mem.values()]
+        finally:
+            if conn is not None:
+                conn.close()
+
+
 @_cached(
     "_parse_jsonl_daily_stats",
     lambda since_date_str: (
@@ -213,70 +411,30 @@ _LAST_TURN_FILE = Path("/tmp/claude-turn-last")
     ),
 )
 def _parse_jsonl_daily_stats(since_date_str):
-    """Parse JSONL session files to get daily activity/token stats after since_date_str (YYYY-MM-DD).
+    """Daily activity/token stats from JSONL session files for days after since_date_str (YYYY-MM-DD).
     Returns (activity_by_day, tokens_by_day, cost_by_model).
     cost_by_model uses full pricing (input+output+cache) for accurate cost totals.
     tokens_by_day uses input+output only to match stats-cache.json chart methodology.
-    Scans all _PROJECTS_ROOTS (local + mirrored from other hosts).
+    Scans all _PROJECTS_ROOTS (local + mirrored from other hosts), incrementally:
+    see _jsonl_file_daily_all.
     """
-    pacific = pytz.timezone("America/Los_Angeles")
-
     daily_activity = defaultdict(lambda: {"messageCount": 0, "sessionCount": 0})
     daily_tokens = defaultdict(lambda: defaultdict(int))
-    # model -> cost (for adding to total_cost)
     extra_model_costs = defaultdict(float)
 
-    all_jsonl = []
-    for projects_root, _host in _PROJECTS_ROOTS:
-        if projects_root.exists():
-            all_jsonl.extend(projects_root.rglob("*.jsonl"))
-    if not all_jsonl:
+    per_file = _jsonl_file_daily_all()
+    if not per_file:
         return {}, {}, {}
-
-    for fpath in all_jsonl:
-        try:
-            session_counted = set()
-            with open(fpath) as fh:
-                for line in fh:
-                    obj = json.loads(line.strip())
-                    if obj.get("type") != "assistant":
-                        continue
-                    ts_str = obj.get("timestamp")
-                    if not ts_str:
-                        continue
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    day = ts.astimezone(pacific).strftime("%Y-%m-%d")
-                    if day <= since_date_str:
-                        continue
-
-                    msg = obj.get("message", {})
-                    if not isinstance(msg, dict):
-                        continue
-
-                    daily_activity[day]["messageCount"] += 1
-                    session_id = obj.get("sessionId", str(fpath))
-                    if session_id not in session_counted:
-                        session_counted.add(session_id)
-                        daily_activity[day]["sessionCount"] += 1
-
-                    usage = msg.get("usage", {})
-                    model = msg.get("model", "unknown")
-
-                    # Chart tokens: input + output only (matches stats-cache.json)
-                    daily_tokens[day][model] += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-
-                    # Cost: full pricing including cache tokens
-                    model_type = "opus" if "opus" in model.lower() else "sonnet"
-                    prices = PRICING[model_type]
-                    cost = (
-                        (usage.get("input_tokens", 0) / 1_000_000) * prices["input"] +
-                        (usage.get("output_tokens", 0) / 1_000_000) * prices["output"] +
-                        (usage.get("cache_read_input_tokens", 0) / 1_000_000) * prices["cache_read"] +
-                        (usage.get("cache_creation_input_tokens", 0) / 1_000_000) * prices["cache_write"]
-                    )
-                    extra_model_costs[model_type] += cost
-        except Exception:
-            continue
+    for file_days in per_file:
+        for day, (msgs, sessions, tok_by_model, cost_by_type) in file_days.items():
+            if day <= since_date_str:
+                continue
+            daily_activity[day]["messageCount"] += msgs
+            daily_activity[day]["sessionCount"] += sessions
+            for model, tok in tok_by_model.items():
+                daily_tokens[day][model] += tok
+            for model_type, cost in cost_by_type.items():
+                extra_model_costs[model_type] += cost
 
     activity_out = {
         day: {"date": day, "messageCount": v["messageCount"], "sessionCount": v["sessionCount"]}
@@ -312,10 +470,38 @@ def ingest_claude_sessions():
     conn = sqlite3.connect(str(LLM_DB))
     cur = conn.cursor()
 
+    # Incremental: skip files whose (mtime_ns, size) match the last ingest.
+    # Re-upserting an unchanged file writes an identical row, so skipping it is
+    # lossless. State is tied to LLM_DB's inode so a rebuilt DB is refilled.
+    state_conn = _jsonl_cache_conn()
+    prev_state, done_state = {}, []
+    if state_conn is not None:
+        try:
+            ino = str(LLM_DB.stat().st_ino)
+            row = state_conn.execute("SELECT v FROM meta WHERE k='ingest_db_ino'").fetchone()
+            if not row or row[0] != ino:
+                state_conn.execute("DELETE FROM ingest_state")
+                state_conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('ingest_db_ino', ?)", (ino,))
+                state_conn.commit()
+            prev_state = {p: (mt, sz) for p, mt, sz in
+                          state_conn.execute("SELECT path, mtime_ns, size FROM ingest_state")}
+        except (OSError, sqlite3.Error) as e:
+            print(f"[ingest-state] disabled: {e}", flush=True)
+            state_conn.close()
+            state_conn = None
+
     for projects_root, host in _PROJECTS_ROOTS:
         if not projects_root.exists():
             continue
         for fpath in projects_root.rglob("*.jsonl"):
+            try:
+                st = fpath.stat()
+            except OSError:
+                continue
+            sig = (st.st_mtime_ns, st.st_size)
+            if prev_state.get(str(fpath)) == sig:
+                continue
+            done_state.append((str(fpath), sig[0], sig[1]))
             # Prefix session_id with host for non-local roots to avoid
             # cross-host collisions on ON CONFLICT(session_id) upsert.
             raw_id = fpath.stem
@@ -333,6 +519,11 @@ def ingest_claude_sessions():
                         continue
 
                 if not messages:
+                    continue
+                # A session whose every assistant record is synthetic never
+                # reached the API (see SYNTHETIC_MODEL) — not a session.
+                asst = [m for m in messages if m.get("type") == "assistant"]
+                if asst and all(_is_synthetic(m.get("message")) for m in asst):
                     continue
 
                 # Timestamps
@@ -408,6 +599,17 @@ def ingest_claude_sessions():
 
     conn.commit()
     conn.close()
+    # Record state only after the sessions commit, so a crash mid-ingest
+    # re-processes rather than silently skips.
+    if state_conn is not None:
+        try:
+            state_conn.executemany(
+                "INSERT OR REPLACE INTO ingest_state (path, mtime_ns, size) VALUES (?,?,?)", done_state)
+            state_conn.commit()
+        except sqlite3.Error as e:
+            print(f"[ingest-state] write failed: {e}", flush=True)
+        finally:
+            state_conn.close()
 
 
 @_cached(
@@ -497,8 +699,20 @@ def get_claude_stats():
         total_cost += cost
         model_costs[model_type] = model_costs.get(model_type, 0) + cost
 
+    # stats-cache.json stopped being rewritten by Claude Code on 2026-07-01, so its
+    # lifetime totals froze (660 sessions / 237,402 messages) while the last 30 days
+    # alone held 1,600+ sessions. Add the JSONL-parsed days strictly after the last
+    # cached date (the overlap day is already in the cache totals). Approximate:
+    # a session spanning midnight counts once per day.
+    total_sessions = data.get("totalSessions", 0)
+    for day, act in extra_activity.items():
+        if day > last_cached_date:
+            total_sessions += act["sessionCount"]
+            total_messages += act["messageCount"]
+    total_turns = total_messages // 6
+
     return {
-        "total_sessions": data.get("totalSessions", 0),
+        "total_sessions": total_sessions,
         "total_messages": total_messages,
         "total_turns": total_turns,
         "total_cost": total_cost,
@@ -645,89 +859,149 @@ def get_permissions_stats(days=30):
     return daily
 
 
+# Autopush snapshot commits ("vault backup: 2026-10-27 04:57:48" from Obsidian
+# Git, "vault: 2026-08-11 05:00" before that, "auto: 2026-10-27 04:50" from the
+# i446-monorepo autopush) land ~144/day and say nothing about JM's work; the
+# heatmap counts everything else. Anchored on the timestamp so a hand-written
+# "vault: fix links" still counts.
+_GH_SNAPSHOT_RE = re.compile(r"^\s*(vault backup|vault|auto):\s*\d{4}-\d{2}-\d{2}", re.I)
+# Branches read besides each repo's default branch. i446-monorepo's live tree
+# is on wip (see ~/.claude/CLAUDE.md "Shared Checkouts"), so main alone missed
+# nearly all of its commits after 09-24. Shas are de-duplicated per repo.
+_GH_EXTRA_BRANCHES = {"jonathanmckay/i446-monorepo": ("wip",)}
+# Pages of 100 per branch per refresh. 150 covers 90 days of an autopush
+# branch on a cold start; incremental refreshes need 1-2 pages.
+_GH_MAX_PAGES_PER_REPO = 150
+_GH_REFRESH_S = 600
+# repos: full_name -> {"through": {branch: datetime}, "commits": {sha: (date_key, counted)}}
+_GH_STATE = {"ts": 0.0, "result": None, "repos": {}}
+_GH_LOCK = threading.Lock()
+
+
+def _is_snapshot_commit(message):
+    return bool(_GH_SNAPSHOT_RE.match(message or ""))
+
+
+def _github_paginate(url, params, headers, max_pages):
+    """Yield commit dicts across GitHub's Link rel="next" pages, up to
+    max_pages. Raises on a non-200 so the caller can keep its old cursor."""
+    pages = 0
+    while url and pages < max_pages:
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            raise RuntimeError(f"GitHub {resp.status_code} for {url}")
+        for c in resp.json() or []:
+            yield c
+        pages += 1
+        url = (resp.links or {}).get("next", {}).get("url")
+        params = None  # the next URL already carries the query string
+
+
 def get_github_commits():
-    """Get GitHub commits with daily breakdown for heatmap"""
+    """GitHub commits per Pacific day over the last 90 days, for the heatmap.
+
+    Was a single per_page=100 request per repo with no paging (2026-10-27):
+    autopush repos fill 100 rows in under a day, so the heatmap showed ~36 h
+    and then a hole back to whichever quiet repo reached further. Now pages
+    through Link headers (capped), keeps a per-repo memo so refreshes only
+    fetch commits newer than the last pass, and excludes autopush snapshot
+    commits (_GH_SNAPSHOT_PREFIXES).
+    """
+    with _GH_LOCK:
+        now_ts = time.time()
+        if _GH_STATE["result"] is not None and now_ts - _GH_STATE["ts"] < _GH_REFRESH_S:
+            return _GH_STATE["result"]
+        try:
+            result = _refresh_github_commits()
+        except Exception as e:
+            return {"total_commits": 0, "daily_commits": {}, "repos": [], "error": str(e)}
+        _GH_STATE["ts"], _GH_STATE["result"] = now_ts, result
+        return result
+
+
+def _fetch_branch_commits(name, branch, state, headers, now, days_ago_90, pacific_tz):
+    """Add one branch's commits since its last pass into state["commits"]."""
+    through = state["through"].get(branch)
+    # Overlap the last pass by an hour (author dates can trail push time).
+    since = max(days_ago_90, through - timedelta(hours=1)) if through else days_ago_90
+    params = {"since": since.isoformat(), "per_page": 100}
+    if branch:
+        params["sha"] = branch
+    fresh = {}
     try:
-        from datetime import timezone
-        from collections import defaultdict
-        import pytz
+        for commit in _github_paginate(
+            f"https://api.github.com/repos/{name}/commits", params, headers,
+            _GH_MAX_PAGES_PER_REPO,
+        ):
+            # Accept commits where author.login matches, OR where the git
+            # author name contains "mckay" (catches unlinked local commits).
+            # NOTE: not filtering by author server-side - git configs vary.
+            author_login = (commit.get("author") or {}).get("login", "")
+            git_author = (commit.get("commit") or {}).get("author") or {}
+            if author_login != GITHUB_USER and "mckay" not in git_author.get("name", "").lower():
+                continue
+            date_str = git_author.get("date", "")
+            if not date_str or not commit.get("sha"):
+                continue
+            commit_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            date_key = commit_dt.astimezone(pacific_tz).strftime("%Y-%m-%d")
+            counted = not _is_snapshot_commit((commit.get("commit") or {}).get("message", ""))
+            fresh[commit["sha"]] = (date_key, counted)
+    except Exception:
+        return  # keep the old cursor; retry next refresh
+    state["commits"].update(fresh)
+    state["through"][branch] = now
 
-        # Use Pacific timezone (America/Los_Angeles)
-        pacific_tz = pytz.timezone('America/Los_Angeles')
 
-        # Get commits for last 90 days
-        days_ago_90 = datetime.now(timezone.utc) - timedelta(days=90)
-        daily_commits = defaultdict(int)
-        repos = set()
-        total_commits = 0
+def _refresh_github_commits():
+    pacific_tz = pytz.timezone('America/Los_Angeles')
+    now = datetime.now(timezone.utc)
+    days_ago_90 = now - timedelta(days=90)
 
-        # Strategy: Check ALL repos for recent commits
-        # Use /user/repos for authenticated requests (includes private repos)
-        # Fall back to /users/{username}/repos for unauthenticated (public only)
-        if GITHUB_TOKEN:
-            repos_url = "https://api.github.com/user/repos?sort=pushed&per_page=100&affiliation=owner"
-            headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-        else:
-            repos_url = f"https://api.github.com/users/{GITHUB_USER}/repos?type=all&sort=pushed&per_page=100"
-            headers = {}
-        repos_response = requests.get(repos_url, headers=headers, timeout=10)
+    # Use /user/repos for authenticated requests (includes private repos)
+    # Fall back to /users/{username}/repos for unauthenticated (public only)
+    if GITHUB_TOKEN:
+        repos_url = "https://api.github.com/user/repos?sort=pushed&per_page=100&affiliation=owner"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    else:
+        repos_url = f"https://api.github.com/users/{GITHUB_USER}/repos?type=all&sort=pushed&per_page=100"
+        headers = {}
+    repos_response = requests.get(repos_url, headers=headers, timeout=10)
+    all_repos = repos_response.json() if repos_response.status_code == 200 else []
 
-        if repos_response.status_code == 200:
-            all_repos = repos_response.json()
+    memo = _GH_STATE["repos"]
+    for repo in all_repos:
+        pushed_at = repo.get("pushed_at")
+        if not pushed_at:
+            continue
+        if datetime.fromisoformat(pushed_at.replace("Z", "+00:00")) < days_ago_90:
+            continue
+        name = repo["full_name"]
+        state = memo.setdefault(name, {"through": {}, "commits": {}})
+        for branch in (None,) + tuple(_GH_EXTRA_BRANCHES.get(name, ())):
+            _fetch_branch_commits(name, branch, state, headers, now, days_ago_90, pacific_tz)
 
-            for repo in all_repos:
-                pushed_at = repo.get("pushed_at")
-                if not pushed_at:
-                    continue
+    cutoff_key = days_ago_90.astimezone(pacific_tz).strftime("%Y-%m-%d")
+    daily_commits = defaultdict(int)
+    repos = []
+    total_commits = 0
+    for name, state in memo.items():
+        state["commits"] = {sha: v for sha, v in state["commits"].items() if v[0] >= cutoff_key}
+        n = 0
+        for date_key, counted in state["commits"].values():
+            if counted:
+                daily_commits[date_key] += 1
+                n += 1
+        if n:
+            repos.append(name)
+        total_commits += n
 
-                push_date = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
-                if push_date < days_ago_90:
-                    continue
-
-                # Fetch commits from this repo
-                try:
-                    commits_url = f"https://api.github.com/repos/{repo['full_name']}/commits"
-                    commits_params = {
-                        "since": days_ago_90.isoformat(),
-                        "per_page": 100
-                        # NOTE: Not filtering by author - git configs vary (mckay vs jonathanmckay)
-                    }
-                    commits_response = requests.get(commits_url, params=commits_params, headers=headers, timeout=5)
-
-                    if commits_response.status_code == 200:
-                        repo_commits = commits_response.json()
-
-                        if repo_commits:
-                            repos.add(repo["full_name"])
-
-                        for commit in repo_commits:
-                            # Accept commits where author.login matches, OR where the git
-                            # author name contains "mckay" (catches unlinked local commits)
-                            author_login = commit.get("author", {}).get("login", "") if commit.get("author") else ""
-                            git_author_name = commit.get("commit", {}).get("author", {}).get("name", "").lower()
-                            if author_login != GITHUB_USER and "mckay" not in git_author_name:
-                                continue
-
-                            commit_date_str = commit.get("commit", {}).get("author", {}).get("date", "")
-                            if commit_date_str:
-                                commit_date = datetime.fromisoformat(commit_date_str.replace("Z", "+00:00"))
-                                # Convert to Pacific timezone before formatting date
-                                commit_date_pacific = commit_date.astimezone(pacific_tz)
-                                date_key = commit_date_pacific.strftime("%Y-%m-%d")
-                                daily_commits[date_key] += 1
-                                total_commits += 1
-
-                except Exception:
-                    continue
-
-        return {
-            "total_commits": total_commits,
-            "daily_commits": dict(daily_commits),
-            "repos": list(repos)[:10],
-            "note": "Public repos only" if total_commits == 0 else None
-        }
-    except Exception as e:
-        return {"total_commits": 0, "daily_commits": {}, "repos": [], "error": str(e)}
+    return {
+        "total_commits": total_commits,
+        "daily_commits": dict(daily_commits),
+        "repos": repos[:10],
+        "note": "Public repos only" if total_commits == 0 else None,
+    }
 
 
 @_cached(
@@ -2860,7 +3134,21 @@ def api_turns():
     return jsonify(result)
 
 
+def _ingest_loop(every_s=900.0):
+    """Keep llm-sessions.db current without a page view. Before 2026-10-26 ingest ran
+    only inside the '/' route, so the DB sat 8 days stale (last row 10-18) whenever
+    nobody opened the page."""
+    while True:
+        try:
+            ingest_claude_sessions()
+        except Exception as e:  # noqa: BLE001 (never take the server down)
+            print(f"[ingest] {e}", flush=True)
+        time.sleep(every_s)
+
+
 if __name__ == "__main__":
+    import threading
+    threading.Thread(target=_ingest_loop, name="llm-ingest", daemon=True).start()
     print("🚀 Starting jm-ai-dash...")
     print("📊 Dashboard: http://localhost:5555")
     print("🔌 API:       http://localhost:5555/api/stats")

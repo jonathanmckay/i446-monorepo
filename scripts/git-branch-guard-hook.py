@@ -56,7 +56,10 @@ def blocked(command: str, cwd: str) -> str | None:
         d, i = cur, 1
         while i < len(toks) and toks[i].startswith("-"):
             if toks[i] == "-C" and i + 1 < len(toks):
-                d = toks[i + 1]; i += 2; continue
+                t = os.path.expanduser(toks[i + 1])
+                d = ("/nonexistent-unresolved" if "$" in t
+                     else t if os.path.isabs(t) else os.path.join(cur, t))
+                i += 2; continue
             if toks[i] in ("-c",) and i + 1 < len(toks):
                 i += 2; continue
             i += 1

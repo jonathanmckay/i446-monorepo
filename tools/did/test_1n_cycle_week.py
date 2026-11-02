@@ -26,6 +26,13 @@ def test_monday_cycle_cards_put_sunday_in_the_ending_week():
     assert weeks.cycle_start("1 -2g", SUN) == date(2026, 10, 19)
 
 
+def test_cycle_lookup_folds_hyphens_like_did_fast_header_match():
+    # did-fast's header_normalize maps `/did 1-2g` onto the 1 -2g column;
+    # the cycle lookup must agree or a Sunday 1-2g lands in week 10.4.
+    for alias in ("1-2g", "1 2g", "1 - 2g", "1-1n", "1 —1n"):
+        assert weeks.habit_week_label(alias, SUN) == "10.3", alias
+
+
 def test_other_cards_keep_the_sunday_week():
     assert weeks.habit_week_label("1 m5x2", SUN) == "10.4"
     assert weeks.habit_week_label("1 i9", SAT) == "10.3"
@@ -44,5 +51,5 @@ def test_run_py_uses_the_cycle_for_row_and_close_window():
 
 def test_did_fast_groups_1n_writes_by_cycle_week():
     s = _src("did-fast.py")
-    assert "neon_weeks.habit_week_label(_hname, _week_date)" in s
+    assert "neon_weeks.habit_week_label(_hname, week_date)" in s
     ast.parse(s)

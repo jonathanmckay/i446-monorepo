@@ -721,3 +721,38 @@ def test_weekly_offset_uses_daily_toggl_cache_not_live_api(monkeypatch):
     assert w["weeks"] == ['5/31', '6/7', '6/14', '6/21', '6/28', '7/5', '7/12', '7/19']
     assert w["window"]["label"] == "5/31 – 7/25"
     assert w["time_week"]["datasets"][0]["data"][0] == 1.0  # 6/1 → first week, 60m = 1.0h
+
+
+def test_block_chart_time_survives_dst_fall_back(monkeypatch):
+    """Bug (2026-11-01, Dream v175): _build_block_chart_data clipped Toggl
+    minutes to blocks with aware datetimes that all shared one ZoneInfo, so
+    Python did the + duration / max / min / subtraction on WALL-CLOCK time.
+    On DST fall-back day the 睡觉 entry 00:00 PDT -> 05:30 PST (6.5 h real)
+    ended at 06:30 wall: 卯 120 + 辰 30 = 150 min instead of 卯 90 + 辰 0.
+    Fix: overlap math in UTC."""
+    m = _load_dash()
+    import datetime as _d
+    from zoneinfo import ZoneInfo
+    today = _d.date(2026, 11, 1)
+
+    class FakeDate(_d.date):
+        @classmethod
+        def today(cls):
+            return today
+    monkeypatch.setattr(m, "date", FakeDate)
+    monkeypatch.setattr(m, "_tz", lambda: ZoneInfo("America/Los_Angeles"))
+    monkeypatch.setattr(m, "load_points_all", lambda: {})
+    monkeypatch.setattr(m, "load_tasks_by_block", lambda *a, **k: {})
+    monkeypatch.setattr(m, "load_email_data", lambda: {})
+    monkeypatch.setattr(m, "_build_email_by_account_blocked", lambda *a, **k: {})
+    monkeypatch.setattr(m, "_neon_edit_events", lambda a, b: [])
+    sleep_pid = next(pid for pid, code in m.PROJECT_ID_TO_CODE.items() if code == "睡觉")
+    monkeypatch.setattr(m, "_fetch_toggl_entries", lambda *a, **k: [{
+        "start": "2026-11-01T07:00:00+00:00", "duration": 23400,
+        "project_id": sleep_pid}])
+
+    d = m._build_block_chart_data()
+    sleep = next(ds for ds in d["time"]["datasets"] if ds["label"] == "睡觉")["data"]
+    nov1 = sleep[-m.N_BLOCKS_PER_DAY:]
+    assert nov1[0] == 90, nov1  # 卯 04:00-05:30 PST
+    assert nov1[1] == 0, nov1   # 辰: nothing after 05:30
