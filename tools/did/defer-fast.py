@@ -56,6 +56,10 @@ DEFAULT_CLAIMED_POINTS = 2
 # is IDENTICAL in content to the card its recurring parent regenerates — two
 # stale undated "AoS (15) [15]" copies caused the 2026-07-24 dtd same-name
 # mess. The date stamp keeps every deferred copy distinct.
+# All recurring copies joined 2026-11-02: an xk87-only recurring task (no
+# habit label) produced exact twins of its parent's next card (6hvVF42cGQ6G8Jqc
+# / 6hvV7wVCF3fQ3qcw). handle_recurring now stamps every copy; HABIT_LABELS
+# still gates the habits-deferred marker.
 HABIT_LABELS = {"0neon", "夜neon", "1neon"}
 
 
@@ -451,15 +455,14 @@ def handle_recurring(task: dict, target_date: str,
 
     # 1. One-off deferred copy of THIS occurrence (non-recurring), due target.
     #    Skip mode carries nothing — the occurrence is simply skipped.
-    #    Daily habits (0neon/夜neon) get the origin date stamped into the copy
-    #    so it stays distinct from the daily card (see HABIT_LABELS).
+    #    Every copy gets the origin date stamped in so it stays distinct from
+    #    the card the parent regenerates (see HABIT_LABELS note, 2026-11-02).
     copy = None
     copy_content = content
     if skip_copy:
         target_date = next_date
     else:
-        if HABIT_LABELS & set(labels):
-            copy_content = _dated_copy_content(content, current_due)
+        copy_content = _dated_copy_content(content, current_due)
         copy = create_task(copy_content, labels, project_id, target_date, priority)
 
     # 2. Posthoc eval record (due today, immediately closed) — created and

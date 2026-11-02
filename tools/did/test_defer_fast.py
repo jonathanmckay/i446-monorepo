@@ -223,9 +223,11 @@ def test_1neon_defer_copy_carries_origin_date(df, monkeypatch):
     assert out["deferred_copy_content"] == "AoS 7.20 (15) [15]"
 
 
-def test_non_habit_recurring_copy_name_unchanged(df, monkeypatch):
-    """Only daily habits get the date stamp — other recurring defers keep the
-    copy's name identical to the parent."""
+def test_non_habit_recurring_copy_gets_date_stamp(df, monkeypatch):
+    """Regression (2026-11-02): an xk87-only recurring task deferred into an
+    exact twin of its parent's next card (6hvVF42cGQ6G8Jqc / 6hvV7wVCF3fQ3qcw)
+    because only 0neon/夜neon/1neon copies were dated. Every recurring defer
+    copy is now dated, whatever its labels."""
     class _D(date):
         @classmethod
         def today(cls):
@@ -241,8 +243,28 @@ def test_non_habit_recurring_copy_name_unchanged(df, monkeypatch):
             "due": {"is_recurring": True, "date": "2026-06-05",
                     "string": "every Friday"}}
     out = df.handle_recurring(task, "2026-06-08", 2)
-    assert created[0] == "hcmr (15) [10]"
-    assert out["deferred_copy_content"] == "hcmr (15) [10]"
+    assert created[0] == "hcmr 6.5 (15) [10]"
+    assert out["deferred_copy_content"] == "hcmr 6.5 (15) [10]"
+
+
+def test_xk87_only_recurring_copy_not_a_twin(df, monkeypatch):
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 11, 1)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "kids bath (20) [10]", "labels": ["xk87"],
+            "due": {"is_recurring": True, "date": "2026-11-01",
+                    "string": "every day"}}
+    df.handle_recurring(task, "2026-11-02", 2)
+    assert created[0] == "kids bath 11.1 (20) [10]"
+    assert created[0] != task["content"]
 
 
 def test_habit_skip_mode_creates_no_dated_copy(df, monkeypatch):
