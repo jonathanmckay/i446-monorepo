@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "honarable basketball": {
-      "todoist_id": "6hvV6xmmgvVr4vWR",
-      "minutes": 10
-    },
-    "tasks to 60": {
-      "todoist_id": "6hvV6xmq9H5r6FJ2",
-      "minutes": 15
-    }
-  },
-  "last_sync": "2026-11-01T20:00:01.664416-08:00"
+  "tasks": {},
+  "last_sync": "2026-11-01T22:00:06.163867-08:00"
 }
