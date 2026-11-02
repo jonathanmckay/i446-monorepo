@@ -208,6 +208,7 @@ def _resolve_project(code: str) -> tuple[int | None, str]:
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import state_paths  # noqa: E402
+import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with janus.py
 TASK_QUEUE = state_paths.TASK_QUEUE
 _POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
 
@@ -292,9 +293,11 @@ def _resolvable_points(desc: str, registered: set[str] | None = None) -> int | N
         registered = registered_habit_names()
     if _norm_key(desc) in registered:
         return None
-    m = _POINTS_BRACKET_RE.search(desc or "")
-    if m:
-        return int(m.group(1))
+    # A split task ("[30] @h335 [10] @i9", lib/fen_split.py) resolves to its
+    # TOTAL here; did-fast itself splits the credit per domain.
+    t = fen_split.total_points(desc or "")
+    if t is not None:
+        return t
     try:
         data = json.loads(TASK_QUEUE.read_text())
     except Exception:
@@ -322,8 +325,7 @@ def _resolvable_points(desc: str, registered: set[str] | None = None) -> int | N
     walk(data)
     if not found:
         return None
-    m = _POINTS_BRACKET_RE.search(found)
-    return int(m.group(1)) if m else None
+    return fen_split.total_points(found)
 
 
 def _ledger_path(day: _dt.date) -> Path:

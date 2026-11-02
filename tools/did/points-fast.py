@@ -20,6 +20,9 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).parent
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import fen_split as _fen_split  # noqa: E402  "[N] @code [N] @code" grammar
+
 _spec = importlib.util.spec_from_file_location("defer_fast", _HERE / "defer-fast.py")
 _df = importlib.util.module_from_spec(_spec)
 sys.modules["defer_fast"] = _df
@@ -29,10 +32,11 @@ _ANNOT = re.compile(r"\s*[\(\[\{][^\)\]\}]*[\)\]\}]")
 
 
 def set_points(content: str, pts: int) -> str:
-    """Replace the first [N] in content, or append [N] if none present."""
-    if re.search(r"\[\d+\]", content):
-        return re.sub(r"\[\d+\]", f"[{pts}]", content, count=1)
-    return f"{content.rstrip()} [{pts}]"
+    """Rewrite the points to one plain [pts] (append if none). A split task
+    ("[30] @h335 [10] @i9", lib/fen_split.py) is collapsed to the single new
+    total: an explicit points edit means the split is over, never kept with
+    a wrong sum."""
+    return _fen_split.set_total(content, pts)
 
 
 def resolve_from_cache(cache: dict, query: str) -> dict | None:

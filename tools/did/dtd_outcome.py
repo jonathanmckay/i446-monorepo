@@ -220,7 +220,10 @@ def done_records(out: dict | None, rows, items, rc: str, now: float | None = Non
         ce = _cache_entry(item_id) if item_id else {}
         labels = ce.get("labels") or []
         raw = ce.get("content") or content
-        est = _EST_RE.search(raw); pts = _PTS_RE.search(raw); bonus = _BONUS_RE.search(raw)
+        est = _EST_RE.search(raw); bonus = _BONUS_RE.search(raw)
+        # Sum of every [N] (a split task, lib/fen_split.py, records its total).
+        _pts_all = [int(v) for v in _PTS_RE.findall(raw)]
+        pts_total = sum(_pts_all) if _pts_all else None
         overdue = None
         try:
             overdue = (today - dt.date.fromisoformat(str(ce.get("due"))[:10])).days if ce.get("due") else None
@@ -240,7 +243,7 @@ def done_records(out: dict | None, rows, items, rc: str, now: float | None = Non
             "kind": "done", "status": status, "id": item_id or None, "content": raw,
             "bucket": _kind_of(labels), "step": (hit or {}).get("step"),
             "est": int(est.group(1)) if est else None, "actual": actual,
-            "points": int(pts.group(1)) if pts else None, "bonus": int(bonus.group(1)) if bonus else None,
+            "points": pts_total, "bonus": int(bonus.group(1)) if bonus else None,
             "writes": {k: v for k, v in (("0n", _write_summary(out.get("0n_write"))), ("0fen", _write_summary(out.get("0fen_write"))),
                                          ("1n", _write_summary(out.get("1n_write"))), ("1n_0fen", _write_summary(out.get("1n_0fen_write")))) if v},
             "overdue_days": overdue, "age_days": age, "impressions": impressions, "rc": rc,

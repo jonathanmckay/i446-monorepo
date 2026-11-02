@@ -73,6 +73,7 @@ import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
 from neon.rates import speedy_meeting_points  # noqa: E402  25m→30 / 50m→60 meetings
 import janus_done  # noqa: E402  /done points paths, shared with mobile.py
+import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with mobile.py
 import outlook_client  # noqa: E402
 from blocks import is_future_block  # noqa: E402  shared future-block gate
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
@@ -5847,10 +5848,12 @@ def _resolvable_points(desc: str) -> int | None:
     the cached task queue (same file/matching did-fast's own Todoist-content
     lookup reads; see fetch_short_names' walk() for the identical shape).
     None when neither exists, meaning did-fast would silently default to 0 —
-    the signal _run_current_timer_done uses to ask instead of guessing."""
-    m = _POINTS_BRACKET_RE.search(desc or "")
-    if m:
-        return int(m.group(1))
+    the signal _run_current_timer_done uses to ask instead of guessing.
+    A split task ("[30] @h335 [10] @i9", lib/fen_split.py) resolves to its
+    TOTAL here; did-fast itself splits the credit per domain."""
+    t = fen_split.total_points(desc or "")
+    if t is not None:
+        return t
     try:
         data = json.loads(TASK_QUEUE.read_text())
     except Exception:
@@ -5878,8 +5881,7 @@ def _resolvable_points(desc: str) -> int | None:
     walk(data)
     if not found:
         return None
-    m = _POINTS_BRACKET_RE.search(found)
-    return int(m.group(1)) if m else None
+    return fen_split.total_points(found)
 
 
 def _completed_in_dtd_today(desc: str) -> bool:

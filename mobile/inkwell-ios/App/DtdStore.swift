@@ -59,7 +59,14 @@ final class DtdStore: ObservableObject {
     /// A task typed offline, drawn like any other row ("⇡" marks it unsynced).
     private static func localRow(_ l: LocalTask) -> DtdTask {
         let code = l.raw.range(of: #"@(\w+)"#, options: .regularExpression).map { String(l.raw[$0].dropFirst()) } ?? ""
-        let pts = l.raw.range(of: #"\[(\d+)\]"#, options: .regularExpression).flatMap { Int(l.raw[$0].dropFirst().dropLast()) }
+        // Sum of every [N]: a split task ("[30] @h335 [10] @i9", lib/fen_split.py)
+        // shows its total; did-fast splits the credit per domain.
+        var pts: Int? = nil
+        var rest = l.raw[...]
+        while let r = rest.range(of: #"\[(\d+)\]"#, options: .regularExpression) {
+            if let n = Int(rest[r].dropFirst().dropLast()) { pts = (pts ?? 0) + n }
+            rest = rest[r.upperBound...]
+        }
         var title = l.raw
         for pat in [#"\s*\(\d+\)"#, #"\s*\[\d+\]"#, #"\s*\{\d+\}"#, #"\s*@\w+"#] {
             title = title.replacingOccurrences(of: pat, with: "", options: .regularExpression)

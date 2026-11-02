@@ -1075,9 +1075,11 @@ def _get_todoist_api_key():
 def _parse_task_points(content: str):
     """Extract [N] value and (N) time estimate from task content.
     Returns (value, time_min) or (None, None) if not parseable."""
-    val_m = re.search(r'\[(\d+)\]', content)
+    # Sum of every [N]: a split task ("[30] @h335 [10] @i9", lib/fen_split.py)
+    # counts its total.
+    vals = [int(v) for v in re.findall(r'\[(\d+)\]', content)]
     time_m = re.search(r'\((\d+)\)', content)
-    value = int(val_m.group(1)) if val_m else None
+    value = sum(vals) if vals else None
     time_min = int(time_m.group(1)) if time_m else None
     return value, time_min
 

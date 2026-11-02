@@ -38,6 +38,12 @@ TODOIST_BASE = "https://api.todoist.com/api/v1"
 POINTS_RE = re.compile(r"\[(\d+)\]")
 DURATION_RE = re.compile(r"\((\d+)\)")
 
+
+def _total_points(content: str) -> int:
+    """Sum of every [N]: a split task ("[30] @h335 [10] @i9",
+    lib/fen_split.py) defers against its total."""
+    return sum(int(v) for v in POINTS_RE.findall(content or ""))
+
 DEFAULT_CLAIMED_POINTS = 2
 
 # Daily-habit labels. A deferred occurrence of one of these gets its origin
@@ -357,8 +363,7 @@ def handle_non_recurring(task: dict, target_date: str,
     _api("POST", f"/tasks/{task_id}", {"due_date": target_date})
 
     # 2. Parse total points
-    pts_match = POINTS_RE.search(content)
-    total_points = int(pts_match.group(1)) if pts_match else 0
+    total_points = _total_points(content)
 
     # 3. Create posthoc eval record (due today, immediately closed)
     today_iso = date.today().isoformat()
@@ -434,8 +439,7 @@ def handle_recurring(task: dict, target_date: str,
     due = task.get("due") or {}
 
     # Parse total points from [N] (for reporting only)
-    pts_match = POINTS_RE.search(content)
-    total_points = int(pts_match.group(1)) if pts_match else 0
+    total_points = _total_points(content)
 
     # Next natural occurrence of the series (from today or the current due,
     # whichever is later, so an overdue parent still lands in the future).

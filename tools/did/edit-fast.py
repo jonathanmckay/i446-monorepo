@@ -47,9 +47,12 @@ _short = _load("shorten_mod", "shorten.py")     # shorten_tasks — same fn the 
 DOMAINS = _dom.DOMAINS
 
 # One or more trailing (time)/[pts]/{bonus} annotation groups at end of content.
-_TRAIL_ANNOT = re.compile(r"(?:\s*[\(\[\{][^\)\]\}]*[\)\]\}])+\s*$")
+# An annotation may be followed by its @code ("[30] @h335 [10] @i9", a
+# multi-domain split, lib/fen_split.py): the code travels with its bracket
+# so a rename keeps the split intact.
+_TRAIL_ANNOT = re.compile(r"(?:\s*[\(\[\{][^\)\]\}]*[\)\]\}](?:\s*@[\w\-一-鿿]+)?)+\s*$")
 # A single annotation token of any bracket kind, anywhere.
-_ANNOT_TOK = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
+_ANNOT_TOK = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}](?:\s*@[\w\-一-鿿]+)?")
 
 
 def set_name(content: str, new_name: str) -> str:
@@ -178,7 +181,9 @@ def current_fields(task: dict, description: str) -> dict:
     """The form's prefill: clean name, domain label, [N] points, (N) time,
     haiku short (prose only), description."""
     content = task.get("content") or ""
-    m = re.search(r"\[(\d+)\]", content)
+    # Sum of every [N]: a split task ("[30] @h335 [10] @i9", lib/fen_split.py)
+    # prefills its total; retyping the total collapses the split (set_points).
+    _pts_all = [int(v) for v in re.findall(r"\[(\d+)\]", content)]
     t = re.search(r"\((\d+)\)", content)
     b = re.search(r"\{(\d+)\}", content)
     dom = [l for l in task.get("labels", []) if l in DOMAINS]
@@ -186,7 +191,7 @@ def current_fields(task: dict, description: str) -> dict:
     return {
         "name": re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip(),
         "domain": dom[0] if dom else "",
-        "points": m.group(1) if m else "",
+        "points": str(sum(_pts_all)) if _pts_all else "",
         "bonus": b.group(1) if b else "",
         "due": str(task.get("due") or "")[:10],
         "time": t.group(1) if t else "",

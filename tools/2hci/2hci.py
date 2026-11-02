@@ -187,9 +187,10 @@ def completed_hci(start: date, end: date) -> list[dict]:
             if key in seen or not is_other_hci(it):
                 continue
             seen.add(key)
-            m = POINTS_RX.search(it.get("content") or "")
+            # Sum of every [N] (a split task, lib/fen_split.py, counts its total).
+            pts = sum(int(v) for v in POINTS_RX.findall(it.get("content") or ""))
             done = datetime.fromisoformat(it["completed_at"].replace("Z", "+00:00")).astimezone(TZ)
-            items.append({"content": it["content"], "points": int(m.group(1)) if m else 0,
+            items.append({"content": it["content"], "points": pts,
                           "date": done.date().isoformat()})
         nxt = data.get("next_cursor")
         url = f"{base}&cursor={nxt}" if nxt else None

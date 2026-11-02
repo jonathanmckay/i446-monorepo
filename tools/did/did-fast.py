@@ -86,6 +86,7 @@ ix_run = _ix_mod.run
 # and other sheets (0n/1n+/hcbi) still use ix_run.
 from neon import excel as neon_excel  # noqa: E402 (path inserted above)
 from neon import cols as neon_cols  # noqa: E402
+import fen_split  # noqa: E402  "[N] @code [N] @code": one task, several domains
 from neon import weeks as neon_weeks  # noqa: E402
 from blocks import BLOCK_START, is_future_block  # noqa: E402 (path inserted above)
 
@@ -412,6 +413,65 @@ def _project_fen_col(labels) -> str:
     return neon_cols.domain_col("0分", "个")
 
 
+def _first_fen_label(labels) -> Optional[str]:
+    """The task's own domain: its first project tag that resolves to a 0分
+    column (None when none does -> _project_fen_col's 个 fallback)."""
+    for lbl in labels or []:
+        if lbl in LABEL_TO_0FEN:
+            return lbl
+    return None
+
+
+def _code_fen_col(code: Optional[str]) -> str:
+    """0分 column for one @code of a split: the project-tag map first, then
+    neon-cols.json's domain aliases, then 个 (the same catch-all an untagged
+    task gets). Never a hardcoded letter (see _project_fen_col)."""
+    if code and code in LABEL_TO_0FEN:
+        return LABEL_TO_0FEN[code]
+    if code:
+        try:
+            return neon_cols.domain_col("0分", code)
+        except KeyError:
+            print(f"⚠ @{code}: no 0分 column for that domain; crediting 个 instead",
+                  file=sys.stderr)
+    return neon_cols.domain_col("0分", "个")
+
+
+def _split_credit(splits, default_code: Optional[str]) -> tuple[str, int, list]:
+    """(fen_col, fen_points, fen_extra) for a per-domain split: the first
+    domain's column and points, then [(col, pts)] for the others. Merged by
+    COLUMN, not by code (i9 and i447 both credit R): the excel-http
+    idempotency key is per task+day+column, so two appends to one column
+    would have had the second dropped as a replay."""
+    merged: dict[str, int] = {}
+    for n, code in splits:
+        col = _code_fen_col(code if code is not None else default_code)
+        merged[col] = merged.get(col, 0) + n
+    cols = list(merged.items())
+    if not cols:
+        return _code_fen_col(default_code), 0, []
+    (first_col, first_pts), rest = cols[0], cols[1:]
+    return first_col, first_pts, rest
+
+
+def _task_credit(item, task: dict) -> tuple[int, str, list]:
+    """(fen_points, fen_col, fen_extra) for a matched Todoist task: the
+    typed split wins, then a typed [N] total (one column), then the task's
+    own content, which may itself be a "[N] @code [N] @code" split."""
+    default_code = _first_fen_label(task.get("labels", []))
+    if item.points_split:
+        col, pts, extra = _split_credit(item.points_split, item.project_override or default_code)
+        return pts, col, extra
+    if item.points_override:
+        return item.points_override, _project_fen_col(task.get("labels", [])), []
+    pairs = fen_split.parse_points(task.get("content", ""))
+    if len(pairs) <= 1:
+        pts = pairs[0][0] if pairs else 0
+        return pts, _project_fen_col(task.get("labels", [])), []
+    col, pts, extra = _split_credit(pairs, default_code)
+    return pts, col, extra
+
+
 # ---------------------------------------------------------------------------
 # Tokenization & matching
 # ---------------------------------------------------------------------------
@@ -587,6 +647,10 @@ class ParsedItem:
     target_date: Optional[str] = None  # M/D
     points_override: Optional[int] = None
     curly_points: Optional[int] = None  # {N} triggers 0g bonus
+    # Typed "[N] @code [N] @code" (JM 2026-11-01, lib/fen_split.py): the
+    # per-domain split, in order; a (n, None) entry is a bare [N] that takes
+    # the item's own domain. points_override holds the total when set.
+    points_split: Optional[list] = None
     time_range: Optional[tuple[str, str]] = None  # (HHMM, HHMM)
     project_override: Optional[str] = None
     defer_date: Optional[str] = None  # ISO date (YYYY-MM-DD) for partial completion
@@ -684,6 +748,17 @@ def parse_input(raw: str) -> list[ParsedItem]:
             item.toggl_tags = tag_matches
             chunk = re.sub(r"\s*#-?\w+", "", chunk).strip()
 
+        # Extract "[N] @code" pairs (a multi-domain split, lib/fen_split.py)
+        # BEFORE the lone-@project step below: that step would otherwise eat
+        # the first pair's @code and leave "[30] [10] @i9". The first pair's
+        # code is the item's domain (same as today's "[30] @i9"); a bare
+        # @code elsewhere in the chunk still wins below.
+        _pairs = list(fen_split.TYPED_PAIR_RE.finditer(chunk))
+        if _pairs:
+            item.points_split = [(int(m.group(1)), m.group(2)) for m in _pairs]
+            item.project_override = _pairs[0].group(2)
+            chunk = " ".join(fen_split.TYPED_PAIR_RE.sub(" ", chunk).split())
+
         # Extract @project override
         at_match = re.search(r"@(\w+)", chunk)
         if at_match:
@@ -705,6 +780,12 @@ def parse_input(raw: str) -> list[ParsedItem]:
             item.points_override = int(bracket_match.group(1))
             chunk = chunk[:bracket_match.start()] + chunk[bracket_match.end():]
             chunk = chunk.strip()
+            if item.points_split is not None:
+                # A bare [N] next to "[N] @code" pairs: its own share, to the
+                # item's domain. points_override becomes the total.
+                item.points_split.append((item.points_override, None))
+        if item.points_split is not None:
+            item.points_override = sum(n for n, _ in item.points_split)
 
         # Extract an explicit block override: a bare, standalone trailing
         # 地支 glyph (e.g. "1 kids nature 巳") means "this happened in 巳,
@@ -1299,6 +1380,9 @@ class RouteResult:
     write_value: int | float = 1
     fen_col: Optional[str] = None  # 0分 column for points
     fen_points: int = 0
+    # A multi-domain split ("[30] @h335 [10] @i9", lib/fen_split.py): the
+    # 2nd..nth columns as [(col, pts)]; fen_col/fen_points are the first.
+    fen_extra: list = field(default_factory=list)
     fen_cell_ref: Optional[str] = None  # 1n+ cell ref like "'1n+'!D20"
     is_cumulative_1n: bool = False
     cumulative_increment: int = 0
@@ -1721,13 +1805,12 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             # guard was never applied here.
             points = 0
             fen_col = None
+            fen_extra: list = []
             if item.curly_points is None:
-                pts_match = POINTS_RE.search(matched["content"])
-                points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
-                fen_col = _project_fen_col(matched.get("labels", []))
+                points, fen_col, fen_extra = _task_credit(item, matched)
 
             r = RouteResult(item=item, step="todoist", todoist_task=matched,
-                            fen_col=fen_col, fen_points=points)
+                            fen_col=fen_col, fen_points=points, fen_extra=fen_extra)
             results.append(r)
             continue
 
@@ -1747,12 +1830,11 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             # domain-column credit here to avoid double-counting.
             points = 0
             fen_col = None
+            fen_extra = []
             if item.curly_points is None:
-                pts_match = POINTS_RE.search(live_matched["content"])
-                points = item.points_override or (int(pts_match.group(1)) if pts_match else 0)
-                fen_col = _project_fen_col(live_matched.get("labels", []))
+                points, fen_col, fen_extra = _task_credit(item, live_matched)
             r = RouteResult(item=item, step="todoist", todoist_task=live_matched,
-                            fen_col=fen_col, fen_points=points)
+                            fen_col=fen_col, fen_points=points, fen_extra=fen_extra)
             results.append(r)
             continue
 
@@ -1852,6 +1934,12 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
         r = RouteResult(item=item, step="variable",
                         fen_col=fen_col, fen_points=pts)
+        if item.points_split:
+            # A typed split on a one-off ("x [30] @h335 [10] @i9"): the
+            # first domain is this item's (fen_col), the rest are extras.
+            r.fen_col, r.fen_points, r.fen_extra = _split_credit(item.points_split, domain_label)
+            if item.bonus_points:
+                r.fen_points += item.bonus_points
         r.todoist_task = None  # will create posthoc in main
         r.error = domain_label  # stash domain label for posthoc creation
         results.append(r)
@@ -2703,13 +2791,11 @@ def defer_todoist_task(task_id: str, defer_date: str, points_claimed: int,
     except Exception as e:
         return False, f"reschedule failed: {e}"
 
-    # 2. Deduct points from [N] in the task content
+    # 2. Deduct points from [N] in the task content (a split's pairs are
+    # walked in order, each clamped at 0: lib/fen_split.deduct_points)
     if points_claimed > 0:
-        pts_match = re.search(r"\[(\d+)\]", current_content)
-        if pts_match:
-            old_pts = int(pts_match.group(1))
-            new_pts = max(0, old_pts - points_claimed)
-            new_content = current_content[:pts_match.start()] + f"[{new_pts}]" + current_content[pts_match.end():]
+        new_content = fen_split.deduct_points(current_content, points_claimed)
+        if new_content != current_content:
             try:
                 body = json.dumps({"content": new_content}).encode()
                 req = urllib.request.Request(
@@ -3795,6 +3881,20 @@ def main():
             fen_appends.append((r.fen_col, r.fen_expr or r.fen_points))
             fen_names.append(r.item.name)
             fen_idem.append(_idem_key("0fen", r, target_date, r.fen_col))
+        # The other domains of a split ("[30] @h335 [10] @i9"): one append
+        # per column, same guards as the first (an hcbi/0n-routed domain
+        # can't take a raw 0分 append, so it is reported, not written).
+        for _xcol, _xpts in r.fen_extra:
+            if _xpts <= 0:
+                continue
+            if _hcbi_domain_col(_xcol) or _0n_domain_header(_xcol):
+                print(f"⚠ {r.item.name}: split share {_xpts} to {_xcol} skipped "
+                      f"(that domain's points go through a formula, not 0分)",
+                      file=sys.stderr)
+                continue
+            fen_appends.append((_xcol, _xpts))
+            fen_names.append(r.item.name)
+            fen_idem.append(_idem_key("0fen", r, target_date, _xcol))
         # {N} curly points → 0分 column Q (0g bonus)
         if r.item.curly_points and r.item.curly_points > 0:
             fen_appends.append(("Q", r.item.curly_points))
@@ -3835,6 +3935,8 @@ def main():
         if (r.fen_col and _fen_pts_ok(r)
                 and not (r.step == "1n" and not r.is_variable_1n)):
             item_pts += r.fen_points
+        item_pts += sum(p for c, p in r.fen_extra
+                        if p > 0 and not _hcbi_domain_col(c) and not _0n_domain_header(c))
         if r.item.curly_points and r.item.curly_points > 0:
             item_pts += r.item.curly_points
         # A signed 分 log (janus ^G correction, 2026-10-28) moves its block
@@ -4033,7 +4135,7 @@ def main():
                     })
                     continue
             if r.item.defer_date:
-                pts = r.item.points_override or r.fen_points or 0
+                pts = r.item.points_override or (r.fen_points + sum(p for _, p in r.fen_extra)) or 0
                 defer_items[tid] = (r.item.defer_date, pts, r.todoist_task["content"])
             elif (r.todoist_task.get("recurring") and task_due and task_due < today_str
                   and _is_daily_recurrence(r.todoist_task.get("due_string", ""))):
@@ -4193,8 +4295,8 @@ def main():
     completed_names = [r.item.name for r in fast if not r.kid_time_for]
     completed_points = {}
     for r in fast:
-        if r.fen_points:
-            completed_points[r.item.name] = r.fen_points
+        if r.fen_points or r.fen_extra:
+            completed_points[r.item.name] = r.fen_points + sum(p for _, p in r.fen_extra)
     # Record the Todoist id of every task we actually closed, so dtd hides by id
     # (collision-proof) and a completed task can't suppress a different open task
     # sharing its annotation-stripped name.
@@ -4297,6 +4399,10 @@ def main():
                 fen_entry = {"col": r.fen_col, "points": r.fen_points}
                 if r.item.bonus_points:
                     fen_entry["bonus"] = r.item.bonus_points
+                if r.fen_extra:
+                    # The split's other columns (undo-fast strips each).
+                    fen_entry["extra"] = [{"col": c, "points": p} for c, p in r.fen_extra if p > 0]
+                    fen_entry["total"] = r.fen_points + sum(p for _, p in r.fen_extra)
                 entry["0fen"] = fen_entry
         if r.item.time_range and r.item.name in toggl_created:
             entry["toggl"] = toggl_created[r.item.name]

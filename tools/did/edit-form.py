@@ -100,7 +100,9 @@ def prose_of(content: str) -> str:
 def prefill(task: dict, description: str | None, domains=DOMAINS) -> dict:
     """The form's initial values from one snapshot-cache task."""
     content = task.get("content") or ""
-    pts = re.search(r"\[(\d+)\]", content)
+    # Sum of every [N] (a split task, lib/fen_split.py, prefills its total).
+    _pts_all = [int(v) for v in re.findall(r"\[(\d+)\]", content)]
+    pts = re.match(r"(\d+)", str(sum(_pts_all))) if _pts_all else None
     curly = re.search(r"\{(\d+)\}", content)
     mins = re.search(r"\((\d+)\)", content)
     labels = [l for l in task.get("labels", []) if l in domains]

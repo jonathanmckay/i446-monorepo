@@ -205,15 +205,18 @@ def variable_rate(raw: str) -> int | None:
 
 def parse_est(content: str) -> tuple[str, int]:
     """Return ('(30) [20]' canonical string, points)."""
-    tm, vm, bm = _TIME.search(content), _VAL.search(content), _BONUS.search(content)
+    tm, bm = _TIME.search(content), _BONUS.search(content)
+    # A split task ("[30] @h335 [10] @i9", lib/fen_split.py) shows and sorts
+    # by its TOTAL; did-fast splits the credit per domain on completion.
+    vals = [int(v) for v in _VAL.findall(content)]
     toks = []
     if tm:
         toks.append("(%s)" % tm.group(1))
-    if vm:
-        toks.append("[%s]" % vm.group(1))
+    if vals:
+        toks.append("[%d]" % sum(vals))
     if bm:
         toks.append("{%s}" % bm.group(1))
-    pts = int(vm.group(1)) if vm else (int(bm.group(1)) if bm else 0)
+    pts = sum(vals) if vals else (int(bm.group(1)) if bm else 0)
     return " ".join(toks), pts
 
 def ritual_points(raw: str, cfg: dict | None = None) -> int | None:

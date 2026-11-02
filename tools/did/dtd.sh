@@ -2385,12 +2385,14 @@ critical = _sec('关键路径', today)
 # Stable, so equal ratios keep the by-id order (test_dtd_stable_render_order).
 def _fen_per_min(t):
     c = t.get('content', '')
-    pv = re.search(r'\[(\d+)\]', c)
+    # Sum of every [N]: a split task ([30] @h335 [10] @i9, lib/fen_split.py)
+    # sorts by its total.
+    pv = [int(v) for v in re.findall(r'\[(\d+)\]', c)]
     if not pv:
         return 0.0
     mv = re.search(r'\((\d+)\)', c)
     mins = int(mv.group(1)) if mv and int(mv.group(1)) > 0 else 30
-    return int(pv.group(1)) / mins
+    return sum(pv) / mins
 rest = sorted([t for t in today_tasks if not _placed(t)],
               key=lambda t: (prank(t.get('priority')), -_fen_per_min(t)))
 # Plain tasks (critical path + everything uncategorized): p1 (API priority 4)
