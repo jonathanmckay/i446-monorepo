@@ -48,6 +48,13 @@ user-invocable: true
 ---
 ```
 
+## Writing a skill
+
+Before creating or editing a SKILL.md, read `writing-skills/SKILL.md` (when a
+skill should exist, how the description decides whether it fires, matching
+the rule's form to the failure) and, for a discipline skill,
+`writing-skills/bulletproofing.md`. The YAML rules above still apply.
+
 ## Self-clearing skills
 
 A skill is **self-clearing** when performing it IS the completion of a dtd

@@ -47,7 +47,13 @@ Read the recent conversation to identify:
 
 ### Step 2: Find the root cause
 
-Read the relevant source files. Trace the logic until you find the exact line(s) causing the wrong behavior. Do not guess — read the code.
+Load `systematic-debugging` (`skills/claude-skills/systematic-debugging/SKILL.md`)
+and follow its four phases in order: reproduce and read the whole error,
+check this household's usual suspects (stale `/tmp` copy, wrong machine,
+three janus clients, partial data), compare against the working example,
+then one written hypothesis tested with the smallest change. No fix is
+proposed before Phase 1 is complete; after three failed fixes, stop and
+question the design instead of trying a fourth.
 
 ### Step 3: Fix it
 
