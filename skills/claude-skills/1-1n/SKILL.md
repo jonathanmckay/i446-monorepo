@@ -59,6 +59,19 @@ Then append three sections, in order:
 | ⏱️ | time logged | Toggl: `-1t` / `-1l` / `0t` / `0l` |
 | ✓ | task completed | Todoist completed tasks (`/api/v1/tasks/completed`) by completed_at |
 
+## Interface layer (🖥️ desk / 📱 mobile)
+
+Shown after a `·` in each cell, kept out of ritual density. Rows come from the
+synced `vault/i447/i446/source-log/` (`lib/jmsource.py`: first-party Todoist and
+Toggl writes plus every Claude prompt via `scripts/ai-timing-log.sh`) and phone
+captures in `z_ibx/{,archive/*/}phone/`. Device IPs, the highgarden router MAC
+and LAN, and daemon vias live in `config/devices.json`.
+
+- 📱: `1p-app`/`watch` source (janus-mobile, /卯), ssh from a phone IP, phone captures.
+- 🖥️: interactive use on ix; laptop only when `net == highgarden` or ssh'd in from the home LAN (JM's rule).
+- Ignored: daemon vias, non-tty writes, laptop over Tailscale/off-network, Todoist/Toggl's own apps (no device info).
+- `net`/`ssh_from`/`tty` exist only from 2026-11-02, so earlier laptop work is unclassified.
+
 ## Blocks (地支, 04:00 wake)
 
 `卯` 04-06, `辰` 06-08, `巳` 08-10, `午` 10-12, `未` 12-14, `申` 14-16, `酉` 16-18, `戌` 18-20, `亥` 20-22. Sleep blocks (子/丑/寅, 22:00-04:00) are omitted. This is the convention the build order and the 0分 sheet's G:O columns are written with (build-order-daemon, janus, -2n all share it).

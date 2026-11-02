@@ -50,3 +50,31 @@ def test_prune_future_leaves_past_days_untouched():
 if __name__ == '__main__':
     import pytest
     sys.exit(pytest.main([__file__, '-v']))
+
+
+# --- desk / mobile classifier (2026-11-02) ---
+import ipaddress as _ip
+
+def _cls(mh, **r):
+    by_ip = {'100.72.38.25': 'mobile', '100.114.46.109': 'desk', '100.71.83.90': 'laptop',
+             '192.168.1.75': 'laptop'}
+    by_host = {'ix': 'desk', 'straylight-refit': 'laptop'}
+    return mh.classify_row(r, by_ip, by_host, [_ip.ip_network('192.168.1.0/24')],
+                           {'build-order-daemon'})
+
+
+def test_classify_device_rules():
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location('mh', pathlib.Path(__file__).parent / 'make_heatmap.py')
+    mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)
+    D, M = mh.DESK, mh.MOBILE
+    assert _cls(mh, host='ix', source='1p-app', via='janus-mobile') == M
+    assert _cls(mh, host='ix', source='cli', via='build-order-daemon') is None
+    assert _cls(mh, host='ix', source='cli', via='quick-close') == D          # pre-cutover row
+    assert _cls(mh, host='ix', source='cli', via='did-fast', tty=False) is None
+    assert _cls(mh, host='ix', metric='prompt', via='claude', tty=True, ssh_from='100.72.38.25') == M
+    assert _cls(mh, host='ix', metric='prompt', via='claude', tty=True, ssh_from='192.168.1.75') == D
+    assert _cls(mh, host='ix', metric='prompt', via='claude', tty=True, ssh_from='100.71.83.90') is None
+    assert _cls(mh, host='straylight-refit', via='janus', tty=True, net='highgarden') == D
+    assert _cls(mh, host='straylight-refit', via='janus', tty=True, net='other') is None
+    assert _cls(mh, host='straylight-refit', via='janus') is None               # no net recorded

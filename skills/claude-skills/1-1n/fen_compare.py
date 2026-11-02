@@ -18,6 +18,11 @@ NEON = os.path.expanduser('~/OneDrive/vault-excel/Neon分v12.2.xlsx')
 RITUALS = [('☀️', 'prayer'), ('📧', 'inbox'), ('🎯', 'goal'), ('⏱️', 'time logged')]
 
 
+def _rituals_only(cell):
+    c = cell.split(' · ')[0].strip()
+    return '' if not c.replace('🖥️', '').replace('📱', '').strip() else c
+
+
 def heatmap_cells(start, end):
     out = subprocess.run([sys.executable, os.path.join(HERE, 'make_heatmap.py'),
                           start.isoformat(), end.isoformat()],
@@ -26,7 +31,8 @@ def heatmap_cells(start, end):
     for line in out.splitlines():
         m = re.match(r'\| (\d+/\d+) \| \w+ \|(.*)\|\s*$', line)
         if m:
-            cells[m.group(1)] = [c.strip() for c in m.group(2).split('|')]
+            # drop the ' · 🖥️📱' device suffix: rituals only
+            cells[m.group(1)] = [_rituals_only(c) for c in m.group(2).split('|')]
         m = re.match(r'\| \d{4}-W\d+ \| *\d+ \| *([\d.]+) \|', line)
         if m:
             density = float(m.group(1))

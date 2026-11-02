@@ -18,6 +18,14 @@ mkdir -p "$LOG_DIR"
 
 case "$EVENT" in
   prompt_start)
+    # Hooks pass session_id in stdin JSON, not env ($SESSION_ID is always empty).
+    if [ ! -t 0 ]; then
+      HOOK_SID=$(python3 -c 'import sys,json; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null)
+      [ -n "$HOOK_SID" ] && SESSION_ID=$HOOK_SID
+    fi
+    # Desk/mobile attribution: log the prompt to the synced source-log with
+    # net / ssh_from (lib/jmsource.py). Backgrounded: never slow the prompt.
+    JMS_SID=$SESSION_ID nohup python3 -c 'import os,sys; sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib")); import jmsource; jmsource.record("prompt", os.environ["JMS_SID"], source="cli", via="claude", tty=True)' >/dev/null 2>&1 &
     # Finalize previous turn: flush LAST_FILE to JSONL
     if [ -f "$LAST_FILE" ]; then
       cat "$LAST_FILE" >> "$LOG_FILE"

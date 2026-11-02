@@ -245,3 +245,62 @@ def test_save_daily_off_ix_runs_0g_sync_on_ix(form, monkeypatch):
     sync = [c for c in ran if any("0g-sync.py" in str(x) for x in c)]
     assert len(sync) == 1 and sync[0][0] == "ssh" and "ix" in sync[0]
     assert sync[0][-1].endswith("0g-sync.py sync")
+
+
+# --- line-1 prefill from 0₲ (2026-11-02) ---
+
+BO = """## 0₲
+- [x] done already {20}
+- [ ] Good interviews, then rest {40}
+- [ ] tasks to 80 [5]
+### 以后的目标
+- [ ] later thing {10}
+
+## -1₲
+- 未 ☀️
+    - [ ] good interviews, then rest {10}
+- 申
+    - [ ]
+"""
+
+
+def test_zerog_prefill_skips_goals_already_in_block_and_strips_points(form):
+    assert form.zerog_prefill(BO, "申") == "Good interviews, then rest"
+    # already a 未 goal (case/points-insensitive) -> next open 0g goal, lone [N] dropped
+    assert form.zerog_prefill(BO, "未") == "tasks to 80"
+    assert form.zerog_prefill("## -1₲\n- 申\n", "申") is None
+
+
+def test_zerog_prefill_ignores_subsection_goals(form):
+    assert form.zerog_prefill("## 0₲\n- [ ]\n### 以后的目标\n- [ ] later {10}\n", "申") is None
+
+
+def _drive(form, monkeypatch, tmp_path, keys):
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    bo = tmp_path / "bo.md"
+    bo.write_text(BO)
+    monkeypatch.setattr(form.nb, "BUILD_ORDER", bo)
+    with create_pipe_input() as inp:
+        inp.send_text(keys)
+        with create_app_session(input=inp, output=DummyOutput()):
+            return form.run_form("申")
+
+
+def test_form_untouched_prefill_is_submitted_unsplit(form, monkeypatch, tmp_path):
+    out = _drive(form, monkeypatch, tmp_path, "\x13")          # ^S save untouched
+    assert out == ["- Good interviews, then rest", "", ""]
+    assert [g["text"] for g in form.plan(out, "申")["goals"]] == ["Good interviews, then rest {10}"]
+
+
+def test_form_typing_replaces_prefill(form, monkeypatch, tmp_path):
+    assert _drive(form, monkeypatch, tmp_path, "x\x13") == ["x", "", ""]
+
+
+def test_form_typing_then_erasing_does_not_resurrect_prefill(form, monkeypatch, tmp_path):
+    assert _drive(form, monkeypatch, tmp_path, "x\x7f\x13") == ["", "", ""]
+
+
+def test_form_backspace_dismisses_prefill(form, monkeypatch, tmp_path):
+    assert _drive(form, monkeypatch, tmp_path, "\x7f\x13") == ["", "", ""]

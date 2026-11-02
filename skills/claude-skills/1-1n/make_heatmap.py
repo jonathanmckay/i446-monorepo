@@ -176,16 +176,117 @@ def add_todoist(grid, start, end):
         if b is None: continue
         grid[day][b].add('✓')
 
+# ---------- Interface -> 🖥️ desk / 📱 mobile ----------
+# Which interface JM drove the system through in each block (2026-11-02).
+# Source: the synced source-log (lib/jmsource.py: every first-party Todoist /
+# Toggl write plus every Claude prompt, with host, net, ssh_from, tty) and
+# phone captures. Third-party app writes (Todoist/Toggl's own apps) carry no
+# device and are ignored. Laptop = desk only on highgarden (JM). Rules and
+# device IPs: config/devices.json.
+DESK, MOBILE = '🖥️', '📱'
+SOURCE_LOG = '/Users/mckay/vault/i447/i446/source-log'
+DEVICES_JSON = '/Users/mckay/i446-monorepo/config/devices.json'
+Z_IBX = '/Users/mckay/vault/z_ibx'
+
+
+def _devices():
+    cfg = json.load(open(DEVICES_JSON))
+    kind_by_ip, kind_by_host = {}, {}
+    for name, d in cfg.get('devices', {}).items():
+        for ip in d.get('ips', []):
+            kind_by_ip[ip] = d['kind']
+        for h in d.get('hosts', [name]):
+            kind_by_host[h] = d['kind']
+    lans = []
+    import ipaddress
+    for n in cfg.get('networks', {}).values():
+        if n.get('lan'):
+            lans.append(ipaddress.ip_network(n['lan']))
+    return cfg, kind_by_ip, kind_by_host, lans
+
+
+def classify_row(r, kind_by_ip, kind_by_host, lans, daemon_vias):
+    """One source-log row -> DESK, MOBILE or None (no device signal)."""
+    import ipaddress
+    if r.get('via') in daemon_vias or r.get('ok') is False:
+        return None
+    if r.get('source') in ('1p-app', 'watch'):
+        return MOBILE
+    # Rows since 2026-11-02 carry `tty`; a non-interactive write (cron, a
+    # backgrounded daemon) says nothing about where JM was. Prompts are typed.
+    if 'tty' in r and not r['tty'] and r.get('metric') != 'prompt':
+        return None
+    ssh = r.get('ssh_from')
+    if ssh:
+        k = kind_by_ip.get(ssh)
+        if k == 'mobile':
+            return MOBILE
+        if k == 'desk':
+            return DESK
+        try:
+            if any(ipaddress.ip_address(ssh) in n for n in lans):
+                return DESK   # client on the home LAN = on highgarden
+        except ValueError:
+            pass
+        return None           # laptop over Tailscale: may be away
+    k = kind_by_host.get(r.get('host'))
+    if k == 'desk':
+        return DESK
+    if k == 'laptop':
+        return DESK if r.get('net') == 'highgarden' else None
+    if k == 'mobile':
+        return MOBILE
+    return None
+
+
+def add_device(dev, start, end):
+    cfg, by_ip, by_host, lans = _devices()
+    daemons = set(cfg.get('daemon_vias', []))
+    months = {f'{d.year}-{d.month:02d}' for d in (start, end)}
+    import glob
+    for path in glob.glob(f'{SOURCE_LOG}/*.jsonl'):
+        if not any(path.endswith(f'{m}.jsonl') for m in months):
+            continue
+        for line in open(path, encoding='utf-8'):
+            try:
+                r = json.loads(line)
+                loc = dt.datetime.fromisoformat(r['ts']).astimezone(PT)
+            except Exception:
+                continue
+            day, b = loc.date(), block_of(loc.hour)
+            if b is None or day < start or day > end:
+                continue
+            g = classify_row(r, by_ip, by_host, lans, daemons)
+            if g:
+                dev[day][b].add(g)
+    # Phone-app captures: YYYY-MM-DD-HHMMSS-<id>-<device>.md, inbox or archive.
+    import glob
+    for p in glob.glob(f'{Z_IBX}/phone/*.md') + glob.glob(f'{Z_IBX}/archive/*/phone/*.md'):
+        m = re.match(r'(\d{4}-\d{2}-\d{2})-(\d{2})\d{4}-', os.path.basename(p))
+        if not m:
+            continue
+        day, b = dt.date.fromisoformat(m.group(1)), block_of(int(m.group(2)))
+        if b and start <= day <= end:
+            dev[day][b].add(MOBILE)
+
+
+def device_glyph(s):
+    return ''.join(g for g in (DESK, MOBILE) if g in s)
+
+
 # ---------- render ----------
 DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 KEY = [('☀️','prayer (salah)'),('📧','inbox processed'),('🎯','goal set for block (-1g)'),
        ('⏱️','time logged'),('✓','task completed (Todoist)')]
+DEV_KEY = [(DESK,'desk: terminal/Claude on ix, or laptop on highgarden'),
+           (MOBILE,'mobile: phone apps, phone captures, ssh from a phone')]
 
 def iso_week(d):
     y,w,_ = d.isocalendar()
     return f'{y}-W{w:02d}'
 
-def render(grid, start, end):
+def render(grid, start, end, dev=None):
+    dev = dev or {}
     L = []
     sr = f'{start.strftime("%b %-d")} - {end.strftime("%b %-d, %Y")}'
     L.append(f'## -1₦ Block Ritual Completion ({sr})')
@@ -196,7 +297,7 @@ def render(grid, start, end):
     L.append('')
     L.append('| Symbol | Meaning |')
     L.append('|--------|---------|')
-    for s,m in KEY:
+    for s,m in KEY + DEV_KEY:
         L.append(f'| {s} | {m} |')
     L.append('')
     L.append('| Date | Day | '+' | '.join(BRANCHES)+' |')
@@ -206,7 +307,9 @@ def render(grid, start, end):
         cells = []
         for b in BRANCHES:
             ics = grid.get(d, {}).get(b, set())
-            cells.append(''.join(i for i in ICON_ORDER if i in ics))
+            cell = ''.join(i for i in ICON_ORDER if i in ics)
+            g = device_glyph(dev.get(d, {}).get(b, set()))
+            cells.append(f'{cell} · {g}' if cell and g else (cell or g))
         L.append(f'| {d.month}/{d.day} | {DOW[d.weekday()]} | '+' | '.join(cells)+' |')
         d += dt.timedelta(days=1)
     L.append('')
@@ -245,6 +348,11 @@ def render(grid, start, end):
         cells = [(f'{r:.0f}%' if r else '—') for r in rates]
         avg = sum(rates)/len(rates) if rates else 0
         L.append(f'| {sym} {name.split(" (")[0]} | '+' | '.join(cells)+f' | {avg:.0f}% |')
+    for sym, name in DEV_KEY:
+        rates = [sum(1 for d in dev if sym in dev[d].get(b, set()))/ndays*100 if ndays else 0
+                 for b in BRANCHES]
+        cells = [(f'{r:.0f}%' if r else '—') for r in rates]
+        L.append(f'| {sym} {name.split(":")[0]} | '+' | '.join(cells)+f' | {sum(rates)/len(rates):.0f}% |')
     L.append('')
     L.append(f'Generated {dt.date.today().strftime("%Y.%m.%d")}.')
     return '\n'.join(L)
@@ -272,13 +380,15 @@ def main():
         start = end - dt.timedelta(days=6)
     grid = defaultdict(lambda: defaultdict(set))
     errs = []
-    for fn in (add_toggl, add_goals, add_todoist):
+    dev = defaultdict(lambda: defaultdict(set))
+    for fn, g in ((add_toggl, grid), (add_goals, grid), (add_todoist, grid), (add_device, dev)):
         try:
-            fn(grid, start, end)
+            fn(g, start, end)
         except Exception as e:
             errs.append(f'{fn.__name__}: {e}')
     prune_future(grid)
-    out = render(grid, start, end)
+    prune_future(dev)
+    out = render(grid, start, end, dev)
     if errs:
         out += '\n\n<!-- source warnings: ' + '; '.join(errs) + ' -->'
     print(out)

@@ -1,0 +1,14 @@
+{
+  "_comment": "Desk vs mobile attribution (2026-11-02). lib/jmsource.py tags each write with `net` (router MAC match) and `ssh_from`; the /1-1n heatmap classifies blocks from these. Laptop counts as desk only on highgarden (JM).",
+  "networks": {
+    "highgarden": {"gateway_macs": ["38:94:ed:4b:8c:d5"], "lan": "192.168.1.0/24"}
+  },
+  "devices": {
+    "ix":               {"kind": "desk",   "hosts": ["ix"],               "ips": ["100.114.46.109"]},
+    "straylight":       {"kind": "laptop", "hosts": ["straylight-refit", "straylight"], "ips": ["100.71.83.90", "192.168.1.75"]},
+    "imago-c":          {"kind": "mobile", "ips": ["100.72.38.25"]},
+    "imago":            {"kind": "mobile", "ips": ["100.68.22.5"]},
+    "fuchikoma":        {"kind": "mobile", "ips": ["100.110.77.24"]}
+  },
+  "daemon_vias": ["build-order-daemon", "vault-autopush-alert", "lease_signerd"]
+}

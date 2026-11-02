@@ -109,6 +109,56 @@ def plan_daily(lines: list[str]) -> list[str]:
     return goals
 
 
+_TRAILING_POINTS_RE = re.compile(r"(\s*(\{\d+\}|\[\d+\]))+\s*$")
+
+
+def _goal_key(goal: str) -> str:
+    """Comparison key: no trailing points, no @code, case/space-folded."""
+    g = _TRAILING_POINTS_RE.sub("", nb._GOAL_AT_RE.sub(" ", goal))
+    return " ".join(g.lower().split())
+
+
+def zerog_prefill(text: str, block: str) -> str | None:
+    """Pure: the dim line-1 prefill for the -1g form (2026-11-02: "#1 integrated
+    into -1g such that it's a prefill but when I put any text in it disappears").
+    First unchecked flush-left `- [ ]` under `## 0₲` (above `###` subsections)
+    not already a goal of `block`. Trailing `{N}`/`[N]` are dropped: a 0g bonus
+    like {40} would blow the ≤18/block -1g budget, and a leftover lone [N]
+    would turn the goal into a plain todo; the block default {10} applies."""
+    lines = text.split("\n")
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith(nb.DAILY_SECTION))
+    except StopIteration:
+        return None
+    daily = []
+    for l in lines[start + 1:]:
+        if l.startswith("#"):
+            break
+        m = re.match(r"^- \[ \]\s*(.+)$", l)
+        if m:
+            daily.append(m.group(1).strip())
+    present = set()
+    for i, l in enumerate(lines):
+        if l.startswith("## -1₲"):
+            for h in range(i + 1, len(lines)):
+                if lines[h].startswith("## "):
+                    break
+                if lines[h].startswith("- ") and nb._block_line_name(lines[h]) == block:
+                    for c in lines[h + 1:]:
+                        if not c.startswith("    "):
+                            break
+                        m = re.match(r"^    - \[[ xX]\]\s*(.*)$", c)
+                        if m and m.group(1).strip():
+                            present.add(_goal_key(m.group(1)))
+                    break
+            break
+    for g in daily:
+        cand = _TRAILING_POINTS_RE.sub("", g).strip()
+        if cand and _goal_key(cand) not in present:
+            return cand
+    return None
+
+
 RECOVERY_DIR = Path.home() / ".cache" / "1g-form-recovery"
 
 
@@ -309,7 +359,29 @@ def run_form(block: str, daily: bool = False) -> list[str] | None:
     from prompt_toolkit.styles import Style
     from prompt_toolkit.widgets import Frame, TextArea
 
+    from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
+    from prompt_toolkit.application import get_app
+    from prompt_toolkit.filters import Condition
+
     areas = [TextArea(multiline=False, style="class:input", height=1) for _ in FIELDS]
+    # Line-1 prefill: the top open 0g goal as a dim ghost suggestion. Typing or
+    # pasting replaces it natively; Backspace on the empty line dismisses it;
+    # left alone it is submitted as goal 1.
+    prefill = None
+    if not daily:
+        try:
+            prefill = zerog_prefill(nb.BUILD_ORDER.read_text(encoding="utf-8"), block)
+        except Exception:  # noqa: BLE001 - a missing prefill must never block the form
+            prefill = None
+    ghost = {"on": bool(prefill)}
+    if prefill:
+        class _Ghost(AutoSuggest):
+            def get_suggestion(self, buffer, document):
+                return Suggestion(prefill) if ghost["on"] and not document.text else None
+        buf0 = areas[0].buffer
+        buf0.auto_suggest = _Ghost()
+        buf0.suggestion = Suggestion(prefill)
+        buf0.on_text_changed += lambda _b: ghost.update(on=False) if _b.text else None
     rows = [VSplit([Window(FormattedTextControl(f" {lbl:<8}"), width=10, style="class:label"), a])
             for lbl, a in zip(FIELDS, areas)]
     hint = Window(FormattedTextControl(
@@ -350,14 +422,24 @@ def run_form(block: str, daily: bool = False) -> list[str] | None:
     def _(e):
         e.app.exit(result=None)
 
+    @kb.add("backspace", filter=Condition(
+        lambda: ghost["on"] and not areas[0].text
+        and get_app().layout.current_control is areas[0].control))
+    def _(e):
+        ghost["on"] = False
+        areas[0].buffer.suggestion = None
+
     style = Style([("label", "fg:#7c7c7c"), ("input", "bg:#1b1b1b fg:#cfcfcf"),
-                   ("status", "bg:#111111 fg:#00e676"), ("frame.border", "fg:#333333")])
+                   ("status", "bg:#111111 fg:#00e676"), ("auto-suggestion", "fg:#5a5a5a italic"), ("frame.border", "fg:#333333")])
     app = Application(layout=Layout(root, focused_element=areas[0]), key_bindings=kb,
                       full_screen=True, style=style, mouse_support=True)
     app.timeoutlen = 0.05   # lone Esc fires after 50ms instead of the 1s chord wait
     if app.run() != "submit":
         return None
-    return [a.text.strip() for a in areas]
+    out = [a.text.strip() for a in areas]
+    if ghost["on"] and not out[0]:
+        out[0] = "- " + prefill   # bullet form: parse_goals_text won't split on its commas
+    return out
 
 
 def main() -> int:

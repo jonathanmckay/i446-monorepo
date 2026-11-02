@@ -101,3 +101,49 @@ def test_toggl_create_and_start_record_entry_ids(logdir, monkeypatch):
     toggl_api.create_entry("x", "2026-10-05T10:00:00Z", "2026-10-05T10:30:00Z", 1800)
     toggl_api.start_timer("y")
     assert [(r["metric"], r["ext_id"]) for r in jmsource.load()] == [("time", "111"), ("time", "222")]
+
+
+# --- net / ssh_from / tty context (2026-11-02, desk vs mobile) ---
+
+def _fake_sh(route, arp="? (192.168.1.1) at 38:94:ed:4b:8c:d5 on en0", router=""):
+    def sh(*cmd):
+        return {"route": route, "arp": arp, "ipconfig": router}[cmd[0]]
+    return sh
+
+
+def test_current_net_matches_router_mac(monkeypatch):
+    import jmsource
+    monkeypatch.setattr(jmsource, "_net_cache", {})
+    monkeypatch.setattr(jmsource, "_sh", _fake_sh("gateway: 192.168.1.1\ninterface: en0\n"))
+    assert jmsource.current_net() == "highgarden"
+
+
+def test_current_net_unknown_router_is_other_and_arp_zero_padding(monkeypatch):
+    import jmsource
+    monkeypatch.setattr(jmsource, "_net_cache", {})
+    monkeypatch.setattr(jmsource, "_sh", _fake_sh("gateway: 10.0.0.1\ninterface: en0\n",
+                                                  arp="? (10.0.0.1) at a:b:c:d:e:f on en0"))
+    assert jmsource.current_net() == "other"
+    monkeypatch.setattr(jmsource, "_net_cache", {})
+    monkeypatch.setattr(jmsource, "_sh", _fake_sh("gateway: 192.168.1.1\ninterface: en0\n",
+                                                  arp="? (192.168.1.1) at 38:94:ed:4b:8c:d5 on en0"))
+    assert jmsource._norm_mac("38:94:ed:4b:c:5") == "38:94:ed:4b:0c:05"
+
+
+def test_current_net_vpn_falls_back_to_physical_router(monkeypatch):
+    import jmsource
+    monkeypatch.setattr(jmsource, "_net_cache", {})
+    monkeypatch.setattr(jmsource, "_sh", _fake_sh("gateway: link#22\ninterface: utun4\n",
+                                                  router="192.168.1.1\n"))
+    assert jmsource.current_net() == "highgarden"
+
+
+def test_current_net_failure_is_none_and_context_omits_it(monkeypatch):
+    import jmsource
+    monkeypatch.setattr(jmsource, "_net_cache", {})
+    def boom(*a):
+        raise OSError("no route")
+    monkeypatch.setattr(jmsource, "_sh", boom)
+    monkeypatch.setenv("SSH_CONNECTION", "100.72.38.25 5555 192.168.1.5 22")
+    ctx = jmsource._context()
+    assert "net" not in ctx and ctx["ssh_from"] == "100.72.38.25"
