@@ -458,3 +458,27 @@ def test_habit_dated_copy_past_next_occurrence_still_created(df, monkeypatch):
     out = df.handle_recurring(task, "2026-10-23", 2)
     assert created[0] == ("xk20 10.22 (20) [15]", "2026-10-23")
     assert out["absorbed"] is False
+
+
+def test_xk87_only_recurring_copy_not_a_twin(df, monkeypatch):
+    """6hvVF42cGQ6G8Jqc / 6hvV7wVCF3fQ3qcw (2026-11-01): a daily xk87 task
+    deferred one day left an exact twin of the parent's next card."""
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 11, 1)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, *a, **k: (created.append(content),
+                                                  {"id": "ph1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "kids bath (20) [10]", "labels": ["xk87"],
+            "due": {"is_recurring": True, "date": "2026-11-01",
+                    "string": "every day"}}
+    out = df.handle_recurring(task, "2026-11-02", 2)
+    # Target == next occurrence: the parent's own 11-02 card absorbs the
+    # defer, so no copy (no twin). created[0] is the posthoc record only.
+    assert out["absorbed"] is True
+    assert task["content"] not in created
