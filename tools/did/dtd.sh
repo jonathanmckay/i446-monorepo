@@ -3902,6 +3902,13 @@ TALLY_PID=$!
       # JM's own timer running: 1s cadence so the top row's glyph moves (2026-10-16).
       (( _acw >= 2 )) && [[ -s "$DTD_TIMER" ]] && break
     done
+    # Ix sessions claim into Ix's store, which nothing sends here (2026-11-02:
+    # /1-1n claimed on Ix, sat at #20 in Straylight's dtd). Pull it into
+    # remote/ix/ every ~2s; the mtime watch above picks up the change. No-op on Ix.
+    if (( EPOCHSECONDS - ${last_pull:-0} >= 2 )); then
+      last_pull=$EPOCHSECONDS
+      ( "$HOME/i446-monorepo/scripts/agent-claims-pull.sh" </dev/null >/dev/null 2>&1 & )
+    fi
     _dtd_tz_refresh
     watch_today="$(date +%Y-%m-%d)"
     # Day rollover while dtd sits open: reset the per-day overlays (mirrors the

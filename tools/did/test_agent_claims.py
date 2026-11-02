@@ -578,6 +578,51 @@ def test_push_mirrors_into_remote_host_dir_never_ix_root(tmp_path):
     assert "--exclude=/remote/" in args
 
 
+# 2026-11-02: /1-1n claimed its card on Ix but it sat at #20 in Straylight's
+# dtd: Ix's store reached no other host. Other hosts now pull it into remote/ix/.
+PULL = HERE.parent.parent / "scripts" / "agent-claims-pull.sh"
+
+
+def _pull_env(tmp_path, host):
+    home = tmp_path / "home"
+    (home / "vault/z_ibx/agent-claims").mkdir(parents=True)
+    (home / ".claude").mkdir()
+    (home / ".claude/.host-name").write_text(host)
+    src = tmp_path / "ix-store"
+    ac.claim({"id": "T9", "content": "1 -1n (10) [15]"}, "IX", root=src, now=1000)
+    ac.claim(TASK, "ST", root=src / "remote" / "straylight-refit", now=1000)
+    (src / "by-session").mkdir(exist_ok=True)
+    (src / "panes.json").write_text('{"IX": 9}')
+    env = {**os.environ, "HOME": str(home), "TMPDIR": str(tmp_path),
+           "AGENT_CLAIMS_PULL_SRC": f"{src}/"}
+    return home / "vault/z_ibx/agent-claims", env
+
+
+def test_pull_brings_ix_claims_into_remote_ix(tmp_path):
+    store, env = _pull_env(tmp_path, "straylight")
+    subprocess.run(["zsh", str(PULL)], env=env, check=True, timeout=10)
+    mirror = store / "remote" / "ix"
+    assert (mirror / "T9.json").exists() and (mirror / "T9.state").exists()
+    # Not this host's own pushed copy, Ix's pane map or its hook index.
+    assert not (mirror / "remote").exists()
+    assert not (mirror / "panes.json").exists()
+    assert not (mirror / "by-session").exists()
+    got = ac.load(store, now=1010)
+    assert got["T9"]["working"] and set(got) == {"T9"}
+
+
+def test_pull_is_noop_on_ix(tmp_path):
+    store, env = _pull_env(tmp_path, "ix")
+    subprocess.run(["zsh", str(PULL)], env=env, check=True, timeout=10)
+    assert not (store / "remote").exists()
+
+
+def test_dtd_watcher_runs_the_pull():
+    src = (HERE / "dtd.sh").read_text()
+    watcher = src[src.index('while [[ -f "$DTD_PORT" ]]; do'):]
+    assert "scripts/agent-claims-pull.sh" in watcher[:watcher.index("_dtd_tz_refresh")]
+
+
 def test_load_merges_remote_host_dirs(tmp_path):
     ac.claim(TASK, "IX", root=tmp_path, now=1000)
     remote = tmp_path / "remote" / "straylight-refit"
