@@ -190,3 +190,40 @@ def test_duplicates_check_reviews_name_clashes_without_deleting(tmp_path, monkey
     monkeypatch.setattr(vh, "APPLY", True)
     f = vh.check_duplicates()
     assert c.exists() and f.review and f.status == "warn" and "x (1).pdf vs x.pdf" in f.detail[0]
+
+
+def test_time_machine_falls_back_to_prefs_plist_without_fda():
+    import plistlib, datetime as _dt
+    vh = _load()
+    recent = _dt.datetime.utcnow() - _dt.timedelta(hours=3)
+    xml = plistlib.dumps({"Destinations": [{"SnapshotDates": [recent - _dt.timedelta(days=5), recent]}]}).decode()
+    def host(c):
+        if "destinationinfo" in c: return "Name : Ix Backup"
+        if "latestbackup" in c: return "tmutil: latestbackup requires Full Disk Access privileges."
+        return xml
+    s, d, r = vh._tm(host)
+    assert s == "ok" and not r and d == ["latest backup 0d ago"]
+    assert vh._tm(lambda c: "garbage" if "defaults" in c else host(c))[0] == "warn"
+
+
+def test_dismissed_alerts_and_neon_days_are_skipped(tmp_path, monkeypatch):
+    import datetime as _dt, json as _j
+    vh = _load()
+    now = _dt.datetime(2026, 11, 1, 12, tzinfo=vh.TZ)
+    alerts = tmp_path / "alerts.jsonl"
+    alerts.write_text("\n".join(_j.dumps(a) for a in [
+        {"ts": "2026-10-30T10:00:00Z", "tool": "t", "reason": "r", "severity": "warning"},
+        {"ts": "2026-10-31T10:00:00Z", "tool": "t", "reason": "r", "severity": "warning"}]))
+    dis = tmp_path / "dismissed.json"
+    dis.write_text(_j.dumps({"alerts": [{"tool": "t", "reason": "r", "through": "2026-10-30T12:00:00+00:00", "why": "x"}],
+                             "neon-rules": [{"column": "D", "date": "2026-10-27", "why": "x"}]}))
+    monkeypatch.setattr(vh, "ALERTS", alerts); monkeypatch.setattr(vh, "DISMISSED", dis)
+    f = vh.check_alerts(now)
+    assert f.summary == "1 alert(s) in 7 days"          # the later one still surfaces
+    rd = tmp_path / "rd"; rd.mkdir()
+    (rd / "2026-10-27.json").write_text(_j.dumps({"summary": {"mismatch": ["D"]}}))
+    (rd / "2026-10-31.json").write_text(_j.dumps({"summary": {"mismatch": []}}))
+    monkeypatch.setattr(vh, "NEON_DIFF_DIR", rd)
+    assert vh.check_neon_rules(now).status == "ok"
+    (rd / "2026-10-30.json").write_text(_j.dumps({"summary": {"mismatch": ["D"]}}))
+    assert vh.check_neon_rules(now).status == "warn"   # a new D day is not dismissed

@@ -77,6 +77,16 @@ def test_candidates_substring_and_ambiguity():
     assert ac.candidates("T2", tasks, df)[0]["id"] == "T2"                        # by id
 
 
+def test_candidates_hyphenated_skill_name_matches_spaced_weekly_card():
+    """2026-11-01: `/d 1-i446` claimed `1-i446 #14: ...` (substring) instead
+    of the weekly `1 i446` card, so dtd never showed the review as claimed."""
+    df = ac._did()
+    tasks = [{"id": "W", "content": "1 i446 (20) [15]"},
+             {"id": "R14", "content": "1-i446 #14: neon-rules mismatch P/S/X (1 day each) (10) [0]"}]
+    assert [t["id"] for t in ac.candidates("1-i446", tasks, df)] == ["W"]
+    assert [t["id"] for t in ac.candidates("1-i446 #14", tasks, df)] == ["R14"]
+
+
 def _hook(home, state, sid):
     env = dict(os.environ, HOME=str(home))
     env.pop("CLAUDE_CODE_SESSION_ID", None)

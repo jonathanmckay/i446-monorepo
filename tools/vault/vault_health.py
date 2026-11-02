@@ -616,15 +616,33 @@ def check_onedrive_neon(now: dt.datetime) -> Finding:
     return Finding("onedrive-neon", status, "in sync" if status == "ok" else "parity gap", detail, review=review)
 
 
+def _tm_plist_latest(xml: str) -> dt.datetime | None:
+    """Newest SnapshotDates entry across destinations in a `defaults export` of
+    com.apple.TimeMachine, or None if unparseable."""
+    import plistlib
+    try:
+        d = plistlib.loads(xml.encode())
+    except Exception:  # noqa: BLE001
+        return None
+    dates = [s for x in d.get("Destinations", []) for s in x.get("SnapshotDates", []) if isinstance(s, dt.datetime)]
+    return max(dates).replace(tzinfo=dt.timezone.utc).astimezone(TZ) if dates else None
+
+
 def _tm(host_cmd) -> tuple[str, list[str], bool]:
     dest = host_cmd("tmutil destinationinfo 2>&1 | head -3")
     if "No destinations configured" in dest:
         return "fail", ["no Time Machine destination configured"], True
     latest = host_cmd("tmutil latestbackup 2>&1 | tail -1").strip()
     m = re.search(r"(\d{4}-\d{2}-\d{2})-(\d{6})", latest)
-    if not m:
-        return "warn", [f"latest backup unreadable: {latest[:80]}"], True
-    when = dt.datetime.strptime(m.group(1) + m.group(2), "%Y-%m-%d%H%M%S").replace(tzinfo=TZ)
+    if m:
+        when = dt.datetime.strptime(m.group(1) + m.group(2), "%Y-%m-%d%H%M%S").replace(tzinfo=TZ)
+    else:
+        # tmutil latestbackup needs Full Disk Access, which cron/ssh lack and
+        # granting it has been unreliable (2026-11-01). Time Machine's prefs
+        # plist is world-readable and records each destination's SnapshotDates (UTC).
+        when = _tm_plist_latest(host_cmd("defaults export /Library/Preferences/com.apple.TimeMachine - 2>/dev/null"))
+        if when is None:
+            return "warn", [f"latest backup unreadable: {latest[:80]}"], True
     days = (dt.datetime.now(TZ) - when).days
     return ("warn" if days > 2 else "ok"), [f"latest backup {days}d ago"], days > 2
 
@@ -723,10 +741,24 @@ def check_skill_claims(cards: list[str] | None = None) -> Finding:
                     "or decline in SKILL_NO_CLAIM" for s, c in pairs], review=True)
 
 
+# /1-i446 "dismiss" answers (2026-11-01). Alerts: {"tool","reason","through"}
+# silences that tool/reason at or before `through` (later ones still surface).
+# Neon: {"column","date"} silences one column on one diff day.
+DISMISSED = VAULT / "z_meta" / "1-i446-dismissed.json"
+
+
+def _dismissed() -> dict:
+    try:
+        return json.loads(DISMISSED.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def check_alerts(now: dt.datetime) -> Finding:
     if not ALERTS.exists():
         return Finding("alerts", "ok", "no alerts sink")
     cutoff = now - dt.timedelta(days=7)
+    acks = _dismissed().get("alerts", [])
     groups: dict[tuple, dict] = {}
     for line in ALERTS.read_text().splitlines()[-2000:]:
         try:
@@ -735,6 +767,9 @@ def check_alerts(now: dt.datetime) -> Finding:
         except Exception:  # noqa: BLE001
             continue
         if ts < cutoff:
+            continue
+        if any(d.get("tool") == a.get("tool") and d.get("reason") == a.get("reason")
+               and ts <= dt.datetime.fromisoformat(d["through"]).astimezone(TZ) for d in acks):
             continue
         k = (a.get("tool", "?"), a.get("reason", "?"), a.get("severity", "?"))
         g = groups.setdefault(k, {"n": 0, "last": ts, "detail": ""})
@@ -768,6 +803,7 @@ def check_neon_rules(now: dt.datetime) -> Finding:
     if age > 2:
         status, review = "fail", True
         detail.append(f"newest diff is for {newest} ({age} days old) — the Ix 04:05 job is not running")
+    neon_ok = _dismissed().get("neon-rules", [])
     mism: dict[str, int] = {}
     unknown: dict[str, int] = {}
     clean = 0
@@ -777,11 +813,12 @@ def check_neon_rules(now: dt.datetime) -> Finding:
         except Exception:  # noqa: BLE001
             continue
         s = d.get("summary", {})
-        for c in s.get("mismatch", []):
+        s_mism = [c for c in s.get("mismatch", []) if not any(o.get("column") == c and o.get("date") == f.stem for o in neon_ok)]
+        for c in s_mism:
             mism[c] = mism.get(c, 0) + 1
         for u in s.get("unknown_inputs", []):
             unknown[u] = unknown.get(u, 0) + 1
-        if not s.get("mismatch") and not s.get("partial"):
+        if not s_mism and not s.get("partial"):
             clean += 1
     n = len(files[-7:])
     if mism:
