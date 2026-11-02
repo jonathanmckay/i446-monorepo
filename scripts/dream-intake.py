@@ -66,8 +66,15 @@ def load_credentials():
 
     # Gmail OAuth
     eml_dir = Path.home() / ".config" / "eml"
-    _CREDS["gmail_tokens_path"] = eml_dir / "tokens-gmail.json"
-    _CREDS["gmail_secrets_path"] = eml_dir / "gcp-oauth-gmail.keys.json"
+    # Same account table as tools/ibx/ibx.py. tokens.json is mckay@m5c7.com
+    # (m5x2/m5c7 aliases land there); tokens-gmail.json is the personal
+    # jonathan.b.mckay@gmail.com.
+    _CREDS["gmail_accounts"] = [
+        {"name": "m5c7", "tokens": eml_dir / "tokens.json",
+         "secrets": eml_dir / "gcp-oauth.keys.json"},
+        {"name": "jbm", "tokens": eml_dir / "tokens-gmail.json",
+         "secrets": eml_dir / "gcp-oauth-gmail.keys.json"},
+    ]
 
     # Google Calendar OAuth
     gcal_dir = Path.home() / ".config" / "google-calendar-mcp"
@@ -467,36 +474,34 @@ def _appfolio_work_orders():
 # Source 6: gmail_inbox
 # ---------------------------------------------------------------------------
 
-@source("gmail_inbox", "Unread Gmail messages with age flags")
-def _gmail_inbox():
-    creds = _build_google_creds(
-        _CREDS["gmail_tokens_path"],
-        _CREDS["gmail_secrets_path"],
-        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-    )
-    service = _google_service("gmail", "v1", creds)
+# Bug (v176): the source read only tokens-gmail.json, which is the personal
+# jonathan.b.mckay@gmail.com, and reported its 2 unread as "Gmail unread" while
+# mckay@m5c7.com (where all m5x2 mail lands) had 19 non-promo unread. Now
+# every account in _CREDS["gmail_accounts"]; Promotions excluded; counts come
+# from paginated ids, not the 50-message metadata cap.
+GMAIL_QUERY = "is:unread in:inbox -category:promotions"
+GMAIL_METADATA_CAP = 30  # per account
 
-    resp = service.users().messages().list(
-        userId="me", q="is:unread in:inbox", maxResults=50
-    ).execute()
 
-    messages = resp.get("messages", [])
-    if not messages:
-        return {"unread_count": 0, "messages": []}
-
+def _gmail_account_unread(service, query=GMAIL_QUERY, cap=GMAIL_METADATA_CAP):
+    ids, page = [], None
+    while True:
+        resp = service.users().messages().list(
+            userId="me", q=query, maxResults=100, pageToken=page).execute()
+        ids += [m["id"] for m in resp.get("messages", [])]
+        page = resp.get("nextPageToken")
+        if not page or len(ids) >= 500:
+            break
     now = time.time()
     results = []
-    # Batch fetch metadata
-    for msg_stub in messages[:50]:
+    for mid in ids[:cap]:
         msg = service.users().messages().get(
-            userId="me", id=msg_stub["id"], format="metadata",
+            userId="me", id=mid, format="metadata",
             metadataHeaders=["From", "Subject", "Date"],
         ).execute()
-
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         internal_ts = int(msg.get("internalDate", "0")) / 1000
         age_hours = (now - internal_ts) / 3600 if internal_ts else 0
-
         results.append({
             "id": msg["id"],
             "from": headers.get("From", ""),
@@ -505,14 +510,38 @@ def _gmail_inbox():
             "age_hours": round(age_hours, 1),
             "stale": age_hours > 24,
         })
+    return len(ids), results
 
-    stale_count = sum(1 for r in results if r["stale"])
 
-    return {
-        "unread_count": len(results),
-        "stale_count": stale_count,
-        "messages": results,
+@source("gmail_inbox", "Unread non-promo Gmail, every account (m5c7 + jbm), with age flags")
+def _gmail_inbox():
+    by_account, messages, errors = {}, [], {}
+    for acct in _CREDS.get("gmail_accounts", []):
+        try:
+            creds = _build_google_creds(acct["tokens"], acct["secrets"])
+            service = _google_service("gmail", "v1", creds)
+            count, msgs = _gmail_account_unread(service)
+        except Exception as e:
+            errors[acct["name"]] = f"{type(e).__name__}: {e}"
+            continue
+        by_account[acct["name"]] = {
+            "unread_count": count,
+            "stale_count": sum(1 for m in msgs if m["stale"]),
+            "listed": len(msgs),
+        }
+        messages += [{**m, "account": acct["name"]} for m in msgs]
+    if not by_account:
+        raise RuntimeError(f"all Gmail accounts failed: {errors}")
+    out = {
+        "query": GMAIL_QUERY,
+        "unread_count": sum(a["unread_count"] for a in by_account.values()),
+        "stale_count": sum(1 for m in messages if m["stale"]),
+        "by_account": by_account,
+        "messages": messages,
     }
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 # ---------------------------------------------------------------------------

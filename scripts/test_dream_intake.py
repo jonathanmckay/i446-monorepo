@@ -90,3 +90,81 @@ def test_outlook_calendar_reads_cache(cache):
 def test_outlook_calendar_without_today_file_is_stale(cache):
     (cache / "outlook-2026-11-01.json").write_text("[]")
     assert di.run_sources(["outlook_calendar"])["outlook_calendar"]["status"] == "stale"
+
+
+# ── gmail_inbox: every account, Promotions excluded, uncapped count ────────
+
+class _Req:
+    def __init__(self, v):
+        self.v = v
+
+    def execute(self):
+        return self.v
+
+
+class _FakeGmail:
+    """Minimal users().messages().list/get chain."""
+
+    def __init__(self, n, page=100):
+        self.n, self.page, self.queries = n, page, []
+
+    def users(self):
+        return self
+
+    def messages(self):
+        return self
+
+    def list(self, userId, q, maxResults, pageToken=None):
+        self.queries.append(q)
+        start = int(pageToken or 0)
+        ids = [{"id": f"m{i}"} for i in range(start, min(self.n, start + self.page))]
+        nxt = start + self.page
+        return _Req({"messages": ids, **({"nextPageToken": str(nxt)} if nxt < self.n else {})})
+
+    def get(self, userId, id, format, metadataHeaders):
+        return _Req({"id": id, "internalDate": str(int(time.time() * 1000)),
+                     "payload": {"headers": [{"name": "Subject", "value": id}]}})
+
+
+def test_gmail_inbox_counts_every_account(monkeypatch):
+    """Regression (v176): intake said 'Gmail unread 2' (the personal
+    jonathan.b.mckay@gmail.com) while mckay@m5c7.com had 19 non-promo
+    unread. Both accounts must be counted, labelled, and summed."""
+    fakes = {"m5c7": _FakeGmail(19), "jbm": _FakeGmail(2)}
+    monkeypatch.setitem(di._CREDS, "gmail_accounts", [
+        {"name": "m5c7", "tokens": "m5c7", "secrets": "x"},
+        {"name": "jbm", "tokens": "jbm", "secrets": "x"}])
+    monkeypatch.setattr(di, "_build_google_creds", lambda t, s, **k: t)
+    monkeypatch.setattr(di, "_google_service", lambda svc, v, creds: fakes[creds])
+    d = di._gmail_inbox()
+    assert d["unread_count"] == 21
+    assert d["by_account"]["m5c7"]["unread_count"] == 19
+    assert {m["account"] for m in d["messages"]} == {"m5c7", "jbm"}
+    assert all("-category:promotions" in q for f in fakes.values() for q in f.queries)
+
+
+def test_gmail_count_not_capped_by_metadata_fetch():
+    count, msgs = di._gmail_account_unread(_FakeGmail(230))
+    assert count == 230 and len(msgs) == di.GMAIL_METADATA_CAP
+
+
+def test_gmail_one_account_failing_keeps_the_other(monkeypatch):
+    monkeypatch.setitem(di._CREDS, "gmail_accounts", [
+        {"name": "m5c7", "tokens": "m5c7", "secrets": "x"},
+        {"name": "jbm", "tokens": "jbm", "secrets": "x"}])
+
+    def creds(t, s, **k):
+        if t == "jbm":
+            raise ValueError("revoked")
+        return t
+    monkeypatch.setattr(di, "_build_google_creds", creds)
+    monkeypatch.setattr(di, "_google_service", lambda *a: _FakeGmail(3))
+    d = di._gmail_inbox()
+    assert d["unread_count"] == 3 and "jbm" in d["errors"]
+
+
+def test_load_credentials_lists_m5c7_first():
+    di.load_credentials()
+    accts = di._CREDS["gmail_accounts"]
+    assert [a["name"] for a in accts] == ["m5c7", "jbm"]
+    assert accts[0]["tokens"].name == "tokens.json"
