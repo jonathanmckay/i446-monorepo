@@ -2322,6 +2322,31 @@ def resolve_block_credit(block: str, cur_block: str,
     return ("credit", neon_cols.col("0分", block))
 
 
+_RESIDUAL_RE = re.compile(r"\bD\$?\d+|SUM\(", re.IGNORECASE)
+_past_block_formulas: dict[tuple[str, str], Optional[str]] = {}
+
+
+def resolve_past_block_credit(block: str, target_date: str) -> tuple[str, Optional[str]]:
+    """Block credit on a PAST day's row (JM 2026-11-02). By then
+    build-order-daemon has locked every G:O cell to a literal, so the block's
+    column takes the points directly: ("credit", col). If a missed lock left
+    the cell as the live "=D-SUM(locked)" residual, it already counts them
+    (D rose with the domain write), so appending would double-count:
+    ("residual", why). An unreadable cell is treated the same way."""
+    col = neon_cols.col("0分", block)
+    key = (target_date, col)
+    if key not in _past_block_formulas:
+        try:
+            resp = neon_excel.read("0分", col, date=target_date) or {}
+        except Exception:  # noqa: BLE001
+            resp = {}
+        _past_block_formulas[key] = str(resp.get("formula") or "") if resp.get("ok") else None
+    formula = _past_block_formulas[key]
+    if formula is None or _RESIDUAL_RE.search(formula):
+        return ("residual", f"0分!{col} on {target_date} is still a live formula or unreadable")
+    return ("credit", col)
+
+
 def _idem_key(tag: str, r, target_date: str, col: str) -> Optional[str]:
     """excel-http idempotency key for one 0分 append: a Todoist task credits a
     column at most once per target day per append kind. dtd retries a
@@ -3548,19 +3573,33 @@ def infer_range_blocks(items: list) -> None:
     logged in. Sets block_override to the 地支 block the range ENDED in (JM
     2026-11-01: "if they span a block boundary, mark the points in the block
     that the task ended"; before that, the block holding most of the
-    minutes), for today's items with no typed glyph. Step 5a then credits
-    that block's 0分 G:O cell; a range in the current block is a no-op there
-    ("skip"). Long per-minute ranges are split per block afterwards, see
-    split_results_by_block."""
-    today = _daytime.today()
-    today_md = f"{today.month}/{today.day}"
+    minutes), for today's and past days' items with no typed glyph (JM
+    2026-11-02: a past-day log from janus credits that day's block too).
+    Step 5a then credits that block's 0分 G:O cell; a range in the current
+    block is a no-op there ("skip"). Long per-minute ranges are split per
+    block afterwards, see split_results_by_block."""
     for it in items:
-        if it.block_override or not it.time_range or (it.target_date or today_md) != today_md:
+        if it.block_override or not it.time_range or _is_future_md(it.target_date):
             continue
         segs = range_block_segments(*it.time_range)
         if segs:
             it.block_override = segs[-1][0]
             it.block_inferred = True
+
+
+def _is_future_md(target_date: Optional[str]) -> bool:
+    """`target_date` ("M/D", None = today) is tomorrow's row (the 戌/亥
+    next-day write), where block credit means nothing yet."""
+    tomorrow = _daytime.today() + timedelta(days=1)
+    return target_date == f"{tomorrow.month}/{tomorrow.day}"
+
+
+def _is_past_md(target_date: Optional[str]) -> bool:
+    """`target_date` is a day before today (any M/D that is neither today
+    nor tomorrow; target_date_iso reads it as this year or last)."""
+    today = _daytime.today()
+    return (bool(target_date) and target_date != f"{today.month}/{today.day}"
+            and not _is_future_md(target_date))
 
 
 def range_block_segments(start: str, end: str) -> list[tuple[str, str, str]]:
@@ -3655,15 +3694,14 @@ def split_results_by_block(fast: list) -> list:
     the parent entry trimmed once), own block_override (-> its own G:O
     credit in 5a), its share of the points (pro rata by minutes, remainder
     on the last segment so the total is unchanged). The Todoist task and the
-    posthoc record stay with the first segment only."""
-    today = _daytime.today()
-    today_md = f"{today.month}/{today.day}"
+    posthoc record stay with the first segment only. Past days split the
+    same way (JM 2026-11-02), so a past-day log matches a same-day one."""
     out: list = []
     for r in fast:
         it = r.item
         total = _per_minute_total(r)
         if (total is None or total <= SPLIT_MIN_POINTS
-                or (it.target_date or today_md) != today_md
+                or _is_future_md(it.target_date)
                 or (it.block_override and not it.block_inferred)):
             out.append(r)
             continue
@@ -4192,8 +4230,15 @@ def main():
         block_col_appends = []
         block_col_names = []
         block_col_idem = []
+        past_day = _is_past_md(target_date)
         for name, block, pts, r in block_override_totals:
-            action, detail = resolve_block_credit(block, cur_block, now)
+            if past_day:
+                action, detail = resolve_past_block_credit(block, target_date)
+            else:
+                action, detail = resolve_block_credit(block, cur_block, now)
+            if action == "residual":
+                print(f"⚠ {name}: {detail} — left to that formula", file=sys.stderr)
+                continue
             if action == "skip":
                 continue
             if action == "future":

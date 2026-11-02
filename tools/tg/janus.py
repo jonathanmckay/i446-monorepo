@@ -5865,9 +5865,58 @@ def _points_adj_add(entry_ids, delta: int) -> None:
         pass
 
 
+# Per-entry 分 for any day (JM 2026-11-02: a past-day log's points show on
+# its row): {Toggl id: 分}, written when ⌥↵ / the points prompt / ^G logs a
+# finished row (janus_done.entry_points_by_id maps did-fast's recreated ids).
+# Read before the name-keyed completed-today.json, which only covers today.
+_ENTRY_PTS_DIR = Path.home() / ".local/state/jm"
+
+
+def _entry_pts_path(day: dt.date) -> Path:
+    return _ENTRY_PTS_DIR / f"janus-entry-points-{day.isoformat()}.json"
+
+
+def _entry_pts(day: dt.date) -> dict:
+    try:
+        return json.loads(_entry_pts_path(day).read_text())
+    except Exception:
+        return {}
+
+
+def _entry_pts_add(day: dt.date, pts_by_id: dict, add: bool = False) -> None:
+    """Record {id: 分} for `day`; `add` sums into what is there (a ^G delta)
+    instead of replacing it."""
+    if not pts_by_id:
+        return
+    data = _entry_pts(day)
+    for k, v in pts_by_id.items():
+        data[str(k)] = (int(data.get(str(k), 0)) if add else 0) + int(v)
+    try:
+        _ENTRY_PTS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _entry_pts_path(day).with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(_entry_pts_path(day))
+    except OSError:
+        pass
+
+
+def _recorded_entry_pts(day: dt.date, entry_ids) -> int | None:
+    """Σ recorded 分 over a row's entry ids on `day`, None when none of them
+    has a record."""
+    data = _entry_pts(day)
+    hits = [int(data[str(i)]) for i in (entry_ids or []) if str(i) in data]
+    return sum(hits) if hits else None
+
+
 def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[bool, int]:
-    """(recorded, 分) for a row today, including its ^G adjustments."""
+    """(recorded, 分) for a row on the viewed day: its per-entry record, else
+    (today only) completed-today.json plus its ^G adjustments."""
     if not raw_desc:
+        return False, 0
+    rec = _recorded_entry_pts(view_now().date(), entry_ids)
+    if rec is not None:
+        return True, rec
+    if STATE.day_offset != 0:
         return False, 0
     recorded, pts = _points_recorded_today(raw_desc, dur_min)
     adj = sum(int(v) for k, v in _points_adj_today().items()
@@ -5881,8 +5930,9 @@ def _entry_dur_display(dur_min: int, raw_desc: str | None, entry_ids=None) -> st
     point total is the more useful number at that point, and the raw
     minutes next to it is just noise (user request 2026-08-10) — else the
     ordinary Nm/Nh duration. Past-day views have no per-entry points record
-    (_points_recorded_today is today-only), so they always show minutes."""
-    if STATE.day_offset == 0 and raw_desc:
+    (_points_recorded_today is today-only), so they show points only once
+    janus itself logged the row (_entry_pts, JM 2026-11-02)."""
+    if raw_desc:
         recorded, pts = _row_points(raw_desc, dur_min, entry_ids)
         if recorded:
             return f"[{pts}]"
@@ -5985,15 +6035,8 @@ def _did_summary(stdout_text: str) -> str:
         if r.get("step") == "refused":  # inferred 分 over janus_done.MAX_INFERRED_POINTS
             bits.append(f"✋ {r.get('reason') or name + ': refused'}")
             continue
-        fen = r.get("0fen") or {}
-        pts = fen.get("points", 0) or 0
-        pts += fen.get("bonus", 0) or 0
-        # A multi-domain split's other columns (lib/fen_split.py).
-        pts += sum((x.get("points") or 0) for x in (fen.get("extra") or []))
-        # hcbi-routed domain points (hcbp -> hcbi!Y) carry no "0fen" entry.
-        pts += (r.get("hcbi") or {}).get("pts", 0) or 0
-        if not pts and r.get("variable_1n"):
-            pts = r.get("variable_value") or 0
+        # 0分 + bonus + split columns + hcbi-routed (hcbp -> hcbi!Y) points.
+        pts = janus_done.did_points(r)
         td = r.get("todoist") or {}
         closed = " · todoist ✓" if td.get("closed") else ""
         # A per-block split segment (did-fast split_results_by_block): say
@@ -6049,6 +6092,12 @@ def _is_loggable_on_past_day(part: str) -> bool:
 
 
 def run_did_fast(text: str, flags: tuple[str, ...] | None = None) -> str:
+    return run_did_fast_data(text, flags)[0]
+
+
+def run_did_fast_data(text: str, flags: tuple[str, ...] | None = None) -> tuple[str, dict | None]:
+    """run_did_fast's summary line plus did-fast's parsed JSON (None when it
+    printed none), for callers that record per-entry points."""
     """Like run_tg_fast, but for did-fast.py — used to convert an ALREADY-
     ENDED calendar event into a completed Toggl entry AND grant its points in
     one shot (the tg-fast path only ever starts a running timer, no points).
@@ -6065,13 +6114,17 @@ def run_did_fast(text: str, flags: tuple[str, ...] | None = None) -> str:
             capture_output=True, text=True, timeout=45,
         )
         if proc.stdout and "{" in proc.stdout:
-            return _did_summary(proc.stdout)
+            try:
+                data = json.loads(proc.stdout[proc.stdout.index("{"):])
+            except Exception:
+                data = None
+            return _did_summary(proc.stdout), data
         out = (proc.stdout or proc.stderr or "").strip()
-        return out.splitlines()[-1] if out else "(no output)"
+        return (out.splitlines()[-1] if out else "(no output)"), None
     except subprocess.TimeoutExpired:
-        return "err: did-fast timed out"
+        return "err: did-fast timed out", None
     except Exception as e:
-        return f"err: {e}"
+        return f"err: {e}", None
 
 
 # ─── App ───────────────────────────────────────────────────────────────────
@@ -6664,7 +6717,8 @@ def _on_enter(event):
         # SPLIT_MIN_POINTS), the same as an inferred minutes credit.
         flags = _did_flags() + (("--rate",) if janus_done.is_rate_answer(text) else ())
         if dtgt.get("row_key"):
-            _run_row_did(event.app, cmd, dtgt["row_key"], flags)
+            _run_row_did(event.app, cmd, dtgt["row_key"], flags,
+                         entry_ids=dtgt.get("entry_ids"), day=dtgt["start_dt"].date())
         else:
             _run_done_command(event.app, cmd, flags)
         return
@@ -6676,8 +6730,8 @@ def _on_enter(event):
         if not text:
             flash("points unchanged", 3.0)
             return
-        if pe["past_day"]:
-            # No per-row record on past days: the answer IS the change.
+        if pe.get("delta_mode"):
+            # No per-row record for this past-day row: the answer IS the change.
             try:
                 delta = int(text)
             except ValueError:
@@ -6699,8 +6753,11 @@ def _on_enter(event):
             flash(f"$ did {cmd}")
             event.app.invalidate()
             res = await asyncio.to_thread(run_did_fast, cmd)
-            if not res.startswith("err") and not pe["past_day"]:
-                _points_adj_add(pe["ids"], delta)
+            if not res.startswith("err"):
+                if pe["ids"] and _recorded_entry_pts(pe["start_dt"].date(), pe["ids"]) is not None:
+                    _entry_pts_add(pe["start_dt"].date(), {pe["ids"][0]: delta}, add=True)
+                elif not pe["past_day"]:
+                    _points_adj_add(pe["ids"], delta)
             flash(res, 8.0)
             event.app.invalidate()
             await asyncio.to_thread(fetch_today, True)
@@ -7399,23 +7456,31 @@ def _(event):
         return
     if path == "ask":
         STATE.done_target = {"desc": desc, "start_dt": start, "end_dt": end,
-                             "code": code, "suffix": suffix, "row_key": cmd}
+                             "code": code, "suffix": suffix, "row_key": cmd,
+                             "entry_ids": item.get("entry_ids") or []}
         input_buffer.text = ""
         ask(f'points for "{desc}" ({item["dur_min"]}m)? total (40) or rate (.5/m), ⏎ = 0')
         return
-    _run_row_did(event.app, cmd, cmd)
+    _run_row_did(event.app, cmd, cmd, entry_ids=item.get("entry_ids") or [],
+                 day=start.date())
 
 
-def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None) -> None:
+def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
+                 entry_ids=None, day: dt.date | None = None) -> None:
     """did-fast a FINISHED entry row (no timer to stop) and refresh. `key`
     is the row's idempotency command (its points-less form when the points
     were asked for), marked done once did-fast has run. `flags` replaces
-    the view's default did-fast flags (callers include _did_flags())."""
+    the view's default did-fast flags (callers include _did_flags()). The
+    points land in _entry_pts under `day`, keyed by the Toggl ids did-fast
+    recreated (else the row's own `entry_ids`), so the row shows them."""
     async def _run_did_and_refresh():
         flash(f"$ did {cmd}")
         app.invalidate()
-        res = await asyncio.to_thread(run_did_fast, cmd, flags)
+        res, data = await asyncio.to_thread(run_did_fast_data, cmd, flags)
         _mark_cmd_done_today(key)
+        if day is not None and data and not res.startswith("err") \
+                and not janus_done.refusal(data):
+            _entry_pts_add(day, janus_done.entry_points_by_id(data, entry_ids or []))
         flash(res, 8.0)
         app.invalidate()
         await asyncio.to_thread(fetch_today, True)
@@ -7444,8 +7509,11 @@ def _(event):
         return
     desc, dur = item.get("raw_desc") or "", item.get("dur_min") or 0
     ids = item.get("entry_ids") or []
-    recorded, cur = _row_points(desc, dur, ids) if STATE.day_offset == 0 else (True, 0)
-    if not recorded:
+    recorded, cur = _row_points(desc, dur, ids)
+    # A past-day row janus never logged has no total to correct: type the
+    # change instead (delta mode).
+    delta_mode = STATE.day_offset != 0 and not recorded
+    if not recorded and not delta_mode:
         flash("^G: not logged yet — ⌥↵ logs it", 4.0)
         return
     code = toggl_project_code(item.get("project_id"), desc)
@@ -7457,12 +7525,13 @@ def _(event):
     STATE.points_edit_target = {"desc": desc, "code": code, "ids": ids, "cur": cur,
                                 "start_dt": start,
                                 "end_dt": start + dt.timedelta(minutes=dur),
-                                "minutes": dur, "past_day": STATE.day_offset != 0}
-    input_buffer.text = str(cur) if STATE.day_offset == 0 else ""
+                                "minutes": dur, "past_day": STATE.day_offset != 0,
+                                "delta_mode": delta_mode}
+    input_buffer.text = "" if delta_mode else str(cur)
     input_buffer.cursor_position = len(input_buffer.text)
-    ask(f'points for "{desc}": now {cur} — type the right total (or .5/m), ⏎'
-        if STATE.day_offset == 0 else
-        f'"{desc}" on a past day: type the change (+10 / -5), ⏎')
+    ask(f'"{desc}" on a past day: type the change (+10 / -5), ⏎'
+        if delta_mode else
+        f'points for "{desc}": now {cur} — type the right total (or .5/m), ⏎')
 
 
 @kb.add("c-p")

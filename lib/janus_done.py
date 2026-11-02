@@ -141,9 +141,46 @@ def entry_block(start, end) -> str:
 def adjust_cmd(desc: str, code: str, delta: int, start, end, past_day: bool) -> str:
     """did-fast 分-log line for a points correction: the signed difference to
     the entry's domain, noted "<desc> adj", in the entry's own block. A past
-    day carries its M/D instead (callers add --past-ok); block credit is a
-    today-only notion."""
+    day also carries its M/D after the block (callers add --past-ok): did-fast
+    credits a past day's block too (JM 2026-11-02)."""
     note = re.sub(r"[\[\]{}()+@,;，；]|\b\d{4}-\d{4}\b", " ", _ANNOT_RE.sub(" ", desc or ""))
     note = " ".join(note.split()) or "entry"
-    cmd = f"{delta:+d} {note} adj @{code}"
-    return cmd + (f" {start.month}/{start.day}" if past_day else f" {entry_block(start, end)}")
+    cmd = f"{delta:+d} {note} adj @{code} {entry_block(start, end)}"
+    return cmd + (f" {start.month}/{start.day}" if past_day else "")
+
+
+def did_points(result: dict) -> int:
+    """分 one did-fast result credited: its 0分 points + bonus + a split's
+    other columns + hcbi-routed points, else a variable 1n+ value. The sum
+    janus shows after a log and records against the entry."""
+    fen = result.get("0fen") or {}
+    pts = (fen.get("points") or 0) + (fen.get("bonus") or 0)
+    pts += sum((x.get("points") or 0) for x in (fen.get("extra") or []))
+    pts += (result.get("hcbi") or {}).get("pts", 0) or 0
+    if not pts and result.get("variable_1n"):
+        pts = result.get("variable_value") or 0
+    return int(pts)
+
+
+def entry_points_by_id(did_fast_output: dict | None, fallback_ids) -> dict[str, int]:
+    """{Toggl id: 分} for a did-fast run on a finished entry. A ranged result
+    carries the Toggl entry did-fast recreated (one per block segment), and
+    its points go to that id. Points from results with no Toggl entry, like
+    habit-tag extras, go to the first recreated id, or to `fallback_ids[0]`
+    (the row's own entry) when nothing was recreated."""
+    out: dict[str, int] = {}
+    loose = 0
+    for r in (did_fast_output or {}).get("results") or []:
+        if r.get("step") in ("refused", "skipped"):
+            continue
+        pts = did_points(r)
+        ids = (r.get("toggl") or {}).get("ids") or []
+        if (r.get("toggl") or {}).get("ok") and ids:
+            out[str(ids[0])] = out.get(str(ids[0]), 0) + pts
+        else:
+            loose += pts
+    if loose or not out:
+        target = next(iter(out), None) or (str(fallback_ids[0]) if fallback_ids else None)
+        if target is not None:
+            out[target] = out.get(target, 0) + loose
+    return out

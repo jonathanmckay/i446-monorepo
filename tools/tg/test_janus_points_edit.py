@@ -22,9 +22,42 @@ def test_adjust_cmd_is_signed_noted_and_in_the_entrys_block():
         == "+20 XCORE adj @i9 未"   # ended in 未 (JM 2026-11-01), not the 午 majority
 
 
-def test_adjust_cmd_on_a_past_day_carries_the_date_not_a_block():
+def test_adjust_cmd_on_a_past_day_carries_its_block_and_date():
+    # JM 2026-11-02: did-fast credits a past day's block too; the glyph goes
+    # before the trailing M/D, which did-fast strips first.
     assert janus._points_adjust_cmd("hiit", "hcb", 5, _t(12, 42), _t(13, 0), True) \
-        == "+5 hiit adj @hcb 10/28"
+        == "+5 hiit adj @hcb 未 10/28"
+
+
+def _view(monkeypatch, tmp_path, day, offset):
+    monkeypatch.setattr(janus, "_ENTRY_PTS_DIR", tmp_path)
+    monkeypatch.setattr(janus.STATE, "day_offset", offset)
+    monkeypatch.setattr(janus, "view_now",
+                        lambda: dt.datetime(day.year, day.month, day.day, 23, 59, tzinfo=janus._tz()))
+
+
+def test_past_day_row_shows_the_points_janus_logged(tmp_path, monkeypatch):
+    """JM 2026-11-02: a past-day entry logged from janus shows its 分 in the
+    right column, not its minutes."""
+    day = dt.date(2026, 11, 1)
+    _view(monkeypatch, tmp_path, day, -1)
+    assert janus._entry_dur_display(120, "interview prep", [4608630595]) == janus.fmt_dur(120)
+    janus._entry_pts_add(day, {"4608630595": 420})
+    assert janus._entry_dur_display(120, "interview prep", [4608630595]) == "[420]"
+    # a same-name entry on that day that was not logged keeps its minutes
+    assert janus._entry_dur_display(90, "interview prep", [4607267560]) == janus.fmt_dur(90)
+
+
+def test_entry_points_record_replaces_and_adjust_adds(tmp_path, monkeypatch):
+    day = dt.date(2026, 11, 1)
+    _view(monkeypatch, tmp_path, day, -1)
+    janus._entry_pts_add(day, {"7": 100})
+    janus._entry_pts_add(day, {"7": 120})
+    janus._entry_pts_add(day, {"7": -20}, add=True)
+    assert janus._row_points("x", 30, [7]) == (True, 100)
+    # a merged row sums its entries
+    janus._entry_pts_add(day, {"8": 5})
+    assert janus._row_points("x", 30, [7, 8]) == (True, 105)
 
 
 def test_row_points_include_adjustments(tmp_path, monkeypatch):

@@ -44,9 +44,55 @@ def test_typed_glyph_wins_and_is_not_marked_inferred(df):
     assert it.block_override == "申" and not it.block_inferred
 
 
-def test_no_range_or_past_day_is_left_alone(df):
+def test_no_range_is_left_alone(df):
     assert _one(df, "write memo 30 @i9").block_override is None
-    assert _one(df, "write memo 0830-0910 @i9 1/2").block_override is None
+
+
+def test_past_day_range_gets_the_block_it_ended_in(df):
+    """JM 2026-11-02: interview prep 1100-1230 logged for a past day credits
+    that day's 未, like a same-day log."""
+    it = _one(df, "interview prep 1100-1230 @g245 [420] 1/2")
+    assert it.target_date == "1/2" and it.block_override == "未" and it.block_inferred
+
+
+def test_tomorrow_range_is_left_alone(df, monkeypatch):
+    import datetime as _dt
+    monkeypatch.setattr(df._daytime, "today", lambda: _dt.date(2026, 11, 2))
+    assert df._is_future_md("11/3") and not df._is_past_md("11/3")
+    assert df._is_past_md("11/1") and df._is_past_md("12/31")
+    assert not df._is_past_md("11/2") and not df._is_past_md(None)
+    items = df.parse_input("a 0830-0910 @i9")
+    items[0].target_date = "11/3"
+    df.infer_range_blocks(items)
+    assert items[0].block_override is None
+
+
+def test_past_day_per_minute_credit_splits_like_today(df):
+    r = _variable(df, "walk 0918-1241 @hcb 1/2")
+    out = df.split_results_by_block([r])
+    assert [r.item.block_override for r in out] == ["巳", "午", "未"]
+
+
+def test_past_block_credit_reads_the_cell_first(df, monkeypatch):
+    """A past day's G:O are locked literals: credit the column. A missed lock
+    leaves the =D-SUM residual, which already counts the points: skip it."""
+    cells = {"K": "=420", "I": "", "O": "=D303-SUM(G303:N303)", "N": "652.9"}
+    calls = []
+
+    def read(sheet, col, date=None, row=None):
+        calls.append(col)
+        if col == "J":
+            return {"ok": False, "error": "down"}
+        return {"ok": True, "col": col, "formula": cells[col]}
+    monkeypatch.setattr(df.neon_excel, "read", read)
+    monkeypatch.setattr(df, "_past_block_formulas", {})
+    assert df.resolve_past_block_credit("未", "11/1") == ("credit", "K")
+    assert df.resolve_past_block_credit("巳", "11/1") == ("credit", "I")
+    assert df.resolve_past_block_credit("戌", "11/1") == ("credit", "N")
+    assert df.resolve_past_block_credit("亥", "11/1")[0] == "residual"
+    assert df.resolve_past_block_credit("午", "11/1")[0] == "residual"   # unreadable
+    df.resolve_past_block_credit("未", "11/1")
+    assert calls.count("K") == 1   # one read per cell per run
 
 
 def test_range_block_segments(df):

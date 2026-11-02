@@ -64,3 +64,23 @@ def test_second_same_name_session_is_not_crossed_off_by_its_own_points_log():
     dtd = {"names": ["call steve"], "ids": {"call steve": "6abc"}}
     assert jd.crossed_off(dtd, "call steve", norm)
     assert not jd.crossed_off(dtd, "", norm)
+
+
+def test_did_points_sums_every_credit():
+    assert jd.did_points({"0fen": {"points": 30, "bonus": 5, "extra": [{"col": "R", "points": 10}]}}) == 45
+    assert jd.did_points({"hcbi": {"col": "Y", "pts": 36}}) == 36
+    assert jd.did_points({"variable_1n": True, "variable_value": 12}) == 12
+    assert jd.did_points({"step": "0n"}) == 0
+
+
+def test_entry_points_by_id_follows_recreated_toggl_entries():
+    out = {"results": [
+        {"0fen": {"points": 60}, "toggl": {"ok": True, "ids": [11]}},
+        {"0fen": {"points": 360}, "toggl": {"ok": True, "ids": [12]}},
+        {"step": "0n", "hcbi": {"pts": 5}},                  # habit-tag extra
+        {"step": "refused", "reason": "too big"},
+    ]}
+    assert jd.entry_points_by_id(out, [99]) == {"11": 65, "12": 360}
+    # nothing recreated: the row's own entry gets the points
+    assert jd.entry_points_by_id({"results": [{"0fen": {"points": 420}}]}, [99]) == {"99": 420}
+    assert jd.entry_points_by_id({"results": []}, []) == {}
