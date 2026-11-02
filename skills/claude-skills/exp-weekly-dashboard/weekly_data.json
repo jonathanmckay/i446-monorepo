@@ -1,0 +1,3717 @@
+{
+  "week_label": "May 25 \u2013 May 31, 2026",
+  "week_start": "2026-05-25",
+  "week_end": "2026-05-31",
+  "generated_for_date": "2026-06-03",
+  "features": {
+    "6f8a31c2-10eb-2949-2e55-cc44eaee3cf7": {
+      "displayName": "[Bayside] Enable Game Tile Context Menus",
+      "description": "Enables context menu actions for game tiles",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "2b928d00-9bee-32c4-94af-7b191aff8479": {
+      "displayName": "Test experiment for tutorial",
+      "description": "Test experiment for tutorial",
+      "experimentationGroup": "xbox~xtarget"
+    },
+    "0625b134-7b3b-af17-5a48-8bf31f6ae576": {
+      "displayName": "Mercury | Add to Wish list after Bail",
+      "description": "Mercury | Add to Wish list after Bail",
+      "experimentationGroup": "xbox~mercury~user"
+    },
+    "e7cfc116-64f0-1eb2-8fea-c8c446c37ebd": {
+      "displayName": "[user-based] Unreliable Input 2026",
+      "description": "Decrease latency for Web and Native client users experiencing high packet loss by reducing time spent on recovering lost input data. No effect on users with average/low packet loss.",
+      "experimentationGroup": "xbox~xcloud~user"
+    },
+    "eadefd52-e6e4-8406-9b24-6112e943ab61": {
+      "displayName": "Events Deeplink (mercury group)",
+      "description": "Enable the deeplinks for events",
+      "experimentationGroup": "xbox~mercury~user"
+    },
+    "49bd7545-beca-5253-06d6-150f126f5227": {
+      "displayName": "[Gamebar] Gaming Copilot Voice Dictation",
+      "description": "The experiment will enable a new feature allowing voice dictation in text chat. A new mic button will show up and do speech to text transcription.",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "0f30d9a8-6285-e0fd-2c98-55c227747979": {
+      "displayName": "[Bayside] Enable First Look FRE Modal",
+      "description": "Enables the First Look FRE Modal",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "5626643f-ea5e-f109-9896-6d5fdc32db68": {
+      "displayName": "Edgewater User Selected Resolution",
+      "description": "Controls the USR Feature Gate (EnableUserRequestedResolution) and related settings",
+      "experimentationGroup": "xbox~xboxweb~gamestreaming~user"
+    },
+    "e0176b38-c9fc-2c64-e7b3-2ec6998a74dd": {
+      "displayName": "[Bayside] Enable New MRU",
+      "description": "Enables new MRU system",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "fc181828-586e-4c26-988a-5e3d39b43955": {
+      "displayName": "[Bayside] Enable Play History Icon",
+      "description": "Enables showing the Play History Icon on Left Nav with the MRU",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "19ae4ebd-f296-8ce9-6b81-f5643dccf689": {
+      "displayName": "A/A",
+      "description": "Test the mock dfdfdf variant",
+      "experimentationGroup": "xbox~shared"
+    },
+    "bb924f52-1581-bdc7-2fb2-1c76776a6a33": {
+      "displayName": "AA 4_30",
+      "description": "AA 4_30",
+      "experimentationGroup": "xbox~validation~user"
+    },
+    "84887710-b583-13b7-789b-089f10999e9f": {
+      "displayName": "Tenure and Gamerscore badges, badges in Guide",
+      "description": "Feature gates enabling tenure and gamerscore badges, as well as showing the most recent 5 user badges on Guide profiles on Bayside",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "62178b3a-bfce-5775-5340-0f108fd3135e": {
+      "displayName": "EnableGen8DeprecationWave1",
+      "description": "EnableGen8DeprecationWave1",
+      "experimentationGroup": "xbox~xboxweb~gamestreaming~device"
+    },
+    "bbc09ebd-d40b-5c72-f35d-9a01f65ff691": {
+      "displayName": "Mercury Dynamic Hero Prompt",
+      "description": "Enables the dynamic hero prompt to display for users in home page",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "6e8eda23-1b72-b8f3-93dd-e5661e4fe579": {
+      "displayName": "Enable local driven search promo banners",
+      "description": "Show promotion banners in Garrison that can be keyword targeted. These banners are locally set in Garrison.",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "9b984950-bea2-a0ea-c945-6ac1385b6fc9": {
+      "displayName": "[Griffin] Dunning Style and Presence EXP  ",
+      "description": "updating presence and style of running banner in griffin",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "a9c13f16-6a87-641e-5c83-c363f13aca34": {
+      "displayName": "[Griffin] Trial Banner Experiment",
+      "description": "Adding trial banners onto Griffin home and game pass tab",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "03bb2e08-d06d-0f6b-ee94-7d490981e71c": {
+      "displayName": "Top Wishlist on Sale Exp",
+      "description": "Exp for adding top wishlist on sale channel to Grifin store",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "74f1a143-7b2e-fafc-95eb-efdf677fa562": {
+      "displayName": "Project Metro V2 PDP",
+      "description": "This experiment enables a safe rollout of Project Metro Phase 2 changes in the PDPs (Game Bundle and DLCs) across the different flighting rings, allowing us to identify and address implementation issues early before the full rollout planned for late June.",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "bc0d015d-dca6-d3ee-1468-f763cb24ec8a": {
+      "displayName": "[Console] Enable 2606 features for Rewards Standalone Page ",
+      "description": "This experiment covers all of the updates to the Rewards page on Console for 2606: new progress bar, new point total in top-nav, removing unclaimed points from claim button, new benefits button",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "6710fb82-94eb-d4fa-b374-0ea0cbd7e4af": {
+      "displayName": "Targeted Offer Badging & Price",
+      "description": "We are surfacing targetd offers on PC. Whenever a game has a targeted offer that is the lowest price, it shows that price along with the \"For You\" badge. ",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "f6854937-3229-4b3d-a6da-5272ebc5b880": {
+      "displayName": "Xbox App on PC | BtF | Dynamic Channel Test | Wishlisted on sale | Deals Unlocked",
+      "description": "Xbox App on PC | BtF | Dynamic Channel Test | Wishlisted on sale | Deals Unlocked",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "1520326c-8a8a-8125-5198-df22b4ccb3f6": {
+      "displayName": "[Mobile] Add Rewards with Xbox banner to Griffin Home ",
+      "description": "This effort will test a placement for Rewards on Griffin Home, based on a Fresno banner. Our hypothesis is that this will grow Rewards engagement.",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "02a19177-84f5-b674-193b-04b4e24a7f4f": {
+      "displayName": "Use GCS for Xbox Optional Data Collection - Console",
+      "description": "Manage incremental rollout of UCS -> GCS transition for Optional Data Collection (ODC) Consent UX on Xbox Console",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~device"
+    },
+    "4650dc8f-360d-f1ed-5444-e209424f3f83": {
+      "displayName": "[Gamebar] Gaming Copilot PTT Upsell and Voice Teaching Tips",
+      "description": "This is an experiment to enable the PTT upsell text and teaching tips in order to see if the effort increases the user engagement with voice mode and push to talk, then help increase the retention rate.",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "142670bf-2107-67c7-b4aa-1f3cba49f479": {
+      "displayName": "[Gamebar] Gaming Copilot FRE Enhanced Welcome Flow",
+      "description": "The experiment will enable a new welcome flow with three pages educating the user of Gaming Copilot functionality. We would like to have a redesign on the onboarding flow for PC to see if it will first-session usage and PTT adoption by teaching the gaming use case upfront.",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "795e4ec9-4261-ccca-97ae-e2c37373d41b": {
+      "displayName": "[Console] Enable a new Rewards entry point on Console Home ",
+      "description": "This experiment will test a new entry point for the Rewards page (aka Hub) on Console. Users in treatment will see a new button on their Console that tracks their point balance and when selected opens their Rewards Hub.",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "b76d7a17-848a-527f-f543-d4c04d46572e": {
+      "displayName": "[Gamebar] Game Assist PDP Cards",
+      "description": "PDP cards first flight",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "c9f4b06b-40f5-9b69-1836-b0cd7098941a": {
+      "displayName": "Griffin Wishlisted Games Channel Exp",
+      "description": "adding top wishlisted games channel onto store",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "a21fdb57-48af-ee91-3d7e-3195bc22eac5": {
+      "displayName": "Gamebar: Switch Search Requests to Celadon",
+      "description": "Testing out latency of a new search path - using Celadon to hydrate Search Results",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "87b39166-6d9b-a0a5-97e4-8925f4a5d01b": {
+      "displayName": "[Mobile] Game Assist PDP Cards",
+      "description": "PDP cards first flight (mobile)",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "3fc42ab0-1159-17ba-c899-bb5be5fbb3cc": {
+      "displayName": "Quality Control Experiment V2: 30D vs 15D Weighted Scores",
+      "description": "This experiment is a continuation of the previous experiment where we introduced Quality Control Weighting to the Search Relevancy Algorithm. This time, we will be testing 2 different weights on 2 different grace periods (30D vs 15D) of data to see the impact of stronger weighting and the presentation of those results. Products marked as \"visible\" will receive a Search relevancy boost to their overall ranked score. At RT, this means that products considered low quality will go down in the order shown to players (i.e. poor quality games will end up behind/underneath products that have met threshold requirements outlined by the QC stream.) ",
+      "experimentationGroup": "xbox~mercury~user"
+    },
+    "3ed414b7-11c3-d013-351a-f7d0f1939d52": {
+      "displayName": "[Console] Launch the Rewards Hub via a standalone page",
+      "description": "This experiment tests the change of Rewards as a standalone page rather than within Profile. We're testing that no negative impact to Rewards engagement, console engagement or other guard rail metrics can be measured from this.",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "b694b2ed-04c7-d6dd-f170-6778534f0a5a": {
+      "displayName": "Mobile: Game assist Rebrand Backend",
+      "description": "Feature Flag for changing the Gaming Copilot brand to Game assist in the prompt",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "4feb0a5a-5ecd-b7a5-492c-d8045203ea92": {
+      "displayName": "Gamebar: Game assist Rebrand Backend",
+      "description": "Feature Flag for changing the Gaming Copilot brand to Game assist in the prompt",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "bf15aa22-5b96-5e24-559b-46fa90ab4a55": {
+      "displayName": "Griffin Store \"Deals for you\" Exp",
+      "description": "exp for surfacing the deals for you row",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "17f8f813-f20d-79e8-39ce-3c4069827ac5": {
+      "displayName": "EnableAccountRelinkFlow",
+      "description": "Enable feature for user to retry relinking their account with Ubisoft.",
+      "experimentationGroup": "xbox~xboxweb~gamestreaming~device"
+    },
+    "0f29b2c1-e13b-e26f-c6e7-29ab32f27f39": {
+      "displayName": "Test flight",
+      "description": "Test flight",
+      "experimentationGroup": "xbox~xtarget"
+    },
+    "b21fc056-7d4f-4f80-f36c-9ca158983960": {
+      "displayName": "9060000 EXP PCGP Winback FY26 - Price vs Content Messaging",
+      "description": "With the reduction in price and rehydration of PCGP, we believe that leading with price will drive more acquisitions than content led creatives",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "d46969e6-2d19-c2d2-fb2f-4b0368ae5a0c": {
+      "displayName": "Counterfactual logging validation (user - PDP)",
+      "description": "Validates counterfactual logging scorecards with an A/A experiment\n",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "2e52e7fd-e027-f90c-c952-22d49128bf00": {
+      "displayName": "Counterfactual logging validation (user - home)",
+      "description": "Validates counterfactual logging scorecards with an A/A experiment",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "cf22d776-2b0f-e786-b218-7c4570b7803a": {
+      "displayName": "Test AA between Bayside and XboxCom (and Edgewater by proxy)",
+      "description": "Test AA between Bayside and XboxCom (and Edgewater by proxy) using Device Id (browser scenario exclusive)",
+      "experimentationGroup": "xbox~shared"
+    },
+    "34934139-f84d-729d-9885-7e381eea2e2c": {
+      "displayName": "XboxcomRedirectExp",
+      "description": "Redirect some traffic away from xbox.com to a platform that can play games.",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "65baedae-a001-0ecf-315b-68805b71ec2b": {
+      "displayName": "39167 | Game Pass | Garrison Plan Picker (US Only) | SKU Ordering EXP",
+      "description": "V1: If we change the order of the SKUs/plans in the Subscription Plan Picker, then Premium Acquisitions will increase because we are leading with the more affordable mid-tier option (Treatment 2). There will also be a version with Ultimate in the lead position (Treatment 1), which is the highest value option. V2: Focusing on Ultimate displayed first instead of Premium. ",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "6a2c0cd2-6759-1122-49d7-86499fc1e3fb": {
+      "displayName": "39579 | Game Pass | Console Plan Picker (WW) | SKU Ordering EXP",
+      "description": "If we change the order of the SKUs/plans in the Subscription Plan Picker, then Premium Acquisitions will increase because we are leading with the more affordable mid-tier option (Treatment 2). There will also be a version with Ultimate in the lead position (Treatment 1), which is the highest value option. V2: Focusing on Ultimate displayed first instead of Premium.",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "b550e5ef-1a21-ccfe-5fb9-98321040f6cd": {
+      "displayName": "Quests Channel on Garrison GP Hub",
+      "description": "Testing introducing a Rewards Quests Channel on the Garrison GP hub to increase visibility and engagement with Rewards.",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "59d104be-07eb-42a2-b2ed-25c035237712": {
+      "displayName": "XSF Offer Campaign Incrementality Measurement - 42078",
+      "description": "Creating Holdback audience to measure incrementality on targeted Xbox Super Fan discount offer",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "3622bf12-29ce-28c3-bf49-179c473379b5": {
+      "displayName": "Counterfactual logging validation (device - home)",
+      "description": "Validates counterfactual logging scorecards with an A/A experiment",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "113fe3b6-ea4d-98e2-33f8-f6bc17fe8080": {
+      "displayName": "Counterfactual logging validation (device - PDP)",
+      "description": "Validates counterfactual logging scorecards with an A/A experiment",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "199cd747-aff4-e5b3-ca03-5c1f605d1541": {
+      "displayName": "XboxcomRedirectTest",
+      "description": "TEsting exp for redirecting xbox.com traffic to bayside/edgewater",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "ee1c96d4-21d2-4ecf-fbda-4f7b61ff5d1f": {
+      "displayName": "Plan Picker Collapse and Expand",
+      "description": "Experiment for the collapse and expand of Game Pass plan picker",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "62d608a3-c7e9-796a-33a4-e2c07afcface": {
+      "displayName": "[Mobile] Add claim button to Play Jewel quest detail page",
+      "description": "This feature tests a change to the Play Jewel quest in Griffin in which treatment will have an additional \"Claim all points\" button in the details page, rather than having to exit to claim. We believe a non-zero amount of users are missing the claim step due to this awkward navigation. As such our hypothesis is that this will increase the number of claims for this quest.",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "65835b20-dd89-ee4f-7106-c98d42d0b091": {
+      "displayName": "AA test flights 5_12",
+      "description": "AA test flights 5_12",
+      "experimentationGroup": "xbox~xcloud~user"
+    },
+    "16d645c7-142c-e827-b356-7a11401092ce": {
+      "displayName": "Mercury | Upsell Top Picks in Gift Card Redeem Confirmation",
+      "description": "Mercury | Upsell Top Picks in Gift Card Redeem Confirmation",
+      "experimentationGroup": "xbox~mercury~user"
+    },
+    "eb29e71c-79e9-a589-8488-57d54cbc03c1": {
+      "displayName": "S2SPrototype",
+      "description": "S2S prototype",
+      "experimentationGroup": "xbox~xboxweb~gamestreaming~device"
+    },
+    "364a1d28-1708-f977-2c12-1888d2257e4a": {
+      "displayName": "Console | Store Home & Store Games | DMM | Gen8 Spotlights vs Gen9 Spotlights",
+      "description": "Console | Store Home & Store Games | DMM | Gen8 Spotlights vs Gen9 Spotlights",
+      "experimentationGroup": "xbox~mercury~user"
+    },
+    "f9b33623-d2a1-4dc5-a3d4-78fed0dfb246": {
+      "displayName": "fhl test: agent created",
+      "description": "AA test created by Copilot CLI agent",
+      "experimentationGroup": "xbox~events~user"
+    },
+    "3ed88860-e8cc-f187-80f1-a7639e1ecada": {
+      "displayName": "Pinebrook USR and NQI ",
+      "description": "Turns on NQI and USR on Pinebrook Cloud Settings ",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~device"
+    },
+    "d86d3581-b048-3b8f-335c-6efd87f414e2": {
+      "displayName": "Console Incrementailty - Promotional Campaigns",
+      "description": "90/10 Series to understand incremental impact of promotional campaigns across Home, Twist & Store",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "7490ac3e-2e98-248b-0bbf-953a25709e55": {
+      "displayName": "[Mobile] Gaming Copilot voice mode teaching tip",
+      "description": "New users (who never chatted to Copilot before) will see a notification window suggesting to use a voice mode",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "e5adba30-a58f-e282-662f-092440672328": {
+      "displayName": "[Mobile] Gaming Copilot Copy & Regeneration",
+      "description": "Gaming Copilot Experiment: New Microinteractions: Copy & Regeneration",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "e24c5de6-f4f3-d9f6-0d09-a6d151cd08ec": {
+      "displayName": "UserId - A/A - 4/16-5/1 - 2026",
+      "description": "UserId - A/A - 4/16-5/1 - 2026",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "9124c615-e9f1-dcd9-c3a9-a6be511cfaac": {
+      "displayName": "UserId - A/A - 4/16-5/1 - 2026",
+      "description": "UserId - A/A - 4/16-5/1 - 2026",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "3b7f5514-78a2-b39b-6f17-fea8f3a18318": {
+      "displayName": "[Mobile] Gaming Copilot experimental prompts",
+      "description": "New conversation starters",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "ea648244-b69b-2669-2bf2-f21b77b426d1": {
+      "displayName": "xSearch Scoring & Cloud Titles in \"Games\" Search Result on PC ",
+      "description": "Adding SYOG titles to the \"Games\" search result row on PC along with updates to the xSearch scoring profile to boost PC engagement data. This should help improve scenarios where SYOG results were returning before PC results in full search. ",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "be58eb3a-0a03-e7ae-e372-502fdace25b0": {
+      "displayName": "[user-based][server-side] allow HEVC streaming",
+      "description": "Enabling HEVC streaming on the server side for specific endpoints/users",
+      "experimentationGroup": "xbox~xcloud~user"
+    },
+    "0908b29a-2804-d75e-5a0d-59a5041a1329": {
+      "displayName": "Rename Top Paid to Top Selling (Games Collection)",
+      "description": "Rename Top Paid to Top Selling (Games Collection)",
+      "experimentationGroup": "xbox~xboxconsoleexperiences~user"
+    },
+    "4665d2d4-9661-3e6a-91f7-59899ee0be39": {
+      "displayName": "Test treatment iteration",
+      "description": "Test treatment iteration (change an existing treatment value while traffic goes out)",
+      "experimentationGroup": "xbox~validation~user"
+    },
+    "1b927ece-be1c-56f0-8bee-424ae23ef436": {
+      "displayName": "[EXP DEBUG] AA_11_7",
+      "description": "AA_11_7",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "f61736c1-16d1-c086-da5c-ce7cf3f73c30": {
+      "displayName": "AA for xCloud User: multi-surface",
+      "description": "AA experiment to verify treatment assignment, data pipelines, and metric sets. Separate stage for each surface.",
+      "experimentationGroup": "xbox~xcloud~user"
+    },
+    "46cb5769-21c3-1fc5-d48f-582f55cdf6cd": {
+      "displayName": "AA for xCloud User",
+      "description": "AA experiment to verify treatment assignment, data pipelines, and metric sets. One combined stage for all surfaces.",
+      "experimentationGroup": "xbox~xcloud~user"
+    },
+    "7c109a96-ec0f-c5ab-3d62-101873845a51": {
+      "displayName": "[Mobile] Gaming Copilot FRE Single Welcome Screen V3 Experiment",
+      "description": "[Mobile] Gaming Copilot FRE Single Welcome Screen V3 Experiment",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "a4709787-0485-4cfb-a178-839dacec9bf9": {
+      "displayName": "Combined Purchase on TV",
+      "description": "Combined purchase on TV subscription and IAP",
+      "experimentationGroup": "xbox~xboxweb~gamestreaming~user"
+    },
+    "8967d704-f954-de1c-fdfc-7d374e90354a": {
+      "displayName": "Loyalty Store Experimentation Group - Test Flight #01",
+      "description": "Loyalty Store Experimentation Group - Test Flight #01",
+      "experimentationGroup": "xbox~loyaltystore"
+    },
+    "8b3024cc-7f47-9b78-ead8-d912ec2ebe89": {
+      "displayName": "[EXP DEBUG] AA_11_12_Device",
+      "description": "AA_11_12_Device",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "672c71e2-904e-1db6-e084-bdd6f5580582": {
+      "displayName": "Test out new User rollout template for GameBar",
+      "description": "Test out new User rollout template for GameBar",
+      "experimentationGroup": "xbox~gamebar~user"
+    },
+    "6a77eb05-f9fc-1585-00b3-dfea971ff58e": {
+      "displayName": "XboxCom | Comparing Default Search Relevancy to new combined PC/Console based Search Relevancy",
+      "description": "We are seeking to compare the default search relevancy algorithm which only uses console engagement data for scoring/ranking search results with our new Console/PC Engagement scoring algorithm to track performance and CTR for search results. Before this change, PC games were not given a true relevancy score and often sorted below Console games. By performing this experiment on Xbox.com (which has started to show console games for xCloud) we will provide a more relevant search and discovery experience for our players.",
+      "experimentationGroup": "xbox~xboxweb~store~device"
+    },
+    "09a31a5b-5941-d7c3-b5d9-da9ab7b94c9e": {
+      "displayName": "[Mobile] Gaming Copilot FRE Single Welcome Screen V2 Experiment",
+      "description": "[Mobile] Gaming Copilot FRE Single Welcome Screen V2 Experiment",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "9f05d6c2-88ac-fe2a-c273-883ca16ea3fc": {
+      "displayName": "[Mobile] Gaming Copilot Centered Prompt for Conversation Starters Experiment",
+      "description": "[Mobile] Gaming Copilot Centered Prompt for Conversation Starters Experiment",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "277f2978-024c-ecf7-a8a4-608b6068e3bd": {
+      "displayName": "[Gamebar] Gaming Copilot FRE Single Welcome Screen V2-B Experiment",
+      "description": "Control versus a treatment of 1 screen + \"Continue\" instead of let's chat",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "c56f4e0e-8ac2-b256-b29a-053819955298": {
+      "displayName": "[server-side] Enable Routing Preferences",
+      "description": "Treatment enables behavior on the server-side streaming stack that (1) binds to ports 9002 and 9004, and (2) sends out RoutingPreference endpoint metadata as part of the ICE candidate messages.",
+      "experimentationGroup": "xbox~xcloud~session"
+    },
+    "96d6eb9a-85dd-9274-d261-15f999e1a471": {
+      "displayName": "[EXP Debug] Juno-AA-Test",
+      "description": "A/A Test to configure scorecard.",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "4b693196-8b0e-c395-0207-84b2dd387ab2": {
+      "displayName": "Griffin Sales Treatment Round 2",
+      "description": "round 2",
+      "experimentationGroup": "xbox~xboxappmobile~user"
+    },
+    "0f28ab7d-3d67-7a27-e998-1a584345c341": {
+      "displayName": "Test the new Bayside User Ring Progression Template",
+      "description": "Test the new Bayside User Ring Progression Template",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "3db5f375-739e-fc72-3d5d-80cb5902f5a7": {
+      "displayName": "Fresno AdExperimentation Experiment",
+      "description": "Fresno AdExperimentation Experiment",
+      "experimentationGroup": "xbox~xcloud~user"
+    },
+    "f289f622-e028-d41f-6438-62ecf9f4cee8": {
+      "displayName": "Profile V4 Migration A/A",
+      "description": "A/A test experiment to validate we don't see SRMs post-migration on the Profile service to on box assignment",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "839f97e2-de1b-5d96-17c5-5ed0fdaae19a": {
+      "displayName": "Test 01",
+      "description": "Test",
+      "experimentationGroup": "xbox~xboxgamebarwidgets"
+    },
+    "fb2beb86-accc-7f0d-9c69-6ea2cca4f856": {
+      "displayName": "Test 01",
+      "description": "testing",
+      "experimentationGroup": "xbox~xboxpctrayapp"
+    },
+    "8a214c13-1a5b-e28c-d2a7-08f7e15b6c7c": {
+      "displayName": "testExpInit",
+      "description": "Testing Experimentation",
+      "experimentationGroup": "xbox~mercury~user"
+    },
+    "a65f9cab-e0bb-0f57-8c46-7b71ac682308": {
+      "displayName": "TestGamingPC",
+      "description": "TestGamingPC",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "54103bde-fab0-15f6-0ad5-77179601d979": {
+      "displayName": "TestCW",
+      "description": "Testing traffic filters",
+      "experimentationGroup": "xbox~xai"
+    },
+    "5b562227-87f5-a9d9-513f-047bd55d88c3": {
+      "displayName": "Garrison | Fortnite Crew Channel - PC Benefits Hub",
+      "description": "Adding a channel for Fortnite Crew to the PC Benefits Hub",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "8eee127e-8f5a-ca87-7025-03187e0df6b3": {
+      "displayName": "AA_11_14",
+      "description": "AA_11_14",
+      "experimentationGroup": "xbox~mercury~device"
+    },
+    "d31c2979-81c4-fb09-5d16-aa054727c933": {
+      "displayName": "[EXP DEBUG] AA_11_12_Device_dev",
+      "description": "AA_11_12_Device_dev",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "ac774622-4a67-b901-f8ff-cbed853e272a": {
+      "displayName": "[EXP DEBUG] AA_11_7_Dev",
+      "description": "AA_11_7_Dev",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "bda890f4-da2f-f846-fa18-7e634c61f5c8": {
+      "displayName": "test",
+      "description": "test",
+      "experimentationGroup": "xbox~validation~user"
+    },
+    "2816a337-6c2b-31f6-2be6-684c388c55df": {
+      "displayName": "[EXP DEBUG] Device test flight",
+      "description": "test flight",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "2d80f4bd-5352-aa11-3b15-fb1e882eded3": {
+      "displayName": "Test Flight 01",
+      "description": "Play Xbox Test Flight",
+      "experimentationGroup": "xbox~playxbox"
+    },
+    "21146662-b1b1-7a4c-b4df-3c1c39667cd9": {
+      "displayName": "Template test 03",
+      "description": "Template test 03",
+      "experimentationGroup": "xbox~xai"
+    },
+    "157c8e2d-2ef6-7f23-a7b5-d9ceeca2997c": {
+      "displayName": "Template test 02",
+      "description": "Template test 02",
+      "experimentationGroup": "xbox~xai"
+    },
+    "205364d0-1a11-2a15-e871-3f9ed8de62c4": {
+      "displayName": "Test flight XAI user 01",
+      "description": "Test flight XAI user 01",
+      "experimentationGroup": "xbox~xai"
+    },
+    "f0a25de2-9b2c-d727-235a-4099f19710e0": {
+      "displayName": "test flight in new ux",
+      "description": "test flight in new ux",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "6123ac17-cd6f-5a61-302c-5f1934fb41de": {
+      "displayName": "xbox~pcgamingapp~user",
+      "description": "A/A test to validate the new Azure ExP Studios workflow for setting up experiments.  \nExperiment Group: pcgamingapp-user\n",
+      "experimentationGroup": "xbox~pcgamingapp~user"
+    },
+    "95d2d180-741d-df61-ddf7-ab3ba6d3e4c6": {
+      "displayName": "Azure ExP Studios A/A setup test: xboxweb-store-devices",
+      "description": "A/A test to validate the new Azure ExP Studios workflow for setting up experiments.  \nExperiment Group: xboxweb-store-devices\n",
+      "experimentationGroup": "xbox~xboxweb~store~device"
+    },
+    "01008c45-806b-a44c-001c-b0218170b329": {
+      "displayName": "Azure ExP Studios A/A setup test: xboxweb-store-user",
+      "description": "A/A test to validate the new Azure ExP Studios workflow for setting up experiments.  \nExperiment Group: xboxweb-store-user\n",
+      "experimentationGroup": "xbox~xboxweb~store~user"
+    },
+    "941c6762-b860-6f3e-4b09-a69edff81b82": {
+      "displayName": "Azure ExP Studios A/A setup test: xboxweb-gamestreaming-user",
+      "description": "A/A test to validate the new Azure ExP Studios workflow for setting up experiments.  \nExperiment Group: xboxweb-gamestreaming-user\n",
+      "experimentationGroup": "xbox~xboxweb~gamestreaming~user"
+    },
+    "d31a895e-38ea-ebb0-b1ca-a929c2a2a1fa": {
+      "displayName": "Azure ExP Studios A/A setup test: xboxweb-gamestreaming-device",
+      "description": "A/A test to validate the new Azure ExP Studios workflow for setting up experiments.  \nExperiment Group: xboxweb-gamestreaming-device\n",
+      "experimentationGroup": "xbox~xboxweb~gamestreaming~device"
+    }
+  },
+  "experiments": {
+    "5c8526d4-9d6b-4f06-827f-1ab0b8c57b75": {
+      "featureId": "6f8a31c2-10eb-2949-2e55-cc44eaee3cf7",
+      "displayName": "Env: Test",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"test\"); detection.xboxhostappname IN (\"Microsoft.GamingApp\")"
+    },
+    "ab61ec00-55ab-4a81-b40e-0082cd207c97": {
+      "featureId": "6f8a31c2-10eb-2949-2e55-cc44eaee3cf7",
+      "displayName": "Env: Development",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"dev\"); detection.xboxhostappname IN (\"Microsoft.GamingApp\")"
+    },
+    "3d650e2c-6348-17ad-e549-8840f026b46a": {
+      "featureId": "2b928d00-9bee-32c4-94af-7b191aff8479",
+      "displayName": "this is stage 1",
+      "audience": "detection.xboxappid IN (\"xTarget\")"
+    },
+    "c92cf563-5551-4154-a954-786f5879379b": {
+      "featureId": "0625b134-7b3b-af17-5a48-8bf31f6ae576",
+      "displayName": "Insiders Alpha WW",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"PublicInsider0\")"
+    },
+    "40868a16-4c83-f21b-b81f-f95dd3f96cd6": {
+      "featureId": "e7cfc116-64f0-1eb2-8fea-c8c446c37ebd",
+      "displayName": "INTERNAL OFFERINGS",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"QUALITYTESTING\", \"TAKEHOME\"); detection.xboxsdktype IN (\"Native\")"
+    },
+    "ea5b0487-e5cf-4c25-b3b5-15cb77b1696f": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Global Audience",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"GlobalAudience\", \"PublicInsider5\", \"QFEInsider0\", \"QFE"
+    },
+    "b8c0e78d-ac13-4abc-92fe-414494ca870d": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Public Omega",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider4\")"
+    },
+    "711f7e83-4aea-4d23-94c8-89bb8685ec9d": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Public Delta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider2\", \"PublicInsider3\")"
+    },
+    "a382c78c-4069-4ee2-a854-be757aa1cba0": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider1\", \"GS_PUBLICINSIDER\")"
+    },
+    "ba3165e3-f768-4f6c-b9a2-c250ea14e540": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Public Alpha",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider0\", \"PublicInsider10\")"
+    },
+    "8a42c1e0-32d0-4bf7-b22f-8a8b53c489ea": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Selfhost",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"SelfhostInsider0\", \"SelfhostInsider1\", \"GS_SELFHOST\", "
+    },
+    "3266c43e-97b6-4ba1-b5a8-a09ef67f48a8": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Takehome",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"GS_CANARY\", \"GS_CANARY_NEXT\", \"GDK_Paired_Recovery_Tak"
+    },
+    "3b19b40d-6cb4-42ff-9d01-1228aff62e55": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "TestX",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"Redstone_Testing_Current\", \"Redstone_Testing_Next\", \"G"
+    },
+    "1504ce2a-5bfd-482a-b54f-2275bf09c40c": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Canary",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"Redstone_Validation\", \"Redstone_Validation_Next\")"
+    },
+    "6a3d3ca4-2582-4a73-ae89-19449fe1e203": {
+      "featureId": "eadefd52-e6e4-8406-9b24-6112e943ab61",
+      "displayName": "Internal Devkit",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"MSFT_Internal_Dev\")"
+    },
+    "414ec861-6558-4a57-bd65-520fb1f670fb": {
+      "featureId": "49bd7545-beca-5253-06d6-150f126f5227",
+      "displayName": "Xbox Insider - External Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "2318f9f7-e4c2-40e2-9cf3-01d6c826b648": {
+      "featureId": "0f30d9a8-6285-e0fd-2c98-55c227747979",
+      "displayName": "Env: Prod",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"prod\")"
+    },
+    "991fc3d7-4273-426d-9c4f-a3db4c45629b": {
+      "featureId": "0f30d9a8-6285-e0fd-2c98-55c227747979",
+      "displayName": "Env: Integration",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"int\")"
+    },
+    "9b963f32-0e00-47de-9d8d-8c873285ca2b": {
+      "featureId": "0f30d9a8-6285-e0fd-2c98-55c227747979",
+      "displayName": "Env: Test",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"test\")"
+    },
+    "ebb98ee1-15d6-4fd3-8841-15998393242a": {
+      "featureId": "0f30d9a8-6285-e0fd-2c98-55c227747979",
+      "displayName": "Env: Development",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"dev\")"
+    },
+    "db415488-d6c9-4236-8f8e-253c51af2e7f": {
+      "featureId": "5626643f-ea5e-f109-9896-6d5fdc32db68",
+      "displayName": "EXTERNAL GA USERS",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxlocale NOTIN (\"pt-BR\", \"es-AR\", \"en-IN\"); detection.xboxring NOTIN (\"4611686018735330000\", \"461168601875314500"
+    },
+    "7f14a08e-fb39-48e9-9be4-b845957563d0": {
+      "featureId": "5626643f-ea5e-f109-9896-6d5fdc32db68",
+      "displayName": "EXTERNAL FEATURE PREVIEW USERS",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxlocale NOTIN (\"pt-BR\", \"es-AR\", \"en-IN\"); detection.xboxring IN (\"4611686018886984000\", \"4611686019004288912\")"
+    },
+    "6aed905c-1fde-4c85-9ab8-4e35d9740afc": {
+      "featureId": "5626643f-ea5e-f109-9896-6d5fdc32db68",
+      "displayName": "INTERNAL RINGS",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxlocale NOTIN (\"pt-BR\", \"es-AR\", \"en-IN\"); detection.xboxring IN (\"4611686018735330000\", \"4611686018753145000\","
+    },
+    "a7019d1f-a0f7-854e-36af-df7c28b33fe0": {
+      "featureId": "e0176b38-c9fc-2c64-e7b3-2ec6998a74dd",
+      "displayName": "Prod",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment IN (\"prod\")"
+    },
+    "251a1fc8-01ab-7ff2-8f85-027898ee54d7": {
+      "featureId": "fc181828-586e-4c26-988a-5e3d39b43955",
+      "displayName": "Prod",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment IN (\"prod\")"
+    },
+    "c7fdcde7-47ce-021c-54bd-b500c2b15b09": {
+      "featureId": "19ae4ebd-f296-8ce9-6b81-f5643dccf689",
+      "displayName": "dfdfd A/A",
+      "audience": "detection.xboxappid IN (\"XboxMobile\")"
+    },
+    "0f0e5448-005c-25dd-74ad-4c1ad5e5513b": {
+      "featureId": "bb924f52-1581-bdc7-2fb2-1c76776a6a33",
+      "displayName": "dfdfd",
+      "audience": "detection.xboxappid IN (\"Validation\")"
+    },
+    "da6a7422-9157-4a2c-b84f-0a79b7375b82": {
+      "featureId": "0625b134-7b3b-af17-5a48-8bf31f6ae576",
+      "displayName": "Internal WW(Takehome + Canary)",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"HardwareTakehome0\", \"HardwareTakehome1\", \"TakehomeInsi"
+    },
+    "dc519d9f-ec4c-4abb-92da-9820acc30321": {
+      "featureId": "84887710-b583-13b7-789b-089f10999e9f",
+      "displayName": "Env: Development",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"dev\")"
+    },
+    "61961054-c0b2-4738-88af-98108978fb2b": {
+      "featureId": "62178b3a-bfce-5775-5340-0f108fd3135e",
+      "displayName": "xbox.com",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment In (\"prod\"); detection.xboxring NotIn (\"4611686018735330000\", \"4611686018760638000\", \"461168601875"
+    },
+    "95b336cb-9b75-4a7f-8752-18971a4a5a1d": {
+      "featureId": "62178b3a-bfce-5775-5340-0f108fd3135e",
+      "displayName": "DnA: Public Insiders in prod",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment NotIn (\"dev\", \"test\", \"int\"); detection.xboxring In (\"4611686019004288912\")"
+    },
+    "9e45e970-563c-41ea-aa71-eb70216033bd": {
+      "featureId": "62178b3a-bfce-5775-5340-0f108fd3135e",
+      "displayName": "origin-int.xbox.com",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment In (\"int\")"
+    },
+    "6f0816ab-ffb9-44ce-acbf-1ad0f8ded9a9": {
+      "featureId": "62178b3a-bfce-5775-5340-0f108fd3135e",
+      "displayName": "origin-test.xbox.com",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment In (\"test\")"
+    },
+    "7425a0c1-6901-48a3-89ec-0a3568a31372": {
+      "featureId": "62178b3a-bfce-5775-5340-0f108fd3135e",
+      "displayName": "greenland.xbox.com:3000",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment In (\"dev\")"
+    },
+    "88b3ac66-afed-4c2e-9217-f99f5e1afb13": {
+      "featureId": "49bd7545-beca-5253-06d6-150f126f5227",
+      "displayName": "Xbox Insider - Canary Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "3518770b-75aa-4e5a-89f4-b9e691541ac9": {
+      "featureId": "bbc09ebd-d40b-5c72-f35d-9a01f65ff691",
+      "displayName": "Global Audience",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"GlobalAudience\", \"PublicInsider5\", \"QFEInsider0\", \"QFE"
+    },
+    "e20162ae-7afc-4ec9-a563-df71b38ce9b2": {
+      "featureId": "bbc09ebd-d40b-5c72-f35d-9a01f65ff691",
+      "displayName": "Public Omega",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider4\")"
+    },
+    "c40c935e-aa85-49fa-867e-8cbe97044298": {
+      "featureId": "bbc09ebd-d40b-5c72-f35d-9a01f65ff691",
+      "displayName": "Public Delta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider2\", \"PublicInsider3\")"
+    },
+    "d266c145-e4ca-4ca1-9b48-c5c7255ed32c": {
+      "featureId": "bbc09ebd-d40b-5c72-f35d-9a01f65ff691",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider1\", \"GS_PUBLICINSIDER\")"
+    },
+    "6ba45642-4c95-45ee-841b-b0c3faa76b0d": {
+      "featureId": "bbc09ebd-d40b-5c72-f35d-9a01f65ff691",
+      "displayName": "Public Alpha",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring In (\"PublicInsider0\", \"PublicInsider10\")"
+    },
+    "ca5ccf90-828c-4956-9d83-89cf3f129e5b": {
+      "featureId": "49bd7545-beca-5253-06d6-150f126f5227",
+      "displayName": "Xbox Insider - Internal Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601895247"
+    },
+    "df9b3071-8f36-4230-a9ce-4d154bf26843": {
+      "featureId": "6e8eda23-1b72-b8f3-93dd-e5661e4fe579",
+      "displayName": "Xbox Insider - Canary Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601895247"
+    },
+    "50e555cc-125c-47e7-bca3-74c85e5d5025": {
+      "featureId": "9b984950-bea2-a0ea-c945-6ac1385b6fc9",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "742aefa7-7b7a-4a2d-87d7-c0434fcc4010": {
+      "featureId": "9b984950-bea2-a0ea-c945-6ac1385b6fc9",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"beta\")"
+    },
+    "4aec1bf8-0ff9-47fb-ade2-df7be93cfefd": {
+      "featureId": "a9c13f16-6a87-641e-5c83-c363f13aca34",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "1bccb2d3-b612-44f6-8ccc-3fff8858e670": {
+      "featureId": "a9c13f16-6a87-641e-5c83-c363f13aca34",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"beta\")"
+    },
+    "73a7d6c0-df65-4e07-b2d4-f596a7b08c3c": {
+      "featureId": "03bb2e08-d06d-0f6b-ee94-7d490981e71c",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "b37b5918-4afb-4377-86e6-3e77dfa5be61": {
+      "featureId": "03bb2e08-d06d-0f6b-ee94-7d490981e71c",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"beta\")"
+    },
+    "ec995481-3f50-4f06-8eb3-ca7339a4d338": {
+      "featureId": "03bb2e08-d06d-0f6b-ee94-7d490981e71c",
+      "displayName": "DogFood",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"dogfood\")"
+    },
+    "8f90a25a-8420-49d0-a5d8-bb5a6709ffb8": {
+      "featureId": "03bb2e08-d06d-0f6b-ee94-7d490981e71c",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"canary\")"
+    },
+    "96b6675b-771e-421c-91cb-5ae5151d5dec": {
+      "featureId": "74f1a143-7b2e-fafc-95eb-efdf677fa562",
+      "displayName": "Xbox Insider - Internal Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601895247"
+    },
+    "b4de62c7-1383-4b59-8609-a8884ffbd713": {
+      "featureId": "bc0d015d-dca6-d3ee-1468-f763cb24ec8a",
+      "displayName": "Public Omega",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"BR\", \"CA\", \"BE\", \"DE\", \"FR\", \"ES\", \"GB\", \"HK\","
+    },
+    "eacc2ac6-b63a-416e-8a46-eb21ad79d43d": {
+      "featureId": "e0176b38-c9fc-2c64-e7b3-2ec6998a74dd",
+      "displayName": "Env: Integration",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"int\")"
+    },
+    "ec016bce-a487-47fd-8b1d-a1f28cae34f4": {
+      "featureId": "e0176b38-c9fc-2c64-e7b3-2ec6998a74dd",
+      "displayName": "Env: Test",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"test\")"
+    },
+    "841daf9f-d752-41e0-9efc-f56710261f13": {
+      "featureId": "fc181828-586e-4c26-988a-5e3d39b43955",
+      "displayName": "Env: Integration",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"int\")"
+    },
+    "33f73bb4-e8c5-4c03-9158-fc9b14bf4f1a": {
+      "featureId": "6710fb82-94eb-d4fa-b374-0ea0cbd7e4af",
+      "displayName": "Xbox Insider - External Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601895247"
+    },
+    "5b7ef5bc-2842-3470-e957-e17b1998306f": {
+      "featureId": "f6854937-3229-4b3d-a6da-5272ebc5b880",
+      "displayName": "GA + Insiders",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxplatform IN (\"Windows\")"
+    },
+    "b399320a-d055-4173-b182-c86024c6bcde": {
+      "featureId": "1520326c-8a8a-8125-5198-df22b4ccb3f6",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxregion IN (\"AU\", \"BE\", "
+    },
+    "c9223117-7a87-cfc9-742a-8301b196d315": {
+      "featureId": "02a19177-84f5-b674-193b-04b4e24a7f4f",
+      "displayName": "GA",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"GlobalAudience\")"
+    },
+    "9ae95c0d-cc8e-4180-98f7-b00e0e596d64": {
+      "featureId": "4650dc8f-360d-f1ed-5444-e209424f3f83",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"461168601863"
+    },
+    "cea6d753-34ba-4d44-8f4b-7fcec0f6a969": {
+      "featureId": "142670bf-2107-67c7-b4aa-1f3cba49f479",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"461168601863"
+    },
+    "82ca71c7-73c3-4117-b2f7-dfc58cea686a": {
+      "featureId": "795e4ec9-4261-ccca-97ae-e2c37373d41b",
+      "displayName": "Public Omega",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"BE\", \"BR\", \"CA\", \"DE\", \"ES\", \"FR\", \"GB\", \"HK\","
+    },
+    "5c0cac3f-255f-3c1a-d2f4-7688c08e7f35": {
+      "featureId": "6f8a31c2-10eb-2949-2e55-cc44eaee3cf7",
+      "displayName": "Prod",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment IN (\"prod\")"
+    },
+    "baaa3b46-8e5d-4e20-9c92-59968a7a695c": {
+      "featureId": "b76d7a17-848a-527f-f543-d4c04d46572e",
+      "displayName": "Xbox Insider - Canary Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "54f01bda-8721-4451-b356-e349224f4b06": {
+      "featureId": "6710fb82-94eb-d4fa-b374-0ea0cbd7e4af",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"461168601863"
+    },
+    "a2ac1a62-ac91-3658-3117-055526cd215d": {
+      "featureId": "c9f4b06b-40f5-9b69-1836-b0cd7098941a",
+      "displayName": "5.7",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\")"
+    },
+    "d900e550-439f-45e0-87ef-dbfb949f2007": {
+      "featureId": "a21fdb57-48af-ee91-3d7e-3195bc22eac5",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NOTIN (\"461168601863"
+    },
+    "78a02349-ecf6-4f12-94ce-ae4b2a9e3a1c": {
+      "featureId": "87b39166-6d9b-a0a5-97e4-8925f4a5d01b",
+      "displayName": "DogFood",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"dogfood\")"
+    },
+    "e13a0cb0-bd89-4604-bcd1-acb93543ab34": {
+      "featureId": "87b39166-6d9b-a0a5-97e4-8925f4a5d01b",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "043982f4-6167-4f33-9766-a6ee51492145": {
+      "featureId": "b76d7a17-848a-527f-f543-d4c04d46572e",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"461168601863"
+    },
+    "5f865112-8ddf-489c-adef-cfc37a9e52c8": {
+      "featureId": "3fc42ab0-1159-17ba-c899-bb5be5fbb3cc",
+      "displayName": "GA + Internal + Insiders",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\")"
+    },
+    "648db3d1-cea4-44b2-bbc8-59746cc9d29b": {
+      "featureId": "87b39166-6d9b-a0a5-97e4-8925f4a5d01b",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "883aa786-30f3-41fd-ac5c-54ce129c533c": {
+      "featureId": "87b39166-6d9b-a0a5-97e4-8925f4a5d01b",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"beta\")"
+    },
+    "857be86b-e925-4ce9-ba78-515f4d7ecc37": {
+      "featureId": "3ed414b7-11c3-d013-351a-f7d0f1939d52",
+      "displayName": "Public Omega",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"BE\", \"BR\", \"CA\", \"DE\", \"ES\", \"FR\", \"GB\", \"HK\","
+    },
+    "3ec611e9-2f71-4d2d-82ef-28597ebef3a4": {
+      "featureId": "b694b2ed-04c7-d6dd-f170-6778534f0a5a",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "042ee340-6fad-46eb-9d20-3095644395f6": {
+      "featureId": "b694b2ed-04c7-d6dd-f170-6778534f0a5a",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "a5d42533-e234-49ab-807b-16f1c5af3a4d": {
+      "featureId": "b694b2ed-04c7-d6dd-f170-6778534f0a5a",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"beta\")"
+    },
+    "17155676-a160-48a8-b460-be92babf73d3": {
+      "featureId": "b694b2ed-04c7-d6dd-f170-6778534f0a5a",
+      "displayName": "DogFood",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"dogfood\")"
+    },
+    "0976c29b-cd8e-49f1-bb29-a67df9bb57aa": {
+      "featureId": "4feb0a5a-5ecd-b7a5-492c-d8045203ea92",
+      "displayName": "Xbox Insider - Canary Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "4f709c60-7f95-4d5e-84c9-80d7a1c149de": {
+      "featureId": "4feb0a5a-5ecd-b7a5-492c-d8045203ea92",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"461168601863"
+    },
+    "18d524f6-8caf-4127-b224-6951b0205b0e": {
+      "featureId": "4feb0a5a-5ecd-b7a5-492c-d8045203ea92",
+      "displayName": "Xbox Insider - External Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601895247"
+    },
+    "74742261-4f98-4d18-9831-907445fbf8d0": {
+      "featureId": "4feb0a5a-5ecd-b7a5-492c-d8045203ea92",
+      "displayName": "Xbox Insider - Internal Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601895247"
+    },
+    "d423ef06-3bae-40e4-83f3-ab80ac636676": {
+      "featureId": "4feb0a5a-5ecd-b7a5-492c-d8045203ea92",
+      "displayName": "TestX",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601876764"
+    },
+    "3ab9a682-8454-4bef-8da6-29ad39d5da19": {
+      "featureId": "4feb0a5a-5ecd-b7a5-492c-d8045203ea92",
+      "displayName": "Partners",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601885161"
+    },
+    "4537dd83-f249-4f1f-b3bd-1f7a7b0c1197": {
+      "featureId": "4feb0a5a-5ecd-b7a5-492c-d8045203ea92",
+      "displayName": "Debug Build",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion In (0.0.0.0); detection.xboxplatform IN (\"Windows\")"
+    },
+    "b1ea80c2-aaff-4593-86b8-d541a9af4564": {
+      "featureId": "6f8a31c2-10eb-2949-2e55-cc44eaee3cf7",
+      "displayName": "Env: Test",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"test\")"
+    },
+    "82434e19-6eeb-40bc-9d33-9fa9152e7e8e": {
+      "featureId": "6f8a31c2-10eb-2949-2e55-cc44eaee3cf7",
+      "displayName": "Env: Development",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"dev\")"
+    },
+    "fdaea72a-e967-4639-82c1-69f19cafa118": {
+      "featureId": "bf15aa22-5b96-5e24-559b-46fa90ab4a55",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"beta\")"
+    },
+    "8e0aeb3c-4530-4c1a-9a29-c97fac369f18": {
+      "featureId": "bf15aa22-5b96-5e24-559b-46fa90ab4a55",
+      "displayName": "DogFood",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"dogfood\")"
+    },
+    "0bd74577-3268-4cf6-94a1-e88c7c5c3331": {
+      "featureId": "bf15aa22-5b96-5e24-559b-46fa90ab4a55",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"canary\")"
+    },
+    "2371c3fb-f9ca-4950-b062-315579ea1ca1": {
+      "featureId": "17f8f813-f20d-79e8-39ce-3c4069827ac5",
+      "displayName": "xbox.com",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment In (\"prod\"); detection.xboxring NotIn (\"4611686018735330000\", \"4611686018760638000\", \"461168601875"
+    },
+    "dceff1ee-bf9f-432a-b7af-88aee7ed88f2": {
+      "featureId": "17f8f813-f20d-79e8-39ce-3c4069827ac5",
+      "displayName": "greenland.xbox.com:3000",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment In (\"dev\")"
+    },
+    "b6f613c0-7c55-4b8f-b7da-3fa5500c0e19": {
+      "featureId": "5626643f-ea5e-f109-9896-6d5fdc32db68",
+      "displayName": "EXTERNAL GA USERS",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxlocale NOTIN (\"pt-BR\", \"es-AR\", \"en-IN\"); detection.xboxplatform IN (\"ChromeOS\", \"fireOS\", \"iPadOS\", \"Linux\", "
+    },
+    "d8a5428a-0efb-4f34-9f24-8671b66b9e47": {
+      "featureId": "5626643f-ea5e-f109-9896-6d5fdc32db68",
+      "displayName": "EXTERNAL FEATURE PREVIEW USERS",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxlocale NOTIN (\"pt-BR\", \"es-AR\", \"en-IN\"); detection.xboxplatform IN (\"Windows\", \"macOS\", \"Linux\", \"ChromeOS\", "
+    },
+    "01a6c961-9080-0ce9-fba0-5cc7c0203669": {
+      "featureId": "5626643f-ea5e-f109-9896-6d5fdc32db68",
+      "displayName": "INTERNAL RINGS",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxlocale NOTIN (\"pt-BR\", \"es-AR\", \"en-IN\"); detection.xboxring IN (\"4611686018735330000\", \"4611686018753145000\","
+    },
+    "80913fb5-511b-b9bf-440e-a36482d63a94": {
+      "featureId": "0f29b2c1-e13b-e26f-c6e7-29ab32f27f39",
+      "displayName": "A/A",
+      "audience": "detection.xboxappid IN (\"xTarget\")"
+    },
+    "b67e0935-ee4a-1917-16fc-fd77810f8594": {
+      "featureId": "e7cfc116-64f0-1eb2-8fea-c8c446c37ebd",
+      "displayName": "MOBILE EXTERNAL + PUBLIC_INSIDER SUG",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"XGPUWEB\", \"CLOUDGAMING\"); detection.xboxplatform IN (\"Android\", \"iOS\", \"iPadOS\"); detection.xbox"
+    },
+    "3135e5d7-ddb3-871f-877c-10c910a2877e": {
+      "featureId": "b21fc056-7d4f-4f80-f36c-9ca158983960",
+      "displayName": "5/21-6/4",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxlanguage IN (\"en\"); detection.xboxplatform IN (\"Windows\"); detection.xboxregion IN (\"US\")"
+    },
+    "80a98aa4-90c1-f149-0b44-b2ec623e435f": {
+      "featureId": "d46969e6-2d19-c2d2-fb2f-4b0368ae5a0c",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "ec973cb2-79ad-b2a3-0e18-7cf5d1048796": {
+      "featureId": "2e52e7fd-e027-f90c-c952-22d49128bf00",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "df46b740-4a34-6133-0577-beb4f99d31ca": {
+      "featureId": "cf22d776-2b0f-e786-b218-7c4570b7803a",
+      "displayName": "33/33/33",
+      "audience": "detection.xboxappid IN (\"XboxWeb\", \"PlayXbox\")"
+    },
+    "3c0ed26d-fd27-1784-c93a-3e8ee75c0d28": {
+      "featureId": "34934139-f84d-729d-9885-7e381eea2e2c",
+      "displayName": "p1",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "e0abb976-1fa2-327f-5712-ace3c2774967": {
+      "featureId": "65baedae-a001-0ecf-315b-68805b71ec2b",
+      "displayName": "5/19/26",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxplatform IN (\"Windows\"); detection.xboxregion IN (\"US\")"
+    },
+    "61b1e029-ac97-36ab-1121-43e37e6e67aa": {
+      "featureId": "6a2c0cd2-6759-1122-49d7-86499fc1e3fb",
+      "displayName": "5/19/26",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"GlobalAudience\")"
+    },
+    "77be4a66-ed45-4055-8c17-85a909500ad2": {
+      "featureId": "b550e5ef-1a21-ccfe-5fb9-98321040f6cd",
+      "displayName": "Xbox Insider - External Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxregion IN (\"US\", \"DE\", \"G"
+    },
+    "e3f9dd25-1ddf-2953-6d86-1580db48d9e3": {
+      "featureId": "59d104be-07eb-42a2-b2ed-25c035237712",
+      "displayName": "Holdback",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring NOTIN (\"DevKitNoUpdate\")"
+    },
+    "aed53028-5253-b5e0-692c-9876b00d5061": {
+      "featureId": "3622bf12-29ce-28c3-bf49-179c473379b5",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "b6802550-3b82-0907-ca52-138c0b3b9ebb": {
+      "featureId": "113fe3b6-ea4d-98e2-33f8-f6bc17fe8080",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "faa54f11-2ee3-abfe-9525-789733b4ec6f": {
+      "featureId": "199cd747-aff4-e5b3-ca03-5c1f605d1541",
+      "displayName": "stage1",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "1771ce95-c228-4d72-9cf8-8337c9911871": {
+      "featureId": "ee1c96d4-21d2-4ecf-fbda-4f7b61ff5d1f",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "3ce8103d-cf73-7590-6e65-c3f446017af9": {
+      "featureId": "62d608a3-c7e9-796a-33a4-e2c07afcface",
+      "displayName": "GA v2",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxregion IN (\"US\", \"DE\", "
+    },
+    "272a97a5-8be6-44ec-a4fd-6a3df93647b3": {
+      "featureId": "bc0d015d-dca6-d3ee-1468-f763cb24ec8a",
+      "displayName": "Public Delta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"BR\", \"CA\", \"BE\", \"DE\", \"FR\", \"ES\", \"GB\", \"HK\","
+    },
+    "d3aee9e1-6a71-4ca5-9b29-fc8ccc8f8088": {
+      "featureId": "bc0d015d-dca6-d3ee-1468-f763cb24ec8a",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"BR\", \"CA\", \"BE\", \"DE\", \"FR\", \"ES\", \"GB\", \"HK\","
+    },
+    "b169c66d-6e3e-c584-f533-aa79b9d86262": {
+      "featureId": "65835b20-dd89-ee4f-7106-c98d42d0b091",
+      "displayName": "50/50",
+      "audience": "detection.xboxappid IN (\"xCloud\")"
+    },
+    "7039856f-2d35-779c-8541-5980a8981c2d": {
+      "featureId": "16d645c7-142c-e827-b356-7a11401092ce",
+      "displayName": "5.8",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"GlobalAudience\", \"HardwareSelfhost0\", \"HardwareSelfhos"
+    },
+    "0bac0f34-293d-48be-b905-d113818f0d90": {
+      "featureId": "eb29e71c-79e9-a589-8488-57d54cbc03c1",
+      "displayName": "Production",
+      "audience": "detection.xboxappid IN (\"XboxWeb\"); detection.xboxenvironment IN (\"ppe\", \"prod\")"
+    },
+    "0d79b541-21f1-2b6f-a39c-a3b655e33cdd": {
+      "featureId": "364a1d28-1708-f977-2c12-1888d2257e4a",
+      "displayName": "5.5",
+      "audience": "detection.devicetype IN (\"FourK\", \"Launch\", \"Slim\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\")"
+    },
+    "34eb613b-d2a7-4432-a053-040fbb6f88d9": {
+      "featureId": "f9b33623-d2a1-4dc5-a3d4-78fed0dfb246",
+      "displayName": "fhl test: agent created",
+      "audience": "detection.xboxappid In (\"Xbox.Shell\"); detection.xboxclienttype In (\"User\"); detection.xboxplatform In (\"Windows.Xbox\")"
+    },
+    "0c669e65-ad01-40ab-af94-049546b6a348": {
+      "featureId": "3ed88860-e8cc-f187-80f1-a7639e1ecada",
+      "displayName": "GA",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"BR\", \"AR\", \"IN\"); detection.xboxring IN (\"GlobalAu"
+    },
+    "aa3684b7-dae5-4caf-a7d9-3329b1cfcd42": {
+      "featureId": "3ed88860-e8cc-f187-80f1-a7639e1ecada",
+      "displayName": "GA",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"AT\", \"BE\", \"CA\", \"CZ\", \"DK\", \"FI\", \"ES\", \"FR"
+    },
+    "a8653485-e61c-b2ff-a73e-3a766750420e": {
+      "featureId": "d86d3581-b048-3b8f-335c-6efd87f414e2",
+      "displayName": "Holdback",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring NOTIN (\"GS_SELFHOST\", \"HardwareSelfhost0\", \"HardwareSelfhos"
+    },
+    "f6fda148-c6d3-467d-b5ef-e6b2385bfe6e": {
+      "featureId": "7490ac3e-2e98-248b-0bbf-953a25709e55",
+      "displayName": "DogFood",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"dogfood\")"
+    },
+    "4f2c5c42-e192-4e1c-841d-df7f51afe038": {
+      "featureId": "7490ac3e-2e98-248b-0bbf-953a25709e55",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "0acd6ebe-b5c1-2716-7522-809e64c91866": {
+      "featureId": "02a19177-84f5-b674-193b-04b4e24a7f4f",
+      "displayName": "Omega",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"PublicInsider4\")"
+    },
+    "ba2e4d4f-7d74-b489-0058-a1c995141772": {
+      "featureId": "02a19177-84f5-b674-193b-04b4e24a7f4f",
+      "displayName": "Beta/Delta",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"PublicInsider1\", \"PublicInsider2\")"
+    },
+    "08bce2c4-941c-c71e-a128-27552a8f96d2": {
+      "featureId": "02a19177-84f5-b674-193b-04b4e24a7f4f",
+      "displayName": "Selfhost",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"SelfhostInsider0\", \"SelfhostInsider1\", \"SelfhostInsi"
+    },
+    "353889b5-96df-658a-fe19-67d09a85a9e9": {
+      "featureId": "02a19177-84f5-b674-193b-04b4e24a7f4f",
+      "displayName": "Takehome",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"TakehomeInsider1\", \"TakehomeInsider0\", \"TakehomeInsi"
+    },
+    "139cf227-aee2-ff3f-6152-c4e60b426ab5": {
+      "featureId": "02a19177-84f5-b674-193b-04b4e24a7f4f",
+      "displayName": "TestX",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"Redstone_Testing_Current\", \"Redstone_Testing_Next\", "
+    },
+    "ae1c8ca4-f4d9-d0e2-a579-21cfa8f254f6": {
+      "featureId": "02a19177-84f5-b674-193b-04b4e24a7f4f",
+      "displayName": "Canary",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"Redstone_Validation\", \"Redstone_Validation_Next\", \"M"
+    },
+    "104afc8f-93e6-441a-a683-6c779b8e94e1": {
+      "featureId": "e5adba30-a58f-e282-662f-092440672328",
+      "displayName": "DogFood",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"dogfood\")"
+    },
+    "eabbf845-dd15-433e-85a0-9732a7e0ea51": {
+      "featureId": "e5adba30-a58f-e282-662f-092440672328",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "e2d31fac-1582-411f-a7cf-9e18930c4435": {
+      "featureId": "e24c5de6-f4f3-d9f6-0d09-a6d151cd08ec",
+      "displayName": "Env: Prod - General Audience",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"prod\"); detection.xboxring NotIn (\"4611686018735330000\", \"4611686018760638000\", \"46116860187"
+    },
+    "713995fd-dbba-4417-94bd-bd0baf91dcc7": {
+      "featureId": "e24c5de6-f4f3-d9f6-0d09-a6d151cd08ec",
+      "displayName": "Env: Prod - [DNA] Public Insiders",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"prod\"); detection.xboxring In (\"4611686019004288912\")"
+    },
+    "14389b9a-a6ec-4169-bd0f-a7ecfa901e9f": {
+      "featureId": "9124c615-e9f1-dcd9-c3a9-a6be511cfaac",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"461168601863"
+    },
+    "88e4e59f-670d-47ea-a7a0-b4856b60232f": {
+      "featureId": "9124c615-e9f1-dcd9-c3a9-a6be511cfaac",
+      "displayName": "Xbox Insider - External Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring In (\"461168601895247"
+    },
+    "0adca709-4780-461b-935b-092436b6ebc4": {
+      "featureId": "3b7f5514-78a2-b39b-6f17-fea8f3a18318",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "9aadf217-eda5-a4f9-4f31-00a79758f46c": {
+      "featureId": "ea648244-b69b-2669-2bf2-f21b77b426d1",
+      "displayName": "Internal Selfhost/Takehome",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "fcc771da-9ec8-b7b1-63b7-2ebceff482a5": {
+      "featureId": "ea648244-b69b-2669-2bf2-f21b77b426d1",
+      "displayName": "External Insiders",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "1af2f224-eee6-4c57-9040-2bb9f6f00599": {
+      "featureId": "be58eb3a-0a03-e7ae-e372-502fdace25b0",
+      "displayName": "XGPUCONSOLE GA SUG",
+      "audience": "detection.devicetype NOTIN (\"XboxOne\"); detection.xboxappid IN (\"xCloud\"); detection.xboxappversion >= 2602.0.2601.16001; detection.xboxofferings IN (\"XGPUCONSO"
+    },
+    "6fe4b045-3239-40e6-a203-7a41be0e0d74": {
+      "featureId": "be58eb3a-0a03-e7ae-e372-502fdace25b0",
+      "displayName": "XGPUCONSOLE PUBLIC_INSIDER SUG",
+      "audience": "detection.devicetype NOTIN (\"XboxOne\"); detection.xboxappid IN (\"xCloud\"); detection.xboxappversion >= 2602.0.2601.16001; detection.xboxofferings IN (\"XGPUCONSO"
+    },
+    "5bbc12cf-547b-a318-ccb1-eecf44c72b04": {
+      "featureId": "0908b29a-2804-d75e-5a0d-59a5041a1329",
+      "displayName": "4.7",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"US\"); detection.xboxring IN (\"GlobalAudience\", \"Hard"
+    },
+    "ec6da205-26ef-250f-8d6d-8aa35f833f81": {
+      "featureId": "4665d2d4-9661-3e6a-91f7-59899ee0be39",
+      "displayName": "50/50 with r/g",
+      "audience": "detection.xboxappid IN (\"Validation\")"
+    },
+    "abe2b99b-e387-4c73-8c00-c7ba7416a0bd": {
+      "featureId": "e7cfc116-64f0-1eb2-8fea-c8c446c37ebd",
+      "displayName": "NON-MOBILE EXTERNAL + PUBLIC_INSIDER SUG",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"XGPUWEB\", \"CLOUDGAMING\"); detection.xboxplatform NOTIN (\"Android\", \"iOS\", \"iPadOS\"); detection.x"
+    },
+    "86b3177c-1599-440e-bdfd-4e3d782790b7": {
+      "featureId": "e7cfc116-64f0-1eb2-8fea-c8c446c37ebd",
+      "displayName": "NON-MOBILE+EXTERNAL + GA SUG",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"CLOUDGAMING\", \"XGPUWEB\"); detection.xboxplatform NOTIN (\"Android\", \"iOS\", \"iPadOS\"); detection.x"
+    },
+    "cc7a309e-f54a-4948-b5f1-4fb98faa52fd": {
+      "featureId": "1b927ece-be1c-56f0-8bee-424ae23ef436",
+      "displayName": "Stage_2",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "cacd36fc-1f8d-eb5f-0dfc-be51f1e13d1e": {
+      "featureId": "f61736c1-16d1-c086-da5c-ce7cf3f73c30",
+      "displayName": "AA for XGPUPCAPP",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"XGPUPCAPP\")"
+    },
+    "2427942d-2685-2fcb-975d-f1f756caebf4": {
+      "featureId": "f61736c1-16d1-c086-da5c-ce7cf3f73c30",
+      "displayName": "AA for XGPU",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"XGPU\")"
+    },
+    "41d18267-d82d-b719-1807-b41af3a010af": {
+      "featureId": "f61736c1-16d1-c086-da5c-ce7cf3f73c30",
+      "displayName": "AA for XGPUCONSOLE",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"XGPUCONSOLE\")"
+    },
+    "8cb0116a-64b3-90e2-48b8-97868584b0fa": {
+      "featureId": "f61736c1-16d1-c086-da5c-ce7cf3f73c30",
+      "displayName": "AA for XGPUWEB",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"XGPUWEB\")"
+    },
+    "fdd08f6e-22d5-9381-4edd-96e0886116ae": {
+      "featureId": "46cb5769-21c3-1fc5-d48f-582f55cdf6cd",
+      "displayName": "persistent 50/50 stage",
+      "audience": "detection.xboxappid IN (\"xCloud\")"
+    },
+    "4689cb58-84b4-e588-2179-e2d503d34c3c": {
+      "featureId": "7c109a96-ec0f-c5ab-3d62-101873845a51",
+      "displayName": "canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "0fe55395-28fc-8399-ebee-ba89bd63506b": {
+      "featureId": "a4709787-0485-4cfb-a178-839dacec9bf9",
+      "displayName": "GA Experiment",
+      "audience": "detection.xboxappid IN (\"XboxWeb\")"
+    },
+    "9e3fddcd-8e89-23fb-29b4-179472b99c35": {
+      "featureId": "8967d704-f954-de1c-fdfc-7d374e90354a",
+      "displayName": "Test with App Id filter",
+      "audience": "detection.xboxappid IN (\"LoyaltyStore\")"
+    },
+    "9afeda17-c3da-46d3-808a-e10d09a92af9": {
+      "featureId": "795e4ec9-4261-ccca-97ae-e2c37373d41b",
+      "displayName": "Public Delta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"BE\", \"BR\", \"CA\", \"DE\", \"ES\", \"FR\", \"GB\", \"HK\","
+    },
+    "26829d94-c456-44c5-83f9-30a236134a51": {
+      "featureId": "795e4ec9-4261-ccca-97ae-e2c37373d41b",
+      "displayName": "Public Beta",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxregion IN (\"AU\", \"BE\", \"BR\", \"CA\", \"DE\", \"ES\", \"FR\", \"GB\", \"HK\","
+    },
+    "8b941e39-b5c2-4c33-8a13-9e127ef257bf": {
+      "featureId": "8b3024cc-7f47-9b78-ead8-d912ec2ebe89",
+      "displayName": "stage1",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "f8a0c8d0-8de3-410b-99eb-3fed9dbbf0cc": {
+      "featureId": "672c71e2-904e-1db6-e084-bdd6f5580582",
+      "displayName": "Ring: General Audience",
+      "audience": "detection.xboxappid IN (\"Microsoft.XboxGamingOverlay_8wekyb3d8bbwe\"); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"4611686018952471000\", \"4"
+    },
+    "2e7f2b7b-879e-8e21-41bf-ffc7482751ec": {
+      "featureId": "6a77eb05-f9fc-1585-00b3-dfea971ff58e",
+      "displayName": "3.5",
+      "audience": "detection.xboxappid IN (\"XboxWeb\")"
+    },
+    "83c5ed2e-01f7-d3c8-0b35-cec681ec2b47": {
+      "featureId": "09a31a5b-5941-d7c3-b5d9-da9ab7b94c9e",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "d5a448a0-34fe-4770-bd65-642511f431d9": {
+      "featureId": "9f05d6c2-88ac-fe2a-c273-883ca16ea3fc",
+      "displayName": "Canary",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring IN (\"canary\")"
+    },
+    "bb99e079-9157-4ba2-ad19-f2aca7360aaf": {
+      "featureId": "277f2978-024c-ecf7-a8a4-608b6068e3bd",
+      "displayName": "Xbox Insider - Internal Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "9f493998-b65a-484b-a6e3-0397a18308d1": {
+      "featureId": "277f2978-024c-ecf7-a8a4-608b6068e3bd",
+      "displayName": "Xbox Insider - Canary Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring IN (\"461168601895247"
+    },
+    "e9b13f1a-b5c7-4b2b-8b3c-1671c41a8788": {
+      "featureId": "c56f4e0e-8ac2-b256-b29a-053819955298",
+      "displayName": "Edgewater+BrazilSouth+PUBLIC_INSIDER and GA SUGs",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"XGPUWEB\"); detection.xboxring IN (\"Public_Insider\", \"GA\"); detection.xboxshellversion >= 10.0.26"
+    },
+    "8ec92416-1ea8-19d0-6877-c4240b8e4dc9": {
+      "featureId": "96d6eb9a-85dd-9274-d261-15f999e1a471",
+      "displayName": "Test Rollout",
+      "audience": "detection.xboxappid IN (\"playxbox\"); territory IN (\"AR\", \"BR\", \"CA\", \"IN\", \"AU\", \"MX\", \"PL\", \"NZ\", \"US\")"
+    },
+    "d500b6c9-c104-4e35-8fe3-7422f3d8094a": {
+      "featureId": "4b693196-8b0e-c395-0207-84b2dd387ab2",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"XboxMobile\"); detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "76164987-c7bf-4a37-875e-de1f81ef5b83": {
+      "featureId": "0f28ab7d-3d67-7a27-e998-1a584345c341",
+      "displayName": "Env: Prod - General Audience",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"prod\"); detection.xboxring NotIn (\"4611686018735330000\", \"4611686018760638000\", \"46116860187"
+    },
+    "0a432692-7937-4f16-8c7e-787f03409216": {
+      "featureId": "0f28ab7d-3d67-7a27-e998-1a584345c341",
+      "displayName": "Env: Prod - [DNA] Public Insiders",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment In (\"prod\"); detection.xboxring In (\"4611686019004288912\")"
+    },
+    "fd9b521c-e3ad-1233-331c-adfb43193c3c": {
+      "featureId": "3db5f375-739e-fc72-3d5d-80cb5902f5a7",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"CLOUDGAMING\", \"CLOUDGAMINGTAKEHOME\", \"XGPUBETA\", \"XGPU\", \"XGPUCONSOLE\", \"XGPUPCAPP\", \"XGPUWEB\")"
+    },
+    "dee414dc-81d3-4aeb-a427-159cd60e2497": {
+      "featureId": "f289f622-e028-d41f-6438-62ecf9f4cee8",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NOTIN (\"461168601863"
+    },
+    "cea422ac-ccef-efc5-45fe-289fbcf26de0": {
+      "featureId": "839f97e2-de1b-5d96-17c5-5ed0fdaae19a",
+      "displayName": "test",
+      "audience": "detection.xboxappid IN (\"XboxGameBarWidgets\")"
+    },
+    "b9b9b39c-4c6f-3e08-cf3f-27cfc22f0eb3": {
+      "featureId": "fb2beb86-accc-7f0d-9c69-6ea2cca4f856",
+      "displayName": "test",
+      "audience": "detection.xboxappid IN (\"XboxAppTray\")"
+    },
+    "16d1d19f-9a0a-45ac-84af-6971f1bf3fd4": {
+      "featureId": "8a214c13-1a5b-e28c-d2a7-08f7e15b6c7c",
+      "displayName": "TestX",
+      "audience": "detection.xboxclienttype IN (\"User\"); detection.xboxplatform IN (\"Windows.Xbox\"); detection.xboxring IN (\"Redstone_Testing_Current\", \"Redstone_Testing_Next\", \"G"
+    },
+    "d48aeb5b-d963-446c-9edc-cab4cf47767c": {
+      "featureId": "a65f9cab-e0bb-0f57-8c46-7b71ac682308",
+      "displayName": "Partners",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion NOTIN (0.0.0.0); detection.xboxarchitecture IN (\"ARM64\"); detection.xboxplatform IN (\"Windows\")"
+    },
+    "f50100f9-b4dd-2d28-5440-603eb320c5d3": {
+      "featureId": "54103bde-fab0-15f6-0ad5-77179601d979",
+      "displayName": "test",
+      "audience": "detection.xboxappid IN (\"xboxai\"); detection.xboxplatform IN (\"Windows\")"
+    },
+    "11d4ce14-fcf7-40c7-b456-32850bc0aa10": {
+      "featureId": "5b562227-87f5-a9d9-513f-047bd55d88c3",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxappversion >= 2602.1000.30.0; detection.xboxplatform IN (\"Windows\"); detection.xboxring NOTIN (\"4611686018"
+    },
+    "77768e4b-9003-9e05-6e27-70beedd83dc3": {
+      "featureId": "8eee127e-8f5a-ca87-7025-03187e0df6b3",
+      "displayName": "stage1",
+      "audience": "detection.xboxclienttype IN (\"Device\"); detection.xboxplatform IN (\"Windows.Xbox\")"
+    },
+    "c3c1c3ec-6b20-e257-4079-6776ed875cc9": {
+      "featureId": "d31c2979-81c4-fb09-5d16-aa054727c933",
+      "displayName": "Stage1",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment IN (\"dev\")"
+    },
+    "e03339d8-5463-702d-2d94-6165700260b5": {
+      "featureId": "ac774622-4a67-b901-f8ff-cbed853e272a",
+      "displayName": "stage_1",
+      "audience": "detection.xboxappid IN (\"playxbox\"); detection.xboxenvironment IN (\"dev\")"
+    },
+    "d380e752-8008-4936-a1f2-f885bf60c700": {
+      "featureId": "3db5f375-739e-fc72-3d5d-80cb5902f5a7",
+      "displayName": "Takehome",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"TAKEHOMEWEB\", \"TAKEHOMECONSOLE\", \"TAKEHOME\")"
+    },
+    "0cc74bf2-da04-4952-b73b-cc3f14925c41": {
+      "featureId": "3db5f375-739e-fc72-3d5d-80cb5902f5a7",
+      "displayName": "Fresno test",
+      "audience": "detection.xboxappid IN (\"xCloud\"); detection.xboxofferings IN (\"FRESNOTEST\")"
+    },
+    "79be13d4-6004-7faa-09f1-73e00c5e1e75": {
+      "featureId": "bda890f4-da2f-f846-fa18-7e634c61f5c8",
+      "displayName": "test 50/50",
+      "audience": "detection.xboxappid IN (\"Validation\")"
+    },
+    "22476493-f575-b190-eb5f-5a4427af9e3f": {
+      "featureId": "2816a337-6c2b-31f6-2be6-684c388c55df",
+      "displayName": "test",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "8a906012-5eb8-4bec-275b-361ecce70c12": {
+      "featureId": "2d80f4bd-5352-aa11-3b15-fb1e882eded3",
+      "displayName": "Test 50/50",
+      "audience": "detection.xboxappid IN (\"playxbox\")"
+    },
+    "330fc4c5-7cd9-48dc-9e89-5206dfd30e50": {
+      "featureId": "21146662-b1b1-7a4c-b4df-3c1c39667cd9",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"xboxai\"); detection.xboxplatform IN (\"Windows\", \"iOS\", \"Android\"); detection.xboxring NOTIN (\"4611686018633089000\", \"461168601876764600"
+    },
+    "368334f4-0098-4fe9-bd6c-01efc4de74af": {
+      "featureId": "157c8e2d-2ef6-7f23-a7b5-d9ceeca2997c",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"xboxai\"); detection.xboxappversion NotIn (0.0.0.0); detection.xboxplatform IN (\"Windows\"); detection.xboxring NotIn (\"46116860186330890"
+    },
+    "b90d490a-6bca-4ce7-83d4-ff15e10bdc44": {
+      "featureId": "157c8e2d-2ef6-7f23-a7b5-d9ceeca2997c",
+      "displayName": "General Audience",
+      "audience": "detection.xboxappid IN (\"xboxai\"); detection.xboxplatform IN (\"Android\", \"iOS\"); detection.xboxring In (\"retail\")"
+    },
+    "d865614a-5ca1-42e2-8720-8ce3471c7f4b": {
+      "featureId": "205364d0-1a11-2a15-e871-3f9ed8de62c4",
+      "displayName": "50/50",
+      "audience": "detection.xboxappid IN (\"xboxai\")"
+    },
+    "512c8eb6-2174-489a-9240-c7feff60e9e4": {
+      "featureId": "f0a25de2-9b2c-d727-235a-4099f19710e0",
+      "displayName": "50/50",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxplatform IN (\"Windows\")"
+    },
+    "01301c87-0008-46b9-b6a9-b4df5bb68f42": {
+      "featureId": "6123ac17-cd6f-5a61-302c-5f1934fb41de",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"PCGamingApp\"); detection.xboxplatform IN (\"Windows\")"
+    },
+    "1ba9c53c-4a36-4a51-8153-1d074669a57c": {
+      "featureId": "95d2d180-741d-df61-ddf7-ab3ba6d3e4c6",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"XboxWeb\")"
+    },
+    "bc70f0c4-0cdc-454e-a7aa-4b3a65a7820e": {
+      "featureId": "01008c45-806b-a44c-001c-b0218170b329",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"XboxWeb\")"
+    },
+    "4e069f42-a723-4bd1-b8c5-d2d381b1e6b2": {
+      "featureId": "941c6762-b860-6f3e-4b09-a69edff81b82",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"XboxWeb\")"
+    },
+    "31400618-ddb1-4fe2-8abf-a2c0707d11bf": {
+      "featureId": "d31a895e-38ea-ebb0-b1ca-a929c2a2a1fa",
+      "displayName": "GA",
+      "audience": "detection.xboxappid IN (\"XboxWeb\")"
+    }
+  },
+  "buckets": {
+    "started": [
+      {
+        "stepId": "4ed0ad4e-84a6-492c-82e3-5f056872e546",
+        "experimentId": "5c8526d4-9d6b-4f06-827f-1ab0b8c57b75",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-29T20:40:07.8862115+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "468bd741-1b4e-4bca-91de-96ace411b893",
+        "experimentId": "ab61ec00-55ab-4a81-b40e-0082cd207c97",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-29T19:34:47.7069818+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "9b9a75a9-8d5f-db1d-c91e-162dfcc439bf",
+        "experimentId": "3d650e2c-6348-17ad-e549-8840f026b46a",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-28T21:08:40.0930476+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "170e569a-a4ba-46ea-b3c6-c4a79245c829",
+        "experimentId": "c92cf563-5551-4154-a954-786f5879379b",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-28T15:24:42.5973118+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "10/90",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "3528c495-1e59-a9ef-ec2d-8c6628cf0a86",
+        "experimentId": "40868a16-4c83-f21b-b81f-f95dd3f96cd6",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T23:30:06.3332495+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "42436054-e2ef-4924-9459-ce7c2120b707",
+        "experimentId": "ea5b0487-e5cf-4c25-b3b5-15cb77b1696f",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-27T23:21:09.2772296+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "24bce0af-b903-4770-aa6c-42e45857bffd",
+        "experimentId": "b8c0e78d-ac13-4abc-92fe-414494ca870d",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-27T23:21:38.5304052+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "0f4e46ba-e8e4-4301-abcd-7e88ee8c8750",
+        "experimentId": "711f7e83-4aea-4d23-94c8-89bb8685ec9d",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-27T23:21:00.9528066+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "9f50e69b-5a55-49c9-a667-a2b0632f4e0a",
+        "experimentId": "a382c78c-4069-4ee2-a854-be757aa1cba0",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-27T23:20:54.0896366+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "924009a7-9df0-4351-bc53-0c944b11567d",
+        "experimentId": "ba3165e3-f768-4f6c-b9a2-c250ea14e540",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:20:04.2561527+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "0ae8bf54-1d62-438c-b87e-0e8da4ca9d42",
+        "experimentId": "8a42c1e0-32d0-4bf7-b22f-8a8b53c489ea",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:19:58.0900194+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "8fcd2823-0c9d-4533-af3e-7f6ad59e058c",
+        "experimentId": "3266c43e-97b6-4ba1-b5a8-a09ef67f48a8",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:19:49.3657758+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "5981dfa3-9834-4cbe-b16b-0d902348e74b",
+        "experimentId": "3b19b40d-6cb4-42ff-9d01-1228aff62e55",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:19:42.5580029+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "0c8721fa-e1b5-4976-808e-0a270b658f60",
+        "experimentId": "1504ce2a-5bfd-482a-b54f-2275bf09c40c",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:19:34.4179522+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "4c8ad6d8-69a8-42d8-87d8-26ecd786227f",
+        "experimentId": "6a3d3ca4-2582-4a73-ae89-19449fe1e203",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:19:25.7163692+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "018bb0f4-c8db-54fe-aae4-48147d36ed36",
+        "experimentId": "414ec861-6558-4a57-bd65-520fb1f670fb",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-29T20:06:07.164066+00:00",
+        "stoppedAt": "2026-06-01T16:41:19.7931722+00:00",
+        "analysisType": "AB",
+        "splits": "25%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "ff174477-b835-4319-9a0c-082b15f15e58",
+        "experimentId": "2318f9f7-e4c2-40e2-9cf3-01d6c826b648",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-28T22:07:14.7665373+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "7492f75a-45af-4a97-b518-8ba30b08a3a0",
+        "experimentId": "991fc3d7-4273-426d-9c4f-a3db4c45629b",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-28T21:47:33.3169208+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "b46f4b93-1883-4c05-8bcd-b94121188b95",
+        "experimentId": "9b963f32-0e00-47de-9d8d-8c873285ca2b",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-28T21:47:16.9619028+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "28680716-16f2-43e9-b6bb-255e2da632e0",
+        "experimentId": "ebb98ee1-15d6-4fd3-8841-15998393242a",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-27T22:31:30.2887507+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "46f34cac-9fb2-4780-b477-ffa000b187df",
+        "experimentId": "db415488-d6c9-4236-8f8e-253c51af2e7f",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T21:48:29.4039926+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "b31ebec5-9700-444d-a600-8080ff0acac5",
+        "experimentId": "7f14a08e-fb39-48e9-9be4-b845957563d0",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T21:47:54.5338828+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "ce2e50ad-00bb-4ce3-ab27-29812c95a185",
+        "experimentId": "6aed905c-1fde-4c85-9ab8-4e35d9740afc",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T21:47:39.3204825+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "59e4527b-1a31-6dcd-0cc4-d55e33ad62a2",
+        "experimentId": "a7019d1f-a0f7-854e-36af-df7c28b33fe0",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T20:20:16.6903583+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "f0145f62-1a6e-b1e6-f2f8-680acaded932",
+        "experimentId": "251a1fc8-01ab-7ff2-8f85-027898ee54d7",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T20:19:27.4969897+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "7803e691-b64d-57d8-bf34-aec6c7e36fbe",
+        "experimentId": "c7fdcde7-47ce-021c-54bd-b500c2b15b09",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T17:51:40.6738315+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "29e5f652-1f0d-737a-a862-7f83f9e2e60a",
+        "experimentId": "0f0e5448-005c-25dd-74ad-4c1ad5e5513b",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T17:49:05.0848048+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "cf2c4a06-32eb-4b4a-b5dd-ab7dbbaef51b",
+        "experimentId": "da6a7422-9157-4a2c-b84f-0a79b7375b82",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-26T23:43:24.9299972+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "10/90",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f48fa72d-0e8e-400b-bf7c-1e11e413fffd",
+        "experimentId": "dc519d9f-ec4c-4abb-92da-9820acc30321",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-26T23:40:12.6014243+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "b2e0fe9f-c9f8-406b-91b9-cde22132aa08",
+        "experimentId": "61961054-c0b2-4738-88af-98108978fb2b",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T17:02:03.2970349+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "a63aeee9-845e-4dc1-8a78-60c6063ee0d1",
+        "experimentId": "95b336cb-9b75-4a7f-8752-18971a4a5a1d",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T17:01:50.8269924+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "88c5bfa7-dfd1-4e70-b81c-7957e5c9ec5f",
+        "experimentId": "9e45e970-563c-41ea-aa71-eb70216033bd",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T17:01:37.1852612+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "fa48f3e7-b81e-4f8c-9c23-b3cb8ecb9d76",
+        "experimentId": "6f0816ab-ffb9-44ce-acbf-1ad0f8ded9a9",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T17:01:29.8415607+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "c0d083fa-4b83-42c4-8af6-2a45bcae4690",
+        "experimentId": "7425a0c1-6901-48a3-89ec-0a3568a31372",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T17:01:18.5388895+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "063eee6a-b629-dacc-a3f2-7cf1e30310b3",
+        "experimentId": "88b3ac66-afed-4c2e-9217-f99f5e1afb13",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-27T22:22:15.5529596+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "9caf9e3d-74a3-4899-ae39-16e13861309e",
+        "experimentId": "3518770b-75aa-4e5a-89f4-b9e691541ac9",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-27T18:12:36.2885198+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "0b75e62f-54f0-4ff8-9e80-639f55210ffe",
+        "experimentId": "e20162ae-7afc-4ec9-a563-df71b38ce9b2",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-26T16:15:55.0499307+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "127acec5-a67e-42d4-85cf-c938d5a53740",
+        "experimentId": "c40c935e-aa85-49fa-867e-8cbe97044298",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-26T16:15:02.9363519+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "82a95582-6e38-40c4-b6a1-4c4b575a7015",
+        "experimentId": "d266c145-e4ca-4ca1-9b48-c5c7255ed32c",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-26T16:14:23.7456128+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "73423919-5fe8-47df-8abb-8f575092fe19",
+        "experimentId": "6ba45642-4c95-45ee-841b-b0c3faa76b0d",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T16:12:54.3139399+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "577ab54e-9ab7-4ac9-a729-d0cada98f70f",
+        "experimentId": "ca5ccf90-828c-4956-9d83-89cf3f129e5b",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T22:23:29.6535458+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "9c5d7a18-55ec-44ff-b112-e5d0954a22c0",
+        "experimentId": "df9b3071-8f36-4230-a9ce-4d154bf26843",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T06:44:08.8575906+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "0e6c42b4-6b90-46f8-88ad-b2e0402dd605",
+        "experimentId": "50e555cc-125c-47e7-bca3-74c85e5d5025",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T16:04:40.8656502+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "0b4557f8-b6f7-4ff3-929b-1174f185e0ac",
+        "experimentId": "742aefa7-7b7a-4a2d-87d7-c0434fcc4010",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T16:03:31.9871379+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "7f722e6f-26a7-4ee9-8939-819e82c0cff8",
+        "experimentId": "4aec1bf8-0ff9-47fb-ade2-df7be93cfefd",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T16:04:36.3618621+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "ba2701c0-529e-4615-af08-a50c4ce60654",
+        "experimentId": "1bccb2d3-b612-44f6-8ccc-3fff8858e670",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T16:03:18.2982622+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "c1ff9e0a-0aec-40a6-b181-e6216d893fe1",
+        "experimentId": "73a7d6c0-df65-4e07-b2d4-f596a7b08c3c",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T15:58:53.0082244+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "42892dd1-bde2-4b8a-8554-1bc07b19d4e9",
+        "experimentId": "b37b5918-4afb-4377-86e6-3e77dfa5be61",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T15:58:46.9639432+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "9e5f3f41-58c3-4a76-b561-d1c8f3c9bdf5",
+        "experimentId": "ec995481-3f50-4f06-8eb3-ca7339a4d338",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T15:55:57.2938999+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "2edf7143-b4e9-4d90-a50b-9a4e657fb8c7",
+        "experimentId": "8f90a25a-8420-49d0-a5d8-bb5a6709ffb8",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T15:55:46.7233175+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "6e408b73-ad9e-44aa-97cd-52e197563918",
+        "experimentId": "96b6675b-771e-421c-91cb-5ae5151d5dec",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-29T15:41:20.5328084+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "822b28ff-3f70-4f8d-b2d4-6f1745b0e20c",
+        "experimentId": "b4de62c7-1383-4b59-8609-a8884ffbd713",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T01:14:45.2641336+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "622cd970-7ddb-436e-9920-2ff28bc7c597",
+        "experimentId": "eacc2ac6-b63a-416e-8a46-eb21ad79d43d",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-27T17:06:42.9517318+00:00",
+        "stoppedAt": "2026-06-01T18:38:07.3550186+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "a6ee1018-a31c-4a7b-9b7e-36fece501d72",
+        "experimentId": "ec016bce-a487-47fd-8b1d-a1f28cae34f4",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-26T17:34:43.1414065+00:00",
+        "stoppedAt": "2026-06-01T18:37:20.2255865+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "54704f1b-f449-4c39-9749-a47bad22536f",
+        "experimentId": "841daf9f-d752-41e0-9efc-f56710261f13",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-27T17:06:38.4753892+00:00",
+        "stoppedAt": "2026-06-02T15:33:24.7711997+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "1ec0c268-2374-4816-ab79-8cd8e65068b1",
+        "experimentId": "33f73bb4-e8c5-4c03-9158-fc9b14bf4f1a",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-29T21:09:41.7268483+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "30eec466-720c-26cd-0bd1-5c230687c701",
+        "experimentId": "5b7ef5bc-2842-3470-e957-e17b1998306f",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-28T17:23:56.8188219+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "d09eb5fb-dd62-4537-919f-397230a5012c",
+        "experimentId": "b399320a-d055-4173-b182-c86024c6bcde",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T17:29:17.5903149+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "2fdf5138-a8b4-ae31-fb64-6cc87aa30d86",
+        "experimentId": "c9223117-7a87-cfc9-742a-8301b196d315",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-28T21:37:39.7518335+00:00",
+        "stoppedAt": "2026-06-01T19:41:12.4404394+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "1ad878aa-522c-4efd-8c96-31e8c029abbf",
+        "experimentId": "9ae95c0d-cc8e-4180-98f7-b00e0e596d64",
+        "stepName": "Step-3",
+        "startedAt": "2026-05-29T18:08:16.6143901+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "2e4a5c77-a9a4-4581-9ead-b3e09e63dca7",
+        "experimentId": "cea6d753-34ba-4d44-8f4b-7fcec0f6a969",
+        "stepName": "Step-3",
+        "startedAt": "2026-05-29T18:08:04.0302625+00:00",
+        "stoppedAt": null,
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "578d09bf-3480-4386-b06b-f82fe21b4558",
+        "experimentId": "82ca71c7-73c3-4117-b2f7-dfc58cea686a",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T01:15:29.0943291+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      }
+    ],
+    "stopped": [
+      {
+        "stepId": "f65b1093-1bfc-a89c-563d-655d3f53f12a",
+        "experimentId": "3d650e2c-6348-17ad-e549-8840f026b46a",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-28T21:06:27.6366543+00:00",
+        "stoppedAt": "2026-05-28T21:08:40.0930476+00:00",
+        "analysisType": "AB",
+        "splits": "10%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "dcb9cccf-b5b7-4f93-802f-b4b3d110f54f",
+        "experimentId": "ea5b0487-e5cf-4c25-b3b5-15cb77b1696f",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:20:38.0187197+00:00",
+        "stoppedAt": "2026-05-27T23:21:09.2772296+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "3dd1154c-bef1-451f-9819-6159800765a3",
+        "experimentId": "b8c0e78d-ac13-4abc-92fe-414494ca870d",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:20:45.019901+00:00",
+        "stoppedAt": "2026-05-27T23:21:38.5304052+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "cb7b2b7a-2c22-442b-bffe-4d48255e6e6f",
+        "experimentId": "711f7e83-4aea-4d23-94c8-89bb8685ec9d",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:20:26.0031034+00:00",
+        "stoppedAt": "2026-05-27T23:21:00.9528066+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "0201829e-4269-4cb6-80e6-e3c419828783",
+        "experimentId": "a382c78c-4069-4ee2-a854-be757aa1cba0",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T23:20:14.1833484+00:00",
+        "stoppedAt": "2026-05-27T23:20:54.0896366+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "56073a0c-948a-4b96-9511-435104c5d820",
+        "experimentId": "2318f9f7-e4c2-40e2-9cf3-01d6c826b648",
+        "stepName": "Switch to 50%",
+        "startedAt": "2026-05-28T22:06:22.3644655+00:00",
+        "stoppedAt": "2026-05-28T22:07:14.7665373+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "58e4871e-9b2f-49ad-88b1-1fa48ab4533e",
+        "experimentId": "2318f9f7-e4c2-40e2-9cf3-01d6c826b648",
+        "stepName": "Switch to 25%",
+        "startedAt": "2026-05-28T22:05:34.0700066+00:00",
+        "stoppedAt": "2026-05-28T22:06:22.3644655+00:00",
+        "analysisType": "AB",
+        "splits": "25%",
+        "nextStepName": "Switch to 100% (DC)",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "2d308211-b66c-4701-8ea3-465816d9a79e",
+        "experimentId": "2318f9f7-e4c2-40e2-9cf3-01d6c826b648",
+        "stepName": "Switch to 5%",
+        "startedAt": "2026-05-28T22:03:19.9985778+00:00",
+        "stoppedAt": "2026-05-28T22:05:34.0700066+00:00",
+        "analysisType": "AB",
+        "splits": "5%",
+        "nextStepName": "Switch to 50% (AB)",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "75e45e55-45b3-176c-9fb0-d24c928fe83b",
+        "experimentId": "5c0cac3f-255f-3c1a-d2f4-7688c08e7f35",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-27T20:12:31.1874596+00:00",
+        "stoppedAt": "2026-05-27T21:31:59.3365204+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "11b0e627-5d2e-4980-8e93-52b52045c0bf",
+        "experimentId": "3518770b-75aa-4e5a-89f4-b9e691541ac9",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T15:46:22.0543485+00:00",
+        "stoppedAt": "2026-05-27T18:12:36.2885198+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "a9bebf25-a819-4a4a-8707-1ca366ff49f1",
+        "experimentId": "e20162ae-7afc-4ec9-a563-df71b38ce9b2",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T16:15:17.1564458+00:00",
+        "stoppedAt": "2026-05-26T16:15:55.0499307+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "7753f2e1-4abc-4cfb-8f38-34fec0653c4b",
+        "experimentId": "c40c935e-aa85-49fa-867e-8cbe97044298",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T16:14:50.5517553+00:00",
+        "stoppedAt": "2026-05-26T16:15:02.9363519+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "2137305a-adc8-4adb-aba6-f94154a616de",
+        "experimentId": "d266c145-e4ca-4ca1-9b48-c5c7255ed32c",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T16:13:08.8042423+00:00",
+        "stoppedAt": "2026-05-26T16:14:23.7456128+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "db8a8ae6-b66f-4173-bbd1-58d8a468ff4d",
+        "experimentId": "414ec861-6558-4a57-bd65-520fb1f670fb",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-27T22:24:25.1517538+00:00",
+        "stoppedAt": "2026-05-29T20:06:07.164066+00:00",
+        "analysisType": "AB",
+        "splits": "5%",
+        "nextStepName": "Step 3 (AB)",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f0b97e58-a469-4597-bc40-a13545b01245",
+        "experimentId": "88b3ac66-afed-4c2e-9217-f99f5e1afb13",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-26T16:34:01.2713941+00:00",
+        "stoppedAt": "2026-05-27T22:22:15.5529596+00:00",
+        "analysisType": "AB",
+        "splits": "1/99",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "28ecf9a3-bf1f-c840-acad-16033286268d",
+        "experimentId": "baaa3b46-8e5d-4e20-9c92-59968a7a695c",
+        "stepName": "Step 3",
+        "startedAt": "2026-05-12T15:45:09.4205014+00:00",
+        "stoppedAt": "2026-05-28T15:02:22.6137452+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "71724f7f-8a29-4746-b2fd-bd7ee887f158",
+        "experimentId": "54f01bda-8721-4451-b356-e349224f4b06",
+        "stepName": "Step-3",
+        "startedAt": "2026-05-29T21:09:50.01602+00:00",
+        "stoppedAt": "2026-05-29T21:19:24.5256032+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "1181195d-cdf6-4778-a203-6feb777ce43d",
+        "experimentId": "54f01bda-8721-4451-b356-e349224f4b06",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-29T21:09:28.4676907+00:00",
+        "stoppedAt": "2026-05-29T21:09:50.01602+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "7e62f520-f0fc-4198-bd13-baec49795118",
+        "experimentId": "54f01bda-8721-4451-b356-e349224f4b06",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-29T20:56:17.960445+00:00",
+        "stoppedAt": "2026-05-29T21:09:28.4676907+00:00",
+        "analysisType": "AB",
+        "splits": "5%",
+        "nextStepName": "Step-3 (DC)",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "5ac59092-fae4-4887-b14f-06df4be43ad4",
+        "experimentId": "33f73bb4-e8c5-4c03-9158-fc9b14bf4f1a",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-29T20:55:51.178031+00:00",
+        "stoppedAt": "2026-05-29T21:09:41.7268483+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "0cd3e320-d99d-8b6c-4807-eac63ee2d45e",
+        "experimentId": "a2ac1a62-ac91-3658-3117-055526cd215d",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-08T00:20:33.9352911+00:00",
+        "stoppedAt": "2026-05-27T15:43:09.3951087+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "a2a433c4-5013-4962-8cc0-4d00a35e8dce",
+        "experimentId": "d900e550-439f-45e0-87ef-dbfb949f2007",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-07T17:33:04.2367705+00:00",
+        "stoppedAt": "2026-05-26T16:01:09.4245715+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "66713751-8fc6-4498-9d6f-9becc8ec1843",
+        "experimentId": "78a02349-ecf6-4f12-94ce-ae4b2a9e3a1c",
+        "stepName": "Step 2",
+        "startedAt": "2026-04-22T14:55:17.7161804+00:00",
+        "stoppedAt": "2026-05-29T12:56:21.6634321+00:00",
+        "analysisType": "AB",
+        "splits": "1/99",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "6cb31cad-bd18-3fbb-030b-17022900a4f6",
+        "experimentId": "e13a0cb0-bd89-4604-bcd1-acb93543ab34",
+        "stepName": "Step 2",
+        "startedAt": "2026-04-22T14:55:08.1391606+00:00",
+        "stoppedAt": "2026-05-29T12:56:00.9710603+00:00",
+        "analysisType": "AB",
+        "splits": "1/99",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "1ef4c8c8-cd39-4ebd-8428-967a7fdd0407",
+        "experimentId": "043982f4-6167-4f33-9766-a6ee51492145",
+        "stepName": "Step-3",
+        "startedAt": "2026-05-06T14:11:57.9453903+00:00",
+        "stoppedAt": "2026-05-29T12:30:05.7437565+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "4e988135-0685-7955-4704-f3e06722467f",
+        "experimentId": "c9223117-7a87-cfc9-742a-8301b196d315",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-21T17:52:14.096834+00:00",
+        "stoppedAt": "2026-05-28T21:37:39.7518335+00:00",
+        "analysisType": "AB",
+        "splits": "25%",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "e34c4920-ef6b-42a9-8664-210a190f1bb8",
+        "experimentId": "5f865112-8ddf-489c-adef-cfc37a9e52c8",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-21T23:08:09.2037778+00:00",
+        "stoppedAt": "2026-05-27T15:46:38.060453+00:00",
+        "analysisType": "AB",
+        "splits": "25%",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "eb988e88-ad02-42f0-8182-ab956df00bc3",
+        "experimentId": "648db3d1-cea4-44b2-bbc8-59746cc9d29b",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-06T14:12:14.6372908+00:00",
+        "stoppedAt": "2026-05-29T12:56:50.9624269+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "05a1ac81-8f33-4dfd-b4cb-7f94280c406f",
+        "experimentId": "883aa786-30f3-41fd-ac5c-54ce129c533c",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-28T11:40:30.5062654+00:00",
+        "stoppedAt": "2026-05-29T12:56:36.6580482+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "36ff8571-e4a7-2c51-9d90-451615e602ef",
+        "experimentId": "857be86b-e925-4ce9-ba78-515f4d7ecc37",
+        "stepName": "Step 2",
+        "startedAt": "2026-04-29T19:56:49.7855083+00:00",
+        "stoppedAt": "2026-05-27T21:46:37.5715132+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "5af264fd-c522-660a-5c1e-446862bee876",
+        "experimentId": "3ec611e9-2f71-4d2d-82ef-28597ebef3a4",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-14T17:15:23.336837+00:00",
+        "stoppedAt": "2026-05-26T16:01:26.783746+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "e07df06a-e541-47b2-aba5-f0f28887cc00",
+        "experimentId": "042ee340-6fad-46eb-9d20-3095644395f6",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-14T17:15:56.7482616+00:00",
+        "stoppedAt": "2026-05-26T16:01:38.6897162+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "a1a9055a-5ad2-4441-ab09-84a3ba40e9e1",
+        "experimentId": "a5d42533-e234-49ab-807b-16f1c5af3a4d",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-14T17:15:40.6991114+00:00",
+        "stoppedAt": "2026-05-26T16:01:34.6497273+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "d6fe9ed0-2374-4caa-90f2-92c147b0f9e6",
+        "experimentId": "17155676-a160-48a8-b460-be92babf73d3",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-04T17:37:59.4384349+00:00",
+        "stoppedAt": "2026-05-26T16:01:30.6530307+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "42be0235-f638-8519-c5c3-5d0eda14256c",
+        "experimentId": "0976c29b-cd8e-49f1-bb29-a67df9bb57aa",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-26T16:01:50.1206297+00:00",
+        "stoppedAt": "2026-05-26T16:02:25.997614+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "1b0f8dd2-d8dc-4e85-a2d4-f90f9b4c024e",
+        "experimentId": "4f709c60-7f95-4d5e-84c9-80d7a1c149de",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-14T17:15:17.6884326+00:00",
+        "stoppedAt": "2026-05-26T16:02:38.3236967+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "c179368f-56ab-4a7d-a82d-542b5089c161",
+        "experimentId": "18d524f6-8caf-4127-b224-6951b0205b0e",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-14T17:14:58.2850244+00:00",
+        "stoppedAt": "2026-05-26T16:02:34.4420841+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "a095dc70-afbf-40c5-bcb5-09a39ee6d76d",
+        "experimentId": "74742261-4f98-4d18-9831-907445fbf8d0",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-04T17:38:28.9854829+00:00",
+        "stoppedAt": "2026-05-26T16:02:29.8426391+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "966519e5-d56e-48f0-9a78-5783410afd5f",
+        "experimentId": "0976c29b-cd8e-49f1-bb29-a67df9bb57aa",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-14T16:55:43.9951791+00:00",
+        "stoppedAt": "2026-05-26T16:01:50.1206297+00:00",
+        "analysisType": "AB",
+        "splits": "1/99",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "764091d1-085e-4cfb-b92c-21d5c972082c",
+        "experimentId": "d423ef06-3bae-40e4-83f3-ab80ac636676",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-04T17:38:47.8892953+00:00",
+        "stoppedAt": "2026-05-26T16:02:22.0037206+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "19ea549f-25d5-4518-ac7e-0c86d251b3d8",
+        "experimentId": "3ab9a682-8454-4bef-8da6-29ad39d5da19",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-04T17:38:39.5928697+00:00",
+        "stoppedAt": "2026-05-26T16:02:17.8093104+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "c0af2666-5742-49ca-844d-1f92297531cf",
+        "experimentId": "4537dd83-f249-4f1f-b3bd-1f7a7b0c1197",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-04T17:38:53.2052144+00:00",
+        "stoppedAt": "2026-05-26T16:02:10.4611727+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "557bc960-6382-4c20-8a1d-54f4f141aa8e",
+        "experimentId": "b1ea80c2-aaff-4593-86b8-d541a9af4564",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-05-05T21:09:09.4031293+00:00",
+        "stoppedAt": "2026-05-29T18:49:22.8730641+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "27465522-7bd1-4d79-b93f-175a66de7b73",
+        "experimentId": "82434e19-6eeb-40bc-9d33-9fa9152e7e8e",
+        "stepName": "Switch to 100%",
+        "startedAt": "2026-04-09T21:38:25.0594678+00:00",
+        "stoppedAt": "2026-05-29T18:49:33.2802307+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "fd98b052-0aaa-460b-8383-d0d6300998fd",
+        "experimentId": "fdaea72a-e967-4639-82c1-69f19cafa118",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-02T17:03:26.4131787+00:00",
+        "stoppedAt": "2026-05-27T16:03:55.2375008+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "cc620f7a-e5d5-4702-84b4-3d16d5dd425b",
+        "experimentId": "8e0aeb3c-4530-4c1a-9a29-c97fac369f18",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-02T17:02:22.0232517+00:00",
+        "stoppedAt": "2026-05-27T16:03:50.4319938+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "1d70fc59-c1d6-420c-b083-3d7592f961a3",
+        "experimentId": "0bd74577-3268-4cf6-94a1-e88c7c5c3331",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-02T17:02:12.874447+00:00",
+        "stoppedAt": "2026-05-27T16:03:45.4658788+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "ffe331b4-4535-432f-838b-878663a3705f",
+        "experimentId": "9ae95c0d-cc8e-4180-98f7-b00e0e596d64",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-04T23:03:06.4032209+00:00",
+        "stoppedAt": "2026-05-29T18:08:16.6143901+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "7909d8fe-aa24-4ed2-a6b4-00406c4e54b1",
+        "experimentId": "cea6d753-34ba-4d44-8f4b-7fcec0f6a969",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-05T16:57:39.5417033+00:00",
+        "stoppedAt": "2026-05-29T18:08:04.0302625+00:00",
+        "analysisType": "AB",
+        "splits": "50%",
+        "nextStepName": null,
+        "hasScorecard": true
+      },
+      {
+        "stepId": "b19102fa-72c5-49ed-a1e3-84908c95c7af",
+        "experimentId": "2371c3fb-f9ca-4950-b062-315579ea1ca1",
+        "stepName": "Step-1",
+        "startedAt": "2026-03-09T15:40:57.9519749+00:00",
+        "stoppedAt": "2026-05-27T12:23:25.3556964+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "639eedab-3bdd-46fd-92d8-39aa418cd944",
+        "experimentId": "dceff1ee-bf9f-432a-b7af-88aee7ed88f2",
+        "stepName": "Step-1",
+        "startedAt": "2026-02-12T04:59:24.7270194+00:00",
+        "stoppedAt": "2026-05-27T12:19:51.3496567+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "ae8a702f-aaa5-4636-880d-869b30df0036",
+        "experimentId": "b6f613c0-7c55-4b8f-b7da-3fa5500c0e19",
+        "stepName": "Step 1",
+        "startedAt": "2026-01-22T04:15:16.5484583+00:00",
+        "stoppedAt": "2026-05-27T21:48:29.4039926+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "dc019431-6804-46b9-9c43-94abaac57f0b",
+        "experimentId": "d8a5428a-0efb-4f34-9f24-8671b66b9e47",
+        "stepName": "Step 1",
+        "startedAt": "2026-01-22T04:12:54.9628704+00:00",
+        "stoppedAt": "2026-05-27T21:47:54.5338828+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      },
+      {
+        "stepId": "a7c05c07-78d8-63d1-e180-0ebcc146abbf",
+        "experimentId": "01a6c961-9080-0ce9-fba0-5cc7c0203669",
+        "stepName": "Step 1",
+        "startedAt": "2025-10-24T09:52:57.7947483+00:00",
+        "stoppedAt": "2026-05-27T21:47:39.3204825+00:00",
+        "analysisType": "DataCollection",
+        "splits": "100%",
+        "nextStepName": null,
+        "hasScorecard": false
+      }
+    ],
+    "active": [
+      {
+        "stepId": "188a7367-8929-17e9-132f-210a15f56bb8",
+        "experimentId": "80913fb5-511b-b9bf-440e-a36482d63a94",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-22T17:47:20.9870304+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "7d7891a7-00cc-eca7-86f9-441ae93c8a2b",
+        "experimentId": "b67e0935-ee4a-1917-16fc-fd77810f8594",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-21T20:47:41.8102397+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "b902428f-2443-8062-1ced-3765840cb5fb",
+        "experimentId": "3135e5d7-ddb3-871f-877c-10c910a2877e",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-21T20:22:39.1435615+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "8d57d2d0-ecaa-3a72-2f4f-366ce121105e",
+        "experimentId": "80a98aa4-90c1-f149-0b44-b2ec623e435f",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-20T23:08:33.5541457+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "220da875-5700-9563-244d-9de47db39679",
+        "experimentId": "ec973cb2-79ad-b2a3-0e18-7cf5d1048796",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-20T23:07:56.7141324+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "6a862eed-73eb-a449-7535-9123b13a9720",
+        "experimentId": "df46b740-4a34-6133-0577-beb4f99d31ca",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-20T19:58:48.1783961+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "14725547-84fb-3dbd-a649-abdb2d6fff5a",
+        "experimentId": "3c0ed26d-fd27-1784-c93a-3e8ee75c0d28",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-19T21:37:51.7422089+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "1%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "6101ffda-1cfb-ed2b-dc6c-2a1a8f8fa2d2",
+        "experimentId": "e0abb976-1fa2-327f-5712-ace3c2774967",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-19T20:34:39.4854785+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f9330718-6b42-8328-a2e7-3ee8a0331aeb",
+        "experimentId": "61b1e029-ac97-36ab-1121-43e37e6e67aa",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-19T20:34:29.8831427+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "883252ae-6f00-4f8c-abc0-e0ab77607c79",
+        "experimentId": "77be4a66-ed45-4055-8c17-85a909500ad2",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-20T18:44:16.5347296+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "d0a40ac0-03ac-7fd2-663e-0fafa1c7184a",
+        "experimentId": "e3f9dd25-1ddf-2953-6d86-1580db48d9e3",
+        "stepName": "Holdback",
+        "startedAt": "2026-05-15T23:26:35.7376215+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "10/90",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "3f5193a5-028b-23bb-ff9e-b2b440bd3152",
+        "experimentId": "aed53028-5253-b5e0-692c-9876b00d5061",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-15T21:12:16.5853112+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "64571347-91c1-e80f-f391-29f8cb3b862d",
+        "experimentId": "b6802550-3b82-0907-ca52-138c0b3b9ebb",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-15T21:08:10.1526313+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "00b16a92-f8db-322e-072e-ac99d643c26f",
+        "experimentId": "faa54f11-2ee3-abfe-9525-789733b4ec6f",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-15T20:18:28.242461+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "1%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "8f583c5c-c857-4c61-bf02-d2c83eed8113",
+        "experimentId": "1771ce95-c228-4d72-9cf8-8337c9911871",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-14T18:21:20.4111593+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "48e1f4ea-1b85-eafd-d38c-5861b25fb3e1",
+        "experimentId": "3ce8103d-cf73-7590-6e65-c3f446017af9",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-14T00:06:40.7758608+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "661630a6-136f-47ba-9b22-50c9c37dfaae",
+        "experimentId": "272a97a5-8be6-44ec-a4fd-6a3df93647b3",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-19T18:17:54.1134227+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "5ac37eae-25d8-4d12-9d83-80ca517a2415",
+        "experimentId": "d3aee9e1-6a71-4ca5-9b29-fc8ccc8f8088",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-19T18:17:44.693792+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "44cc2d58-5935-982a-b28c-f4faac74025c",
+        "experimentId": "b169c66d-6e3e-c584-f533-aa79b9d86262",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-13T17:08:46.2050284+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "3cfca18f-fda7-9abb-9427-dae318793a89",
+        "experimentId": "7039856f-2d35-779c-8541-5980a8981c2d",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-08T17:51:29.0690425+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "2deb2da9-364a-4881-b285-27130e8a22a4",
+        "experimentId": "0bac0f34-293d-48be-b905-d113818f0d90",
+        "stepName": "Step-2",
+        "startedAt": "2026-05-06T18:18:55.2853665+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "e9de94e8-ccea-e8a3-175e-71745d3d2878",
+        "experimentId": "0d79b541-21f1-2b6f-a39c-a3b655e33cdd",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-05T01:54:05.534554+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "b47e8f22-840f-489d-8573-308e2ccd11db",
+        "experimentId": "34eb613b-d2a7-4432-a053-040fbb6f88d9",
+        "stepName": "step-1",
+        "startedAt": "2026-05-01T21:37:35.2480349+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "b5b49c73-e869-47ee-9981-572f695bdcd2",
+        "experimentId": "0c669e65-ad01-40ab-af94-049546b6a348",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-28T20:39:03.8245094+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f55e9772-b964-4b20-8d8f-b7eee4d8c726",
+        "experimentId": "aa3684b7-dae5-4caf-a7d9-3329b1cfcd42",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-28T20:38:14.3457402+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "584acdad-4fb9-c0a0-aaa5-e8feaf9cff6c",
+        "experimentId": "a8653485-e61c-b2ff-a73e-3a766750420e",
+        "stepName": "10% Holdback",
+        "startedAt": "2026-04-27T18:56:48.2131079+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "10/90",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "a362df0b-a2f9-4e4d-a6df-8dfc91da789a",
+        "experimentId": "f6fda148-c6d3-467d-b5ef-e6b2385bfe6e",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-22T16:29:32.9392276+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f8a8874e-67b6-45f5-9840-fbe7735f36e2",
+        "experimentId": "4f2c5c42-e192-4e1c-841d-df7f51afe038",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-22T16:29:21.346639+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "eb7ba53c-33e5-488e-7bec-993e74443c58",
+        "experimentId": "0acd6ebe-b5c1-2716-7522-809e64c91866",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-18T18:29:36.7010904+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "6b188f0a-50ef-3e18-5526-f6448c11cd05",
+        "experimentId": "ba2e4d4f-7d74-b489-0058-a1c995141772",
+        "stepName": "Step 2",
+        "startedAt": "2026-05-12T21:43:24.87967+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "a94bf847-8683-0ad1-43e9-82cc1c98df80",
+        "experimentId": "08bce2c4-941c-c71e-a128-27552a8f96d2",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-06T23:21:01.5752297+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "4e75834c-fc06-8f36-9e66-302841d00701",
+        "experimentId": "353889b5-96df-658a-fe19-67d09a85a9e9",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-05T21:30:49.7022266+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "09971399-7f9f-6c10-c91c-7467d771b742",
+        "experimentId": "139cf227-aee2-ff3f-6152-c4e60b426ab5",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-23T01:06:38.6440315+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f6e7d172-ae3d-41eb-575f-5a8124d966ec",
+        "experimentId": "ae1c8ca4-f4d9-d0e2-a579-21cfa8f254f6",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-21T23:13:14.9536952+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "236f90f1-9e1f-484e-8ce8-99fea93e58dd",
+        "experimentId": "104afc8f-93e6-441a-a683-6c779b8e94e1",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-20T16:11:09.2857455+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "e61c70c1-1cbf-446b-9d2d-e78418137370",
+        "experimentId": "eabbf845-dd15-433e-85a0-9732a7e0ea51",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-20T16:10:48.1072657+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "3e589cdb-01ac-47d3-a018-997d12868c53",
+        "experimentId": "e2d31fac-1582-411f-a7cf-9e18930c4435",
+        "stepName": "Switch to 50%",
+        "startedAt": "2026-04-16T21:16:11.997767+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "0644cbd9-e9c6-4ab1-8a4e-0d9922314c5b",
+        "experimentId": "713995fd-dbba-4417-94bd-bd0baf91dcc7",
+        "stepName": "Switch to 50%",
+        "startedAt": "2026-04-16T20:25:49.2217039+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "6bf22280-4345-4aca-9ffb-f82823e14761",
+        "experimentId": "14389b9a-a6ec-4169-bd0f-a7ecfa901e9f",
+        "stepName": "Step-2",
+        "startedAt": "2026-04-16T20:11:56.4863113+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "c81cd44c-6062-408e-818b-4c00c068db57",
+        "experimentId": "88e4e59f-670d-47ea-a7a0-b4856b60232f",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-16T20:10:55.8902508+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "0dc32bbb-a975-4e58-9da2-fa0dd107a203",
+        "experimentId": "0adca709-4780-461b-935b-092436b6ebc4",
+        "stepName": "Step-1",
+        "startedAt": "2026-04-15T16:55:48.3956755+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "1b828ab5-c9c2-5fc5-4507-2f7fb0cf13ff",
+        "experimentId": "9aadf217-eda5-a4f9-4f31-00a79758f46c",
+        "stepName": "Step 2",
+        "startedAt": "2026-04-10T23:24:43.0388443+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "c86a9794-af21-a377-f64e-949d4e2fd517",
+        "experimentId": "fcc771da-9ec8-b7b1-63b7-2ebceff482a5",
+        "stepName": "Step 1",
+        "startedAt": "2026-05-18T21:02:09.5360949+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "5ffaf4d6-fb44-4a49-baef-751caa35404a",
+        "experimentId": "1af2f224-eee6-4c57-9040-2bb9f6f00599",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-13T21:25:28.6684346+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "20abdd7f-8538-4a57-9794-9c3b32dd0e84",
+        "experimentId": "6fe4b045-3239-40e6-a203-7a41be0e0d74",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-08T21:26:21.3250712+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "25%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "d5f41c03-1a01-1160-1807-de75ea8d92f3",
+        "experimentId": "5bbc12cf-547b-a318-ccb1-eecf44c72b04",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-08T22:26:22.0229542+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "c2f83d18-62c8-dd73-dee0-5eceabe1b708",
+        "experimentId": "ec6da205-26ef-250f-8d6d-8aa35f833f81",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-06T23:23:52.3619827+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "4ec22e48-c35c-4a3f-aca1-419b58a80fb1",
+        "experimentId": "abe2b99b-e387-4c73-8c00-c7ba7416a0bd",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-03T23:37:27.272567+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "1febaabd-9514-47a5-83e6-9fd72394ff38",
+        "experimentId": "86b3177c-1599-440e-bdfd-4e3d782790b7",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-03T23:36:41.4731312+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "d611bf1f-10d6-403a-abd0-aa8d1ca9d677",
+        "experimentId": "cc7a309e-f54a-4948-b5f1-4fb98faa52fd",
+        "stepName": "Step 1",
+        "startedAt": "2026-04-01T20:58:35.8572717+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "25%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "37dbdd71-c6e3-991a-b770-32d6ada99ca7",
+        "experimentId": "cacd36fc-1f8d-eb5f-0dfc-be51f1e13d1e",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-30T17:04:08.2443746+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "b1269063-d101-08a6-efe4-e2c6440e5049",
+        "experimentId": "2427942d-2685-2fcb-975d-f1f756caebf4",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-30T17:04:00.9140802+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "d8bd6d08-12ff-72ce-ca3b-37e2a5d9c016",
+        "experimentId": "41d18267-d82d-b719-1807-b41af3a010af",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-30T17:03:53.9184643+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "4d94d85f-2127-756f-baab-a93d3f025fb2",
+        "experimentId": "8cb0116a-64b3-90e2-48b8-97868584b0fa",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-30T17:03:46.4881651+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f52c331a-9c72-6bdb-3a81-596c192d4b15",
+        "experimentId": "fdd08f6e-22d5-9381-4edd-96e0886116ae",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-30T16:55:44.7542325+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f2060fd9-bc82-2179-155f-17f92e122bb5",
+        "experimentId": "4689cb58-84b4-e588-2179-e2d503d34c3c",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-27T17:02:44.7757182+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "6b9210f8-37a1-d359-7c38-be0e67160d2b",
+        "experimentId": "0fe55395-28fc-8399-ebee-ba89bd63506b",
+        "stepName": "fifty-fifty",
+        "startedAt": "2026-03-30T18:10:06.880061+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "5c320131-1112-ad39-5408-e4a3bbed373f",
+        "experimentId": "9e3fddcd-8e89-23fb-29b4-179472b99c35",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-25T17:37:24.8342961+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "29e47273-955f-495c-8167-ab4d91d42a99",
+        "experimentId": "9afeda17-c3da-46d3-808a-e10d09a92af9",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-20T17:03:49.0363061+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "632f7726-a911-4009-b64f-f023c6de1a00",
+        "experimentId": "26829d94-c456-44c5-83f9-30a236134a51",
+        "stepName": "Step-1",
+        "startedAt": "2026-05-20T17:03:35.9300687+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f69ddd4e-1302-45d0-95eb-83fa0432c9f1",
+        "experimentId": "8b941e39-b5c2-4c33-8a13-9e127ef257bf",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-19T17:34:59.1038161+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "25%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "d9fb2ec9-dbc0-4f40-83f0-9f7aaf3f5a44",
+        "experimentId": "f8a0c8d0-8de3-410b-99eb-3fed9dbbf0cc",
+        "stepName": "Switch to 5%",
+        "startedAt": "2026-03-17T21:57:47.6519229+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "5%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "6b5c0161-a59c-644e-a159-e097506845b7",
+        "experimentId": "2e7f2b7b-879e-8e21-41bf-ffc7482751ec",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-06T02:19:54.1449726+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "c7dd9c02-c6e7-21f4-3550-0201bcb9f498",
+        "experimentId": "83c5ed2e-01f7-d3c8-0b35-cec681ec2b47",
+        "stepName": "Step 1",
+        "startedAt": "2026-03-03T11:12:13.6205244+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "33%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "9dda13d1-164b-42f3-8d24-651509f446c0",
+        "experimentId": "d5a448a0-34fe-4770-bd65-642511f431d9",
+        "stepName": "Step-1",
+        "startedAt": "2026-03-05T10:28:42.9643899+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "2de8748f-6701-4c83-b064-dc8560cb97d0",
+        "experimentId": "bb99e079-9157-4ba2-ad19-f2aca7360aaf",
+        "stepName": "Step-1",
+        "startedAt": "2026-02-27T16:39:41.3302466+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "1b0484bd-d3d8-4c48-98a8-d40530de97e0",
+        "experimentId": "9f493998-b65a-484b-a6e3-0397a18308d1",
+        "stepName": "Step-1",
+        "startedAt": "2026-02-27T16:39:13.1035862+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "7966ff53-ef42-4c6a-94cf-8aea89860274",
+        "experimentId": "e9b13f1a-b5c7-4b2b-8b3c-1671c41a8788",
+        "stepName": "Step 1",
+        "startedAt": "2026-02-19T16:54:18.3214377+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "25%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "934cdde6-ac4d-a256-92e0-96287c29e594",
+        "experimentId": "8ec92416-1ea8-19d0-6877-c4240b8e4dc9",
+        "stepName": "Step 1",
+        "startedAt": "2026-02-19T01:26:50.0678652+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "803057a0-af28-42b8-a17b-76d21f872732",
+        "experimentId": "d500b6c9-c104-4e35-8fe3-7422f3d8094a",
+        "stepName": "Step-1",
+        "startedAt": "2026-02-18T21:59:06.5232737+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "be32ce92-c12f-4b76-a750-990a6d5d2951",
+        "experimentId": "76164987-c7bf-4a37-875e-de1f81ef5b83",
+        "stepName": "Switch to 25%",
+        "startedAt": "2026-02-10T23:33:14.5150784+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "25%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "2da5149a-8ee6-4740-89b2-ca0f68e55f2c",
+        "experimentId": "0a432692-7937-4f16-8c7e-787f03409216",
+        "stepName": "Switch to 50%",
+        "startedAt": "2026-02-10T23:33:43.9890144+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "666e5d73-a241-4657-3c6f-d183d01f9e7d",
+        "experimentId": "fd9b521c-e3ad-1233-331c-adfb43193c3c",
+        "stepName": "Step 1",
+        "startedAt": "2026-02-09T18:21:09.9263517+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "c7e5e5db-4e55-4fd8-a514-e93df4991707",
+        "experimentId": "dee414dc-81d3-4aeb-a427-159cd60e2497",
+        "stepName": "Step-1",
+        "startedAt": "2026-01-27T22:50:14.6015958+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "04e3845e-7065-5862-85cb-12af1f9a4cc6",
+        "experimentId": "cea422ac-ccef-efc5-45fe-289fbcf26de0",
+        "stepName": "Step 1",
+        "startedAt": "2026-01-12T23:06:20.1585123+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "587f78f5-791d-6b66-974e-17b2e653730a",
+        "experimentId": "b9b9b39c-4c6f-3e08-cf3f-27cfc22f0eb3",
+        "stepName": "Step 1",
+        "startedAt": "2026-01-12T22:58:25.004256+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "d1ebf399-1cbb-d9f0-6f32-f8c39fac58e2",
+        "experimentId": "16d1d19f-9a0a-45ac-84af-6971f1bf3fd4",
+        "stepName": "Step 2",
+        "startedAt": "2025-12-16T06:43:28.4580288+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "a56ef500-28d5-4acf-a9c3-fc53d494d407",
+        "experimentId": "d48aeb5b-d963-446c-9edc-cab4cf47767c",
+        "stepName": "Step-1",
+        "startedAt": "2025-12-11T16:29:27.8874323+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "5d94c516-f6b7-0298-8049-87229afd0878",
+        "experimentId": "f50100f9-b4dd-2d28-5440-603eb320c5d3",
+        "stepName": "Step 1",
+        "startedAt": "2025-11-19T22:43:42.8366903+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "09de5090-0d57-43c6-8dfb-e5354b6faefb",
+        "experimentId": "11d4ce14-fcf7-40c7-b456-32850bc0aa10",
+        "stepName": "Step-1",
+        "startedAt": "2026-01-19T21:00:26.5609606+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "abb567a1-b06d-720c-fe4b-77137d3aa15a",
+        "experimentId": "77768e4b-9003-9e05-6e27-70beedd83dc3",
+        "stepName": "Step 1",
+        "startedAt": "2025-11-14T23:18:08.5835574+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "f7d22385-f345-427b-e394-530e9776fbb3",
+        "experimentId": "c3c1c3ec-6b20-e257-4079-6776ed875cc9",
+        "stepName": "Step 1",
+        "startedAt": "2025-11-13T00:05:50.8303885+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "2c4357a5-0609-1d56-9fdb-b987b66d8a9a",
+        "experimentId": "e03339d8-5463-702d-2d94-6165700260b5",
+        "stepName": "Step 1",
+        "startedAt": "2025-11-07T20:27:23.2977551+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "06cc37cb-2204-4e8e-9479-acb481e2ef76",
+        "experimentId": "d380e752-8008-4936-a1f2-f885bf60c700",
+        "stepName": "50/50",
+        "startedAt": "2025-11-05T17:06:26.4657282+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "8277f758-9221-460b-a9fb-b8b11372c4d8",
+        "experimentId": "0cc74bf2-da04-4952-b73b-cc3f14925c41",
+        "stepName": "Step 1",
+        "startedAt": "2025-11-05T17:05:50.0995787+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "da60b24b-7c56-c09e-fa5f-bb35aee6eb13",
+        "experimentId": "79be13d4-6004-7faa-09f1-73e00c5e1e75",
+        "stepName": "Step 1",
+        "startedAt": "2025-10-21T22:25:28.8419091+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "8d024987-a654-7133-e533-96874711ecb2",
+        "experimentId": "22476493-f575-b190-eb5f-5a4427af9e3f",
+        "stepName": "Step 1",
+        "startedAt": "2025-09-22T21:20:03.3243978+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "6fa54c2d-c962-2b64-228b-a10e36377ee0",
+        "experimentId": "8a906012-5eb8-4bec-275b-361ecce70c12",
+        "stepName": "Step 1",
+        "startedAt": "2025-09-05T17:48:55.4048452+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "2525c7a1-7d08-4093-97d8-f0588a12861c",
+        "experimentId": "330fc4c5-7cd9-48dc-9e89-5206dfd30e50",
+        "stepName": "Step-2",
+        "startedAt": "2025-09-04T17:55:25.3701165+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "3e53b975-7e8d-45e8-bd6f-1fc50f902c5c",
+        "experimentId": "368334f4-0098-4fe9-bd6c-01efc4de74af",
+        "stepName": "Step-2",
+        "startedAt": "2025-09-04T17:46:53.033394+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "4bc912db-0926-43ef-bd27-1aa73038d640",
+        "experimentId": "b90d490a-6bca-4ce7-83d4-ff15e10bdc44",
+        "stepName": "Step-1",
+        "startedAt": "2025-09-04T17:47:31.6799515+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "e0f4f832-2a31-4aa8-ba1a-47167d4ae7ca",
+        "experimentId": "d865614a-5ca1-42e2-8720-8ce3471c7f4b",
+        "stepName": "Step 1",
+        "startedAt": "2025-08-28T23:39:11.144784+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": false
+      },
+      {
+        "stepId": "7642ed48-c4c6-442b-ace6-58a3c3aa364d",
+        "experimentId": "512c8eb6-2174-489a-9240-c7feff60e9e4",
+        "stepName": "Step 1",
+        "startedAt": "2025-08-28T23:38:42.0757709+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "acc2aee6-6ba9-45cd-9346-bfa14287f5a2",
+        "experimentId": "01301c87-0008-46b9-b6a9-b4df5bb68f42",
+        "stepName": "Step 1",
+        "startedAt": "2025-08-26T01:00:05.5147304+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "2dfed28a-f76e-4d9e-9eb2-10f55dce6187",
+        "experimentId": "1ba9c53c-4a36-4a51-8153-1d074669a57c",
+        "stepName": "Step 1",
+        "startedAt": "2025-08-26T00:57:43.0542511+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "07bb3ef6-531a-47ec-9f06-0db10e616203",
+        "experimentId": "bc70f0c4-0cdc-454e-a7aa-4b3a65a7820e",
+        "stepName": "Step 1",
+        "startedAt": "2025-08-26T00:57:37.7391927+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "29648b20-5c20-434d-a052-728b055747e9",
+        "experimentId": "4e069f42-a723-4bd1-b8c5-d2d381b1e6b2",
+        "stepName": "Step 1",
+        "startedAt": "2025-08-26T00:57:14.7014864+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      },
+      {
+        "stepId": "ddc0138e-494d-4dc7-a771-42de9477080c",
+        "experimentId": "31400618-ddb1-4fe2-8abf-a2c0707d11bf",
+        "stepName": "Step 1",
+        "startedAt": "2025-08-26T00:57:09.7432808+00:00",
+        "stoppedAt": null,
+        "analysisType": "AB",
+        "splits": "50%",
+        "hasScorecard": true
+      }
+    ]
+  }
+}
