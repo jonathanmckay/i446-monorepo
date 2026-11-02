@@ -57,6 +57,20 @@ def classify(*, task_points: int | None, time_based: bool, crossed_off: bool) ->
     return ASK
 
 
+def crossed_off(completed: dict, desc: str, norm: Callable[[str], str]) -> bool:
+    """`desc` was crossed off today: a completed-today name (`completed`, the
+    already date-checked file) that CLOSED A TODOIST TASK, i.e. has an entry
+    in its "ids" map. A name-only completion is an earlier entry's points
+    log (an "ask"-priced janus /done records no task id), so a second
+    same-name session still asks instead of reading as "credited" (JM
+    2026-11-01: three interview prep entries, only the first earned 分)."""
+    target = norm(desc or "")
+    if not target:
+        return False
+    ids = {norm(k) for k, v in (completed.get("ids") or {}).items() if v}
+    return target in ids and any(norm(n) == target for n in completed.get("names") or [])
+
+
 def is_time_based(name: str, *, is_habit: Callable[[str], bool], df) -> bool:
     """`name` (normalized, no @code) is a 0n/1n+ habit (`is_habit`, each
     client's own header lookup) or one of did-fast's time-priced names:

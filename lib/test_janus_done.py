@@ -52,3 +52,15 @@ def test_entry_block_is_the_block_the_entry_ended_in():
 def test_is_rate_answer():
     assert jd.is_rate_answer(".5/m") and jd.is_rate_answer("2/min")
     assert not jd.is_rate_answer("40") and not jd.is_rate_answer("") and not jd.is_rate_answer(None)
+
+
+def test_second_same_name_session_is_not_crossed_off_by_its_own_points_log():
+    """JM 2026-11-01: three interview prep entries, only the first earned 分.
+    The first /done ("ask" path) records the name with no Todoist id; that
+    must not read as "crossed off", or every later session gets "credited"."""
+    norm = lambda s: " ".join(s.split()).lower()
+    logged = {"names": ["interview prep"], "points": {"interview prep": 406}, "ids": {}}
+    assert not jd.crossed_off(logged, "Interview prep", norm)
+    dtd = {"names": ["call steve"], "ids": {"call steve": "6abc"}}
+    assert jd.crossed_off(dtd, "call steve", norm)
+    assert not jd.crossed_off(dtd, "", norm)

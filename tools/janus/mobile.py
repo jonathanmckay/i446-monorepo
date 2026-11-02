@@ -1527,15 +1527,15 @@ def _run_did_fast(text: str, flags: tuple[str, ...] = ()) -> dict:
 
 def _crossed_off_today(desc: str, today: _dt.date) -> bool:
     """`desc` is in today's completed-today.json names (crossed off in dtd
-    or anywhere else before this entry was logged)."""
+    or anywhere else before this entry was logged). Only a completion that
+    closed a Todoist task counts (janus_done.crossed_off)."""
     try:
         data = json.loads((COMPLETED_TODAY or STATE_DIR / "completed-today.json").read_text())
     except Exception:
         return False
     if data.get("date") != today.isoformat():
         return False
-    key = _norm_key(desc)
-    return bool(key) and any(_norm_key(n) == key for n in data.get("names") or [])
+    return janus_done.crossed_off(data, desc, _norm_key)
 
 
 def _done_path(desc: str, task_pts: int | None, today: _dt.date | None) -> str:

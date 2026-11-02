@@ -5936,15 +5936,15 @@ def _resolvable_points(desc: str) -> int | None:
 
 def _completed_in_dtd_today(desc: str) -> bool:
     """`desc` is in today's completed-today.json names — crossed off (in dtd
-    or anywhere else) before its time entry was /done'd."""
+    or anywhere else) before its time entry was /done'd. Only a completion
+    that closed a Todoist task counts (janus_done.crossed_off)."""
     try:
         data = json.loads(_COMPLETED_TODAY.read_text())
     except Exception:
         return False
     if data.get("date") != dt.datetime.now(_tz()).date().isoformat():
         return False
-    target = _norm_done_name(desc)
-    return bool(target) and any(_norm_done_name(n) == target for n in data.get("names", []))
+    return janus_done.crossed_off(data, desc, _norm_done_name)
 
 
 def _is_time_based(desc: str) -> bool:

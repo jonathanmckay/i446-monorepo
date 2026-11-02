@@ -1091,10 +1091,22 @@ def test_log_entry_crossed_off_in_dtd_adds_nothing(jm, monkeypatch, tmp_path):
     seen = _capture_did(jm, monkeypatch)
     ct = tmp_path / "completed-today.json"
     ct.write_text(json.dumps({"date": dt.datetime.now(jm.TZ).date().isoformat(),
-                              "names": ["call steve"], "points": {}}))
+                              "names": ["call steve"], "points": {},
+                              "ids": {"call steve": "6abc"}}))
     monkeypatch.setattr(jm, "COMPLETED_TODAY", ct)
     r = jm.log_entry("c1", "call steve", 12, "qz12")
     assert r["credited"] and r["already"] and "text" not in seen
+
+
+def test_second_same_name_session_asks_not_credited(jm, monkeypatch, tmp_path):
+    """JM 2026-11-01: an earlier interview prep's points log (no Todoist id)
+    must not mark the next interview prep session "credited"."""
+    ct = tmp_path / "completed-today.json"
+    ct.write_text(json.dumps({"date": dt.datetime.now(jm.TZ).date().isoformat(),
+                              "names": ["interview prep"],
+                              "points": {"interview prep": 406}, "ids": {}}))
+    monkeypatch.setattr(jm, "COMPLETED_TODAY", ct)
+    assert jm._done_path("interview prep", None, dt.datetime.now(jm.TZ).date()) == "ask"
 
 
 def test_adjust_points_appends_the_difference_in_the_entrys_block(jm, monkeypatch):
