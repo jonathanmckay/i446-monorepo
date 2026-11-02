@@ -21,6 +21,15 @@ from typing import Callable
 
 TASK, TIME, CREDITED, ASK = "task", "time", "credited", "ask"
 
+# Block attribution (JM 2026-11-01): a finished entry that crosses a 地支
+# block boundary credits the block it ENDED in. A per-minute entry worth more
+# than SPLIT_MIN_POINTS is split at each boundary instead: one Toggl entry
+# per block, same name, each block credited its own minutes. did-fast owns
+# the split (infer_range_blocks / split_results_by_block); the clients only
+# need to hand it the HHMM-HHMM range, and the --rate flag when the points
+# came from a typed rate (".5/m"), so a rate-priced total still splits.
+SPLIT_MIN_POINTS = 100
+
 # Largest single credit taken without explicit points ([N], {N}, +N, a typed
 # answer). Above it, inferred minutes-as-points is a parse slip or a forgotten
 # timer: did-fast refuses it (result step "refused"), and both janus clients
@@ -66,6 +75,13 @@ def is_time_based(name: str, *, is_habit: Callable[[str], bool], df) -> bool:
 _RATE_ANSWER_RE = re.compile(r"^(\d*\.?\d+)\s*/\s*m(?:in)?$", re.IGNORECASE)
 
 
+def is_rate_answer(text) -> bool:
+    """True when the points prompt was answered with a per-minute rate
+    (".5/m", "2/min") rather than a total. Clients pass did-fast --rate for
+    these so a long entry still splits per block (SPLIT_MIN_POINTS)."""
+    return bool(_RATE_ANSWER_RE.match(str(text or "").strip()))
+
+
 def points_from_answer(text, minutes: int) -> int | None:
     """The points prompt's answer: "40" = 40 total, ".5/m" or "2/min" = a
     rate times the entry's minutes, blank = 0. None = unparseable."""
@@ -85,18 +101,27 @@ def points_from_answer(text, minutes: int) -> int | None:
 _ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
 
 
-def entry_block(start, end) -> str:
-    """The 地支 block holding most of an entry's minutes (ties → the earlier
-    block), the same rule as did-fast's infer_range_blocks (accrual)."""
+def entry_blocks(start, end) -> list[str]:
+    """The 地支 blocks an entry touches, in order (one per block boundary
+    crossed; a zero-length entry still names its start block)."""
     import datetime as _dt
     import neon_blocks as nb
-    counts: dict[str, int] = {}
+    out: list[str] = []
     t = start
     while t < end:
         b = nb.current_block(t.hour)
-        counts[b] = counts.get(b, 0) + 1
+        if not out or out[-1] != b:
+            out.append(b)
         t += _dt.timedelta(minutes=1)
-    return max(counts, key=counts.get) if counts else nb.current_block(start.hour)
+    return out or [nb.current_block(start.hour)]
+
+
+def entry_block(start, end) -> str:
+    """The 地支 block an entry ENDED in (the block of its last minute), the
+    same rule as did-fast's infer_range_blocks. JM 2026-11-01: "if they span
+    a block boundary, mark the points in the block that the task ended"
+    (before that, the block holding most of the minutes)."""
+    return entry_blocks(start, end)[-1]
 
 
 def adjust_cmd(desc: str, code: str, delta: int, start, end, past_day: bool) -> str:

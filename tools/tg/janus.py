@@ -5996,10 +5996,13 @@ def _did_summary(stdout_text: str) -> str:
             pts = r.get("variable_value") or 0
         td = r.get("todoist") or {}
         closed = " · todoist ✓" if td.get("closed") else ""
+        # A per-block split segment (did-fast split_results_by_block): say
+        # which block its share landed in.
+        blk = f" →{r['block']}" if r.get("split") and r.get("block") else ""
         if pts:
-            bits.append(f"✓ {name} +{pts}分{closed}")
+            bits.append(f"✓ {name} +{pts}分{blk}{closed}")
         else:
-            bits.append(f"✓ {name}{closed}")
+            bits.append(f"✓ {name}{blk}{closed}")
     for a in data.get("agent_needed", []):
         bits.append(f"⚠ {a.get('name', '?')}: {a.get('reason', 'needs agent')}")
     for fs in data.get("future_skipped", []):
@@ -6528,14 +6531,15 @@ async def _stop_only(app, desc: str) -> None:
     app.invalidate()
 
 
-def _run_done_command(app, cmd: str) -> None:
+def _run_done_command(app, cmd: str, flags: tuple[str, ...] | None = None) -> None:
     """Shared did-fast dispatch for /done — stop the running timer AND grant
-    its points in one call (the completed-range MECE trim does the stop)."""
+    its points in one call (the completed-range MECE trim does the stop).
+    `flags` replaces the view's default did-fast flags when given."""
     async def _run():
         flash(f"$ did {cmd}  (stop + done)")
         app.invalidate()
         t0 = time.monotonic()
-        res = await asyncio.to_thread(run_did_fast, cmd)
+        res = await asyncio.to_thread(run_did_fast, cmd, flags)
         JE.emit("outcome", "done", (), f"{time.monotonic() - t0:.1f}s {cmd} -> {res}")
         flash(res, 8.0)
         app.invalidate()
@@ -6655,10 +6659,14 @@ def _on_enter(event):
         if dtgt.get("code"):
             cmd += f" @{dtgt['code']}"
         cmd += f" [{pts}]" + dtgt.get("suffix", "")
+        # A rate answer (".5/m") is still a per-minute credit: --rate lets
+        # did-fast split a long entry per block (lib/janus_done.py
+        # SPLIT_MIN_POINTS), the same as an inferred minutes credit.
+        flags = _did_flags() + (("--rate",) if janus_done.is_rate_answer(text) else ())
         if dtgt.get("row_key"):
-            _run_row_did(event.app, cmd, dtgt["row_key"])
+            _run_row_did(event.app, cmd, dtgt["row_key"], flags)
         else:
-            _run_done_command(event.app, cmd)
+            _run_done_command(event.app, cmd, flags)
         return
     if STATE.points_edit_target is not None:
         pe = STATE.points_edit_target
@@ -7360,6 +7368,10 @@ def _(event):
         if _e.get("id") in (item.get("entry_ids") or []):
             entry_tags = _e.get("tags") or []
             break
+    # did-fast recreates the entry from this command (its range trim), so
+    # the entry's own single-word tags ride as #tag tokens or they are lost
+    # (2026-11-01; same as mobile.py's _tag_tokens).
+    cmd += "".join(f" #{_t}" for _t in entry_tags if re.match(r"^-?\w+$", str(_t)))
     suffix = date_sfx
     for _t in _habit_tags(entry_tags):
         suffix += f", {_t} {item['dur_min']}{date_sfx}"
@@ -7394,14 +7406,15 @@ def _(event):
     _run_row_did(event.app, cmd, cmd)
 
 
-def _run_row_did(app, cmd: str, key: str) -> None:
+def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None) -> None:
     """did-fast a FINISHED entry row (no timer to stop) and refresh. `key`
     is the row's idempotency command (its points-less form when the points
-    were asked for), marked done once did-fast has run."""
+    were asked for), marked done once did-fast has run. `flags` replaces
+    the view's default did-fast flags (callers include _did_flags())."""
     async def _run_did_and_refresh():
         flash(f"$ did {cmd}")
         app.invalidate()
-        res = await asyncio.to_thread(run_did_fast, cmd)
+        res = await asyncio.to_thread(run_did_fast, cmd, flags)
         _mark_cmd_done_today(key)
         flash(res, 8.0)
         app.invalidate()

@@ -39,6 +39,9 @@ def jm(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "DTD_RUNNING_HINT", tmp_path / "dtd-running-hint")
     from neon import excel
     monkeypatch.setattr(excel, "read", lambda *a, **k: {"ok": False})
+    # log_entry looks the swiped entry up for its HHMM-HHMM range
+    # (2026-11-01); no network here — tests that want a range stub their own.
+    monkeypatch.setattr(mod.toggl_api, "get_entries", lambda **kw: [])
     return mod
 
 

@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -693,6 +694,14 @@ class ParsedItem:
     bonus_points: Optional[int] = None  # +N bonus points added on top of computed value
     block_override: Optional[str] = None  # explicit 地支 block (e.g. "巳") this completion happened in
     block_inferred: bool = False  # block_override came from the HHMM-HHMM range, not a typed glyph
+    # Per-block split of a long per-minute entry (JM 2026-11-01, see
+    # split_results_by_block): split_of = the parent's full (HHMM, HHMM)
+    # range, split_part = (index, count) of this segment.
+    split_of: Optional[tuple] = None
+    split_part: Optional[tuple] = None
+    # --rate: the [N] on this run came from a typed per-minute rate (".5/m"
+    # at janus's points prompt), so it is still a per-minute credit.
+    rate_based: bool = False
     # "+90 @m5x2 monthly sync" / "-15 @m5x2 late fee": a bare 分 log — signed
     # points to a domain column with a free-text note. The note goes ONLY
     # into the 分 log (neon ledger src + completed-today); no Todoist task,
@@ -2267,6 +2276,20 @@ def _warn_chain_broken(resp: dict, sheet: str = "0分") -> None:
               file=sys.stderr)
 
 
+def _kid_time_block_minutes(r) -> Optional[int]:
+    """Minutes a kid-time result (xk20/xk22/xk26 habit, or a card/item on
+    the 0n:xk20 / 0n:xk22 domain route) adds to 0分!X, a point per minute
+    via 0n!AZ — the block credit a range-inferred completion of it earns.
+    None for anything else."""
+    if not r.item.block_inferred:
+        return None
+    if _0n_domain_header(r.fen_col) and r.item.time_range:
+        return time_range_minutes(*r.item.time_range) or None
+    if r.step == "0n" and r.item.name.lower() in KID_TIME_0N:
+        return int(r.write_value or 0) or None
+    return None
+
+
 def resolve_block_credit(block: str, cur_block: str,
                          now: datetime) -> tuple[str, Optional[str]]:
     """Decide what a /did block-override (e.g. "...  巳") should do.
@@ -3522,31 +3545,164 @@ def skip_threshold_zero(r, task_id: Optional[str]) -> Optional[str]:
 def infer_range_blocks(items: list) -> None:
     """Accrual, not cash (JM 2026-10-28): a completion with an HHMM-HHMM
     range credits the block the work happened in, not the block it was
-    logged in. Sets block_override to the 地支 block holding most of the
-    range's minutes (ties → the earlier block), for today's items with no
-    typed glyph. Step 5a then credits that block's 0分 G:O cell; a range in
-    the current block is a no-op there ("skip")."""
-    import neon_blocks as nb
+    logged in. Sets block_override to the 地支 block the range ENDED in (JM
+    2026-11-01: "if they span a block boundary, mark the points in the block
+    that the task ended"; before that, the block holding most of the
+    minutes), for today's items with no typed glyph. Step 5a then credits
+    that block's 0分 G:O cell; a range in the current block is a no-op there
+    ("skip"). Long per-minute ranges are split per block afterwards, see
+    split_results_by_block."""
     today = _daytime.today()
     today_md = f"{today.month}/{today.day}"
     for it in items:
         if it.block_override or not it.time_range or (it.target_date or today_md) != today_md:
             continue
-        s, e = it.time_range
-        try:
-            sm = int(s[:2]) * 60 + int(s[2:])
-            em = int(e[:2]) * 60 + int(e[2:])
-        except ValueError:
-            continue
-        if em < sm:
-            em += 24 * 60  # overnight range
-        counts: dict[str, int] = {}
-        for m in range(sm, em):
-            b = nb.current_block((m // 60) % 24)
-            counts[b] = counts.get(b, 0) + 1
-        if counts:
-            it.block_override = max(counts, key=counts.get)
+        segs = range_block_segments(*it.time_range)
+        if segs:
+            it.block_override = segs[-1][0]
             it.block_inferred = True
+
+
+def range_block_segments(start: str, end: str) -> list[tuple[str, str, str]]:
+    """Split an HHMM-HHMM range at 地支 block boundaries: [(block, HHMM,
+    HHMM), ...] in order, one per block touched (an overnight range wraps
+    past 24:00 and its post-midnight minutes clamp to 卯 like
+    neon_blocks.current_block does). Empty on an unparseable range."""
+    import neon_blocks as nb
+    try:
+        sm = int(start[:2]) * 60 + int(start[2:])
+        em = int(end[:2]) * 60 + int(end[2:])
+    except ValueError:
+        return []
+    if em < sm:
+        em += 24 * 60  # overnight range
+    segs: list[list] = []
+    for m in range(sm, em):
+        b = nb.current_block((m // 60) % 24)
+        if not segs or segs[-1][0] != b:
+            segs.append([b, m, m + 1])
+        else:
+            segs[-1][2] = m + 1
+    return [(b, f"{(a // 60) % 24:02d}{a % 60:02d}", f"{(z // 60) % 24:02d}{z % 60:02d}")
+            for b, a, z in segs]
+
+
+# Points above which a per-minute completion spanning several blocks is
+# split into one completion per block (lib/janus_done.SPLIT_MIN_POINTS).
+try:
+    from janus_done import SPLIT_MIN_POINTS  # noqa: E402
+except Exception:  # noqa: BLE001 — lib not importable: keep the documented default
+    SPLIT_MIN_POINTS = 100
+
+# 0n habits whose minutes ARE their 0分 points (0n!AZ sums xk20/xk22/xk26 and
+# 0分!X is ='0n'!AZ, a point per minute): block credit can be computed from
+# the minutes even though the points reach 0分 through a formula.
+KID_TIME_0N = {"xk20", "xk22", "xk26"}
+
+
+def _per_minute_total(r) -> Optional[int]:
+    """The points a result derives from its range minutes, or None when it
+    is not a per-minute credit: an explicit [N]/typed minutes (unless the
+    [N] came from a typed rate, --rate), a fixed-points habit, a 长
+    threshold habit (splitting could drop a segment under its minimum), a
+    BASE_IN_CELL_1N habit (its base is per occurrence, not per minute) or a
+    formula-routed domain whose points-per-minute is not known here (hcbi
+    habits like bball)."""
+    it = r.item
+    if not it.time_range or it.time_value:
+        return None
+    if it.points_override is not None and not it.rate_based:
+        return None
+    name = it.name.lower()
+    if r.step == "variable":
+        return r.fen_points if not _hcbi_domain_col(r.fen_col) else None
+    if r.step == "todoist":
+        # A card's [N] is a fixed value, unless it is a kid-time card whose
+        # credit is its minutes (0n:xk20 / 0n:xk22) or a --rate total.
+        if _0n_domain_header(r.fen_col):
+            return time_range_minutes(*it.time_range)
+        return r.fen_points if it.rate_based else None
+    if r.step == "1n" and r.is_variable_1n:
+        resolved = header_normalize(ONENEON_ALIASES.get(name, name))
+        if resolved in THRESHOLD_1N or resolved in BASE_IN_CELL_1N:
+            return None
+        return r.variable_value or 0
+    if r.step == "0n" and name in KID_TIME_0N:
+        return int(r.write_value or 0)
+    return None
+
+
+def _toggl_key(r) -> tuple:
+    """Step 6b's per-result key: (name, range) — same-name segments of a
+    per-block split each get their own Toggl entry and report."""
+    return (r.item.name, tuple(r.item.time_range) if r.item.time_range else None)
+
+
+def _is_later_split_part(r) -> bool:
+    """A 2nd..nth segment of a per-block split: it carries its own Toggl
+    entry and block credit, but the Todoist task and the posthoc record
+    belong to the first segment only."""
+    return bool(r.item.split_part and r.item.split_part[0] > 0)
+
+
+def split_results_by_block(fast: list) -> list:
+    """JM 2026-11-01: "if it is >100 points and a per-minute task, break it
+    up per block, so that there are multiple time blocks with the same name,
+    and the points from each block get recorded into their respective
+    block." A today result whose points come from its HHMM-HHMM minutes,
+    worth more than SPLIT_MIN_POINTS and crossing a 地支 boundary, becomes
+    one clone per block segment: own range (-> its own Toggl entry in 6b,
+    the parent entry trimmed once), own block_override (-> its own G:O
+    credit in 5a), its share of the points (pro rata by minutes, remainder
+    on the last segment so the total is unchanged). The Todoist task and the
+    posthoc record stay with the first segment only."""
+    today = _daytime.today()
+    today_md = f"{today.month}/{today.day}"
+    out: list = []
+    for r in fast:
+        it = r.item
+        total = _per_minute_total(r)
+        if (total is None or total <= SPLIT_MIN_POINTS
+                or (it.target_date or today_md) != today_md
+                or (it.block_override and not it.block_inferred)):
+            out.append(r)
+            continue
+        segs = range_block_segments(*it.time_range)
+        if len(segs) < 2:
+            out.append(r)
+            continue
+        total_min = time_range_minutes(*it.time_range) or 1
+        given = 0
+        for i, (block, a, z) in enumerate(segs):
+            seg_min = time_range_minutes(a, z)
+            last = i == len(segs) - 1
+            seg_pts = total - given if last else total * seg_min // total_min
+            given += seg_pts
+            c_item = copy.copy(it)
+            c_item.time_range = (a, z)
+            c_item.block_override = block
+            c_item.block_inferred = True
+            c_item.split_of = it.time_range
+            c_item.split_part = (i, len(segs))
+            if it.points_override is not None:
+                c_item.points_override = seg_pts
+            c = copy.copy(r)
+            c.item = c_item
+            c.fen_extra = list(r.fen_extra)
+            if r.step in ("variable", "todoist"):
+                if not _0n_domain_header(r.fen_col):
+                    c.fen_points = seg_pts
+            elif r.step == "1n":
+                c.variable_value = seg_pts
+                c.write_value = seg_min
+            elif r.step == "0n":
+                c.write_value = seg_min
+            if i > 0:
+                c.todoist_task = None
+            out.append(c)
+        print(f"  ⇶ {it.name}: {total}分 over {len(segs)} blocks → "
+              + ", ".join(f"{b} {a}-{z}" for b, a, z in segs), file=sys.stderr)
+    return out
 
 
 def _past_target(items: list, past_ok: bool) -> bool:
@@ -3657,6 +3813,12 @@ def main():
     past_ok = "--past-ok" in argv
     if past_ok:
         argv = [a for a in argv if a != "--past-ok"]
+    # --rate: the [N] was computed from a typed per-minute rate (janus points
+    # prompt ".5/m"), so the credit is still per-minute and may be split per
+    # block (split_results_by_block) like an inferred minutes credit.
+    rate_based = "--rate" in argv
+    if rate_based:
+        argv = [a for a in argv if a != "--rate"]
     # --task-id <id>: dtd passes the fzf row id so completion closes the EXACT
     # selected task, not a name match (duplicate names would close the wrong
     # instance). Only honoured for a single-item completion — a batch has no
@@ -3671,6 +3833,9 @@ def main():
 
     # 1. Parse
     items = parse_input(raw)
+    if rate_based:
+        for _it in items:
+            _it.rate_based = True
     infer_range_blocks(items)
     if not items:
         _emit({"error": "no items parsed"})
@@ -3754,6 +3919,7 @@ def main():
 
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
+    fast = split_results_by_block(fast)  # long per-minute ranges, one clone per block
     agent_needed = [r for r in routes if r.step == "needs_agent"]
     threshold_skipped = [r for r in routes if r.step == "skipped"]
     refused = [r for r in routes if r.step == "refused"]
@@ -3990,15 +4156,21 @@ def main():
     for r in fast:
         if not r.item.block_override:
             continue
+        kid_minutes = _kid_time_block_minutes(r)
         habit_routes_via_formula = (r.item.name.lower() in HCBI_HABITS
                                     or _hcbi_domain_col(r.fen_col) is not None
                                     or _0n_domain_header(r.fen_col) is not None)
-        if habit_routes_via_formula:
+        if habit_routes_via_formula and kid_minutes is None:
             if r.item.block_inferred:
                 continue  # range-inferred: no glyph was typed, nothing to warn about
             print(f"⚠ {r.item.name}: block override ({r.item.block_override}) "
                   f"ignored — hcbi habits route points through a formula, "
                   f"not an appendable column", file=sys.stderr)
+            continue
+        if kid_minutes is not None:
+            # xk20/xk22 minutes reach 0分!X through 0n!AZ at a point per
+            # minute, so the block's share is the segment's minutes.
+            block_override_totals.append((r.item.name, r.item.block_override, kid_minutes, r))
             continue
         item_pts = 0
         if (r.fen_col and _fen_pts_ok(r)
@@ -4256,14 +4428,16 @@ def main():
                 if lbl in LABEL_TO_0FEN:
                     return lbl
         return None
-    toggl_items = [(r.item.name, r.item.time_range,
+    # Keyed per result (name + range), not per name: a per-block split
+    # (split_results_by_block) creates several same-name entries.
+    toggl_items = [(_toggl_key(r), r.item.name, r.item.time_range,
                     _resolve_toggl_project(r),
                     r.item.target_date,
-                    r.item.toggl_tags or [])
+                    r.item.toggl_tags or [],
+                    r.item.split_of)
                    for r in fast if r.item.time_range]
     if toggl_items:
-        def _create_toggl(args):
-            name, tr, proj, td, tags = args
+        def _range_dts(tr, td):
             today_str = _daytime.today_iso()
             # If target_date differs from today, compute ISO date
             if td:
@@ -4277,10 +4451,33 @@ def main():
             start_dt, end_dt = _parse_hhmm(tr[0]), _parse_hhmm(tr[1])
             if end_dt <= start_dt:
                 end_dt += timedelta(days=1)
-            try:
-                trim_lines = _trim_toggl_range(start_dt, end_dt)
-            except Exception as e:  # noqa: BLE001 — never block entry creation on a trim failure
-                trim_lines = [f"trim failed: {e}"]
+            return today_str, start_dt, end_dt
+
+        # A split's segments abut exactly and all overlap the ONE parent
+        # entry: trim the parent range once, serially, before the pool —
+        # four workers trimming the same original concurrently would delete
+        # an already-deleted id and leave duplicate remainders.
+        pre_trim: dict[tuple, list[str]] = {}
+        for _key, _name, _tr, _proj, _td, _tags, _split_of in toggl_items:
+            if _split_of and (_td, _split_of) not in pre_trim:
+                _, _s, _e = _range_dts(_split_of, _td)
+                try:
+                    pre_trim[(_td, _split_of)] = _trim_toggl_range(_s, _e)
+                except Exception as e:  # noqa: BLE001
+                    pre_trim[(_td, _split_of)] = [f"trim failed: {e}"]
+
+        def _create_toggl(args):
+            key, name, tr, proj, td, tags, split_of = args
+            today_str, start_dt, end_dt = _range_dts(tr, td)
+            if split_of:
+                # Parent range already trimmed above; the first segment
+                # reports those lines.
+                trim_lines = pre_trim.get((td, split_of), []) if tr[0] == split_of[0] else []
+            else:
+                try:
+                    trim_lines = _trim_toggl_range(start_dt, end_dt)
+                except Exception as e:  # noqa: BLE001 — never block entry creation on a trim failure
+                    trim_lines = [f"trim failed: {e}"]
             cmd = ["python3", str(TOGGL_CLI), "create", name,
                    f"{tr[0][:2]}:{tr[0][2:]}", f"{tr[1][:2]}:{tr[1][2:]}"]
             if proj:
@@ -4291,15 +4488,20 @@ def main():
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 out = proc.stdout.strip()
+                # The entry id(s) the CLI printed ("[id:N]"; two across
+                # midnight) — mobile janus ledgers them (its logged-entry
+                # ledger is keyed by Toggl id, and the original was just
+                # replaced).
+                ids = [int(m) for m in re.findall(r"\[id:(\d+)\]", out)]
                 if trim_lines:
                     out = "\n".join(trim_lines) + ("\n" + out if out else "")
-                return name, proc.returncode == 0, out
+                return key, proc.returncode == 0, out, ids
             except Exception as e:
-                return name, False, str(e)
+                return key, False, str(e), []
 
         with ThreadPoolExecutor(max_workers=4) as pool:
-            for name, ok, out in pool.map(_create_toggl, toggl_items):
-                toggl_created[name] = {"ok": ok, "output": out}
+            for key, ok, out, ids in pool.map(_create_toggl, toggl_items):
+                toggl_created[key] = {"ok": ok, "output": out, "ids": ids}
 
     # 6c. Create posthoc Todoist tasks for variable items (parallel)
     # Skipped under --points-only: the caller (split) makes its own posthoc.
@@ -4309,7 +4511,8 @@ def main():
     # activity that needs a brand-new posthoc record fabricated for it.
     posthoc_results = {}
     variable_items = [] if points_only else [
-        r for r in fast if r.step == "variable" and r.todoist_task is None]
+        r for r in fast if r.step == "variable" and r.todoist_task is None
+        and not _is_later_split_part(r)]
     if variable_items:
         today = _daytime.today()
 
@@ -4365,7 +4568,10 @@ def main():
     completed_points = {}
     for r in fast:
         if r.fen_points or r.fen_extra:
-            completed_points[r.item.name] = r.fen_points + sum(p for _, p in r.fen_extra)
+            # Summed, not assigned: a per-block split lists one result per
+            # segment under the same name.
+            completed_points[r.item.name] = (completed_points.get(r.item.name, 0)
+                                             + r.fen_points + sum(p for _, p in r.fen_extra))
     # Record the Todoist id of every task we actually closed, so dtd hides by id
     # (collision-proof) and a completed task can't suppress a different open task
     # sharing its annotation-stripped name.
@@ -4458,8 +4664,15 @@ def main():
             td_entry["due_string"] = r.todoist_task.get("due_string", "")
             td_entry["recurring"] = r.todoist_task.get("recurring", False)
             entry["todoist"] = td_entry
-        if r.step == "variable" and r.item.name in posthoc_results:
+        if (r.step == "variable" and r.item.name in posthoc_results
+                and not _is_later_split_part(r)):
             entry["posthoc"] = posthoc_results[r.item.name]
+        if r.item.split_part:
+            # One segment of a per-block split (split_results_by_block).
+            entry["split"] = {"part": r.item.split_part[0], "of": r.item.split_part[1],
+                              "range": f"{r.item.time_range[0]}-{r.item.time_range[1]}"}
+        if r.item.block_override:
+            entry["block"] = r.item.block_override
         if r.kid_time_for:
             entry["kid_time_for"] = r.kid_time_for
         if r.fen_col and not _hcbi_domain_col(r.fen_col):
@@ -4473,8 +4686,8 @@ def main():
                     fen_entry["extra"] = [{"col": c, "points": p} for c, p in r.fen_extra if p > 0]
                     fen_entry["total"] = r.fen_points + sum(p for _, p in r.fen_extra)
                 entry["0fen"] = fen_entry
-        if r.item.time_range and r.item.name in toggl_created:
-            entry["toggl"] = toggl_created[r.item.name]
+        if r.item.time_range and _toggl_key(r) in toggl_created:
+            entry["toggl"] = toggl_created[_toggl_key(r)]
         if r.item.name in night_hcmc_results:
             entry["night_hcmc_toggl"] = night_hcmc_results[r.item.name]
         output["results"].append(entry)

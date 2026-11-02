@@ -1498,15 +1498,26 @@ def _run_did_fast(text: str, flags: tuple[str, ...] = ()) -> dict:
             data = None
     step = None
     tag_steps = []
+    segments: list[dict] = []
     if data and data.get("results"):
         step = data["results"][0].get("step")
+        # The 2nd..nth segments of a per-block split (did-fast
+        # split_results_by_block) are the same item, not habit-tag items.
         tag_steps = [f"{r.get('name')}→{r.get('step')}"
-                     for r in data["results"][1:]]
+                     for r in data["results"][1:] if not r.get("split")]
+        for r in data["results"]:
+            tg = r.get("toggl") or {}
+            if tg.get("ids"):
+                # Every Toggl entry did-fast created for this command (the
+                # original was trimmed away): mobile ledgers them by id.
+                segments.append({"ids": list(tg["ids"]), "block": r.get("block"),
+                                 "credits": _credits({"results": [r]})})
     needs_agent = bool(data and data.get("agent_needed"))
     refused = janus_done.refusal(data)  # inferred 分 over the cap (lib/janus_done.py)
     ok = proc.returncode == 0 and step is not None and refused is None
     out = {"ok": ok, "step": step, "tag_steps": tag_steps,
            "credits": _credits(data) if ok else [],
+           "segments": segments if ok else [],
            "needs_agent": needs_agent,
            "stderr_tail": proc.stderr.strip()[-200:]}
     if refused:
@@ -1552,6 +1563,15 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     today = day or _dt.datetime.now(_tz()).date()
     if str(entry_id) in _ledger(today):
         return {"ok": True, "already": True}
+    # The entry's own HHMM-HHMM range rides the command (JM 2026-11-01, the
+    # desktop janus's ⌥↵ form): did-fast credits the 地支 block the entry
+    # ENDED in and splits a >100分 per-minute entry per block, each block
+    # its own Toggl entry (lib/janus_done.py SPLIT_MIN_POINTS). did-fast
+    # replaces the original entry when it gets a range, so the tags ride
+    # too (#tag) and the new ids are ledgered below. An entry that started
+    # on another day (overnight 睡觉) or is still running keeps the old
+    # minutes-only form, as does a lookup failure.
+    time_range, entry_tags = _entry_range_and_tags(entry_id, today)
     # A dtd-started task carries its OWN point value (e.g. [30]), which is
     # generally NOT the same number as the entry's elapsed minutes. Passing
     # a bare number here only ever means anything to did-fast's Step 6
@@ -1573,15 +1593,21 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     if path == janus_done.CREDITED:
         _ledger_add(today, entry_id, f"{desc} already crossed off — no extra 分")
         return {"ok": True, "already": True, "credited": True}
+    rate_answer = False
     if path == janus_done.ASK:
         if points is None:
             return {"ok": True, "needs_points": True, "desc": desc, "minutes": minutes}
         pts = janus_done.points_from_answer(points, minutes)
         if pts is None:
             return {"ok": False, "error": f"not a number or rate: {points!r}"}
-    text = f"{desc} [{pts}]" if pts is not None else f"{desc} {minutes}"
+        rate_answer = janus_done.is_rate_answer(points)
+    if time_range:
+        text = f"{desc} {time_range}" + (f" [{pts}]" if pts is not None else "")
+    else:
+        text = f"{desc} [{pts}]" if pts is not None else f"{desc} {minutes}"
     if project:
         text += f" @{project}"
+    text += _tag_tokens(entry_tags)
     # Habit tags ride along as extra comma-separated /did items — did-fast
     # processes each independently (其他人 61 → 其他人 0n column, etc.).
     # These are always minutes (0n habit columns track time, not the
@@ -1593,6 +1619,8 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     if day is not None:
         text += f" {day.month}/{day.day}"
         flags = ("--past-ok",)
+    if rate_answer:
+        flags += ("--rate",)  # a rate-priced total is still per-minute: split-eligible
     r = _run_did_fast(text, flags)
     if r["ok"]:
         note = f"{desc} {pts if pts is not None else minutes} → {r['step']}"
@@ -1601,7 +1629,46 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
         _ledger_add(today, entry_id, note)
         r["points"] = _credited_total(r.get("credits") or [], pts if pts is not None else minutes)
         _logged_points_add(today, entry_id, r["points"], r.get("credits") or [])
+        _ledger_segments(today, r, note)
     return r
+
+
+def _entry_range_and_tags(entry_id: str, today: _dt.date) -> tuple[str | None, list[str]]:
+    """("HHMM-HHMM", tags) for a finished Toggl entry that lies within
+    `today`, else (None, []) — see log_entry."""
+    try:
+        e = _get_entry(entry_id, today)
+        if not e or (e.get("duration") or 0) < 0 or not e.get("stop"):
+            return None, []
+        start, end = _parse_iso(e["start"]), _parse_iso(e["stop"])
+        if start.date() != today or end.date() != today or end <= start:
+            return None, []
+        return f"{start:%H%M}-{end:%H%M}", [str(t) for t in (e.get("tags") or [])]
+    except Exception as ex:  # noqa: BLE001 — the range is an upgrade, never a blocker
+        print(f"[janus-mobile] entry {entry_id}: no range ({ex})", file=sys.stderr)
+        return None, []
+
+
+_TAG_TOKEN_RE = re.compile(r"^-?\w+$")
+
+
+def _tag_tokens(tags: list[str]) -> str:
+    """" #tag" tokens for did-fast (it recreates the Toggl entry from the
+    command, so the entry's own tags must ride along or they are lost).
+    Only single-word tags: a space inside a tag would leak into the name."""
+    return "".join(f" #{t}" for t in tags if _TAG_TOKEN_RE.match(t))
+
+
+def _ledger_segments(today: _dt.date, r: dict, note: str) -> None:
+    """Ledger every Toggl entry did-fast created for a logged command (the
+    swiped entry was replaced; a per-block split made several), so the
+    timeline shows them logged and a second swipe is refused."""
+    for seg in r.get("segments") or []:
+        credits = seg.get("credits") or []
+        pts = _credited_total(credits, None)
+        for eid in seg.get("ids") or []:
+            _ledger_add(today, str(eid), note + (f" →{seg['block']}" if seg.get("block") else ""))
+            _logged_points_add(today, str(eid), pts, credits)
 
 
 # In-flight guard for the two actions below: did-fast's point-writing is an
@@ -1711,6 +1778,7 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
             _ledger_add(now.date(), entry_id, f"{desc} stopped, already crossed off")
             return {"ok": proc.returncode == 0, "credited": True, "stopped": True,
                     "stderr_tail": proc.stderr.strip()[-200:]}
+        flags: tuple[str, ...] = ()
         if path == janus_done.ASK:
             mins = int((now - start).total_seconds() // 60)
             if points is None:
@@ -1718,18 +1786,22 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
             pts = janus_done.points_from_answer(points, mins)
             if pts is None:
                 return {"ok": False, "error": f"not a number or rate: {points!r}"}
+            if janus_done.is_rate_answer(points):
+                flags = ("--rate",)  # per-minute: split-eligible (SPLIT_MIN_POINTS)
         text = f"{desc} {start:%H%M}-{now:%H%M}"
         if pts is not None:
             text += f" [{pts}]"
         if project:
             text += f" @{project}"
-        r = _run_did_fast(text)
+        text += _tag_tokens([str(t) for t in (e.get("tags") or [])])
+        r = _run_did_fast(text, flags)
         if r["ok"]:
-            _ledger_add(_dt.datetime.now(_tz()).date(), entry_id,
-                       f"{desc} done {start:%H%M}-{now:%H%M} → {r['step']}")
+            note = f"{desc} done {start:%H%M}-{now:%H%M} → {r['step']}"
+            _ledger_add(_dt.datetime.now(_tz()).date(), entry_id, note)
             r["points"] = _credited_total(r.get("credits") or [], pts)
             _logged_points_add(_dt.datetime.now(_tz()).date(), entry_id, r["points"],
                                r.get("credits") or [])
+            _ledger_segments(_dt.datetime.now(_tz()).date(), r, note)
         return r
     finally:
         _INFLIGHT.discard(key)
