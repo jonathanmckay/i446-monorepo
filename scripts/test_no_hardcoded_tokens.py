@@ -33,8 +33,11 @@ def test_no_token_shaped_literals():
     for p in PATTERNS:
         hits += _tracked_hits(p)
     # report file:line only, never the secret itself
-    assert not hits, "hardcoded token literal(s):\n" + "\n".join(
-        h.split(":", 2)[0] + ":" + h.split(":", 2)[1] for h in hits)
+    # raise, not `assert hits`: pytest's assert rewriting would echo the hit
+    # lines (and the secret in them) into the failure output.
+    if hits:
+        raise AssertionError("hardcoded token literal(s):\n" + "\n".join(
+            h.split(":", 2)[0] + ":" + h.split(":", 2)[1] for h in hits))
 
 
 def test_live_todoist_token_not_in_tree():
@@ -46,4 +49,6 @@ def test_live_todoist_token_not_in_tree():
         return
     r = subprocess.run(["git", "-C", str(REPO), "grep", "-lIF", tok, "--", "."],
                        capture_output=True, text=True)
-    assert not r.stdout.strip(), "live Todoist token found in: " + r.stdout.replace("\n", " ")
+    found = r.stdout.strip()
+    if found:
+        raise AssertionError("live Todoist token found in: " + found.replace("\n", " "))
