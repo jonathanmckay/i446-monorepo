@@ -556,6 +556,13 @@ class State:
         self.flash = ""  # one-line status
         self.flash_until = 0.0
         self.flash_style = ""  # optional override style for flash
+        # A question janus is WAITING on (the /done points ask, ^G re-point):
+        # shown in the footer, wrapped, for as long as its target is armed --
+        # unlike a flash it never expires (bug 2026-11-01: "did is asking me
+        # questions but not enough space"; the 64-col one-line footer clipped
+        # the ask and dropped it after 8s while the ❯ box still expected an
+        # answer). Cleared by render_footer once no target is armed.
+        self.pending_ask = ""
         self.today_points = 0  # 分 earned today
         self.block_points: dict[str, int] = {}  # per-block 分, straight from Neon's G:O cells
         # Today's per-domain 分 straight from 0分 P:Y, keyed by DOMAIN_PTS_ROW
@@ -2023,6 +2030,30 @@ def flash(msg: str, secs: float = 4.0, style: str = ""):
     STATE.flash = msg
     STATE.flash_until = time.monotonic() + secs
     STATE.flash_style = style or ""
+
+
+def ask(msg: str) -> None:
+    """Pose a question whose answer is the next Enter in the ❯ box. Stays
+    in the footer (wrapping onto up to ASK_MAX_LINES lines) until the armed
+    target is consumed or cancelled -- a flash is the wrong tool for this:
+    it times out and is clipped to one line."""
+    JE.emit("action", "ask", (), msg)
+    STATE.pending_ask = msg
+    STATE.flash = ""
+
+
+def _ask_armed() -> bool:
+    """True while some input-consuming target is waiting on the ❯ box."""
+    return any(t is not None for t in (STATE.done_target, STATE.points_edit_target,
+                                       STATE.split_target, STATE.edit_target))
+
+
+def pending_ask() -> str:
+    """The live question, or "" -- and self-heal: a question whose target
+    was consumed/cancelled elsewhere is dropped here."""
+    if STATE.pending_ask and not _ask_armed():
+        STATE.pending_ask = ""
+    return STATE.pending_ask
 
 
 _PROJECTS_FETCHED = False
@@ -4938,10 +4969,29 @@ def render_footer() -> list[tuple[str, str]]:
     # A long error is truncated here BY DESIGN (2026-10-20): the full text goes
     # to the event log (JE "outcome error"), which is the thing to read when an
     # error needs diagnosing -- the footer never grows to accommodate it.
+    #
+    # Exception: a pending ASK (see ask()). janus is waiting on the ❯ box,
+    # so the question stays up, un-clipped (wrap, up to ASK_MAX_LINES),
+    # until the target is consumed. A flash fired meanwhile (e.g. "$ did
+    # ...") still wins while it is live, then the question comes back.
     if STATE.flash and time.monotonic() < STATE.flash_until:
         sty = STATE.flash_style or "class:flash"
         return [(sty, f" ▸ {STATE.flash}\n")]
+    q = pending_ask()
+    if q:
+        return [("class:ask", f" ? {q}  · answer in the ❯ box above")]  # no "\n": it would cost a blank wrapped line
     return [("class:hint", HINT_LINE + "\n")]
+
+
+ASK_MAX_LINES = 3
+
+
+def footer_height() -> Dimension:
+    """One line normally (by design, see render_footer); up to ASK_MAX_LINES
+    while a question is pending so it is never clipped."""
+    if pending_ask():
+        return Dimension(min=1, max=ASK_MAX_LINES)  # preferred = wrapped content height
+    return Dimension.exact(1)
 
 
 def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[str, str]]:
@@ -6450,7 +6500,7 @@ def _run_current_timer_done(app) -> None:
         STATE.event_sel = None
         STATE.done_target = {"desc": raw_desc, "start_dt": start, "code": code}
         input_buffer.text = ""
-        flash(f'points for "{raw_desc}"? total (40) or rate (.5/m), ⏎ = 0', 8.0)
+        ask(f'points for "{raw_desc}"? total (40) or rate (.5/m), ⏎ = 0')
         return
     if path == "credited":
         # Crossed off in dtd first: its task points are already in, so the
@@ -7339,7 +7389,7 @@ def _(event):
         STATE.done_target = {"desc": desc, "start_dt": start, "end_dt": end,
                              "code": code, "suffix": suffix, "row_key": cmd}
         input_buffer.text = ""
-        flash(f'points for "{desc}" ({item["dur_min"]}m)? total (40) or rate (.5/m), ⏎ = 0', 8.0)
+        ask(f'points for "{desc}" ({item["dur_min"]}m)? total (40) or rate (.5/m), ⏎ = 0')
         return
     _run_row_did(event.app, cmd, cmd)
 
@@ -7397,9 +7447,9 @@ def _(event):
                                 "minutes": dur, "past_day": STATE.day_offset != 0}
     input_buffer.text = str(cur) if STATE.day_offset == 0 else ""
     input_buffer.cursor_position = len(input_buffer.text)
-    flash(f'points for "{desc}": now {cur} — type the right total (or .5/m), ⏎'
-          if STATE.day_offset == 0 else
-          f'"{desc}" on a past day: type the change (+10 / -5), ⏎', 8.0)
+    ask(f'points for "{desc}": now {cur} — type the right total (or .5/m), ⏎'
+        if STATE.day_offset == 0 else
+        f'"{desc}" on a past day: type the change (+10 / -5), ⏎')
 
 
 @kb.add("c-p")
@@ -7825,7 +7875,8 @@ prompt_window = Window(content=FormattedTextControl(render_input_prompt), height
                        width=Dimension.exact(3), style=lambda: _no_timer_flash_style())
 
 # Key-hint / flash line pinned BELOW the input box (Claude Code style).
-footer_window = Window(content=FormattedTextControl(render_footer), height=1, wrap_lines=False)
+footer_window = Window(content=FormattedTextControl(render_footer), height=footer_height,
+                       wrap_lines=True)
 
 from prompt_toolkit.layout import VSplit  # noqa: E402
 
@@ -7850,6 +7901,7 @@ style = Style.from_dict({
     "selected_bg": "bg:#3a3a3a",
     "selected_accent": "bold bg:#3a3a3a #ff2d78",
     "flash": "bold yellow",
+    "ask": "bold #ffffff bg:#5f00af",
     "hint": "italic #666666",
     "prompt": "bold cyan",
 })

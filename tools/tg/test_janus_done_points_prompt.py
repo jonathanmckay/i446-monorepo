@@ -131,7 +131,8 @@ def test_unresolvable_points_arms_done_target_not_did_fast(tmp_path, monkeypatch
         "code": mod.toggl_project_code(None, "fix the parser bug"),
     }
     assert mod.input_buffer.text == ""
-    assert "points for" in mod.STATE.flash and ".5/m" in mod.STATE.flash
+    # 2026-11-01: the question is a pinned ask(), not an expiring flash.
+    assert "points for" in mod.STATE.pending_ask and ".5/m" in mod.STATE.pending_ask
     assert mod.STATE.event_sel is None
 
 
