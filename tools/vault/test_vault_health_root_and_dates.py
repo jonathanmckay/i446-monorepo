@@ -15,7 +15,7 @@ def test_root_flags_stray_files_only(tmp_path):
     assert vh.check_root(tmp_path).status == "ok"
     (tmp_path / "pc-stores-windows.md").write_text("x")
     f = vh.check_root(tmp_path)
-    assert f.status == "warn" and f.review and f.detail == ["pc-stores-windows.md"]
+    assert f.status == "warn" and f.review and f.detail == ["vault/pc-stores-windows.md"]
 
 
 def test_filename_date_shapes():
@@ -24,3 +24,22 @@ def test_filename_date_shapes():
             "2026.04.30-build-order", "2026-05-13-retention", "2016-02-24"]
     assert all(vh._BAD_DATE_RE.search(n) for n in bad)
     assert not any(vh._BAD_DATE_RE.search(n) for n in good)
+
+
+def test_root_audits_home_layout(tmp_path):
+    vault, home = tmp_path / "vault", tmp_path / "home"
+    vault.mkdir(); home.mkdir()
+    for d in ("vault", "files", "code", "Library", ".config"):
+        (home / d).mkdir()
+    (home / "bin").symlink_to(home / "code")
+    assert vh.check_root(vault, home).status == "ok"
+    (home / "dead").symlink_to(home / "nope")
+    (home / "old-backup-20260101").mkdir()
+    (home / "neon.xlsx").write_text("x")
+    (home / "repo").mkdir(); (home / "repo" / ".git").mkdir()
+    (home / "notes.md").write_text("x")
+    d = vh.check_root(vault, home).detail
+    assert any(s.startswith("~/dead → broken symlink") for s in d)
+    assert any(s.startswith("~/old-backup-20260101 → ~/.to-delete/") for s in d)
+    assert "~/neon.xlsx → OneDrive (Excel lives there)" in d
+    assert "~/repo → ~/code/" in d and "~/notes.md → ~/vault/<domain>/" in d

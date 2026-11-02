@@ -218,6 +218,7 @@ STYLE_OK: set[str] = {               # relative paths confirmed as exceptions
     # 1g_review.py plus the 1g/1s/1i9/1m5x2 skills read that name; rename generator + readers together.
     "g245/5e2/2026.07 2g-narrative.md", "g245/5e2/2026.08 2g-narrative.md",
     "g245/5e2/2026.09 2g+1g-narrative.md", "g245/5e2/2026.10 2g+1g-narrative.md",
+    "g245/5e2/2026.11 2g+1g-narrative.md",
     "m5x2/STYLE.md",                 # meta-docs standard: README/STYLE/TODO/DECISIONS are uppercase
     # Book short titles that are 41-42 characters; cutting them loses the title.
     "hcmc/reviews/undated/harry-potter-and-the-order-of-the-phoenix.md",
@@ -280,20 +281,56 @@ def scan_style(vault: Path = VAULT) -> dict[str, list[tuple[str, str]]]:
 
 
 ROOT_FILES_OK = {"CLAUDE.md"}   # plus dotfiles (git, Syncthing, Obsidian config)
+# ~ layout (i447/i448/home-folder-tree.md): vault, files, code + macOS folders.
+# Symlinks (bin, OneDrive, Dropbox, screenshots, i446-monorepo, ext) are
+# pointers by design and pass unless broken. Dotfiles are ignored.
+HOME_OK = {"vault", "files", "code", "Applications", "Desktop", "Documents", "Downloads",
+           "Library", "Movies", "Music", "Pictures", "Public"}
+_JUNK_RE = re.compile(r"backup|recovery|pre-migration|-bak\b|^tmp$|\d{8}", re.I)
 
 
-def check_root(vault: Path | None = None) -> Finding:
+def _home_dest(e: Path) -> str:
+    """Suggested home for a stray top-level item in ~ (a hint for review, never applied)."""
+    if e.is_symlink():
+        return "broken symlink: remove"
+    if _JUNK_RE.search(e.name):
+        return f"~/.to-delete/{dt.date.today():%Y-%m-%d}/"
+    if e.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
+        return "OneDrive (Excel lives there)"
+    if e.is_dir() and ((e / ".git").exists() or e.name.endswith("-worktrees")):
+        return "~/code/"
+    if e.suffix.lower() == ".md":
+        return "~/vault/<domain>/"
+    return "~/files/<domain>/ (or ~/files/archive/)"
+
+
+def check_root(vault: Path | None = None, home: Path | None = None) -> Finding:
     """Vault root holds only folders, CLAUDE.md and dotfiles (style guide
     2026-10-24: notes belong in their domain, junk in the trash). The 10-24
     cleanup found 10 Syncthing conflict copies of an old log (658 MB), empty
-    stub notes, a probe file and two real notes stranded at the top."""
+    stub notes, a probe file and two real notes stranded at the top.
+    With `home`, also audits the top of ~ against the home-folder-tree layout
+    (2026-11-01): anything not in HOME_OK, not a working symlink and not a
+    dotfile is flagged with a suggested destination. Checks this host's ~."""
     vault = vault or VAULT
-    stray = sorted(e.name for e in vault.iterdir()
-                   if e.is_file() and not e.name.startswith(".") and e.name not in ROOT_FILES_OK)
+    stray = [f"vault/{n}" for n in sorted(e.name for e in vault.iterdir()
+             if e.is_file() and not e.name.startswith(".") and e.name not in ROOT_FILES_OK)]
+    if home is not None:
+        for e in sorted(home.iterdir(), key=lambda x: x.name.lower()):
+            if e.name.startswith(".") or e.name in HOME_OK:
+                continue
+            if e.is_symlink() and e.exists():
+                continue
+            stray.append(f"~/{e.name} → {_home_dest(e)}")
     if not stray:
-        return Finding("vault-root", "ok", "only folders and CLAUDE.md at the top level")
-    return Finding("vault-root", "warn", f"{len(stray)} stray file(s) at the vault root: move notes to their "
-                   "domain, trash the rest", stray[:20], review=True)
+        where = "vault root and ~" if home is not None else "the vault root"
+        return Finding("vault-root", "ok", f"nothing stray at {where}")
+    n_home = sum(s.startswith("~/") for s in stray)
+    summary = f"{len(stray) - n_home} stray file(s) at the vault root"
+    if home is not None:
+        summary += f", {n_home} item(s) at {socket.gethostname()}:~ outside the home layout"
+    return Finding("vault-root", "warn", summary + ": move notes/files to their domain, trash the rest",
+                   stray[:30], review=True)
 
 
 def check_style() -> Finding:
@@ -790,7 +827,7 @@ def check_duplicates() -> Finding:
 # ---------------------------------------------------------------------------
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
-    for fn in (check_singletons, check_duplicate_notes, check_root, check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
+    for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
                check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
                check_duplicates):
