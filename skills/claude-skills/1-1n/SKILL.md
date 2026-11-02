@@ -13,8 +13,8 @@ the week went on the icons that accompany every block of the build order.
 Run the generator. With no args it covers the trailing 7 days (ending yesterday):
 
 ```bash
-python3 ~/.copilot/skills/1-1n/make_heatmap.py            # last 7 days
-python3 ~/.copilot/skills/1-1n/make_heatmap.py 2026-06-01 2026-06-10   # explicit range
+python3 ~/.claude/skills/1-1n/make_heatmap.py            # last 7 days
+python3 ~/.claude/skills/1-1n/make_heatmap.py 2026-06-01 2026-06-10   # explicit range
 ```
 
 Then write the output to the vault with frontmatter and open it:
@@ -24,12 +24,30 @@ mkdir -p ~/vault/g245/5e-1/1e-1n
 OUT=~/vault/g245/5e-1/1e-1n/$(date +%Y.%m.%d)-block-ritual-heatmap.md
 {
   printf -- '---\ntitle: "-1₦ Block Ritual Heatmap"\ndate: %s\ntype: report\ntags: [g245, neon, -1n, rituals]\n---\n\n' "$(date +%Y-%m-%d)"
-  python3 ~/.copilot/skills/1-1n/make_heatmap.py <START> <END>
+  python3 ~/.claude/skills/1-1n/make_heatmap.py <START> <END>
 } > "$OUT"
 open "obsidian://open?vault=vault&file=g245%2F5e-1%2F1e-1n%2F$(basename "$OUT")&newTab=true"
 ```
 
-Optionally append a short Commentary section (phase shifts, weakest rituals, week-over-week density). Keep it factual and brief.
+Then append three sections, in order:
+
+1. **Commentary.** Phase shifts, weakest rituals. Keep it factual and brief.
+2. **Week-over-week.** Append the helper's output, then a short **Read.** paragraph
+   naming which days drove the 分 delta (one dead day often explains most of it) and
+   whether 0g was over/under its ≤100/day budget (fen.md, Goaling bonus budget):
+   ```bash
+   python3 ~/.claude/skills/1-1n/fen_compare.py <START> <END> >> "$OUT"
+   ```
+   It compares START..END with the 7 days before it: ritual density, Σ/P/Q 分 from
+   0分, per-day Σ, and mean block 分 with vs without each ritual (correlational;
+   say so, never call it an effect).
+3. **Five ideas (分-positive, not trade-offs).** Five ways to raise ritual hit rates
+   that also *increase* total 分 rather than shifting it between columns or
+   inflating it via rule changes. Ground each in a number from this week's tables.
+   Prefer mechanisms (daemon defaults, auto-award checks, capture at creation)
+   over willpower. Before writing, read the Ideas sections of the last 3 reports
+   in `1e-1n/` and don't repeat one unless its numbers moved; if repeating, say why.
+   Mark unverified causal claims as such.
 
 ## Icons (the build-order rituals)
 

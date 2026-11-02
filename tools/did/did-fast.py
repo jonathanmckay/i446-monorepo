@@ -3640,17 +3640,23 @@ KID_TIME_0N = {"xk20", "xk22", "xk26"}
 
 
 def _per_minute_total(r) -> Optional[int]:
-    """The points a result derives from its range minutes, or None when it
-    is not a per-minute credit: an explicit [N]/typed minutes (unless the
-    [N] came from a typed rate, --rate), a fixed-points habit, a 长
+    """The points a result spreads over its range minutes, or None when it
+    is not splittable: typed minutes, a fixed-points habit, a 长
     threshold habit (splitting could drop a segment under its minimum), a
     BASE_IN_CELL_1N habit (its base is per occurrence, not per minute) or a
     formula-routed domain whose points-per-minute is not known here (hcbi
-    habits like bball)."""
+    habits like bball). An explicit [N] on a range counts too (JM
+    2026-11-02: "if more than 100分 we split the time entry ... and record
+    the points per block"), pro rata by minutes, unless it is a multi-domain
+    split or a {N} bonus, whose extra columns cannot be divided per segment."""
     it = r.item
     if not it.time_range or it.time_value:
         return None
     if it.points_override is not None and not it.rate_based:
+        if (r.step in ("variable", "todoist") and not it.points_split
+                and not it.curly_points and not r.fen_extra
+                and not _0n_domain_header(r.fen_col) and not _hcbi_domain_col(r.fen_col)):
+            return r.fen_points
         return None
     name = it.name.lower()
     if r.step == "variable":

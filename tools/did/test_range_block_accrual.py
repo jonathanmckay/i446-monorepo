@@ -129,11 +129,32 @@ def test_under_100_points_or_single_block_is_not_split(df):
     assert len(out) == 1 and out[0].item.split_part is None
 
 
-def test_explicit_points_are_not_per_minute_unless_rate(df):
-    it = _one(df, "deck 0918-1241 @i9 [300]")
-    r = df.RouteResult(item=it, step="todoist", fen_col="R", fen_points=300)
+def test_explicit_points_over_100_split_like_a_rate(df):
+    """JM 2026-11-02: over 100分 splits per block whether the total was typed
+    or came from a rate."""
+    for rate in (False, True):
+        it = _one(df, "deck 0918-1241 @i9 [300]")
+        it.rate_based = rate
+        r = df.RouteResult(item=it, step="todoist", fen_col="R", fen_points=300)
+        out = df.split_results_by_block([r])
+        assert [(r.item.block_override, r.fen_points, r.item.points_override) for r in out] == [
+            ("巳", 62, 62), ("午", 177, 177), ("未", 61, 61)]
+
+
+def test_explicit_points_under_100_or_multi_domain_go_to_the_ended_block(df):
+    it = _one(df, "deck 0918-1241 @i9 [90]")
+    r = df.RouteResult(item=it, step="todoist", fen_col="R", fen_points=90)
+    assert len(df.split_results_by_block([r])) == 1 and r.item.block_override == "未"
+    it = _one(df, "deck 0918-1241 [200] @i9 [100] @h335")
+    r = df.RouteResult(item=it, step="todoist", fen_col="R", fen_points=200,
+                       fen_extra=[("T", 100)])
     assert len(df.split_results_by_block([r])) == 1
-    it.rate_based = True   # --rate: the [300] came from a typed ".../m"
+
+
+def test_rate_total_split_sums_back(df):
+    it = _one(df, "deck 0918-1241 @i9 [300]")
+    it.rate_based = True
+    r = df.RouteResult(item=it, step="todoist", fen_col="R", fen_points=300)
     out = df.split_results_by_block([r])
     assert [(r.item.block_override, r.fen_points, r.item.points_override) for r in out] == [
         ("巳", 62, 62), ("午", 177, 177), ("未", 61, 61)]
