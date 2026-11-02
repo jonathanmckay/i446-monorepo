@@ -825,111 +825,97 @@ def _imessage_recent():
 # Source 12: slack
 # ---------------------------------------------------------------------------
 
-@source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
+# Outlook sources read Straylight's cache, never the live Agency MCP.
+# Ix cron has no work auth (Agency CLI absent; login keychain locked to cron,
+# MSAL -61), so the live calls only ever burned the 30s source timeout
+# (v51..v176: "outlook_inbox timeout" every night). Straylight's
+# tools/tg/outlook-cache-daemon.py writes ~/.cache/janus/outlook-YYYY-MM-DD.json
+# (calendar) and outlook-inbox-YYYY-MM-DD.json (unread, last 48h) every 5 min
+# and rsyncs them to ix:~/.cache/janus/. Missing file = "missing", instantly.
+JANUS_CACHE = Path.home() / ".cache" / "janus"
+OUTLOOK_STALE_HOURS = 6
+
+
+def _local_today() -> datetime.date:
+    return datetime.datetime.now().astimezone().date()
+
+
+def _file_age_hours(path: Path) -> float:
+    return round((time.time() - path.stat().st_mtime) / 3600, 1)
+
+
+@source("outlook_inbox", "Outlook unread emails, last 48h (Straylight cache snapshot)")
 def _outlook_inbox():
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
-    import agency_mcp as mcp
-    from datetime import timezone
-    cutoff = (datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Unread inbox
-    query = (
-        f"?$top=50"
-        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
-        f"&$select=id,subject,from,receivedDateTime,bodyPreview"
-        f"&$orderby=receivedDateTime desc"
-    )
-    # 5s timeout (was 30s). The outlook MCP has been timing out reliably for
-    # weeks; burning 30s per call costs ~60s of every intake. If the MCP is
-    # responsive, 5s is plenty for a single SearchMessages. v51 self-improvement.
-    raw = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
-        "queryParameters": query
-    }, timeout=5)
-    unread = []
-    if raw and raw.get("content"):
-        for item in raw["content"]:
-            text = item.get("text", "")
-            try:
-                data = json.loads(text)
-                messages = data if isinstance(data, list) else data.get("value", [])
-                for msg in messages:
-                    unread.append({
-                        "subject": msg.get("subject", ""),
-                        "from": (msg.get("from", {}).get("emailAddress", {}).get("name", "")
-                                 or msg.get("from", {}).get("emailAddress", {}).get("address", "")),
-                        "received": msg.get("receivedDateTime", ""),
-                        "preview": msg.get("bodyPreview", "")[:200],
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    # Recent sent (last 24h) for context on what JM communicated
-    sent_query = (
-        f"?$top=20"
-        f"&$filter=sentDateTime ge {cutoff}"
-        f"&$select=subject,toRecipients,sentDateTime,bodyPreview"
-        f"&$orderby=sentDateTime desc"
-    )
-    raw_sent = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
-        "queryParameters": f"/me/mailFolders/SentItems/messages{sent_query}"
-    }, timeout=5)
-    sent = []
-    if raw_sent and raw_sent.get("content"):
-        for item in raw_sent["content"]:
-            text = item.get("text", "")
-            try:
-                data = json.loads(text)
-                messages = data if isinstance(data, list) else data.get("value", [])
-                for msg in messages:
-                    to_list = [r.get("emailAddress", {}).get("name", "")
-                               for r in msg.get("toRecipients", [])]
-                    sent.append({
-                        "subject": msg.get("subject", ""),
-                        "to": to_list,
-                        "sent": msg.get("sentDateTime", ""),
-                        "preview": msg.get("bodyPreview", "")[:200],
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    return {"unread": unread, "unread_count": len(unread),
-            "sent": sent, "sent_count": len(sent)}
+    today = _local_today()
+    # Today's snapshot, else yesterday's (Straylight asleep since evening).
+    for day in (today, today - datetime.timedelta(days=1)):
+        path = JANUS_CACHE / f"outlook-inbox-{day.isoformat()}.json"
+        if not path.exists():
+            continue
+        try:
+            snap = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            return {"_status": "error", "error": f"unreadable {path.name}: {e}"}
+        age = _file_age_hours(path)
+        msgs = snap.get("messages", [])
+        unread = [{
+            "subject": m.get("subject", ""),
+            "from": m.get("sender", ""),
+            "from_email": m.get("sender_email", ""),
+            "received": m.get("received", ""),
+            "preview": m.get("preview", ""),
+            "importance": m.get("importance", "normal"),
+            "conversation_id": m.get("conversationId", ""),
+        } for m in msgs if not m.get("isRead")]
+        return {
+            "_status": "stale" if age > OUTLOOK_STALE_HOURS else "ok",
+            "cache_file": str(path),
+            "cache_age_hours": age,
+            "snapshot_at": snap.get("generated_at", ""),
+            "window_hours": snap.get("window_hours"),
+            "unread": unread,
+            "unread_count": len(unread),
+            "high_importance": sum(1 for m in unread if m["importance"] == "high"),
+        }
+    return {
+        "_status": "missing",
+        "error": (f"no outlook-inbox-{today}.json or previous day in {JANUS_CACHE}; "
+                  "Straylight outlook-cache-daemon not running or asleep"),
+    }
 
 
-@source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
+@source("outlook_calendar", "Outlook calendar events, yesterday..tomorrow (Straylight cache)")
 def _outlook_calendar():
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
-    import agency_mcp as mcp
-    from datetime import timezone
-    yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
-    day_after = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
-    raw = mcp.call_tool("calendar", "ListEvents", {
-        "startDateTime": yesterday,
-        "endDateTime": day_after,
-        "top": "50",
-    }, timeout=5)
-    events = []
-    if raw and raw.get("content"):
-        for item in raw["content"]:
-            text = item.get("text", "")
-            # Strip "Events retrieved successfully.\n" status prefix
-            idx = min((text.find(c) for c in "{[" if text.find(c) != -1), default=-1)
-            if idx > 0:
-                text = text[idx:]
-            try:
-                data = json.loads(text)
-                ev_list = data if isinstance(data, list) else data.get("value", [])
-                for ev in ev_list:
-                    events.append({
-                        "subject": ev.get("subject", ""),
-                        "start": ev.get("start", {}).get("dateTime", ""),
-                        "end": ev.get("end", {}).get("dateTime", ""),
-                        "organizer": ev.get("organizer", {}).get("emailAddress", {}).get("name", ""),
-                        "is_online": bool(ev.get("onlineMeeting")),
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-    return {"events": events, "count": len(events)}
+    today = _local_today()
+    events, files, ages = [], [], []
+    for off in (-1, 0, 1):
+        day = today + datetime.timedelta(days=off)
+        path = JANUS_CACHE / f"outlook-{day.isoformat()}.json"
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        files.append(path.name)
+        ages.append(_file_age_hours(path))
+        for ev in raw if isinstance(raw, list) else []:
+            events.append({
+                "day": day.isoformat(),
+                "subject": ev.get("subject", ""),
+                "start": ev.get("start", ""),
+                "end": ev.get("end", ""),
+                "tz": ev.get("start_tz", ""),
+                "all_day": ev.get("is_all_day", False),
+            })
+    if not files:
+        return {"_status": "missing",
+                "error": f"no outlook-YYYY-MM-DD.json around {today} in {JANUS_CACHE}"}
+    today_file = f"outlook-{today.isoformat()}.json"
+    stale = today_file not in files or ages[files.index(today_file)] > OUTLOOK_STALE_HOURS
+    return {"_status": "stale" if stale else "ok", "cache_files": files,
+            "cache_age_hours": max(ages), "events": events, "count": len(events),
+            "note": "Graph times; tz field is the Windows zone name (UTC if blank)"}
 
 
 @source("slack", "Slack status (stub)")
@@ -1002,11 +988,19 @@ def run_sources(selected=None, timeout=30):
         try:
             data = info["fn"]()
             elapsed = time.time() - t0
-            return name, {
-                "status": "ok",
+            # A source may report its own status ("missing", "stale") via a
+            # "_status" key instead of raising (cache-backed sources).
+            status = "ok"
+            if isinstance(data, dict) and "_status" in data:
+                status = data.pop("_status")
+            out = {
+                "status": status,
                 "elapsed_ms": round(elapsed * 1000),
                 "data": data,
             }
+            if status not in ("ok", "stale") and isinstance(data, dict) and "error" in data:
+                out["error"] = data["error"]
+            return name, out
         except Exception as e:
             elapsed = time.time() - t0
             return name, {
@@ -1096,8 +1090,8 @@ def print_test_table(results):
             status_str = "\033[32mok\033[0m"
         elif status == "error":
             status_str = "\033[31merror\033[0m"
-        elif status == "timeout":
-            status_str = "\033[33mtimeout\033[0m"
+        elif status in ("timeout", "stale", "missing"):
+            status_str = f"\033[33m{status}\033[0m"
 
         print(f"{name:<25} {status_str:<19} {elapsed:>8}  {notes}")
 
