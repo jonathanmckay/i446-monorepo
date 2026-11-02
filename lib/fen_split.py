@@ -92,24 +92,35 @@ def set_total(content: str, pts: int) -> str:
     return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 
-def deduct_points(content: str, claimed: int) -> str:
+def take_points(content: str, claimed: int) -> tuple[str, list[tuple[int, Optional[str]]]]:
     """Take `claimed` points off the task, walking the pairs in order and
     clamping each at 0 (the defer flow: points logged today come off the
-    task's remaining value). Codes are preserved; a pair that reaches 0 stays
-    as "[0] @code" so the user sees where the deduction landed."""
+    task's remaining value). Returns (new content, what was taken as
+    [(n, code)]) so the caller credits EXACTLY the pairs it deducted (never
+    the label's column for a share that came off another domain). Codes are
+    preserved; a pair that reaches 0 stays as "[0] @code" so the user sees
+    where the deduction landed."""
     remaining = max(int(claimed), 0)
     out = []
+    taken: list[tuple[int, Optional[str]]] = []
     last = 0
     for m in PAIR_RE.finditer(content or ""):
         n = int(m.group(1))
         take = min(n, remaining)
         remaining -= take
+        if take:
+            taken.append((take, m.group(2)))
         new = n - take
         out.append(content[last:m.start()])
         out.append(f"[{new}]" + (f" @{m.group(2)}" if m.group(2) else ""))
         last = m.end()
     out.append((content or "")[last:])
-    return "".join(out)
+    return "".join(out), taken
+
+
+def deduct_points(content: str, claimed: int) -> str:
+    """take_points, content only."""
+    return take_points(content, claimed)[0]
 
 
 def strip_points(content: str) -> str:

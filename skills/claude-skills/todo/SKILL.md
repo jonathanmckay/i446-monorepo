@@ -32,9 +32,9 @@ All three modifiers are optional and can appear in any order within the input.
 
 ## Parsing
 
-1. Extract all `@word` tokens → these become Todoist labels. Strip them from the task content.
+1. Extract all `@word` tokens → these become Todoist labels. Strip them from the task content. **Exception, multi-domain split (2026-11-01):** two or more `[N]` where at least one is directly followed by `@code` (`mock WAU tree (30) [30] @h335 [10] @i9`) is a split: keep every `[N] @code` pair in the content verbatim (order matters: each `[N]` binds to the `@code` right after it, a bare `[N]` means the task's own label), and make ONLY the first bound code a label (plus any `@tag` not bound to a bracket). `/did` credits each share to its own 0分 column (`lib/fen_split.py`); dtd and janus show the total.
 2. Extract `(N)` where N is a number → this is the time estimate in minutes. Strip from content.
-3. Extract `[N]` where N is a number → this is the value. Keep `[N]` in the task content (Todoist task name includes it for the /did flow).
+3. Extract `[N]` where N is a number → this is the value. Keep `[N]` in the task content (Todoist task name includes it for the /did flow). In a split, the value is the sum of the pairs.
 3b. **URLs become named links.** Any bare `http(s)://…` token in the input is
    replaced in the content with the markdown link `[(link)](<url>)` — Todoist
    renders it as a clickable "(link)", and dtd renders it as a clickable

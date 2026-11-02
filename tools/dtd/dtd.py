@@ -748,6 +748,25 @@ def parse_add_input(raw: str) -> tuple[str, list[str]]:
     """('description (N) [N]', ['tag', ...]) — tags stripped from content,
     (N)/[N] left in place (dtd's own parse_est reads them back out for
     display, same as every other task in the list)."""
+    import fen_split
+    pairs = fen_split.parse_points(raw)
+    if len(pairs) >= 2 and any(c for _, c in pairs):
+        # A multi-domain split ("x [30] @h335 [10] @i9", lib/fen_split.py):
+        # the "[N] @code" pairs stay in the content verbatim; only a @tag
+        # NOT bound to a bracket is a plain label, plus the first bound code
+        # (JM 2026-11-01: only the first domain becomes a label).
+        toks = raw.split()
+        labels, keep = [], []
+        for i, tok in enumerate(toks):
+            bound = tok.startswith("@") and i > 0 and re.fullmatch(r"\[\d+\]", toks[i - 1])
+            if tok.startswith("@") and len(tok) > 1 and not bound:
+                labels.append(tok[1:])
+            else:
+                keep.append(tok)
+        first = fen_split.first_code(raw)
+        if first and first not in labels:
+            labels.append(first)
+        return " ".join(keep).strip(), labels
     labels = _TAG.findall(raw)
     content = re.sub(r"  +", " ", _TAG.sub("", raw)).strip()
     return content, labels

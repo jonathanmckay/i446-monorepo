@@ -113,6 +113,8 @@ commas are fine as long as every item is in this form.
 
 **@project override:** `@code` token → set `projectOverride`, strip from item.
 
+**Multi-domain split (2026-11-01, `lib/fen_split.py`):** `[N] @code [N] @code` on the /did input or in the task's own content credits each share to its own 0分 column: `did mock WAU tree [30] @h335 [10] @i9` → +30 to h335's column, +10 to i9's. Each `[N]` binds to the `@code` directly after it; a bare `[N]` takes the task's own label; only the first code is a Todoist label. A lone `[N] @code` is NOT a split (it stays today's points + project override, which is what mobile janus sends as `[total] @project`); when that typed total equals a split task's own total, the task's split is kept. Shares are merged per column (i9 + i447 both → R) so the daemon's idempotency key never drops one. `--tmrw` on a split task credits exactly the shares it deducts, walking the pairs in order. Editing the points to a single `[N]` collapses the split. did-fast's JSON reports the other columns under `0fen.extra` (undo-fast strips them too). Always hand a split to `did-fast.py` (run.py's one-off path handles it as well).
+
 **Time range:** `HHMM-HHMM` pattern → extract start/end, compute duration as `[time]`, set `hasTimeRange`.
 
 **Defer (partial completion):** `--tmrw`, `--tomorrow`, `--Mon`, `--Jun 15`, etc. at the end of an item → log points to 0分 but do NOT close the Todoist task. Instead, reschedule it to the defer date and deduct claimed `[N]` points from the task's total. Example: `/did xbox analytics [10] --tmrw` logs 10 pts, reschedules to tomorrow, updates task from `[30]` to `[20]`.

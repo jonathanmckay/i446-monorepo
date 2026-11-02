@@ -73,6 +73,13 @@ def test_deduct_walks_pairs_in_order():
     assert fs.deduct_points("a (10)", 10) == "a (10)"
 
 
+def test_take_points_reports_what_came_off_which_domain():
+    c = "prep call [20] @m5x2 [10]"
+    assert fs.take_points(c, 15) == ("prep call [5] @m5x2 [10]", [(15, "m5x2")])
+    assert fs.take_points(c, 25) == ("prep call [0] @m5x2 [5]", [(20, "m5x2"), (5, None)])
+    assert fs.take_points("a (10)", 5) == ("a (10)", [])
+
+
 def test_strip_points():
     assert fs.strip_points("mock WAU tree (30) [30] @h335 [10] @i9") == "mock WAU tree (30)"
     assert fs.strip_points("a [8] b") == "a b"

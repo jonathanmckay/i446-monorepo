@@ -46,6 +46,8 @@ MONTHS = ["jan", "feb", "mar", "apr", "may", "jun",
 # Habit cards and bookkeeping that must not count as "other" image work.
 HABIT_CARD_RX = re.compile(r"^\s*(1st hci|2nd hci|2 hci)\b", re.I)
 POINTS_RX = re.compile(r"\[(\d+)\]")
+# "[N]" with the @code bound to it (same grammar as lib/fen_split.PAIR_RE).
+SPLIT_RX = re.compile(r"\[(\d+)\](?:[ \t]*@([\w\-一-鿿]+))?")
 
 
 # ── window ───────────────────────────────────────────────────────────────────
@@ -187,8 +189,10 @@ def completed_hci(start: date, end: date) -> list[dict]:
             if key in seen or not is_other_hci(it):
                 continue
             seen.add(key)
-            # Sum of every [N] (a split task, lib/fen_split.py, counts its total).
-            pts = sum(int(v) for v in POINTS_RX.findall(it.get("content") or ""))
+            # hci's SHARE of the task: every [N] that is bare or bound to @hci
+            # (a split task "[30] @hci [10] @i9", lib/fen_split.py, counts 30).
+            pts = sum(int(n) for n, code in SPLIT_RX.findall(it.get("content") or "")
+                      if code in ("", "hci"))
             done = datetime.fromisoformat(it["completed_at"].replace("Z", "+00:00")).astimezone(TZ)
             items.append({"content": it["content"], "points": pts,
                           "date": done.date().isoformat()})

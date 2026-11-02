@@ -48,6 +48,7 @@ from neon import excel  # noqa: E402
 from neon import weeks  # noqa: E402
 from neon import rates  # noqa: E402
 import registry  # noqa: E402
+import fen_split  # noqa: E402  "[N] @code [N] @code": one task, several domains
 import todoist  # noqa: E402
 
 VAULT = Path.home() / "vault"
@@ -782,6 +783,12 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
     Routes points to 0分 column based on matched task's domain label.
     Closes Todoist + flips build-order checkbox if 关键径路-labeled.
     """
+    # A typed multi-domain split ("x [30] @h335 [10] @i9", lib/fen_split.py)
+    # or a split task's own codes in the timer name are annotations, not
+    # words to match on.
+    user_pairs = fen_split.parse_points(raw_input)
+    user_split = user_pairs if len(user_pairs) >= 2 else None
+    query = " ".join(re.sub(r"(?<!\S)@\S+", "", fen_split.strip_points(query)).split())
     # Fetch all open tasks (paginated, no label filter)
     candidates = todoist.find_tasks(limit=500)
     best, best_score = None, 0.0
@@ -807,6 +814,26 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
 
     domain = _domain_from_labels(labels)
     fen_writes = []
+    # Per-domain split: the typed one wins; else the task's own pairs when
+    # nothing was typed and the build order did not override. A bare [N]
+    # takes the task's label; an unknown @code falls back to it too.
+    td_pairs = fen_split.parse_points(content)
+    splits = user_split or (td_pairs if (user_sq is None and bo_sq is None and len(td_pairs) >= 2) else None)
+    if splits:
+        merged: dict[str, int] = {}
+        for n, code in splits:
+            dom = code if code and registry.get_domain(code) else domain
+            if not dom:
+                print(f"  ✗ no domain for [{n}]{' @' + code if code else ''}: {content!r}",
+                      file=sys.stderr)
+                return 1
+            col = registry.resolve_fen_col(dom)
+            merged[col] = merged.get(col, 0) + n
+            fen_writes.append(f"+{n} → {col}({dom})")
+        for col, n in merged.items():
+            if n > 0:
+                excel.append("0分", col, date=target_date, value=f"+{n}", src=f"did {content[:60]}")
+        points_sq = 0
     if points_sq:
         if not domain:
             print(f"  ✗ matched task has no domain label; can't route [{points_sq}]: {content!r}",

@@ -41,6 +41,8 @@ def _load(mod_name: str, filename: str):
 
 _dom = _load("domain_fast", "domain-fast.py")  # DOMAINS, swap_domain, patch_cache_labels
 _pf = _load("points_fast", "points-fast.py")   # set_points, resolve_from_cache, patch_cache
+sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import fen_split as _fs  # noqa: E402  "[N] @code [N] @code" grammar
 _df = _pf._df                                   # Todoist _api transport
 _short = _load("shorten_mod", "shorten.py")     # shorten_tasks — same fn the cache refresh uses
 
@@ -189,7 +191,8 @@ def current_fields(task: dict, description: str) -> dict:
     dom = [l for l in task.get("labels", []) if l in DOMAINS]
     short = task.get("short") or ""
     return {
-        "name": re.sub(r"  +", " ", _NUM_ANNOT.sub("", content)).strip(),
+        # A split's "@code" tokens are annotations too, not part of the name.
+        "name": re.sub(r"  +", " ", re.sub(r"(?<!\S)@\S+", "", _NUM_ANNOT.sub("", content))).strip(),
         "domain": dom[0] if dom else "",
         "points": str(sum(_pts_all)) if _pts_all else "",
         "bonus": b.group(1) if b else "",
@@ -250,8 +253,38 @@ def parse_line(line: str) -> dict:
     if m:
         out["desc"] = line[m.end():].strip()
         line = line[:m.start()]
+    toks = line.split()
+    # A retyped multi-domain split ("[30] @h335 [10] @i9", lib/fen_split.py):
+    # the pairs go into the content verbatim, points = the total, domain =
+    # the first code (the only one that is a label).
+    if len([t for t in toks if re.fullmatch(r"\[\d+\]", t)]) >= 2 and any(
+            t.startswith("@") and i > 0 and re.fullmatch(r"\[\d+\]", toks[i - 1])
+            for i, t in enumerate(toks)):
+        pair_toks, name_tokens, total, first = [], [], 0, None
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if re.fullmatch(r"\[\d+\]", t):
+                total += int(t[1:-1])
+                nxt = toks[i + 1] if i + 1 < len(toks) else ""
+                if nxt.startswith("@") and len(nxt) > 1:
+                    pair_toks += [t, nxt]
+                    first = first or nxt[1:]
+                    i += 2
+                    continue
+                pair_toks.append(t)
+            elif t.startswith("@") and len(t) > 1:
+                out["domain"] = t[1:]
+            else:
+                name_tokens.append(t)
+            i += 1
+        out["pairs"] = " ".join(pair_toks)
+        out["points"] = str(total)
+        out.setdefault("domain", first)
+        out["name"] = " ".join(name_tokens)
+        return out
     name_tokens: list[str] = []
-    for tok in line.split():
+    for tok in toks:
         if tok.startswith("@") and len(tok) > 1:
             out["domain"] = tok[1:]
         elif re.fullmatch(r"\[\d+\]", tok):
@@ -477,7 +510,7 @@ def _main_fields(argv: list[str]) -> int:
             return 1
         rc = apply(task, cache, cache_file, ch.get("name"), ch.get("domain"), pts,
                    description=ch.get("desc"), minutes=minutes, short=ch.get("short"),
-                   bonus=bonus, due=due)
+                   bonus=bonus, due=due, pairs=new.get("pairs"))
         if rc != 0 or split is None:
             return rc
     # Split: the edits above already landed in Todoist and the snapshot cache,
@@ -508,7 +541,8 @@ def _standalone_checks(text: str) -> int:
     return len(_STANDALONE_CHECK.findall(text))
 def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
           description: str | None = None, minutes: int | None = None,
-          short: str | None = None, bonus: int | None = None, due: str | None = None) -> int:
+          short: str | None = None, bonus: int | None = None, due: str | None = None,
+          pairs: str | None = None) -> int:
     orig_content = task["content"]
     orig_clean = _pf._ANNOT.sub("", orig_content).strip()
     summary: list[str] = []
@@ -517,7 +551,13 @@ def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
     new_content = orig_content
     if new_name is not None:
         new_content = set_name(new_content, new_name)
-    if points is not None:
+    if pairs:
+        # A retyped multi-domain split ("[30] @h335 [10] @i9",
+        # lib/fen_split.py) replaces every [N] (and bound @code) verbatim.
+        new_content = f"{_fs.strip_points(new_content).rstrip()} {pairs}".strip()
+        if new_content != orig_content:
+            summary.append(pairs)
+    elif points is not None:
         new_content = _pf.set_points(new_content, points)
     if minutes is not None:
         new_content = set_time(new_content, minutes)
@@ -559,7 +599,7 @@ def apply(task: dict, cache: dict, cache_file: str, new_name, domain, points,
         short_ok = True if short else _resync_short(cache, task["id"], new_content)
         if new_name is not None:
             summary.append(f'name→"{new_name}"')
-        if points is not None:
+        if points is not None and not pairs:
             summary.append(f"[{points}]")
         if minutes is not None:
             summary.append(f"({minutes})")

@@ -404,6 +404,11 @@ def _credits(data: dict | None) -> list[dict]:
         if isinstance(fen, dict):
             col = str(fen.get("col") or "")
             add(FEN_COL_LABELS.get(col, col), (fen.get("points") or 0) + (fen.get("bonus") or 0))
+            # A multi-domain split's other columns (lib/fen_split.py).
+            for x in fen.get("extra") or []:
+                if isinstance(x, dict):
+                    xc = str(x.get("col") or "")
+                    add(FEN_COL_LABELS.get(xc, xc), x.get("points") or 0)
             got = True
         if r.get("curly_q"):
             add("0g", r["curly_q"])
@@ -1852,6 +1857,8 @@ def _did_summary(stdout_text: str) -> str:
             continue
         fen = r.get("0fen") or {}
         pts = (fen.get("points", 0) or 0) + (fen.get("bonus", 0) or 0)
+        # A multi-domain split's other columns (lib/fen_split.py).
+        pts += sum((x.get("points") or 0) for x in (fen.get("extra") or []))
         pts += (r.get("hcbi") or {}).get("pts", 0) or 0
         if not pts and r.get("variable_1n"):
             pts = r.get("variable_value") or 0

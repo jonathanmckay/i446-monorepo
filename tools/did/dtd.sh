@@ -743,7 +743,7 @@ TIMER="$DTD_TIMER"
 task="\$1"
 # Strip ANSI codes first
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/ *@[^ ]+//g; s/  +/ /g; s/ *\$//')
 # Ritual (-1neon) cards carry the 😈 marker; their Toggl project comes from the
 # ritual→domain map — the SAME source as their row color (keep in sync with
 # RITUAL_DOMAIN in the list generator) — NOT tg-fast, whose shortcodes differ
@@ -978,6 +978,7 @@ print -- "\$EPOCHREALTIME\tdone-resolved\t\$1" >> "${DTD_TIMING:-/dev/null}" 2>/
 clean="\${task//( #\\([0-9]#\\))/}"
 clean="\${clean//( #\\[[0-9]#\\])/}"
 clean="\${clean//( #\\[[0-9.+]#\\/m\\])/}"
+clean="\${clean//( #@[^ ]##)/}"
 clean="\${clean//  ##/ }"; clean="\${clean%% ##}"
 clean_for_filter="\${clean//( #\\{[0-9]#\\})/}"
 clean_for_filter="\${clean_for_filter//  ##/ }"; clean_for_filter="\${clean_for_filter%% ##}"
@@ -3011,7 +3012,7 @@ if (( \$# > 1 )); then
 fi
 task="\$1"
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/ *@[^ ]+//g; s/  +/ /g; s/ *\$//')
 echo "\$clean" | tr '[:upper:]' '[:lower:]' >> "\$SKIPPED"
 echo "⏭ \$clean" > "\$HDR"
 SKIPEOF
@@ -3036,7 +3037,7 @@ fi
 task="\$1"
 # Strip ANSI codes and recurring indicator
 task=\$(python3 "$DTD_RESOLVE" "$DTD_CACHE_FILE" "\$1")  # id (field 2) -> canonical content
-clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/  +/ /g; s/ *\$//')
+clean=\$(echo "\$task" | sed -E 's/ *\\([0-9]*\\)//g; s/ *\\[[0-9]*\\]//g; s/ *\\[[0-9.+]*\\/m\\]//g; s/ *\\{[0-9]*\\}//g; s/ *@[^ ]+//g; s/  +/ /g; s/ *\$//')
 # fzf field 2 (\$1) IS the Todoist id (id-based since 2026-07-12; the old
 # name-match lookup that ran here was dead code, overwritten on the next line).
 tid="\$1"

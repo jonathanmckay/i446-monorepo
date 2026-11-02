@@ -422,18 +422,29 @@ def _first_fen_label(labels) -> Optional[str]:
     return None
 
 
+def _known_code(code: Optional[str]) -> bool:
+    """A @code that resolves to a 0分 column (project-tag map or
+    neon-cols.json's domain aliases). "@posthoc", "@2026-10-31" and typos
+    are not codes: a [N] bound to one is credited like a bare [N]."""
+    if not code:
+        return False
+    if code in LABEL_TO_0FEN:
+        return True
+    try:
+        neon_cols.domain_col("0分", code)
+        return True
+    except (KeyError, Exception):  # noqa: BLE001
+        return False
+
+
 def _code_fen_col(code: Optional[str]) -> str:
     """0分 column for one @code of a split: the project-tag map first, then
     neon-cols.json's domain aliases, then 个 (the same catch-all an untagged
     task gets). Never a hardcoded letter (see _project_fen_col)."""
     if code and code in LABEL_TO_0FEN:
         return LABEL_TO_0FEN[code]
-    if code:
-        try:
-            return neon_cols.domain_col("0分", code)
-        except KeyError:
-            print(f"⚠ @{code}: no 0分 column for that domain; crediting 个 instead",
-                  file=sys.stderr)
+    if code and _known_code(code):
+        return neon_cols.domain_col("0分", code)
     return neon_cols.domain_col("0分", "个")
 
 
@@ -442,9 +453,14 @@ def _split_credit(splits, default_code: Optional[str]) -> tuple[str, int, list]:
     domain's column and points, then [(col, pts)] for the others. Merged by
     COLUMN, not by code (i9 and i447 both credit R): the excel-http
     idempotency key is per task+day+column, so two appends to one column
-    would have had the second dropped as a replay."""
+    would have had the second dropped as a replay. An unknown code falls back
+    to the task's own domain, with a warning."""
     merged: dict[str, int] = {}
     for n, code in splits:
+        if code is not None and not _known_code(code):
+            print(f"⚠ @{code}: not a 分 domain; its {n} go to the task's own domain",
+                  file=sys.stderr)
+            code = None
         col = _code_fen_col(code if code is not None else default_code)
         merged[col] = merged.get(col, 0) + n
     cols = list(merged.items())
@@ -459,12 +475,26 @@ def _task_credit(item, task: dict) -> tuple[int, str, list]:
     typed split wins, then a typed [N] total (one column), then the task's
     own content, which may itself be a "[N] @code [N] @code" split."""
     default_code = _first_fen_label(task.get("labels", []))
+    content = task.get("content", "")
     if item.points_split:
         col, pts, extra = _split_credit(item.points_split, item.project_override or default_code)
         return pts, col, extra
+    pairs = fen_split.parse_points(content)
     if item.points_override:
+        if len(pairs) >= 2 and item.defer_date:
+            # Partial completion of a split task: credit exactly the shares
+            # that defer_todoist_task's deduction takes off (pairs in
+            # order), never the label's column for another domain's share.
+            _, taken = fen_split.take_points(content, item.points_override)
+            if taken:
+                col, pts, extra = _split_credit(taken, default_code)
+                return pts, col, extra
+        if len(pairs) >= 2 and item.points_override == sum(n for n, _ in pairs):
+            # The task's own total typed back (mobile janus appends
+            # "[total] @project" to every /done): keep the content's split.
+            col, pts, extra = _split_credit(pairs, default_code)
+            return pts, col, extra
         return item.points_override, _project_fen_col(task.get("labels", [])), []
-    pairs = fen_split.parse_points(task.get("content", ""))
     if len(pairs) <= 1:
         pts = pairs[0][0] if pairs else 0
         return pts, _project_fen_col(task.get("labels", [])), []
@@ -753,8 +783,12 @@ def parse_input(raw: str) -> list[ParsedItem]:
         # the first pair's @code and leave "[30] [10] @i9". The first pair's
         # code is the item's domain (same as today's "[30] @i9"); a bare
         # @code elsewhere in the chunk still wins below.
+        # Only a REAL split (two or more [N]) takes this path: a lone
+        # "[40] @家" is today's "points + project override" form (mobile janus
+        # sends the task TOTAL that way) and must keep crediting the task's
+        # own label, exactly as before.
         _pairs = list(fen_split.TYPED_PAIR_RE.finditer(chunk))
-        if _pairs:
+        if _pairs and len(re.findall(r"\[\d+\]", chunk)) >= 2:
             item.points_split = [(int(m.group(1)), m.group(2)) for m in _pairs]
             item.project_override = _pairs[0].group(2)
             chunk = " ".join(fen_split.TYPED_PAIR_RE.sub(" ", chunk).split())
@@ -765,6 +799,10 @@ def parse_input(raw: str) -> list[ParsedItem]:
             item.project_override = at_match.group(1)
             chunk = chunk[:at_match.start()] + chunk[at_match.end():]
             chunk = chunk.strip()
+        # Any further @token (a split task's codes ride along in the Toggl
+        # description, e.g. "x @h335 @i9 1000-1030") is not part of the name.
+        if "@" in chunk:
+            chunk = " ".join(re.sub(r"(?<!\S)@\S+", "", chunk).split())
 
         # Extract {N} curly points
         curly_match = re.search(r"\{(\d+)\}", chunk)

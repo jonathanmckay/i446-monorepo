@@ -374,6 +374,11 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
         if (fen_ok and fen and fen.get("points", 0) > 0
                 and not (step == "1n" and not e.get("variable_1n"))):
             fen_strips.append((fen["col"], f"+{fen['points']}"))
+        if fen_ok and fen and not (step == "1n" and not e.get("variable_1n")):
+            # A multi-domain split's other columns (lib/fen_split.py).
+            for x in fen.get("extra") or []:
+                if isinstance(x, dict) and (x.get("points") or 0) > 0 and x.get("col"):
+                    fen_strips.append((x["col"], f"+{x['points']}"))
 
         if fen_ok and e.get("curly_q"):
             fen_strips.append(("Q", f"+{e['curly_q']}"))
