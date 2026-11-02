@@ -8,6 +8,7 @@ Then open: http://localhost:5555
 """
 
 import json
+import re
 import glob
 import os
 import sqlite3
@@ -809,72 +810,135 @@ def get_mcp_stats(days=30):
     return {"daily": daily, "servers": servers, "top_servers": top_servers, "total": total}
 
 
+_SKILLS_DIR = Path.home() / ".claude" / "skills"
+_SOURCE_LOG_DIR = Path.home() / "vault" / "i447" / "i446" / "source-log"
+_SKILL_CMD_RE = re.compile(r"<command-name>/?([^<\s]+)</command-name>")
+# path -> (mtime_ns, size, events): a transcript is re-read only when it changes
+_SKILL_FILE_CACHE = {}
+
+
+def _skill_names():
+    """User skills: directories under ~/.claude/skills holding a SKILL.md.
+    Filtering on this (not a list of built-ins) keeps /bug, drops /resume."""
+    try:
+        return {p.name for p in _SKILLS_DIR.iterdir() if (p / "SKILL.md").exists()}
+    except OSError:
+        return set()
+
+
+def _skill_events_from_file(fpath):
+    """(uuid, utc_ts, skill, via) for every skill call in one transcript:
+    via 'slash' for a typed /name, 'model' for a Skill tool call."""
+    events = []
+    try:
+        with open(fpath, errors="ignore") as fh:
+            for line in fh:
+                if "<command-name>" not in line and '"Skill"' not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    ts = datetime.fromisoformat(obj["timestamp"].replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                msg = obj.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content", [])
+                uuid = obj.get("uuid") or f"{fpath}:{obj['timestamp']}"
+                if obj.get("type") == "user":
+                    texts = [content] if isinstance(content, str) else [
+                        b if isinstance(b, str) else b.get("text", "")
+                        for b in content if isinstance(b, (str, dict))]
+                    for name in {m for t in texts for m in _SKILL_CMD_RE.findall(t or "")}:
+                        events.append((uuid, ts, name, "slash"))
+                elif obj.get("type") == "assistant" and isinstance(content, list):
+                    for b in content:
+                        if (isinstance(b, dict) and b.get("type") == "tool_use"
+                                and b.get("name") == "Skill"):
+                            name = str((b.get("input") or {}).get("skill", ""))
+                            events.append((b.get("id") or uuid, ts, name, "model"))
+    except OSError:
+        pass
+    return events
+
+
 @_cached(
     "get_skill_stats",
-    lambda days=30: (days, _dir_fingerprint(_SESSION_DIR)),
+    lambda days=30: (
+        days,
+        tuple(_rglob_fingerprint(r) for r, _ in _PROJECTS_ROOTS),
+        _dir_fingerprint(_SOURCE_LOG_DIR),
+    ),
 )
 def get_skill_stats(days=30):
-    """Get slash-command (skill) invocation stats from Claude Code JSONL session logs.
-
-    Scans user messages for <command-name>/skill</command-name> tags,
-    groups by skill name and day.
+    """Skill invocations per day, from three sources (2026-11-01):
+      - typed /name commands in every Claude transcript (all project dirs,
+        subagents, mirrored hosts; previously only projects/-Users-mckay)
+      - Skill tool calls the model made
+      - runs outside Claude (dtd, janus, phone) that lib/jmsource records as
+        metric 'skill' (did-fast); runs inside Claude skip that log
+    A forked or resumed session repeats earlier messages under the same uuid,
+    so events are deduped by (uuid, skill).
     """
-    import re
     pacific = pytz.timezone("America/Los_Angeles")
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-
-    session_dir = Path.home() / ".claude" / "projects" / "-Users-mckay"
-    if not session_dir.exists():
-        return {"daily": [], "skills": [], "total": 0}
-
-    # Exclude built-in CLI commands that aren't user-defined skills
-    EXCLUDED = {"/clear", "/exit", "/model", "/help", "/compact", "/config", "/fast",
-                "/login", "/logout", "/status", "/doctor", "/permissions", "/memory",
-                "/review", "/cost", "/init", "/terminal-setup", "/vim", "/bug"}
+    known = _skill_names()
 
     daily_by_skill = defaultdict(Counter)
+    by_via = Counter()
     all_skills = set()
     total = 0
+    seen = set()
 
-    for fpath in session_dir.glob("*.jsonl"):
-        try:
-            with open(fpath) as fh:
-                for line in fh:
-                    obj = json.loads(line.strip())
-                    if obj.get("type") != "user":
-                        continue
-                    ts_str = obj.get("timestamp")
-                    if not ts_str:
-                        continue
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    if ts < cutoff:
-                        continue
+    def add(ts, skill, via):
+        nonlocal total
+        day = ts.astimezone(pacific).strftime("%Y-%m-%d")
+        name = "/" + skill
+        daily_by_skill[day][name] += 1
+        all_skills.add(name)
+        by_via[via] += 1
+        total += 1
 
-                    msg = obj.get("message", {})
-                    if not isinstance(msg, dict):
-                        continue
-                    content = msg.get("content", [])
-                    # Collect all text to search
-                    texts = []
-                    if isinstance(content, str):
-                        texts.append(content)
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, str):
-                                texts.append(block)
-                            elif isinstance(block, dict) and block.get("type") == "text":
-                                texts.append(block.get("text", ""))
-                    for text in texts:
-                        for match in re.finditer(r"<command-name>(/[^<]+)</command-name>", text):
-                            skill = match.group(1)
-                            if skill in EXCLUDED:
-                                continue
-                            day = ts.astimezone(pacific).strftime("%Y-%m-%d")
-                            daily_by_skill[day][skill] += 1
-                            all_skills.add(skill)
-                            total += 1
-        except Exception:
+    for root, _host in _PROJECTS_ROOTS:
+        if not root.exists():
             continue
+        for fpath in root.rglob("*.jsonl"):
+            try:
+                st = fpath.stat()
+            except OSError:
+                continue
+            if st.st_mtime < cutoff.timestamp():
+                continue  # untouched since before the window: nothing in range
+            key = str(fpath)
+            hit = _SKILL_FILE_CACHE.get(key)
+            if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+                events = hit[2]
+            else:
+                events = _skill_events_from_file(fpath)
+                _SKILL_FILE_CACHE[key] = (st.st_mtime_ns, st.st_size, events)
+            for uuid, ts, skill, via in events:
+                if ts < cutoff or skill not in known or (uuid, skill) in seen:
+                    continue
+                seen.add((uuid, skill))
+                add(ts, skill, via)
+
+    if _SOURCE_LOG_DIR.exists():
+        for path in _SOURCE_LOG_DIR.glob("*.jsonl"):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    for line in fh:
+                        if '"skill"' not in line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                            ts = datetime.fromisoformat(row["ts"])
+                        except Exception:
+                            continue
+                        if row.get("metric") != "skill" or ts < cutoff:
+                            continue
+                        add(ts, str(row.get("ext_id", "")), row.get("via") or "outside")
+            except OSError:
+                continue
 
     skills = sorted(all_skills)
     daily = []
@@ -897,7 +961,8 @@ def get_skill_stats(days=30):
             skill_7d_counts.update(counts)
     top_skills = [s for s, _ in skill_7d_counts.most_common(10)]
 
-    return {"daily": daily, "skills": skills, "top_skills": top_skills, "total": total}
+    return {"daily": daily, "skills": skills, "top_skills": top_skills,
+            "total": total, "by_via": dict(by_via)}
 
 
 def _wait_buckets(wall_times):

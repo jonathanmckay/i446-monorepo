@@ -3629,6 +3629,12 @@ def main():
         return
 
     argv = sys.argv[1:]
+    # Skill usage (2026-11-01): count /did runs that bypass Claude (dtd, janus,
+    # phone) for the AI dashboard's skill chart. Runs inside Claude are already
+    # counted from the session transcripts, so skip them to avoid doubling.
+    if not os.environ.get("CLAUDECODE"):
+        import jmsource
+        jmsource.record("skill", "did")
     # Stdout is a JSON protocol here (dtd's worker, undo-fast's journal and
     # Janus all parse it). Anything else that reaches fd 1 during the run, a
     # stray print in an imported module or a child process inheriting fd 1,

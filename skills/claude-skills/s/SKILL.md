@@ -1,24 +1,24 @@
 ---
 name: "s"
-description: "Thin alias for /salat (prayer counter). Usage: /s [count]"
+description: "Prayer counter: log prayers to the Neon 0n tab (ص column). No args: +1. With number: set total. Usage: /s [count]"
 user-invocable: true
 ---
 
-# s Proxy (/s)
+# Prayer counter (/s)
 
-Thin alias for [`/salat`](../salat/SKILL.md), itself a proxy for `/ص`.
-Identical behavior: no args → +1, number → set total.
+No args → +1, number → set total. `/salat` and `/ص` were retired to
+`_archive/` on 2026-11-01; `/s` is the only prayer-counter skill.
 
 ## Execution
 
-Run the same fast script — do NOT duplicate any logic here:
+Run the fast script — do NOT duplicate any logic here:
 
 ```bash
 python3 ~/i446-monorepo/tools/did/salat-fast.py [count]
 ```
 
 Echo its one-line output verbatim (it reads `ص: N`, not `s: N`, keeping
-logs consistent with `/ص`/`/salat` invocations).
+logs consistent with earlier `/ص` invocations).
 
 ## Response Style
 

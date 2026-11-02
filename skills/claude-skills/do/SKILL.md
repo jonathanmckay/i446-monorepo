@@ -11,7 +11,6 @@ One entry point for starting work. Two modes, decided by the task name:
 1. **Variable mode** — the task is in the Variable Task Set below → input-based timer; points auto-calculated from duration when stopped via `/done` or `/did`.
 2. **Task mode** — anything else → create a Todoist task (due today) + start a Toggl timer, like the old `/doing`. **`[N]` points are required in this mode** — if the input has no `[N]`, ask the user for the point value before doing anything else.
 
-`/doing` is an alias for this skill.
 
 ## Mode decision
 

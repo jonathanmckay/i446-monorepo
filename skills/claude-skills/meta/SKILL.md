@@ -40,9 +40,9 @@ through `ssh ix`), **Ix** (always-on server, Excel open, dtd, cron, excel-http).
 Crons and daemons: `docs/cron-and-daemons.md`. Self-clearing skills and
 frontmatter rules: `skills/claude-skills/README.md`.
 
-Known overlap worth checking before recommending anything new: `/do` vs
-`/doing`, `/did` vs `/d1d` vs `/done`, `/d` vs `/claim`, `/bug` vs `/bugg`,
-`/s` vs `/salat` vs `/ص`, `/inbound` vs `/-2n`.
+Known overlap worth checking before recommending anything new: `/did` vs
+`/done`, `/d` vs `/claim`, `/inbound` vs `/-2n`. (`/doing`, `/d1d`, `/bugg`,
+`/salat` and `/ص` were retired to `_archive/` on 2026-11-01.)
 
 The map goes stale. A skill's frontmatter describes intent; `did-fast.py` and
 the hooks do the real work. Where the two disagree, trust the code and tell

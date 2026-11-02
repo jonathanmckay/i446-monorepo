@@ -56,12 +56,6 @@ echo "-2n:"
 [ -d ~/vault/g245/v_logs ] && pass "v_logs dir exists" || warn "v_logs dir missing"
 echo ""
 
-# ── prep ─────────────────────────────────────────────────────────────────
-echo "prep:"
-[ -f ~/i446-monorepo/skills/claude-skills/prep/SKILL.md ] && pass "SKILL.md exists" || fail "SKILL.md missing"
-[ -d ~/vault/h335/d359 ] || [ -d ~/vault/d359 ] && pass "d359 directory exists" || fail "d359 directory missing"
-echo ""
-
 # ── send ─────────────────────────────────────────────────────────────────
 echo "send:"
 [ -f ~/i446-monorepo/skills/claude-skills/send/SKILL.md ] && pass "SKILL.md exists" || fail "SKILL.md missing"
