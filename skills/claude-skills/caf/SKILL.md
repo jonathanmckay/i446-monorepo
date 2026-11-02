@@ -18,7 +18,7 @@ are a clean day, negative points are caffeine taken; the number is JM's.
 `when` is free text: nothing (today), `yesterday`, `tomorrow`, `3 days ago`,
 a weekday (`friday`, the most recent one; `last friday` never means today),
 `10.30` / `10/30` (this year, last year if not yet happened), `2026-10-28`.
-Order does not matter: `/caf yesterday -60` works.
+Order does not matter: `/caf yesterday -60` and `/caf 10.30 -60` both work.
 
 ## Steps
 

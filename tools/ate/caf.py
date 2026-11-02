@@ -5,7 +5,8 @@ the text names (2026-11-01).
     caf.py "<points> [when]"        write, print one line
     caf.py --parse "<text>"         print {"points", "date"} and write nothing
 
-Points: one signed number anywhere in the text (-60, 120, +50). Everything
+Points: one signed number anywhere in the text (-60, 120, +50); an M.D
+token is the date when another number is present, in either order. Everything
 else is the date phrase; with none it is today (daytime.today(), travel-aware):
 
     yesterday · tomorrow · N days ago · <weekday> / last <weekday> (the most
@@ -41,7 +42,7 @@ def parse(text: str, today: dt.date | None = None) -> dict:
     there is no number or the date phrase is not understood."""
     today = today or _today()
     s = text.strip()
-    m = _NUM.search(s)
+    m = _points_match(s)
     if not m:
         raise ValueError("no points in text")
     points = float(m.group(0))
@@ -49,6 +50,24 @@ def parse(text: str, today: dt.date | None = None) -> dict:
     rest = re.sub(r"\b(pts?|points?|caf|caffeine|on|for|the)\b", " ", rest)
     toks = [t for t in re.split(r"\s+", rest.strip()) if t]
     return {"points": points, "date": when(toks, today)}
+
+
+def _looks_like_md(tok: str) -> bool:
+    m = _MD.fullmatch(tok)
+    return bool(m) and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31
+
+
+def _points_match(s: str):
+    """The number that is the points. An unsigned M.D token ("10.30") is a
+    date whenever another number is present, so "10.30 -60" (date first) parses
+    like "-60 10.30" (2026-11-02: it read 10.30 as the points). A lone number
+    is always the points."""
+    ms = list(_NUM.finditer(s))
+    if len(ms) > 1:
+        for m in ms:
+            if not _looks_like_md(m.group(0)):
+                return m
+    return ms[0] if ms else None
 
 
 def when(toks: list[str], today: dt.date) -> dt.date:
