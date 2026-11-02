@@ -86,4 +86,5 @@ def test_is_loggable_uses_task_points_or_habit_names(monkeypatch):
 def test_alt_enter_guard_no_longer_today_only():
     src = (HERE / "janus.py").read_text()
     assert "if STATE.day_offset == 0 and _cmd_done_today(cmd):" not in src
-    assert "if _cmd_done_today(cmd):" in src
+    # 2026-11-02: the guard also checks the Toggl-id ledger (split segments).
+    assert "if _cmd_done_today(cmd) or _entries_done_today(" in src

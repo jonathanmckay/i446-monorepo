@@ -5816,21 +5816,77 @@ def _cmd_done_today(cmd: str) -> bool:
     return cmd in data.get("cmds", [])
 
 
-def _mark_cmd_done_today(cmd: str) -> None:
+def _done_state_today() -> dict:
     today = dt.datetime.now(_tz()).date().isoformat()
     try:
         data = json.loads(_DONE_CMDS_TODAY.read_text())
         if data.get("date") != today:
-            data = {"date": today, "cmds": []}
+            data = {"date": today}
     except Exception:
-        data = {"date": today, "cmds": []}
-    if cmd not in data["cmds"]:
-        data["cmds"].append(cmd)
+        data = {"date": today}
+    data.setdefault("cmds", [])
+    data.setdefault("ids", [])
+    return data
+
+
+def _write_done_state(data: dict) -> None:
     try:
         _DONE_CMDS_TODAY.parent.mkdir(parents=True, exist_ok=True)
         _DONE_CMDS_TODAY.write_text(json.dumps(data, ensure_ascii=False))
     except OSError:
         pass
+
+
+def _mark_cmd_done_today(cmd: str) -> None:
+    data = _done_state_today()
+    if cmd not in data["cmds"]:
+        data["cmds"].append(cmd)
+        _write_done_state(data)
+
+
+# Per-Toggl-ENTRY idempotency (2026-11-02). Since 42d6f30a did-fast splits a
+# >100分 per-minute entry into one Toggl entry per 地支 block; each segment
+# row's command ("xk20 1300-1400 @xk87") differs from the pressed command
+# ("xk20 1100-1400 @xk87"), so ⌥↵ on a segment re-credited its minutes. Every
+# Toggl id did-fast creates for a credited command is ledgered here and a row
+# whose entry is in the ledger is refused — mobile.py's _ledger_segments rule.
+def _entries_done_today(entry_ids) -> bool:
+    ids = {str(i) for i in (entry_ids or []) if i is not None}
+    if not ids:
+        return False
+    try:
+        data = json.loads(_DONE_CMDS_TODAY.read_text())
+    except Exception:
+        return False
+    if data.get("date") != dt.datetime.now(_tz()).date().isoformat():
+        return False
+    return bool(ids & {str(i) for i in data.get("ids", [])})
+
+
+def _mark_entries_done_today(entry_ids) -> None:
+    ids = [str(i) for i in (entry_ids or []) if i is not None]
+    if not ids:
+        return
+    data = _done_state_today()
+    known = {str(i) for i in data["ids"]}
+    new = [i for i in ids if i not in known]
+    if new:
+        data["ids"].extend(new)
+        _write_done_state(data)
+
+
+def _did_toggl_ids(stdout_text: str) -> list[str]:
+    """Every Toggl entry id did-fast reports creating (results[*].toggl.ids),
+    split segments included. [] when the output carries no JSON."""
+    try:
+        data = json.loads(stdout_text[stdout_text.index("{"):])
+    except Exception:
+        return []
+    out: list[str] = []
+    for r in data.get("results") or []:
+        for i in ((r.get("toggl") or {}).get("ids") or []):
+            out.append(str(i))
+    return out
 
 
 _POINTS_ADJ = Path.home() / ".local/state/jm/janus-points-adj.json"
@@ -6055,6 +6111,13 @@ def run_did_fast(text: str, flags: tuple[str, ...] | None = None) -> str:
     did-fast is a much heavier call: an Excel write over ix-osa plus Todoist
     round-trips, commonly 10-20s and occasionally more — hence the longer
     timeout than run_tg_fast's 15s."""
+    return run_did_fast_ids(text, flags)[0]
+
+
+def run_did_fast_ids(text: str, flags: tuple[str, ...] | None = None) -> tuple[str, list[str]]:
+    """run_did_fast plus the Toggl ids did-fast created (see
+    _mark_entries_done_today). The summary-only wrapper keeps every other
+    caller's str return unchanged."""
     if flags is None:
         # Every did-fast run from a past-day view carries --past-ok; the flag
         # is inert when the command targets today (see did-fast _past_target).
@@ -6065,13 +6128,13 @@ def run_did_fast(text: str, flags: tuple[str, ...] | None = None) -> str:
             capture_output=True, text=True, timeout=45,
         )
         if proc.stdout and "{" in proc.stdout:
-            return _did_summary(proc.stdout)
+            return _did_summary(proc.stdout), _did_toggl_ids(proc.stdout)
         out = (proc.stdout or proc.stderr or "").strip()
-        return out.splitlines()[-1] if out else "(no output)"
+        return (out.splitlines()[-1] if out else "(no output)"), []
     except subprocess.TimeoutExpired:
-        return "err: did-fast timed out"
+        return "err: did-fast timed out", []
     except Exception as e:
-        return f"err: {e}"
+        return f"err: {e}", []
 
 
 # ─── App ───────────────────────────────────────────────────────────────────
@@ -6539,7 +6602,8 @@ def _run_done_command(app, cmd: str, flags: tuple[str, ...] | None = None) -> No
         flash(f"$ did {cmd}  (stop + done)")
         app.invalidate()
         t0 = time.monotonic()
-        res = await asyncio.to_thread(run_did_fast, cmd, flags)
+        res, ids = await asyncio.to_thread(run_did_fast_ids, cmd, flags)
+        _mark_entries_done_today(ids)  # split segments of this /done (2026-11-02)
         JE.emit("outcome", "done", (), f"{time.monotonic() - t0:.1f}s {cmd} -> {res}")
         flash(res, 8.0)
         app.invalidate()
@@ -6664,7 +6728,8 @@ def _on_enter(event):
         # SPLIT_MIN_POINTS), the same as an inferred minutes credit.
         flags = _did_flags() + (("--rate",) if janus_done.is_rate_answer(text) else ())
         if dtgt.get("row_key"):
-            _run_row_did(event.app, cmd, dtgt["row_key"], flags)
+            _run_row_did(event.app, cmd, dtgt["row_key"], flags,
+                         entry_ids=dtgt.get("entry_ids"))
         else:
             _run_done_command(event.app, cmd, flags)
         return
@@ -7384,7 +7449,7 @@ def _(event):
     # session and a second xk22 kid-time block as "already recorded").
     # Past-day views are guarded too (2026-09-28): the command already
     # carries the viewed M/D, so the key is distinct per day.
-    if _cmd_done_today(cmd):
+    if _cmd_done_today(cmd) or _entries_done_today(item.get("entry_ids")):
         flash(f"already recorded: {cmd} — not re-running", 6.0)
         return
     STATE.event_sel = None
@@ -7399,23 +7464,28 @@ def _(event):
         return
     if path == "ask":
         STATE.done_target = {"desc": desc, "start_dt": start, "end_dt": end,
-                             "code": code, "suffix": suffix, "row_key": cmd}
+                             "code": code, "suffix": suffix, "row_key": cmd,
+                             "entry_ids": list(item.get("entry_ids") or [])}
         input_buffer.text = ""
         ask(f'points for "{desc}" ({item["dur_min"]}m)? total (40) or rate (.5/m), ⏎ = 0')
         return
-    _run_row_did(event.app, cmd, cmd)
+    _run_row_did(event.app, cmd, cmd, entry_ids=item.get("entry_ids"))
 
 
-def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None) -> None:
+def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
+                 entry_ids=None) -> None:
     """did-fast a FINISHED entry row (no timer to stop) and refresh. `key`
     is the row's idempotency command (its points-less form when the points
     were asked for), marked done once did-fast has run. `flags` replaces
-    the view's default did-fast flags (callers include _did_flags())."""
+    the view's default did-fast flags (callers include _did_flags()).
+    `entry_ids` (the row's own Toggl ids) and every id did-fast creates are
+    ledgered so a split segment can't be credited again."""
     async def _run_did_and_refresh():
         flash(f"$ did {cmd}")
         app.invalidate()
-        res = await asyncio.to_thread(run_did_fast, cmd, flags)
+        res, ids = await asyncio.to_thread(run_did_fast_ids, cmd, flags)
         _mark_cmd_done_today(key)
+        _mark_entries_done_today(list(entry_ids or ()) + ids)
         flash(res, 8.0)
         app.invalidate()
         await asyncio.to_thread(fetch_today, True)
