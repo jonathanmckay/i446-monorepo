@@ -73,6 +73,10 @@ DEFAULT_CLAIMED_POINTS = 2
 # is IDENTICAL in content to the card its recurring parent regenerates — two
 # stale undated "AoS (15) [15]" copies caused the 2026-07-24 dtd same-name
 # mess. The date stamp keeps every deferred copy distinct.
+# All recurring copies joined 2026-11-02: an xk87-only recurring task (no
+# habit label) produced exact twins of its parent's next card (6hvVF42cGQ6G8Jqc
+# / 6hvV7wVCF3fQ3qcw). handle_recurring now stamps every copy; HABIT_LABELS
+# still gates the habits-deferred marker.
 HABIT_LABELS = {"0neon", "夜neon", "1neon"}
 
 
@@ -483,30 +487,30 @@ def handle_recurring(task: dict, target_date: str,
 
     # 1. One-off deferred copy of THIS occurrence (non-recurring), due target.
     #    Skip mode carries nothing — the occurrence is simply skipped.
-    #    Daily habits (0neon/夜neon) get the origin date stamped into the copy
-    #    so it stays distinct from the daily card (see HABIT_LABELS).
+    #    Every created copy gets the origin date stamped in so it stays
+    #    distinct from the card the parent regenerates (2026-11-02: an
+    #    xk87-only recurring task deferred into an exact twin of its parent's
+    #    next card, 6hvVF42cGQ6G8Jqc / 6hvV7wVCF3fQ3qcw).
     #
     #    Bug (2026-10-23): "→ 2026-10-23 (recurring; next 2026-10-23)" — the
     #    copy was made unconditionally, so a target on/after next_date left
-    #    two identical same-day tasks (the copy + the advanced parent). An
-    #    undated copy whose target is not BEFORE next_date is absorbed by the
-    #    parent's own next occurrence. Dated habit copies are deliberately
-    #    distinct catch-up cards (HABIT_LABELS) and are still created.
+    #    two same-day tasks (the copy + the advanced parent). A non-habit copy
+    #    whose target is not BEFORE next_date is absorbed by the parent's own
+    #    next occurrence. Habit copies (HABIT_LABELS) are deliberately
+    #    distinct catch-up cards and are still created.
     copy = None
     copy_content = content
-    if HABIT_LABELS & set(labels):
-        copy_content = _dated_copy_content(content, current_due)
     absorbed = False
-    if not skip_copy and copy_content == content:
+    if not skip_copy and not (HABIT_LABELS & set(labels)):
         try:
             absorbed = date.fromisoformat(str(target_date)[:10]) >= date.fromisoformat(next_date)
         except ValueError:
             absorbed = False  # unparsed target: keep the old copy behavior
     if skip_copy or absorbed:
         skip_copy = True
-        copy_content = content
         target_date = next_date
     else:
+        copy_content = _dated_copy_content(content, current_due)
         copy = create_task(copy_content, labels, project_id, target_date, priority)
 
     # 2. Posthoc eval record (due today, immediately closed) — created and
