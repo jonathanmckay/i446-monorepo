@@ -213,8 +213,10 @@ def classify_row(r, kind_by_ip, kind_by_host, lans, daemon_vias):
     if r.get('source') in ('1p-app', 'watch'):
         return MOBILE
     # Rows since 2026-11-02 carry `tty`; a non-interactive write (cron, a
-    # backgrounded daemon) says nothing about where JM was. Prompts are typed.
-    if 'tty' in r and not r['tty'] and r.get('metric') != 'prompt':
+    # backgrounded daemon) says nothing about where JM was. Prompts too: since
+    # 2026-11-03 ai-timing-log.sh records the real tty, and a tty-less prompt
+    # is cron's `claude -p` or Dream, not JM typing.
+    if 'tty' in r and not r['tty']:
         return None
     ssh = r.get('ssh_from')
     if ssh:

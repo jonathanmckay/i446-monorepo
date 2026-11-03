@@ -829,6 +829,10 @@ def _imessage_recent():
 def _outlook_inbox():
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
+    if mcp.local_server_forbidden():
+        # Ix has no work auth and no mail cache: an Agency call here only
+        # hangs on a sign-in (15 min per server, every night until v177).
+        raise RuntimeError("cache-only host: no Outlook mail source here")
     from datetime import timezone
     cutoff = (datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -897,9 +901,43 @@ def _outlook_inbox():
 
 
 @source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
+def _outlook_calendar_from_cache(cache_dir=None, today=None):
+    """Outlook events from the Janus cache Straylight pushes to cache-only
+    hosts (tools/tg/outlook-cache-daemon.py writes today + tomorrow only;
+    yesterday's file is whatever was last pushed). Converted from Janus's
+    record shape to this source's; missing files are reported, not fatal."""
+    cache_dir = Path(cache_dir or Path.home() / ".cache" / "janus")
+    today = today or datetime.date.today()
+    events, files = [], {}
+    for off in (-1, 0, 1):
+        d = today + datetime.timedelta(days=off)
+        f = cache_dir / f"outlook-{d.isoformat()}.json"
+        try:
+            raw = json.loads(f.read_text())
+            age_min = round((time.time() - f.stat().st_mtime) / 60)
+        except (OSError, ValueError):
+            files[d.isoformat()] = None
+            continue
+        files[d.isoformat()] = {"age_min": age_min, "count": len(raw)}
+        for ev in raw if isinstance(raw, list) else []:
+            events.append({
+                "subject": ev.get("subject", ""),
+                "start": ev.get("start", ""),
+                "end": ev.get("end", ""),
+                "start_tz": ev.get("start_tz", ""),
+                "all_day": bool(ev.get("is_all_day")),
+                "organizer": "",       # not in the Janus cache
+                "is_online": None,     # not in the Janus cache
+            })
+    return {"events": events, "count": len(events), "via": "janus-cache",
+            "cache_files": files}
+
+
 def _outlook_calendar():
     sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
     import agency_mcp as mcp
+    if mcp.local_server_forbidden():
+        return _outlook_calendar_from_cache()
     from datetime import timezone
     yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
     day_after = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
@@ -1016,15 +1054,20 @@ def run_sources(selected=None, timeout=30):
                 "error": f"{type(e).__name__}: {e}",
             }
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {}
-        for name, info in sources_to_run.items():
-            fut = pool.submit(_run_one, name, info)
-            futures[fut] = name
-
+    # No `with`: its exit is shutdown(wait=True), which waited out a source
+    # hung past its timeout (agency sign-in: 15-30 min a night, 2026-11-03).
+    # One deadline for all: max_workers=8 queues the rest, so allow one extra
+    # timeout window for the second wave rather than 30s per future in turn.
+    pool = ThreadPoolExecutor(max_workers=8)
+    deadline = time.time() + timeout * 2
+    futures = {}
+    for name, info in sources_to_run.items():
+        fut = pool.submit(_run_one, name, info)
+        futures[fut] = name
+    try:
         for fut in futures:
             try:
-                name, result = fut.result(timeout=timeout)
+                name, result = fut.result(timeout=max(0.0, deadline - time.time()))
                 results[name] = result
             except FuturesTimeout:
                 name = futures[fut]
@@ -1042,8 +1085,23 @@ def run_sources(selected=None, timeout=30):
                     "data": None,
                     "error": f"{type(e).__name__}: {e}",
                 }
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     return results
+
+
+def _exit_now_if_hung():
+    """Executor threads are non-daemon: the interpreter joins them at exit,
+    so one hung source would still hold the launcher after the JSON is
+    written. Hard-exit in that case (atexit hooks skipped on purpose: a hung
+    thread may hold agency_mcp's _lock, which its stop_all needs)."""
+    import threading
+    if any(t.is_alive() for t in threading.enumerate()
+           if t is not threading.main_thread() and not t.daemon):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 # ---------------------------------------------------------------------------
@@ -1136,6 +1194,7 @@ def main():
 
     if args.test:
         print_test_table(results)
+        _exit_now_if_hung()
         return
 
     import socket
@@ -1155,6 +1214,7 @@ def main():
     else:
         json.dump(output, sys.stdout, indent=2, default=str)
         print()
+    _exit_now_if_hung()
 
 
 if __name__ == "__main__":
