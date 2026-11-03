@@ -354,3 +354,25 @@ def test_no_card_habits_are_never_expected_or_recreated(cs):
     main = next(n for n in ast.walk(ast.parse(src))
                 if isinstance(n, ast.FunctionDef) and n.name == "main")
     assert "NO_CARD" in ast.unparse(main), "main() must drop NO_CARD from weekly expectations"
+
+
+# --- hcbi Daily Dozen zero-fill (2026-11-03) ---------------------------------
+def _row(day_text, vals):
+    # B (date), C (weekday), D, then E..R
+    return [day_text, "M", "1.0"] + vals
+
+
+def test_dozen_blanks_past_rows_only(cs):
+    from datetime import date
+    full = ["1.0"] * 14
+    holey = ["", "0.0", "", "1.0", "1.0", "1.0", "1.0", "1.0", "1.0", "1.0", "1.0", "70.0", "", ""]
+    rows = [
+        _row("Sunday, November 1, 2026 at 12:00:00 AM", full),
+        _row("Monday, November 2, 2026 at 12:00:00 AM", holey),
+        _row("Tuesday, November 3, 2026 at 12:00:00 AM", [""] * 14),   # today: untouched
+        _row("Wednesday, November 4, 2026 at 12:00:00 AM", [""] * 14),  # future
+        ["Q1", "", ""] + [""] * 14,                                          # summary row
+    ]
+    out = cs.dozen_blanks(rows, 300, date(2026, 11, 3))
+    # E, G blank; P (protein) and Q (mg cfn) are not food groups; R is.
+    assert out == {301: ["E", "G", "R"]}

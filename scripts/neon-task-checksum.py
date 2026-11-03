@@ -114,9 +114,42 @@ WEEKLY_DOMAIN = {
 }
 
 
+# hcbi Daily Dozen group columns (bn br fr cr gr vg fx g nt sp wtr) plus R
+# (g al). A day nobody logged a group must read 0, not blank: blanks leave
+# holes in the weekly/quarterly averages (2026-11-03, per JM). Filled for
+# every dated row BEFORE today, so a live /ate on today's row never races it.
+DOZEN_COLS = "EFGHIJKLMNOR"
+HCBI_SCAN = "B3:R400"
+_COL_ORDER = "BCDEFGHIJKLMNOPQR"
+_DATE_RE = re.compile(r"([A-Z][a-z]+) (\d{1,2}), (\d{4})")
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested)
 # ---------------------------------------------------------------------------
+
+def dozen_blanks(rows: list[list[str]], first_row: int, today: date) -> dict[int, list[str]]:
+    """{sheet row: [blank cols]} for hcbi rows dated before `today`. `rows`
+    is read_range's B..R block; col B holds the date as Excel's long text
+    ('Monday, November 2, 2026 at 12:00:00 AM'). Summary rows (Q1, 2026)
+    don't parse as dates and are skipped."""
+    out: dict[int, list[str]] = {}
+    for i, r in enumerate(rows):
+        m = _DATE_RE.search(r[0] if r else "")
+        if not m:
+            continue
+        try:
+            d = datetime.strptime(" ".join(m.groups()), "%B %d %Y").date()
+        except ValueError:
+            continue
+        if d >= today:
+            continue
+        blanks = [c for c in DOZEN_COLS
+                  if (r[_COL_ORDER.index(c)] if len(r) > _COL_ORDER.index(c) else "").strip() == ""]
+        if blanks:
+            out[first_row + i] = blanks
+    return out
+
 
 def norm_name(s: str) -> str:
     """Bare habit name: strip 😈, (N)/[N]/{N}, [x/m] rate markers; collapse
@@ -473,6 +506,27 @@ def _load_vdh():
 # Main
 # ---------------------------------------------------------------------------
 
+def zero_fill_dozen(fix: bool) -> dict:
+    """Blank hcbi Daily Dozen cells on past rows → 0, through the excel-http
+    daemon (journaled, src 'checksum dozen zero-fill'). Report-only without
+    --fix."""
+    sys.path.insert(0, str(REPO / "lib"))
+    from neon import excel as neon_excel
+    res = neon_excel.read_range("hcbi", HCBI_SCAN)
+    if not res.get("ok"):
+        return {"error": res.get("error") or "read_range failed"}
+    blanks = dozen_blanks(res["rows"], res.get("row") or 3, date.today())
+    filled, errors = [], []
+    if fix:
+        for row, cols in blanks.items():
+            r = neon_excel.batch_write("hcbi", [{"col": c, "value": 0, "mode": "set"} for c in cols],
+                                       row=row, src="checksum dozen zero-fill")
+            (filled if r.get("ok") else errors).append(f"{row}:{''.join(cols)}")
+    if errors:
+        emit_alert("dozen_zero_fill_failed", ", ".join(errors))
+    return {"rows_with_blanks": len(blanks), "filled": filled, "errors": errors}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fix", action="store_true")
@@ -527,6 +581,9 @@ def main() -> int:
                        f"manifest match not in 0n headers: {', '.join(drift)}")
         for w in daily_pts_warnings:
             emit_alert("daily_points_mismatch", w)
+
+    if not args.weekly_only:
+        report["dozen_zero_fill"] = zero_fill_dozen(args.fix)
 
     if not args.daily_only:
         expected = [e for e in parse_1n_expectations(*rows_1n)
