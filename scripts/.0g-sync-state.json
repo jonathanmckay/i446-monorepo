@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-03T06:00:01.301252-08:00"
+  "tasks": {
+    "tasks to 50": {
+      "todoist_id": "6hvr2vgWV7fpwJpR",
+      "minutes": 50
+    },
+    "good interview": {
+      "todoist_id": "6hvr2vhw8Cc7Jx7R",
+      "minutes": 70
+    },
+    "current with 分": {
+      "todoist_id": "6hvr2vjJFxmh63WR",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-11-03T08:00:04.434719-08:00"
 }
