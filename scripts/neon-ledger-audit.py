@@ -149,6 +149,8 @@ def replay(entries):
         key = entry_key(e)
         cell = f"{key[0]}!{key[1]} @{key[2]}"
         prev = last.get(key)
+        if e.get("kind") == "adopt":   # ledger-only hand-edit adoption (lib/neon/adopt.py), not a cell write
+            continue
         if e.get("kind") == "ack":
             for msg in pending.pop(key, []):
                 warns.append(f"{msg} [acked {e.get('ts')}: {e.get('note')}]")
