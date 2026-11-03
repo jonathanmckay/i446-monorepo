@@ -6010,6 +6010,17 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
     if not raw_desc:
         return False, 0
     rec = _recorded_entry_pts(view_now().date(), entry_ids)
+    if rec == 0:
+        # A per-minute 0n habit (o314: 1分/min) is credited by the sheet, so
+        # did-fast reported 0 for it and janus recorded that 0 until
+        # did_points priced it (bug 2026-11-03: a 69m o314 showed [0]).
+        try:
+            from neon.rates import zero_n_points
+            sheet = zero_n_points(_norm_done_name(raw_desc) or raw_desc, dur_min)
+        except Exception:
+            sheet = None
+        if sheet:
+            return True, sheet
     if rec is not None:
         return True, rec
     if STATE.day_offset != 0:

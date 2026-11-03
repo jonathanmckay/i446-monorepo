@@ -70,3 +70,19 @@ def test_row_points_include_adjustments(tmp_path, monkeypatch):
     janus._points_adj_add([111], -12)
     assert janus._row_points("write memo", 40, [111]) == (True, 18)
     assert janus._row_points("write memo", 40, [222]) == (True, 30)  # other entry untouched
+
+
+def test_stale_zero_record_on_a_per_minute_habit_shows_its_minutes(tmp_path, monkeypatch):
+    """Bug 2026-11-03: a 69m o314 row logged from janus showed [0]. did-fast
+    reports no 0分 points for a sheet-credited 0n habit, so janus recorded
+    {entry: 0}; the record outranked everything after did_points was fixed.
+    A 0 record on a per-minute 0n habit is that stale value, not a real 0."""
+    day = dt.date(2026, 11, 1)
+    _view(monkeypatch, tmp_path, day, -1)
+    janus._entry_pts_add(day, {"4609785250": 0})
+    assert janus._entry_dur_display(69, "o314", [4609785250]) == "[69]"
+    # a real record still wins, and a 0 on an ordinary task stays 0
+    janus._entry_pts_add(day, {"4609785250": 104})
+    assert janus._entry_dur_display(69, "o314", [4609785250]) == "[104]"
+    janus._entry_pts_add(day, {"5": 0})
+    assert janus._entry_dur_display(20, "read memo", [5]) == "[0]"
