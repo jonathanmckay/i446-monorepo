@@ -19,6 +19,10 @@ Checks (v1, 2026-09-27):
   onedrive-neon  Neon workbook mtime (and Ix↔Straylight parity when run off Ix)
   time-machine   destination configured + latest backup age
   ix-cron        Ix's live crontab matches the committed config/ix.crontab
+  ix-memory      Ix over 7 days (tools/vault/ix_mem_sample.py, cron */15): reboots,
+                 jetsam / panic / Chrome hang reports, Chrome restarts, extra Chrome
+                 instances (non-default user-data-dir), Chrome footprint and swap
+                 peaks (added 2026-11-03 after the 10-29 23.6 GB Chrome jetsam)
   skill-claims   skills whose name matches a recurring Todoist card but that
                  aren't linked to dtd (agent_claims.SKILL_CLAIMS) or recorded
                  as declined (SKILL_NO_CLAIM) (added 2026-10-11)
@@ -687,6 +691,59 @@ def check_ix_cron() -> Finding:
     return Finding("ix-cron", "ok", f"{len(have)} jobs match config/ix.crontab")
 
 
+IX_MEM = "$HOME/i446-monorepo/tools/vault/ix_mem_sample.py"   # expanded by the shell on Ix
+CHROME_PEAK_MB = 6000
+SWAP_PEAK_PCT = 90
+
+
+def ix_memory_finding(sm: dict, now: dt.datetime) -> Finding:
+    """Turn ix_mem_sample.py --summary into a Finding (pure; tested).
+    2026-11-03: Chrome renderers hit 23.6 GB on 10-29 and macOS jetsammed; Chrome
+    itself restarted 11-02 03:00 with no reboot. Both are what JM wants surfaced."""
+    detail, status = [], "ok"
+
+    def bump(s):
+        nonlocal status
+        status = max(status, s, key=["ok", "warn", "fail"].index)
+
+    for r in sm.get("reports", []):
+        if r["kind"] == "jetsam":
+            bump("fail"); detail.append(f"jetsam {r['at'][:16]}: {r.get('top', '?')}")
+        elif r["kind"] == "panic":
+            bump("fail"); detail.append(f"kernel panic {r['at'][:16]}: {r['file']}")
+        else:
+            bump("warn"); detail.append(f"Chrome hang/resource report {r['at'][:16]}: {r['file']}")
+    for b in sm.get("boots_in_window", []):
+        bump("warn"); detail.append(f"rebooted {dt.datetime.fromtimestamp(b, TZ):%m-%d %H:%M}")
+    for st in sm.get("chrome_restarts", []):
+        bump("warn"); detail.append(f"Chrome restarted (new main process started {st})")
+    for k, e in sm.get("extra_browsers", {}).items():
+        bump("warn"); detail.append(f"extra Chrome instance {k} (parent pid {e['ppid']}), in {e['n']} sample(s) from {e['first'][:16]}")
+    for k, e in sm.get("automation_browsers", {}).items():
+        detail.append(f"automation browser {k}, in {e['n']} sample(s)")
+    if (sm.get("chrome_peak_mb") or 0) >= CHROME_PEAK_MB:
+        bump("warn"); detail.append(f"Chrome footprint peaked {sm['chrome_peak_mb'] / 1024:.1f} GB at {sm['chrome_peak_at'][:16]}")
+    if (sm.get("swap_peak_pct") or 0) >= SWAP_PEAK_PCT:
+        bump("warn"); detail.append(f"swap peaked {sm['swap_peak_pct']}% full")
+    last = sm.get("last")
+    if not last or now - dt.datetime.fromisoformat(last) > dt.timedelta(hours=1):
+        bump("warn"); detail.append(f"sampler stale or missing (last sample {last or 'never'}; cron */15 ix_mem_sample.py)")
+    if sm.get("top"):
+        detail.append("largest now: " + ", ".join(f"{n} {mb / 1024:.1f} GB" for n, mb in sm["top"]))
+    summary = "no reboots, jetsams or extra Chrome" if status == "ok" else \
+        f"{sum(1 for d in detail if not d.startswith(('automation', 'largest')))} memory event(s) this week"
+    return Finding("ix-memory", status, summary, detail, review=status != "ok")
+
+
+def check_ix_memory(now: dt.datetime) -> Finding:
+    out = ix(f"/usr/bin/python3 {IX_MEM} --summary", timeout=60)
+    try:
+        sm = json.loads(out.strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001
+        return Finding("ix-memory", "warn", "Ix memory summary unreadable", [out[:160]], review=True)
+    return ix_memory_finding(sm, now)
+
+
 _CARD_ANNOT = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")   # did-fast's ANNOT_RE
 
 
@@ -866,7 +923,7 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
+               check_ix_cron, lambda: check_ix_memory(now), check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
                check_duplicates):
         try:
             out.append(fn())

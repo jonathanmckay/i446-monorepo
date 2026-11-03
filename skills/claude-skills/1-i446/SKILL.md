@@ -1,6 +1,6 @@
 ---
 name: "1-i446"
-description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, vault-wide style: ASCII kebab filenames and short one-language titles, Toggl entries store freshness and last-7-days coverage, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, skills not yet linked to a dtd card, 7-day alert sink, Downloads files queued by tools/triage that share a name but differ in content), auto-fixes what is safe (Syncthing rescans), writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
+description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, vault-wide style: ASCII kebab filenames and short one-language titles, Toggl entries store freshness and last-7-days coverage, Syncthing, git autopush, skills backup, OneDrive Neon parity, Time Machine, Ix memory leaks (reboots, jetsam/panic/Chrome hang reports, Chrome restarts and extra Chrome instances, Chrome footprint and swap peaks), skills not yet linked to a dtd card, 7-day alert sink, Downloads files queued by tools/triage that share a name but differ in content), auto-fixes what is safe (Syncthing rescans), writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
 user-invocable: true
 ---
 
@@ -54,5 +54,15 @@ hand does the same thing interactively, from whichever machine you are on
   ~/i446-monorepo/tools/toggl-db/toggl_db.py sync --days 14 --export`, then
   `status` / `verify --days 7`; a stale copy here with a fresh store on Ix is
   a Syncthing problem, not a Toggl one.
+- Ix memory (`check_ix_memory`, 2026-11-03): reads a 7-day summary from
+  `tools/vault/ix_mem_sample.py --summary`, fed by a `*/15` Ix cron sample in
+  `~/Library/Logs/ix-mem.jsonl` plus `/Library/Logs/DiagnosticReports`. Jetsam
+  or kernel panic = fail; a reboot, a Chrome restart (new main pid), a Chrome
+  `.diag` hang report, an extra Chrome instance with a non-default
+  `--user-data-dir`, Chrome footprint ≥ 6 GB or swap ≥ 90% = warn. Known
+  automation profiles (Playwright, lease_signer's `appfolio_browser_state`) are
+  listed, not flagged. The review question is which spawner to fix: name it
+  from the instance's parent pid / user-data-dir, file a task, don't kill
+  processes from the review.
 - New rules go into `vault_health.py` as a `check_*` returning a `Finding`;
   set `review=True` only when JM has to decide something.
