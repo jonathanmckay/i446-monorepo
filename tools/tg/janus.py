@@ -75,7 +75,7 @@ from neon.rates import speedy_meeting_points  # noqa: E402  25m→30 / 50m→60 
 import janus_done  # noqa: E402  /done points paths, shared with mobile.py
 import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with mobile.py
 import outlook_client  # noqa: E402
-from blocks import is_future_block  # noqa: E402  shared future-block gate
+from blocks import is_future_block, BLOCK_SCHEDULE  # noqa: E402  shared future-block gate
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 
 # dtd's Haiku title shortener, reused for long calendar event titles. Optional:
@@ -658,6 +658,9 @@ class State:
         self.edit_target: dict | None = None
         # ^G "these points were wrong": the row being re-pointed (Enter applies).
         self.points_edit_target: dict | None = None
+        # ^G block view (JM 2026-11-02): (branch, start_hour) of the block
+        # shown full-screen with EVERY entry in it; None = the main timeline.
+        self.block_view: tuple[str, int] | None = None
         # Armed by ^P on a selected completed entry: {"id", "date", "desc",
         # "project_id", "tags", "start_dt", "end_dt"}. The next Enter reads
         # the input line as the HHMM split point and cuts the entry in two.
@@ -4960,7 +4963,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     ]
 
 
-HINT_LINE = " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit"
+HINT_LINE = " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^O block · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit"
 
 
 def render_footer() -> list[tuple[str, str]]:
@@ -5135,8 +5138,101 @@ def render_focus_compact(bo_emojis: dict[str, str] | None = None) -> list[tuple[
     return out
 
 
+def _block_of(t: dt.datetime) -> tuple[str, int]:
+    """(branch, start_hour) of the 2-hour block holding `t` — the full
+    12-branch day (丑/寅 included), unlike BLOCKS' waking-day layout table."""
+    sh = (t.hour // 2) * 2
+    return next(b for b, h in BLOCK_SCHEDULE if h == sh), sh
+
+
+def render_block_view() -> list[tuple[str, str]]:
+    """^G: one block, full-screen, every raw Toggl entry in it — no merging,
+    no 3-row cap, no tiny-entry absorption (JM 2026-11-02: "look at all time
+    entries in a block … same way I can look at the details of a task").
+    Untracked stretches between them show as gap rows. Every row registers
+    in STATE.visible_events, so ↑/↓, ↵, ⌥↵, ^P, ^X and ^G (points) act here
+    exactly as on the main timeline. Esc returns."""
+    name, sh = STATE.block_view
+    day = view_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    bs = day + dt.timedelta(hours=sh)
+    be = bs + dt.timedelta(hours=2)
+    now = view_now()
+    entries = sorted((e for e in STATE.entries
+                      if e["start_dt"] < be and e["end_dt"] > bs),
+                     key=lambda e: e["start_dt"])
+    tracked = sum(int((min(e["end_dt"], be, now) - max(e["start_dt"], bs))
+                      .total_seconds() // 60) for e in entries)
+    pts = _block_display_pts(name)
+    left = f"{name} {sh:02d}:00–{(sh + 2) % 24:02d}:00  {day:%a %m/%d}"
+    right = f"{len(entries)} entries · {fmt_dur(tracked)} tracked" + (
+        f" · {int(round(pts))}分" if pts else "")
+    out: list[tuple[str, str]] = [
+        ("class:header", left),
+        ("class:dim", " " * max(1, WIDTH_HINT - dwidth(left) - dwidth(right)) + right + "\n"),
+        ("class:rule", "─" * WIDTH_HINT + "\n"),
+    ]
+    if not STATE.entries_known:
+        out.append(("class:dim", "⚠ Toggl unconfirmed — entries below may be incomplete\n"))
+
+    def gap_row(gs, ge):
+        mins = int((ge - gs).total_seconds() // 60)
+        if mins < 1:
+            return
+        item = {"kind": "empty", "start_dt": gs, "dur_min": mins}
+        STATE.visible_events.append(item)
+        is_sel, click, marker = _row_selection(_sel_key(item))
+        tcol = f"{gs:%H:%M}–{ge:%H:%M} "
+        out.extend(marker)
+        out.append(_frag("class:selected_accent" if is_sel else "class:time", tcol, click))
+        out.append(_frag("class:selected_bg" if is_sel else "class:no_entry",
+                         _gap_fill(f"untracked ({fmt_dur(mins)})",
+                                   max(1, WIDTH_HINT - dwidth(tcol))) + "\n", click))
+
+    cursor = bs
+    for e in entries:
+        if e["start_dt"] > cursor:
+            gap_row(cursor, min(e["start_dt"], now))
+        running = bool(e.get("running"))
+        end = min(e["end_dt"], now) if running else e["end_dt"]
+        dur = int((end - e["start_dt"]).total_seconds() // 60)
+        item = {"kind": "entry", "start_dt": e["start_dt"], "entry_ids": [e["id"]],
+                "raw_desc": e["desc"], "project_id": e["project_id"],
+                "dur_min": dur, "running": running, "contiguous": True}
+        STATE.visible_events.append(item)
+        is_sel, click, marker = _row_selection(_sel_key(item))
+        # Real start/end even when the entry spills across the block edge;
+        # ↳ / ↦ say which side it crosses.
+        tcol = (f"{'↳' if e['start_dt'] < bs else ' '}{e['start_dt']:%H:%M}–"
+                f"{'now  ' if running else f'{end:%H:%M}'}{'↦' if end > be else ' '} ")
+        tail = ("▶ " if running else "") + _entry_dur_display(dur, e["desc"], [e["id"]])
+        tags = _visible_tags(e.get("tags"))
+        avail = max(1, WIDTH_HINT - dwidth(tcol) - dwidth(tail) - _tag_chips_width(tags) - 1)
+        label = truncate(display_desc(e["desc"]) or "(blank)", avail)
+        sty = project_style(toggl_project_code(e["project_id"], e["desc"]))
+        if is_sel:
+            sty = f"bold {sty} bg:#3a3a3a".strip()
+        out.extend(marker)
+        out.append(_frag("class:selected_accent" if is_sel else "class:time", tcol, click))
+        out.append(_frag(sty or ("class:selected_bg" if is_sel else "class:past"), label, click))
+        out.extend(_tag_chip_frags(tags, click))
+        out.append(_frag("class:selected_bg" if is_sel else "",
+                         " " * (avail - dwidth(label) + 1), click))
+        out.append(_frag("class:running" if running else "class:dim", tail + "\n", click))
+        cursor = max(cursor, end)
+    if cursor < min(be, now):
+        gap_row(cursor, min(be, now))
+    if not entries and now <= bs:
+        out.append(("class:idle", "block hasn't started\n"))
+    out.append(("class:hint", "\n esc back · ↑↓ select · ↵ edit/fill · ⌥↵ did · "
+                              "^G fix 分 · ^P split · ^X del\n"))
+    return out
+
+
 def render_all() -> list[tuple[str, str]]:
     _sync_width()
+    if STATE.block_view is not None:
+        STATE.visible_events = []
+        return _hold_scroll(render_block_view(), _main_scroll())
     # Event cursor spans the WHOLE day now (past blocks' uncovered meetings,
     # the current + next block) — reset once here, before anything renders,
     # so render_morning's registrations survive render_focus_compact's (each
@@ -7534,6 +7630,28 @@ def _(event):
         f'points for "{desc}": now {cur} — type the right total (or .5/m), ⏎')
 
 
+@kb.add("c-o")
+def _(event):
+    """^O: open the block view (JM 2026-11-02) — the selected row's block,
+    else the block now is in, every entry listed (see render_block_view);
+    Esc goes back. ^O again inside the view jumps to the selected row's block
+    (or stays put)."""
+    sel = STATE.event_sel
+    item = next((it for it in STATE.visible_events if _sel_key(it) == sel), None) if sel else None
+    anchor = item.get("start_dt") if isinstance(item, dict) else None
+    if anchor is None:
+        if STATE.block_view is not None:
+            return
+        if STATE.day_offset != 0:
+            flash("^O: select a row to open its block", 3.0)
+            return
+        anchor = view_now()
+    _cancel_armed_edit_for_nav()
+    STATE.block_view = _block_of(anchor)
+    STATE.scroll_to_selection_until = time.monotonic() + 0.3
+    flash(f"{STATE.block_view[0]} block — esc back", 3.0)
+
+
 @kb.add("c-p")
 def _(event):
     """Split the selected tracked entry in two at a chosen point — ^P to
@@ -7896,6 +8014,14 @@ def _(event):
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing;
                     # cancel an armed edit/selection
 def _(event):
+    if STATE.block_view is not None:
+        # Esc backs out one level: an armed edit first, then the block view.
+        if _edit_armed():
+            _cancel_armed_edit_for_nav()
+            return
+        STATE.block_view = None
+        STATE.scroll_to_selection_until = time.monotonic() + 0.3
+        return
     if (STATE.edit_target is not None or STATE.split_target is not None or STATE.points_edit_target is not None
             or STATE.event_sel is not None):
         STATE.edit_target = None
