@@ -37,6 +37,7 @@ TODAY = date(2026, 9, 21)
     ("09.22", date(2026, 9, 22)),   # tomorrow's own M/D → tomorrow, not last year
     ("9/22", date(2026, 9, 22)),
     ("tomorrow", date(2026, 9, 22)),
+    ("today", date(2026, 9, 21)),
     ("09.23", date(2025, 9, 23)),   # day after tomorrow → last year, as before
 ])
 def test_parse_target_date(zb, raw, expect):

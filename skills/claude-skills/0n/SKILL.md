@@ -21,7 +21,7 @@ Pass the user's arguments through as typed: habit and date may come in either
 order (`/0n 11.02 hiit +15` works), and `+15` / `=15` go through untouched.
 
 - `<habit>`: a 0n row-1 header (`0l`, `0t`, `notes`, `ibx i9`, `早餐`, ...). Case/dash-insensitive.
-- `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, `yesterday`, or `tomorrow`. Usually past. Today's row works too (credited in place, nothing moves). Tomorrow's row is allowed only during 戌/亥 (18:00–22:00) — for a habit done tonight whose row carries tomorrow's date (e.g. 0l on the wake-date row). Points always land on today.
+- `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, `today`, `yesterday`, or `tomorrow`. Usually past. Today's row works too (credited in place, nothing moves). Tomorrow's row is allowed only during 戌/亥 (18:00–22:00) — for a habit done tonight whose row carries tomorrow's date (e.g. 0l on the wake-date row). Points always land on today.
 - `[value]`: cell value, default `1`. For variable habits it is minutes: `+N` adds to the day's cell, `=N` sets it, bare `N` adds for cumulative habits (`问学`, `xk20/22/26`) and sets for the rest (same as `/did`).
 - `--move-only`: the 0n cell is already marked (by hand, or an earlier run whose 0分 half failed). Skips the 0n write and moves the row-2 weight only. Fixed habits only.
 - `--dry-run`: read-only plan.

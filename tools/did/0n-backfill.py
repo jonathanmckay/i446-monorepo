@@ -108,11 +108,13 @@ def col_letter(n: int) -> str:
 
 
 def parse_target_date(raw: str, today: date) -> date:
-    """'09.18' | '9/18' | '9.18' | '2026-09-18' | 'yesterday' | 'tomorrow' → date.
+    """'09.18' | '9/18' | '9.18' | '2026-09-18' | 'today' | 'yesterday' | 'tomorrow' → date.
     M/D with no year: tomorrow's own M/D means tomorrow (advance marking,
     gated to 戌/亥 in main); any other M/D after today picks last year.
     Last year's tomorrow-date needs the ISO form."""
     raw = raw.strip().lower()
+    if raw == "today":
+        return today
     if raw == "yesterday":
         return today - timedelta(days=1)
     if raw == "tomorrow":
