@@ -11,17 +11,14 @@ into the cell triad whose Earthly Branch covers the current hour.
 
 ## Excel host
 
-All Excel writes go through **Ix** (Mac Mini, Tailscale) — Neon is open there, not on Straylight. Wrap every `osascript` call:
-
-```bash
-ssh ix 'osascript <<APPLESCRIPT
-tell application "Microsoft Excel"
-  ...
-end tell
-APPLESCRIPT'
-```
-
-If `ssh ix` fails (timeout/unreachable), fall back to local `osascript` and warn the user — this is a degraded state. Set terminal orange via `~/i446-monorepo/scripts/term-color.sh orange`.
+Every write goes through `tools/ate/ate.py` → the excel-http daemon on Ix
+(`neon.excel.batch_append`), which journals each cell to
+`~/vault/g245/neon-ledger/`. **Never write hcbi with `osascript`, `ssh ix
+osascript` or `ix-osa.sh`**, and never fall back to local AppleScript when the
+daemon is down: an unjournaled food write is invisible to the ledger audit and
+only resurfaces as a 23:55 `reconcile` observation, which `neon.py strict`
+scores as an outside edit (0分!W miss). If `ate.py` fails, report the error and
+stop; JM re-runs `/ate` once the daemon is back.
 
 ## Usage
 
@@ -251,4 +248,5 @@ higher value (e.g. a one-off bonus) is never clobbered downward.
 - `ERR:date_not_found` → today's date isn't in `hcbi` col B yet. Ask user
   whether to add the row manually first or use `--date` to target an existing
   row.
-- AppleScript error mentioning `workbook` → Neon isn't open. Open it and retry.
+- `batch write failed` / connection refused → the excel-http daemon on Ix is
+  down or Neon isn't open there. Report it and stop; do not write via AppleScript.

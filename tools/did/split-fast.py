@@ -126,8 +126,9 @@ def plan(content: str, *, pts=None, bonus=None, minutes=None, done_name="", rem_
         "keep": bool(keep),
         "today": today,
         # did-fast splits on , and ; -- a name holding one scattered the
-        # points (split.sh regression 2026-06-06)
-        "safe_name": re.sub(r"[,;]+", " ", clean),
+        # points (split.sh regression 2026-06-06). Fullwidth ，； too: did-fast
+        # has split on them since 2026-10-22 (45c6b881).
+        "safe_name": re.sub(r"[,;，；]+", " ", clean),
     }
 
 
@@ -245,6 +246,7 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
         return {"ok": True, "dry_run": True, "message": "dry run", **p}
     tid = task["id"]
     labels = task.get("labels", [])
+    recurring = bool((task.get("due") or {}).get("is_recurring"))
     # 1. the done record, closed at once
     posthoc = api("POST", "/tasks", {"content": p["posthoc_content"],
                                      "labels": labels + ["posthoc"],
@@ -254,7 +256,12 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
         api("POST", f"/tasks/{posthoc['id']}/close")
     # 2. remainder renamed + kept on the do-date, or the task closed
     if p["keep"]:
-        api("POST", f"/tasks/{tid}", {"content": p["new_content"], "due_date": p["rem_date"]})
+        body = {"content": p["new_content"]}
+        # a plain due_date strips a recurring task's cadence (edit-fast.py
+        # guards the same case); the occurrence keeps its own do-date.
+        if not recurring:
+            body["due_date"] = p["rem_date"]
+        api("POST", f"/tasks/{tid}", body)
     else:
         api("POST", f"/tasks/{tid}/close")
     # 3. credit: [N] with its domain label; {N} alone (a label double-credits)
@@ -275,7 +282,7 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
                   "prev_due": (task.get("due") or {}).get("date", ""),
                   "posthoc_id": posthoc["id"] if posthoc else None,
                   "didfast": didfast_out, "didfast_bonus": didfast_bonus,
-                  "closed": not p["keep"]}
+                  "closed": not p["keep"], "recurring": recurring}
         subprocess.run([sys.executable, str(UNDO_FAST), "--append", journal],
                        input=json.dumps(record, ensure_ascii=False), text=True,
                        capture_output=True, timeout=10)
