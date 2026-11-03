@@ -397,12 +397,7 @@
       "toggl_tags": [
         "-3"
       ],
-      "todoist_label": "0neon",
-      "bonus": {
-        "long_habit_id": "long-o314",
-        "threshold_minutes": 30,
-        "multiplier": 0.5
-      }
+      "todoist_label": "0neon"
     },
     "冥想": {
       "name": "冥想",
@@ -618,7 +613,7 @@
     "long-o314": {
       "name": "long o314",
       "category": "1n+",
-      "neon_header": "long o314",
+      "neon_header": "长o314",
       "domain": "hcm",
       "todoist_label": "1neon"
     },

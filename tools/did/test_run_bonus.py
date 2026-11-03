@@ -1,4 +1,4 @@
-"""Regression tests for run.py long-session auto-bonus (冥想 / o314).
+"""Regression tests for run.py long-session auto-bonus (冥想; o314 is did-fast's).
 
 Covers:
   - `[N]` parsed as explicit minutes by `_parse_input`.
@@ -155,11 +155,17 @@ def test_meditation_52min_triggers_bonus_of_26():
     assert calls == [("长冥想", 26, "5/4")]
 
 
-def test_o314_45min_triggers_bonus_of_22():
-    d = _route_for("o314")
-    assert d.get("bonus") is not None, "config: o314 must carry a bonus block"
-    rc, calls = _stub_run_0n(d, minutes=45)
-    assert calls == [("long-o314", 22, "5/4")]
+@pytest.mark.parametrize("text", ["o314", "o314 45", "long o314", "hcmr"])
+def test_o314_family_is_handed_to_did_fast(text):
+    """o314's day total + 长o314 bonus live in did-fast (2026-11-03,
+    lib/neon/long_bonus.py); run.py must hand these over, never run_0n."""
+    seen = []
+    with patch.object(run, "run_via_did_fast", side_effect=lambda i: seen.append(i) or 0), \
+         patch.object(run, "run_0n", side_effect=AssertionError("run_0n")), \
+         patch.object(run, "run_1n", side_effect=AssertionError("run_1n")), \
+         patch.object(sys, "argv", ["run.py", text]):
+        assert run.main() == 0
+    assert seen == [text]
 
 
 def test_meditation_29min_skips_bonus():

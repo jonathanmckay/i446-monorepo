@@ -6,10 +6,8 @@ hcmr is treated as the same underlying activity as o314, just a different
 Toggl description:
 - Completing a "hcmr" 0₦ item writes into o314's own 0n column (ZERO_N_ALIASES),
   not a column of its own.
-- hcmr's OWN Toggl minutes (when no value is typed) still come from Toggl
-  entries actually named "hcmr" -- the alias only affects which Neon column
-  the write lands in, not which entries the "how long did this take" lookup
-  reads.
+- With no value typed, AQ is set to the day's o314 + hcmr Toggl minutes
+  (2026-11-03; previously hcmr read only its own entries and clobbered AQ).
 - The weekly "长o314" card's 30-minute threshold sums o314 AND hcmr Toggl
   minutes together (THRESHOLD_1N["长o314"]["toggl"] = ("o314", "hcmr")).
 """
@@ -67,63 +65,34 @@ def test_o314_completion_still_writes_to_its_own_column(df, monkeypatch):
     assert r.step == "0n" and r.col_num == "AQ"
 
 
-def test_hcmr_minutes_lookup_uses_the_unaliased_name(df):
-    """The 'how long did THIS entry take' fallback must read Toggl entries
-    actually named 'hcmr', not silently look up 'o314' instead -- otherwise
-    an o314 entry logged earlier the same day would leak into an unrelated
-    hcmr completion's minute count."""
-    calls = []
-    real = df.toggl_minutes_for
-
-    def spy(name):
-        calls.append(name)
-        return real(name)
-
-    df.toggl_minutes_for = spy
+def test_hcmr_and_o314_share_one_day_total(df):
+    """2026-11-03: AQ is the DAY's o314+hcmr total (lib/neon/long_bonus.py).
+    A bare hcmr completion used to write only hcmr's own minutes, which
+    overwrote the o314 minutes already in AQ; it now sets AQ to both."""
     df._TOGGL_TODAY = [
         {"description": "hcmr", "duration": 900},   # 15 min
-        {"description": "o314", "duration": 6000},  # 100 min -- must NOT be counted
+        {"description": "o314", "duration": 6000},  # 100 min
     ]
     r = _route_one(df, "hcmr")
-    assert calls == ["hcmr"]
-    assert r.write_value == 15
+    assert r.write_value == 115
+    assert not df._adds_0n(r)   # set, not add: it IS the day total
 
 
 def test_threshold_1n_toggl_key_includes_both_names(df):
     assert df.THRESHOLD_1N["长o314"]["toggl"] == ("o314", "hcmr")
 
 
-def test_long_o314_credits_from_hcmr_minutes_alone(df):
-    """The weekly 长o314 card must earn credit purely from hcmr entries,
-    since hcmr is the same underlying activity -- not require any o314
-    entries to also exist that day."""
-    df._TOGGL_TODAY = [{"description": "hcmr", "duration": 1800}]  # 30 min
-    headers = {"0n": {}, "1n": {"长o314": "V"}}
-    r = _route_one(df, "长o314", headers=headers)
-    assert r.step == "1n"
-    assert r.write_value == 15  # .5/m * 30
-
-
-def test_long_o314_sums_o314_and_hcmr_minutes_together(df):
+@pytest.mark.parametrize("text", ["长o314", "long o314"])
+def test_long_o314_is_an_o314_completion(df, text):
+    """2026-11-03: "/did long o314" folds into o314. It writes AQ's day total
+    and the 长o314 bonus follows from AQ's change after the write
+    (test_o314_long_bonus.py), so it can't double-credit the auto bonus."""
     df._TOGGL_TODAY = [
         {"description": "o314", "duration": 600},   # 10 min
         {"description": "hcmr", "duration": 1200},  # 20 min
     ]
-    headers = {"0n": {}, "1n": {"长o314": "V"}}
-    r = _route_one(df, "长o314", headers=headers)
-    assert r.step == "1n" and r.write_value == 15  # .5/m * 30 total
-
-
-def test_long_o314_below_threshold_still_skips_with_hcmr_only(df):
-    """skip_todoist=False so the threshold is enforced right here at route
-    time (matches route_items' own `explicit_time or not skip_todoist` gate
-    -- with skip_todoist=True and no typed value, enforcement is deliberately
-    deferred to apply_timer_minutes instead, per its own comment)."""
-    df._TOGGL_TODAY = [{"description": "hcmr", "duration": 600}]  # 10 min < 30
-    headers = {"0n": {}, "1n": {"长o314": "V"}}
-    items = df.parse_input("长o314")
-    res = df.route_items(items, headers, TQ, skip_todoist=False)
-    assert len(res) == 1 and res[0].step == "skipped"
+    r = _route_one(df, text)
+    assert r.step == "0n" and r.col_num == "AQ" and r.write_value == 30
 
 
 if __name__ == "__main__":

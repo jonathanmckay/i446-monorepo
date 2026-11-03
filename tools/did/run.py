@@ -912,6 +912,38 @@ def run_defer(query: str, defer_date: str, claimed_points: int) -> int:
     return 0
 
 
+# Habits whose rules live only in did-fast.py (2026-11-03): o314/hcmr's AQ is
+# a day total and its 30m 长o314 bonus is computed from AQ's before/after
+# change there (lib/neon/long_bonus.py). run.py's own run_0n/apply_long_bonus
+# would write the cell and miss or double the bonus, so hand the item over.
+VIA_DID_FAST = {"o314", "hcmr", "long-o314", "长o314"}
+DID_FAST = Path(__file__).resolve().parent / "did-fast.py"
+
+
+def run_via_did_fast(item: str) -> int:
+    r = subprocess.run([sys.executable, str(DID_FAST), item],
+                       capture_output=True, text=True, timeout=120)
+    try:
+        out = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print(f"  ✗ did-fast: {r.stdout.strip() or r.stderr.strip()}", file=sys.stderr)
+        return r.returncode or 1
+    for res in out.get("results") or []:
+        line = f"  ✓ {res.get('name')} → {res.get('value', res.get('variable_value', ''))}"
+        fen = res.get("0fen") or {}
+        if fen.get("points"):
+            line += f" (+{fen['points']:g}分 {fen.get('col', '')})"
+        if (res.get("todoist") or {}).get("closed"):
+            line += " + todoist closed"
+        if res.get("step") in ("skipped", "refused"):
+            line = f"  ⏸ {res.get('name')}: {res.get('reason') or res.get('error')}"
+        print(line)
+    for ln in r.stderr.splitlines():
+        if ln.strip().startswith(("⤷", "⚠", "✗")):
+            print(f"  {ln.strip()}")
+    return r.returncode
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: run.py <input>", file=sys.stderr)
@@ -931,6 +963,9 @@ def main() -> int:
         d = _route(query, target)
         d["query_after_strip"] = d.get("query_after_strip", query)
         step = d.get("step")
+        if d.get("habit_id") in VIA_DID_FAST or query.strip().lower() in VIA_DID_FAST:
+            rc |= run_via_did_fast(item)
+            continue
         if step == "0n":
             rc |= run_0n(d, item, target, time_range, explicit_minutes)
         elif step == "1n+":

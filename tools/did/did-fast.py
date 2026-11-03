@@ -186,6 +186,27 @@ THRESHOLD_1N: dict[str, dict] = {
 # own Toggl entries, not o314's.
 ZERO_N_ALIASES: dict[str, str] = {"hcmr": "o314"}
 
+# o314 and hcmr are one activity, so AQ holds the DAY's total of both
+# (2026-11-03, lib/neon/long_bonus.py): a bare completion SETS it to today's
+# Toggl o314+hcmr minutes; a typed value or HHMM-HHMM range is one session
+# and ADDS to it. (Before this an hcmr completion overwrote AQ with hcmr's
+# own minutes and a second session overwrote the first.)
+O314_FAMILY = {"o314", "hcmr"}
+# A long-session weekly habit is earned from its base 0n habit's day total
+# (JM 2026-11-03): "/did long o314" is "/did o314", and the 长o314 bonus
+# follows from AQ's before/after change (_long_bonus_results), so the two
+# paths can never credit the same minutes twice.
+LONG_TO_BASE_0N: dict[str, str] = {"长o314": "o314"}
+
+
+def _adds_0n(w) -> bool:
+    """True when this 0n write ADDS to the cell instead of setting it."""
+    name = w.item.name
+    if name in CUMULATIVE_0N:
+        return True
+    return (name.lower() in O314_FAMILY
+            and (w.item.time_range is not None or w.item.time_value is not None))
+
 
 def variable_1n_points(resolved_1n: str, minutes: int) -> int:
     """Points for a variable 1n+ habit given minutes: base + rate×minutes."""
@@ -1555,6 +1576,10 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
     items = expanded
 
     for item in items:
+        _base_0n = LONG_TO_BASE_0N.get(header_normalize(
+            ONENEON_ALIASES.get(item.name.lower(), item.name.lower())))
+        if _base_0n:
+            item.name = _base_0n
         name_lower = item.name.lower()
 
         # 分 log ("+90 @m5x2 monthly sync", "-10 0g"): straight to a domain
@@ -1671,7 +1696,9 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             else:
                 # No typed value: record how long the habit actually took,
                 # from today's same-named Toggl entries (2026-07-24).
-                val = toggl_minutes_for(item.name) or 1
+                val = toggl_minutes_for(
+                    tuple(sorted(O314_FAMILY)) if name_lower in O314_FAMILY
+                    else item.name) or 1
             # Cumulative columns: add to existing (handled in AppleScript)
             is_cumulative = item.name in CUMULATIVE_0N
 
@@ -2066,7 +2093,7 @@ def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str
     verify_lines = []
     pre_lines = []
     for w in writes:
-        is_cumulative = w.item.name in CUMULATIVE_0N
+        is_cumulative = _adds_0n(w)
         col = w.col_num
         val = w.write_value
         # Pre-image capture (for ctrl-z undo): read the cell BEFORE writing.
@@ -2119,7 +2146,7 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
     body = []
     for w in writes:
         body.append({"col": neon_cols.col_letter(w.col_num), "value": w.write_value,
-                     "mode": "add" if w.item.name in CUMULATIVE_0N else "set"})
+                     "mode": "add" if _adds_0n(w) else "set"})
     try:
         resp = neon_excel.batch_write(
             "0n", body, date=target_date,
@@ -2150,6 +2177,58 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
     return subprocess.CompletedProcess(args=["excel-http", "/batch_write"], returncode=0,
                                        stdout=echo + "\n" + "\n".join(pre_lines) + "\n",
                                        stderr="")
+
+
+def _long_bonus_results(on_writes: list, stdout: str, tq: dict) -> list:
+    """1n RouteResults for the long-session bonus earned by these 0n writes,
+    from each cell's value before (PRE line) and after (echo) the write; the
+    daemon and raw-script paths print the same shape."""
+    from neon import long_bonus
+    pre = parse_pre_lines(stdout)
+    after: dict[str, str] = {}
+    head = stdout.splitlines()[0] if stdout else ""
+    for seg in head.split("|")[1:]:
+        if "=" in seg:
+            k, v = seg.split("=", 1)
+            after[k.strip()] = v.strip()
+    out = []
+    for w in on_writes:
+        base = ZERO_N_ALIASES.get(w.item.name.lower(), w.item.name.lower())
+        weekly = long_bonus.weekly_header(base)
+        col = str(w.col_num)
+        if not weekly or col not in after:
+            continue
+        d = long_bonus.bonus_delta(base, pre.get(col, ""), after[col])
+        if d is None:
+            continue
+        minutes, pts = d
+        if pts <= 0:
+            print(f"⚠ {base}: day total went {pre.get(col) or 0} → {after[col]}; "
+                  f"{weekly} bonus not reduced ({pts:+g}分), fix by hand if needed",
+                  file=sys.stderr)
+            continue
+        try:
+            col_letter = neon_cols.col("1n+", weekly)
+        except KeyError:
+            print(f"⚠ {weekly}: no 1n+ column, bonus +{pts:g} not credited", file=sys.stderr)
+            continue
+        item = ParsedItem(raw=f"{weekly} bonus", name=weekly, time_value=int(minutes),
+                          target_date=w.item.target_date)
+        r = RouteResult(item=item, step="1n", col_letter=col_letter,
+                        fen_col=LABEL_TO_0FEN.get(HABIT_PROJECT.get(base, "hcm"), "V"),
+                        write_value=pts, is_variable_1n=True, variable_value=pts)
+        # The card is named by the alias ("long o314"), the column by the
+        # header ("长o314"); try both.
+        card = None
+        for nm in [weekly] + [k for k, v in ONENEON_ALIASES.items() if v == weekly]:
+            card = match_todoist_task(nm, tq.get("1neon", []), require_labels={"1neon"})
+            if card:
+                break
+        if card:
+            r.todoist_task = card
+        print(f"  ⤷ {weekly} +{pts:g}分 ({base} day total {after[col]}m)", file=sys.stderr)
+        out.append(r)
+    return out
 
 
 def _pre_image_text(r: dict) -> str:
@@ -2235,7 +2314,7 @@ def verify_0n_output(stdout: str, writes: list) -> Optional[str]:
         got = echoed.get(col)
         if got is None:
             return f"0n verify: column {col} missing from echo"
-        if w.item.name in CUMULATIVE_0N:
+        if _adds_0n(w):
             continue
         try:
             if abs(float(got) - float(want)) > 1e-6:
@@ -4016,6 +4095,14 @@ def main():
             script = build_0n_script(on_writes, target_date)
             if script:
                 on_result = ix_run(script, timeout=30.0)
+
+    # 4a-ii'. Long-session bonus (JM 2026-11-03): a same-day o314 write that
+    # puts AQ's day total at 30m+ earns 0.5分 for every minute of the day,
+    # credited to the weekly 长o314 habit. Added as a 1n result so steps
+    # 4b-6 write the week cell, append the 0分 points and close the card
+    # exactly as for any 1neon completion.
+    if on_result and on_result.returncode == 0 and not past_target:
+        fast.extend(_long_bonus_results(on_writes, on_result.stdout, tq))
 
     # 4a-i. "night hcmc" side effect: carve a real Toggl entry for the
     # pre-sleep audiobook listening out of the 睡觉/"generic placeholder"

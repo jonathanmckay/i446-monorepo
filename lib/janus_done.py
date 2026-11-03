@@ -16,6 +16,8 @@ credits a second session's minutes.
 """
 from __future__ import annotations
 
+import math
+
 import re
 from typing import Callable
 
@@ -157,9 +159,15 @@ def did_points(result: dict) -> int:
     pts = (fen.get("points") or 0) + (fen.get("bonus") or 0)
     pts += sum((x.get("points") or 0) for x in (fen.get("extra") or []))
     pts += (result.get("hcbi") or {}).get("pts", 0) or 0
+    if not fen and result.get("step") == "0n":
+        # A per-minute 0n habit (o314: 1分/min) is credited by the sheet
+        # formula, so did-fast reports no 0分 points for it; price the
+        # minutes it wrote (bug 2026-11-03: a 69m o314 showed [0]).
+        from neon.rates import zero_n_points
+        pts += zero_n_points(result.get("name") or "", result.get("value") or 0) or 0
     if not pts and result.get("variable_1n"):
         pts = result.get("variable_value") or 0
-    return int(pts)
+    return int(math.floor(pts + 0.5))   # half points (0.5/m bonuses) round up
 
 
 def entry_points_by_id(did_fast_output: dict | None, fallback_ids) -> dict[str, int]:

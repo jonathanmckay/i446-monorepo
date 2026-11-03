@@ -37,7 +37,9 @@ def rate_points(cell, minutes: float) -> int | None:
 # multiplier lives in a sheet formula, not row 5, so it is mirrored here for
 # display only (writes still go through 0n and let the sheet do the math).
 #   hiit: hcbi!Y = '0n'!AE*2 + 40  (the +40 is a flat daily hcbp base)
-ZERO_N_MULTIPLIERS: dict[str, int] = {"hiit": 2}
+#   o314 / 冥想 / 其他人: 0分!V = '0n'!BA = AP*0.5 + SUM(AQ:AS), 1分 a minute;
+#   hcmr writes o314's column (did-fast ZERO_N_ALIASES).
+ZERO_N_MULTIPLIERS: dict[str, int] = {"hiit": 2, "o314": 1, "hcmr": 1, "冥想": 1, "其他人": 1}
 
 
 def zero_n_points(habit: str, minutes: float) -> int | None:
