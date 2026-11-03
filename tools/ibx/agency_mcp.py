@@ -235,6 +235,36 @@ def _refuse_if_login_pending(what):
             f"({url[:80]}...) - finish that sign-in instead of opening another")
 
 
+# Hosts with no work (Entra) auth: Ix. A local Agency server there can only
+# sit on an interactive sign-in for ~15 min and open a browser tab (2026-10-18:
+# enough tabs to OOM ix). tools/tg/outlook_client.py already made Janus
+# cache-only there, but dream-intake.py called this module directly and hung
+# 15-30 min every night for weeks (2026-11-03, v177 code-review). Decided here
+# so no caller can forget. AGENCY_ALLOW_LOCAL=1 overrides; remote endpoints
+# (AGENCY_REMOTE_*_PORT) are unaffected.
+CACHE_ONLY_HOSTS = {"ix", "ix.local"}
+
+
+class AgencyUnavailable(EntraLoginPending):
+    """No local Agency on this host (cache-only). Subclasses EntraLoginPending
+    so existing 'MCP unavailable' handlers treat it the same way."""
+
+
+def local_server_forbidden() -> bool:
+    if os.environ.get("AGENCY_ALLOW_LOCAL") == "1":
+        return False
+    if os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1":
+        return True
+    return socket.gethostname().lower() in CACHE_ONLY_HOSTS
+
+
+def _refuse_if_cache_only(what):
+    if local_server_forbidden():
+        raise AgencyUnavailable(
+            f"not {what}: {socket.gethostname()} is a cache-only host with no work "
+            f"auth (set AGENCY_ALLOW_LOCAL=1 to override)")
+
+
 def _pidfile(name):
     return _PIDFILE_DIR / f"{name}.json"
 
@@ -283,47 +313,54 @@ def _port_responsive(port):
         return False
 
 
+def _read_port(proc, timeout):
+    """First all-digit stdout line of `proc` within `timeout` seconds, else
+    None. Raw os.read under select, not readline(): readline blocks until a
+    newline, so a child sitting silently on a sign-in prompt held get_server's
+    _lock ~15 min past the 30s deadline (2026-11-03). Bypassing the text
+    wrapper also avoids a port line stranded in its buffer after select."""
+    fd = proc.stdout.fileno()
+    deadline = time.time() + timeout
+    buf = b""
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return None
+        ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
+        if not ready:
+            continue
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return None  # child exited / closed stdout
+        buf += chunk
+        *lines, buf = buf.split(b"\n")
+        for line in lines:
+            line = line.strip()
+            if line.isdigit():
+                return int(line)
+
+
 START_TIMEOUT = float(os.environ.get("AGENCY_START_TIMEOUT", "30"))
 
 
 def _start_server(name, timeout=None):
     """Start an agency MCP server on a random port and return (proc, port).
 
-    The deadline is enforced with select() on the raw fd. It used to loop on
-    proc.stdout.readline(), which blocks until Agency prints a line; with an
-    expired Entra token Agency sits ~30 min in interactive auth before printing
-    anything, so the "30s" deadline was never checked. Under the module _lock,
-    dream-intake's mail + calendar sources serialized four such starts every
-    night: intake took 2h01m (duration_ms ~7.26M) from 2026-10-15 onward."""
+    Deadline enforced by _read_port (select on the raw fd); readline() used to
+    block ~30 min on an Entra sign-in prompt (intake 2h01m from 2026-10-15)."""
     timeout = START_TIMEOUT if timeout is None else timeout
     proc = subprocess.Popen(
         [AGENCY_BIN, "mcp", name, "--transport", "http", "--port", "0"],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,  # never read; a full PIPE would block Agency
     )
-    fd = proc.stdout.fileno()
-    deadline = time.time() + timeout
-    port = None
-    buf = b""
-    while port is None:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            break
-        ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
-        if not ready:
-            continue
-        chunk = os.read(fd, 4096)
-        if not chunk:  # EOF: Agency exited before printing a port
-            break
-        buf += chunk
-        *lines, buf = buf.split(b"\n")
-        for line in lines:
-            line = line.strip()
-            if line.isdigit():
-                port = int(line)
-                break
+    port = _read_port(proc, timeout)
     if port is None:
         proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
         _mark_login_pending(name, "server start failed")
         raise RuntimeError(
             f"Failed to start agency mcp {name} (no port within {timeout:.0f}s)")
@@ -337,6 +374,7 @@ def get_server(name):
     First checks for an existing process via pidfile. If a healthy process
     exists from a previous Python session, reuses it without spawning a new one.
     """
+    _refuse_if_cache_only(f"using agency mcp {name}")
     with _lock:
         start_lock = _start_locks.setdefault(name, threading.Lock())
     with start_lock:
@@ -445,6 +483,7 @@ def call_tool(server_name, tool_name, arguments=None, timeout=120):
     if remote:
         host, port = remote
         return _call_tool_once(host, port, server_name, tool_name, arguments, timeout)
+    _refuse_if_cache_only(f"calling {server_name}/{tool_name}")
     # Even a healthy, already-running server opens a new sign-in tab on the
     # first 401 it meets, so the guard applies per call, not just per start.
     _refuse_if_login_pending(f"calling {server_name}/{tool_name}")

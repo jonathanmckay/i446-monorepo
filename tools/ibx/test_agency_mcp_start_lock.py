@@ -21,6 +21,8 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(am, "_refuse_if_login_pending", lambda why: None)
     monkeypatch.setattr(am, "_servers", {})
     monkeypatch.setattr(am, "_start_locks", {})
+    # Local-server path; refused on cache-only hosts (ix) since 216fb4f3.
+    monkeypatch.setenv("AGENCY_ALLOW_LOCAL", "1")
 
 
 def test_hung_start_does_not_block_other_server(monkeypatch):

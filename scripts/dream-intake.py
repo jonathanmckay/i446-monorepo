@@ -1527,40 +1527,54 @@ def run_sources(selected=None, timeout=30):
                 "error": f"{type(e).__name__}: {e}",
             }
 
-    # No `with` block: its __exit__ joins every worker, so one hung source
-    # (2026-10: an Agency start stuck in interactive auth) held the whole intake
-    # for 2h despite the per-source timeout. One shared deadline; stragglers are
-    # abandoned and main() exits with os._exit so atexit can't join them either.
+    # No `with`: its exit is shutdown(wait=True), which waited out a source
+    # hung past its timeout (agency sign-in: 15-30 min a night, 2026-11-03).
+    # One deadline for all: max_workers=8 queues the rest, so allow one extra
+    # timeout window for the second wave rather than 30s per future in turn.
     pool = ThreadPoolExecutor(max_workers=8)
-    deadline = time.time() + timeout
+    deadline = time.time() + timeout * 2
     futures = {}
     for name, info in sources_to_run.items():
         fut = pool.submit(_run_one, name, info)
         futures[fut] = name
+    try:
+        for fut in futures:
+            try:
+                name, result = fut.result(timeout=max(0.0, deadline - time.time()))
+                results[name] = result
+            except FuturesTimeout:
+                name = futures[fut]
+                results[name] = {
+                    "status": "timeout",
+                    "elapsed_ms": timeout * 1000,
+                    "data": None,
+                    "error": f"Exceeded {timeout}s timeout",
+                }
+            except Exception as e:
+                name = futures[fut]
+                results[name] = {
+                    "status": "error",
+                    "elapsed_ms": 0,
+                    "data": None,
+                    "error": f"{type(e).__name__}: {e}",
+                }
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
-    for fut in futures:
-        try:
-            name, result = fut.result(timeout=max(deadline - time.time(), 0))
-            results[name] = result
-        except FuturesTimeout:
-            name = futures[fut]
-            results[name] = {
-                "status": "timeout",
-                "elapsed_ms": timeout * 1000,
-                "data": None,
-                "error": f"Exceeded {timeout}s timeout",
-            }
-        except Exception as e:
-            name = futures[fut]
-            results[name] = {
-                "status": "error",
-                "elapsed_ms": 0,
-                "data": None,
-                "error": f"{type(e).__name__}: {e}",
-            }
-
-    pool.shutdown(wait=False, cancel_futures=True)
     return results
+
+
+def _exit_now_if_hung():
+    """Executor threads are non-daemon: the interpreter joins them at exit,
+    so one hung source would still hold the launcher after the JSON is
+    written. Hard-exit in that case (atexit hooks skipped on purpose: a hung
+    thread may hold agency_mcp's _lock, which its stop_all needs)."""
+    import threading
+    if any(t.is_alive() for t in threading.enumerate()
+           if t is not threading.main_thread() and not t.daemon):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 # ---------------------------------------------------------------------------
@@ -1661,6 +1675,7 @@ def main():
         print_test_table(results)
         if diag:
             print(diag)
+        _exit_now_if_hung()
         return
 
     import socket
@@ -1683,6 +1698,7 @@ def main():
     else:
         json.dump(output, sys.stdout, indent=2, default=str)
         print()
+    _exit_now_if_hung()
 
 
 if __name__ == "__main__":
