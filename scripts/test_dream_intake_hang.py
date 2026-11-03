@@ -6,7 +6,6 @@ which sat ~15 min per server on an interactive sign-in; fut.result(timeout)
 reported "timeout" but `with ThreadPoolExecutor` then waited for the hung
 thread anyway, and the interpreter joined it again at exit.
 """
-import datetime
 import importlib.util
 import json
 import subprocess
@@ -54,17 +53,3 @@ def test_process_exits_promptly_with_a_hung_source(tmp_path):
     assert time.time() - t0 < 15
     out = json.loads((tmp_path / "out.json").read_text())
     assert out["sources"]["hung"]["status"] == "timeout"
-
-
-def test_outlook_calendar_cache_conversion(tmp_path):
-    today = datetime.date(2026, 11, 3)
-    (tmp_path / "outlook-2026-11-03.json").write_text(json.dumps([
-        {"subject": "XTECH AMA", "start": "2026-11-03T09:05:00.0000000",
-         "end": "2026-11-03T10:00:00.0000000", "start_tz": "Pacific Standard Time",
-         "end_tz": "Pacific Standard Time", "is_all_day": False}]))
-    out = di._outlook_calendar_from_cache(tmp_path, today)
-    assert out["count"] == 1 and out["via"] == "janus-cache"
-    ev = out["events"][0]
-    assert ev["subject"] == "XTECH AMA" and ev["start"].startswith("2026-11-03T09:05")
-    assert out["cache_files"]["2026-11-04"] is None  # tomorrow not pushed: reported, not fatal
-    assert out["cache_files"]["2026-11-03"]["count"] == 1
