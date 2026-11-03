@@ -347,6 +347,26 @@ def cmd_create(args):
         print(f"Created: {_fmt(entry)}")
 
 
+def cmd_trim(args):
+    """Stop the running entry N minutes ago (default 2), for /0g Step 0's
+    carve-out. Replaces the SKILL.md one-liner that imported toggl_api from
+    inside the package dir: its relative imports failed and, without this
+    module's key loader, TOGGL_API_KEY was empty anyway (2026-11-02)."""
+    from datetime import timezone, timedelta
+    minutes = int(args[0]) if args else 2
+    current = toggl_api.get_current_cached() or toggl_api.get_current()
+    if not current:
+        print("No timer running.")
+        return
+    stop = datetime.datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    start = datetime.datetime.fromisoformat(current["start"].replace("Z", "+00:00"))
+    if stop <= start:
+        sys.exit(f"Not trimmed: entry {current['id']} started under {minutes} min ago")
+    iso = stop.strftime("%Y-%m-%dT%H:%M:%SZ")
+    toggl_api.update_entry(current["id"], stop=iso)
+    print(f"Trimmed {current['id']} to {iso}")
+
+
 def cmd_delete(args):
     if not args:
         sys.exit("Usage: delete <entry_id>")
@@ -362,6 +382,7 @@ COMMANDS = {
     "date": cmd_date,
     "create": cmd_create,
     "delete": cmd_delete,
+    "trim": cmd_trim,
 }
 
 def _notify_tui():
@@ -375,7 +396,7 @@ def _notify_tui():
 
 
 # Commands that change timer state and should trigger janus refresh
-_MUTATING_COMMANDS = {"start", "stop", "create", "delete"}
+_MUTATING_COMMANDS = {"start", "stop", "create", "delete", "trim"}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:

@@ -101,3 +101,17 @@ def test_dry_run_writes_nothing(tmp_path):
     s = ect.parse_session(_jsonl(proj / "ffffffff-0000.jsonl", 2))
     n = ect.export_session(s, out, ect.SEGMENT_TURNS, force=False, verbose=False, dry_run=True)
     assert n == 1 and not out.exists()
+
+
+def test_sid8_prefix_clash_never_overwrites(tmp_path):
+    # Two sessions sharing the first 8 chars of their id: the second must not
+    # overwrite the first; it falls back to the full session id.
+    proj, out = tmp_path / "proj", tmp_path / "out"
+    proj.mkdir()
+    a = _jsonl(proj / "cccccccc-1111-2222-3333-444444444444.jsonl", 2, tag="alpha")
+    b = _jsonl(proj / "cccccccc-9999-2222-3333-444444444444.jsonl", 2, tag="beta")
+    _export(a, out); _export(b, out)
+    first = out / "2026-10-26_untitled_cccccccc.md"
+    assert "alpha question" in first.read_text()
+    full = out / "2026-10-26_untitled_cccccccc-9999-2222-3333-444444444444.md"
+    assert full.exists() and "beta question" in full.read_text()

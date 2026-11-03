@@ -249,10 +249,17 @@ def output_paths_for_session(session: dict, out_dir: Path, segment_turns: int):
         if all((not p.exists()) or _file_session_id(p) == sid for p in legacy):
             return legacy
 
-    base = f"{date}_{slug}_{sid[:8]}"
-    if n_segments == 1:
-        return [out_dir / f"{base}.md"]
-    return [out_dir / f"{base}_p{i+1:02d}.md" for i in range(n_segments)]
+    def named(base):
+        if n_segments == 1:
+            return [out_dir / f"{base}.md"]
+        return [out_dir / f"{base}_p{i+1:02d}.md" for i in range(n_segments)]
+
+    paths = named(f"{date}_{slug}_{sid[:8]}")
+    # Never overwrite another session's file: on an 8-char prefix clash, fall
+    # back to the full session id.
+    if any(p.exists() and _file_session_id(p) not in (None, sid) for p in paths):
+        paths = named(f"{date}_{slug}_{sid}")
+    return paths
 
 
 def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool, verbose: bool,

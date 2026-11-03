@@ -68,16 +68,12 @@ Before any goal processing, ensure Toggl has a 0g entry for the planning time:
 2. If a timer is running and its description already contains "0g", skip this step.
 3. If a timer is running but is NOT 0g:
    a. Read the entry's ID, description, project, and start time.
-   b. Update the running entry's `stop` to (now - 2 minutes) via `toggl_api.update_entry(entry_id, stop=<iso>)`. Use this Python one-liner through Bash:
+   b. Stop the running entry 2 minutes ago:
       ```bash
-      python3 -c "
-      import sys; sys.path.insert(0, '$HOME/i446-monorepo/mcp/toggl_server')
-      import toggl_api; from datetime import datetime, timezone, timedelta
-      two_ago = (datetime.now(timezone.utc) - timedelta(minutes=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
-      toggl_api.update_entry(ENTRY_ID, stop=two_ago)
-      print('Trimmed to', two_ago)
-      "
+      python3 ~/i446-monorepo/mcp/toggl_server/toggl_cli.py trim 2
       ```
+      (Do not import `toggl_api` directly: it is a package module with
+      relative imports, and only `toggl_cli.py` loads the API key.)
    c. Create a new 2-minute completed entry: `toggl_cli.py create "0g" <HH:MM-2min> <HH:MM> g245`
    d. Start a new timer with the SAME description and project as the one that was running: `toggl_cli.py start "<original desc>" <original project>`
 4. If NO timer is running:
