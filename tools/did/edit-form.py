@@ -495,6 +495,10 @@ class Form:
             Field("done_min", "min done", "", width=6),
             Field("done_pts", "pts done", "", width=6),
             *([Field("done_bonus", "bonus", "", width=6)] if pre["has_bonus"] else []),
+            # Between done and remainder (2026-11-03: "move up the keep
+            # remaining ... so I can more easily uncheck"): one Tab after the
+            # done numbers instead of five.
+            Field("keep", "keep remainder", "x", check=True),
             # remainder (the task itself)
             Field("name", "name", pre["name"], rows=2),
             Field("time", "(N) min", pre["time"], width=6),
@@ -503,7 +507,6 @@ class Form:
             # blank) to all tasks"); blank stays blank, a typed N adds {N}.
             Field("bonus", "{N} bonus", pre["bonus"], width=6),
             Field("due", "do-date", pre["due"], width=12),
-            Field("keep", "keep remainder", "x", check=True),
             # common
             Field("desc", "notes", pre["desc"], multiline=True, enabled=pre["desc_loaded"],
                   hint="loading notes…"),
@@ -512,8 +515,9 @@ class Form:
         self.by = {f.key: f for f in self.fields}
         # Cursor at the START of the name (2026-10-24): edits usually begin there.
         self.by["name"].cur = self.by["done_name"].cur = 0
-        # ctrl-p lands on the done section; ctrl-o / ctrl-g on the remainder
-        self.focus = self.by["done_name"] if focus == "split" else self.by["name"]
+        # ctrl-p lands on "pts done" (2026-11-03: the number is what a split
+        # starts with); ctrl-o / ctrl-g on the remainder
+        self.focus = self.by["done_pts"] if focus == "split" else self.by["name"]
         self._thread: threading.Thread | None = None
         self._fetched: dict | None = None
         if self.bundle is None:
@@ -621,7 +625,7 @@ class Form:
         # Budget the height from the bottom up (2026-10-21: in a short pane the
         # remainder fell off the screen): the field rows always fit; the
         # detail block and the notes box take what is left.
-        FIXED = 1 + 5 + 1 + 7 + 1 + 1 + 1 + 1   # title, done (hdr+name2+haiku+nums), blank, remainder (+do-date, keep), blank, common hdr, project, legend
+        FIXED = 1 + 6 + 1 + 6 + 1 + 1 + 1 + 1   # title, done (hdr+name2+haiku+nums+keep), blank, remainder (+do-date), blank, common hdr, project, legend
         spare = max(0, h - FIXED)
         # Links under notes, each URL whole (wrapped), ahead of the detail
         # block and extra notes rows in the height budget (2026-10-22).
@@ -659,6 +663,10 @@ class Form:
         haiku("auto")
         c = self._draw_row(scr, y, [self.by[k] for k in ("done_min", "done_pts", "done_bonus") if k in self.by], w)
         cursor = c or cursor; y += 1
+        c = self._draw_row(scr, y, [self.by["keep"]], w); cursor = c or cursor
+        if not self.by["keep"].text:
+            put(y, dwidth("[ ] keep remainder") + 1, "→ close task after done credit", curses.A_DIM)
+        y += 1
         y += 1
         header("remainder")
         c, used = self._draw_wrapped(scr, y, self.by["name"], w); cursor = c or cursor; y += used
@@ -668,10 +676,6 @@ class Form:
         c = self._draw_row(scr, y, [self.by[k] for k in ("time", "points", "bonus") if k in self.by], w)
         cursor = c or cursor; y += 1
         c = self._draw_row(scr, y, [self.by["due"]], w); cursor = c or cursor; y += 1
-        c = self._draw_row(scr, y, [self.by["keep"]], w); cursor = c or cursor
-        if not self.by["keep"].text:
-            put(y, dwidth("[ ] keep remainder") + 1, "→ close task after done credit", curses.A_DIM)
-        y += 1
         y += 1
         header("common")
         c, used = self._draw_multiline(scr, y, self.by["desc"], w, notes_rows)
@@ -914,7 +918,7 @@ class Form:
         elif key == "\x0f":
             self.focus = self.by["name"]
         elif key == "\x10":
-            self.focus = self.by["done_name"]
+            self.focus = self.by["done_pts"]
         elif key == "\x1b":
             return "esc"
         elif key >= " ":

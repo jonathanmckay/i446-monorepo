@@ -74,8 +74,9 @@ def _run(tmp_path: Path, cols: int, keys: list[bytes]) -> tuple[str, dict | None
     return text, (json.loads(out.read_text()) if out.exists() else None)
 
 
-# done_min, done_pts, done_bonus, then Tab through name, time, points, bonus, due to the checkbox
-TO_KEEP = [b"\t", b"3", b"\t", b"5", b"\t", b"2"] + [b"\t"] * 6
+# A split opens on "pts done" (2026-11-03); bonus is one Tab on, and the
+# keep-remainder checkbox sits right after it, before the remainder fields.
+TO_KEEP = [b"5", b"\t", b"2", b"\t"]
 
 
 def test_bonus_fields_fit_a_51_col_pane(tmp_path):
@@ -96,3 +97,12 @@ def test_enter_unchecks_keep_remainder_and_save_closes(tmp_path):
 def test_enter_twice_rechecks(tmp_path):
     _, out = _run(tmp_path, 51, TO_KEEP + [b"\r", b"\r", b"\x13"])
     assert out and out["split"]["keep"] is True
+
+
+def test_split_opens_on_pts_done_and_keep_is_one_tab_after_the_done_numbers(tmp_path):
+    """2026-11-03: "the cursor by default is on 'points done' and ... move up
+    the 'keep remaining' to be between the done task and the task remaining"."""
+    text, out = _run(tmp_path, 51, [b"7", b"\t", b"\t", b"\r", b"\x13"])
+    assert out and out["split"]["pts"] == 7 and out["split"]["keep"] is False
+    # drawn between the done section and the remainder header
+    assert text.find("keep remainder") < text.rfind("REMAINDER")
