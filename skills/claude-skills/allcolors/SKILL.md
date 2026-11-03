@@ -8,6 +8,8 @@ user-invocable: true
 
 Mark the moment all habit colors are completed for the day. Writes the current time as HHMM into column AG (`⎣∀clr`) of today's row in the `0n` sheet.
 
+AG is normally stamped automatically (`tools/allcolors/allcolors.py`, live after each /did plus a nightly backstop that also sets AH). This skill is the manual override; the automation never overwrites a manual stamp.
+
 ## Execution
 
 Write through the excel-http daemon on Ix (journaled, numbers stay numbers;

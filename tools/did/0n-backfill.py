@@ -127,6 +127,48 @@ def parse_target_date(raw: str, today: date) -> date:
     return date(y, m, d)
 
 
+def looks_like_date(raw: str) -> bool:
+    try:
+        parse_target_date(raw, date(2026, 6, 15))
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def order_args(a: str, b: str) -> tuple[str, str]:
+    """(habit, date) in either order: '/0n 11.02 hiit +15' works like
+    '/0n hiit 11.02 +15' (2026-11-03). Habit headers never parse as dates."""
+    if looks_like_date(a) and not looks_like_date(b):
+        return b, a
+    return a, b
+
+
+def parse_value(raw: str, cumulative: bool) -> tuple[str, float]:
+    """'+N' → add, '=N' → set, bare N → add for CUMULATIVE_0N habits (same
+    as /did, which adds for them) and set for everything else."""
+    s = raw.strip()
+    if s.startswith("+"):
+        mode, s = "add", s[1:]
+    elif s.startswith("="):
+        mode, s = "set", s[1:]
+    else:
+        mode = "add" if cumulative else "set"
+    try:
+        n = float(s)
+    except ValueError:
+        raise ValueError(f"value {raw!r} is not numeric") from None
+    return mode, (int(n) if n.is_integer() else n)
+
+
+def deltas_follow_change(deltas: dict[int, float], change: float) -> bool:
+    """Variable habits have no row-2 model to check against, so the measured
+    0分 change is moved as-is. Guard: every column moved the same way the cell
+    did (a stray recalc of an unrelated column shows up as a wrong sign)."""
+    if change == 0:
+        return not deltas
+    return all((v > 0) == (change > 0) for v in deltas.values())
+
+
 def advance_window_open(now: datetime) -> bool:
     """Tomorrow may be marked early only during 戌/亥 — the two evening
     wind-down blocks (18:00-22:00 local on the 04:00-wake schedule)."""
@@ -223,10 +265,30 @@ def _fen_read_block(tag: str) -> str:
     return "\n".join(lines)
 
 
-def build_script(habit_col: int, month: int, day: int, value, do_write: bool) -> str:
-    """One script: weight, pre cell, 0分 pre-image, [write + calculate], post-image."""
+def build_script(habit_col: int, month: int, day: int, value, do_write: bool,
+                 variable_mode: str | None = None) -> str:
+    """One script: weight, pre cell, 0分 pre-image, [write + calculate], post-image.
+    variable_mode ('add'/'set') = variable/cumulative habit: no blank-only
+    guard, and `calculate full` because its points route through another
+    sheet (hiit: 0n!AE → hcbi!Y → 0分!W)."""
     write_block = ""
-    if do_write:
+    if do_write and variable_mode:
+        if variable_mode == "add":
+            assign = f'''    if (pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0" then
+        set nv to {value}
+    else
+        set nv to (pv as number) + {value}
+    end if'''
+        else:
+            assign = f"    set nv to {value}"
+        write_block = f'''{assign}
+    set value of cell {habit_col} of row nRow of ws to nv
+    calculate full
+    set pv2 to value of cell {habit_col} of row nRow of ws
+    if pv2 is missing value then set pv2 to ""
+    set out to out & "POST0N" & (character id 9) & (pv2 as text) & linefeed
+{_fen_read_block("POST")}'''
+    elif do_write:
         # Guard inside the script: a non-empty cell is never overwritten, so
         # "already marked" needs no revert round-trip.
         write_block = f'''    if (pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0" then

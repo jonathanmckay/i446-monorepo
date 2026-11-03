@@ -8738,5 +8738,15 @@
     "unit": "A11",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-03",
+    "effective": "2026-11-13",
+    "kind": "leased",
+    "unit_id": "847",
+    "prop": "kn47 K1",
+    "unit": "C105",
+    "tenant": null,
+    "baseline": false
   }
 ]

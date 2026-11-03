@@ -4845,6 +4845,22 @@ def main():
         except Exception:
             pass
 
+    # Fire-and-forget: stamp 0n!AG (all colors) the moment a same-day habit
+    # write crosses the handicap threshold (tools/allcolors, JM 2026-11-03).
+    if not past_target and any(
+        r is not None and r.returncode == 0 for r in (on_result, one_n_result)
+    ):
+        try:
+            with open("/tmp/allcolors-live.log", "a") as _aclog:
+                subprocess.Popen(
+                    [sys.executable,
+                     str(Path(__file__).resolve().parents[1] / "allcolors" / "allcolors.py"),
+                     "--live"],
+                    stdout=_aclog, stderr=_aclog, start_new_session=True,
+                )
+        except Exception:
+            pass
+
     _emit(output)
     failed = _write_failures(output)
     if failed:
