@@ -27,6 +27,10 @@ for off in (0, 1):  # today + tomorrow (Janus's late-evening lookahead)
         oc.list_events(s, s + dt.timedelta(days=1), force=True)
     except Exception as e:
         print(f"{s:%F}: {e}", file=sys.stderr)
+try:
+    oc.fetch_unread_inbox()  # outlook-inbox-YYYY-MM-DD.json for dream-intake
+except Exception as e:
+    print(f"inbox: {e}", file=sys.stderr)
 PY
 rsync -q -t "$HOME"/.cache/janus/outlook-*.json ix:.cache/janus/ 2>/dev/null \
   || { ssh ix 'mkdir -p ~/.cache/janus' && rsync -q -t "$HOME"/.cache/janus/outlook-*.json ix:.cache/janus/; }

@@ -166,12 +166,19 @@ def delete_event(calendar_id: str, event_id: str) -> None:
                         sendUpdates="none").execute()
 
 
+def _fromiso(v: str) -> dt.datetime:
+    # Python < 3.11 fromisoformat rejects a trailing "Z", which the Outlook
+    # ICS-mirror calendar uses ("2026-11-02T16:00:00Z"); those events were
+    # silently dropped on ix (python3.9).
+    return dt.datetime.fromisoformat(v[:-1] + "+00:00" if v.endswith("Z") else v)
+
+
 def _hydrate(raw: Iterable[dict], start: dt.datetime, end: dt.datetime) -> list[dict]:
     result = []
     for ev in raw:
         try:
-            s = dt.datetime.fromisoformat(ev["start"])
-            e = dt.datetime.fromisoformat(ev["end"])
+            s = _fromiso(ev["start"])
+            e = _fromiso(ev["end"])
         except Exception:
             continue
         if s.tzinfo is None:

@@ -66,8 +66,15 @@ def load_credentials():
 
     # Gmail OAuth
     eml_dir = Path.home() / ".config" / "eml"
-    _CREDS["gmail_tokens_path"] = eml_dir / "tokens-gmail.json"
-    _CREDS["gmail_secrets_path"] = eml_dir / "gcp-oauth-gmail.keys.json"
+    # Same account table as tools/ibx/ibx.py. tokens.json is mckay@m5c7.com
+    # (m5x2/m5c7 aliases land there); tokens-gmail.json is the personal
+    # jonathan.b.mckay@gmail.com.
+    _CREDS["gmail_accounts"] = [
+        {"name": "m5c7", "tokens": eml_dir / "tokens.json",
+         "secrets": eml_dir / "gcp-oauth.keys.json"},
+        {"name": "jbm", "tokens": eml_dir / "tokens-gmail.json",
+         "secrets": eml_dir / "gcp-oauth-gmail.keys.json"},
+    ]
 
     # Google Calendar OAuth
     gcal_dir = Path.home() / ".config" / "google-calendar-mcp"
@@ -702,36 +709,34 @@ def _appfolio_work_orders():
 # Source 6: gmail_inbox
 # ---------------------------------------------------------------------------
 
-@source("gmail_inbox", "Unread Gmail messages with age flags")
-def _gmail_inbox():
-    creds = _build_google_creds(
-        _CREDS["gmail_tokens_path"],
-        _CREDS["gmail_secrets_path"],
-        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-    )
-    service = _google_service("gmail", "v1", creds)
+# Bug (v176): the source read only tokens-gmail.json, which is the personal
+# jonathan.b.mckay@gmail.com, and reported its 2 unread as "Gmail unread" while
+# mckay@m5c7.com (where all m5x2 mail lands) had 19 non-promo unread. Now
+# every account in _CREDS["gmail_accounts"]; Promotions excluded; counts come
+# from paginated ids, not the 50-message metadata cap.
+GMAIL_QUERY = "is:unread in:inbox -category:promotions"
+GMAIL_METADATA_CAP = 30  # per account
 
-    resp = service.users().messages().list(
-        userId="me", q="is:unread in:inbox", maxResults=50
-    ).execute()
 
-    messages = resp.get("messages", [])
-    if not messages:
-        return {"unread_count": 0, "messages": []}
-
+def _gmail_account_unread(service, query=GMAIL_QUERY, cap=GMAIL_METADATA_CAP):
+    ids, page = [], None
+    while True:
+        resp = service.users().messages().list(
+            userId="me", q=query, maxResults=100, pageToken=page).execute()
+        ids += [m["id"] for m in resp.get("messages", [])]
+        page = resp.get("nextPageToken")
+        if not page or len(ids) >= 500:
+            break
     now = time.time()
     results = []
-    # Batch fetch metadata
-    for msg_stub in messages[:50]:
+    for mid in ids[:cap]:
         msg = service.users().messages().get(
-            userId="me", id=msg_stub["id"], format="metadata",
+            userId="me", id=mid, format="metadata",
             metadataHeaders=["From", "Subject", "Date"],
         ).execute()
-
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         internal_ts = int(msg.get("internalDate", "0")) / 1000
         age_hours = (now - internal_ts) / 3600 if internal_ts else 0
-
         results.append({
             "id": msg["id"],
             "from": headers.get("From", ""),
@@ -740,174 +745,115 @@ def _gmail_inbox():
             "age_hours": round(age_hours, 1),
             "stale": age_hours > 24,
         })
+    return len(ids), results
 
-    stale_count = sum(1 for r in results if r["stale"])
 
-    return {
-        "unread_count": len(results),
-        "stale_count": stale_count,
-        "messages": results,
+@source("gmail_inbox", "Unread non-promo Gmail, every account (m5c7 + jbm), with age flags")
+def _gmail_inbox():
+    by_account, messages, errors = {}, [], {}
+    for acct in _CREDS.get("gmail_accounts", []):
+        try:
+            creds = _build_google_creds(acct["tokens"], acct["secrets"])
+            service = _google_service("gmail", "v1", creds)
+            count, msgs = _gmail_account_unread(service)
+        except Exception as e:
+            errors[acct["name"]] = f"{type(e).__name__}: {e}"
+            continue
+        by_account[acct["name"]] = {
+            "unread_count": count,
+            "stale_count": sum(1 for m in msgs if m["stale"]),
+            "listed": len(msgs),
+        }
+        messages += [{**m, "account": acct["name"]} for m in msgs]
+    if not by_account:
+        raise RuntimeError(f"all Gmail accounts failed: {errors}")
+    out = {
+        "query": GMAIL_QUERY,
+        "unread_count": sum(a["unread_count"] for a in by_account.values()),
+        "stale_count": sum(1 for m in messages if m["stale"]),
+        "by_account": by_account,
+        "messages": messages,
     }
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 # ---------------------------------------------------------------------------
 # Source 7: google_calendar
 # ---------------------------------------------------------------------------
 
-_SKIP_CAL_SUFFIXES = ("#holiday@group.v.calendar.google.com", "#weeknum@group.v.calendar.google.com")
+# Bug (v176): the source queried only the m5c7 "primary" calendar (plus a
+# "work" one that does not exist) with a UTC window "today T00:00Z" ..
+# "+2d T00:00Z", i.e. 16:00 PST yesterday onward, so Sunday-evening events
+# were labelled "today" on Monday and jbm / m5x2 Cal / 3494 House / CAIS
+# School / 家 Meals were missing. Now delegates to janus's gcal_client: every
+# calendar on the m5c7 account (LX's filtered, same as janus), local-midnight
+# windows from lib/daytime, and it shares janus's 5-min cache
+# (~/.cache/janus/gcal-YYYY-MM-DD.json), which is also the fallback.
+_TG_DIR = Path(__file__).resolve().parent.parent / "tools" / "tg"
+_IMPORT_CAL_SUFFIX = "@import.calendar.google.com"
 
 
-def _gcal_accounts():
-    """Account keys in the google-calendar-mcp tokens file (e.g. jbm, m5c7)."""
-    with open(_CREDS["gcal_tokens_path"]) as f:
-        data = json.load(f)
-    if isinstance(data, dict) and "access_token" not in data:
-        return [k for k, v in data.items() if isinstance(v, dict) and v.get("refresh_token")]
-    return [None]  # flat single-account token file
+def _gcal_client():
+    if str(_TG_DIR) not in sys.path:
+        sys.path.insert(0, str(_TG_DIR))
+    import gcal_client
+    return gcal_client
 
 
-def _gcal_event_start_pt_date(start):
-    """PT calendar date of an event start ('YYYY-MM-DD' all-day or RFC3339)."""
-    if len(start) == 10:
-        return start
-    dt = _to_pt(start)
-    return dt.date().isoformat() if dt else start[:10]
+def _gcal_day(gc, day_start, day_end):
+    try:
+        return gc.list_events(day_start, day_end), "live-or-janus-cache"
+    except Exception as e:
+        cache = gc.CACHE_DIR / f"gcal-{day_start.date().isoformat()}.json"
+        if not cache.exists():
+            raise
+        return gc._hydrate(json.loads(cache.read_text()), day_start, day_end), \
+            f"janus cache fallback ({type(e).__name__})"
 
 
-@source("google_calendar", "Today + tomorrow (PT) events across every Google account and calendar")
+def _gcal_slim(ev):
+    cal = ev.get("calendar", "")
+    if (ev.get("calendar_id") or "").endswith(_IMPORT_CAL_SUFFIX):
+        cal = f"{cal} (Outlook ICS mirror)"
+    return {
+        "calendar": cal,
+        "summary": ev.get("title", "(no title)"),
+        "start": ev["start_dt"].isoformat(),
+        "end": ev["end_dt"].isoformat(),
+        "all_day": ev.get("all_day", False),
+        "transparency": ev.get("transparency", "opaque"),
+    }
+
+
+@source("google_calendar", "Today + tomorrow events, all JM calendars (local-day windows)")
 def _google_calendar():
-    today = _pt_today()
-    tomorrow = today + datetime.timedelta(days=1)
-    time_min = _pt_midnight(today).isoformat()
-    time_max = _pt_midnight(today + datetime.timedelta(days=2)).isoformat()
-
-    accounts_out, calendars_out, errors = [], [], []
-    all_events, seen = [], set()
-    for acct in _gcal_accounts():
-        label = acct or "default"
-        try:
-            creds = _build_google_creds(
-                _CREDS["gcal_tokens_path"], _CREDS["gcal_secrets_path"],
-                scopes=["https://www.googleapis.com/auth/calendar.readonly"],
-                account_key=acct,
-            )
-            service = _google_service("calendar", "v3", creds)
-            cals, page = [], None
-            while True:
-                resp = service.calendarList().list(pageToken=page).execute()
-                cals.extend(resp.get("items", []))
-                page = resp.get("nextPageToken")
-                if not page:
-                    break
-        except Exception as e:
-            errors.append({"account": label, "error": f"{type(e).__name__}: {e}"})
-            accounts_out.append({"account": label, "ok": False})
-            continue
-
-        acct_count = 0
-        for cal in cals:
-            cal_id = cal.get("id", "")
-            name = cal.get("summaryOverride") or cal.get("summary") or cal_id
-            skip = None
-            if cal.get("deleted"):
-                skip = "deleted"
-            elif cal.get("hidden"):
-                skip = "hidden"
-            elif cal_id.endswith(_SKIP_CAL_SUFFIXES):
-                skip = "holidays/weeknum"
-            cal_rec = {"account": label, "id": cal_id, "name": name,
-                       "primary": bool(cal.get("primary")), "events": 0}
-            if skip:
-                cal_rec["skipped"] = skip
-                calendars_out.append(cal_rec)
-                continue
-            try:
-                items, page = [], None
-                while True:
-                    resp = service.events().list(
-                        calendarId=cal_id, timeMin=time_min, timeMax=time_max,
-                        singleEvents=True, orderBy="startTime", maxResults=250,
-                        pageToken=page,
-                    ).execute()
-                    items.extend(resp.get("items", []))
-                    page = resp.get("nextPageToken")
-                    if not page:
-                        break
-            except Exception as e:
-                cal_rec["error"] = f"{type(e).__name__}: {e}"
-                errors.append({"account": label, "calendar": cal_id, "error": cal_rec["error"]})
-                calendars_out.append(cal_rec)
-                continue
-
-            for ev in items:
-                if ev.get("status") == "cancelled":
-                    continue
-                attendees = ev.get("attendees", []) or []
-                me = next((a for a in attendees if a.get("self")), None)
-                if me and me.get("responseStatus") == "declined":
-                    continue
-                start = ev.get("start", {}).get("dateTime", ev.get("start", {}).get("date", ""))
-                end = ev.get("end", {}).get("dateTime", ev.get("end", {}).get("date", ""))
-                # Recurring instances share an iCalUID, so key on the instance start too.
-                orig = ev.get("originalStartTime", {})
-                inst = orig.get("dateTime", orig.get("date", "")) or start
-                key = (ev.get("iCalUID") or ev.get("id"), inst)
-                if key in seen:
-                    continue
-                seen.add(key)
-                cal_rec["events"] += 1
-                acct_count += 1
-                org = ev.get("organizer", {}) or {}
-                all_events.append({
-                    "account": label,
-                    "calendar": cal_id,
-                    "calendar_name": name,
-                    "id": ev.get("id"),
-                    "ical_uid": ev.get("iCalUID"),
-                    "summary": ev.get("summary", "(no title)"),
-                    "start": start,
-                    "end": end,
-                    "all_day": "date" in ev.get("start", {}) and "dateTime" not in ev.get("start", {}),
-                    "status": ev.get("status", ""),
-                    "location": ev.get("location", ""),
-                    "attendees": len(attendees),  # int, kept for backward compat
-                    "attendee_list": [
-                        {"email": a.get("email", ""), "responseStatus": a.get("responseStatus", ""),
-                         **({"self": True} if a.get("self") else {}),
-                         **({"organizer": True} if a.get("organizer") else {})}
-                        for a in attendees
-                    ],
-                    "organizer": org.get("email", ""),
-                    "self_response": (me or {}).get("responseStatus", ""),
-                })
-            calendars_out.append(cal_rec)
-        accounts_out.append({"account": label, "ok": True, "calendars": len(cals), "events": acct_count})
-
-    if accounts_out and not any(a["ok"] for a in accounts_out):
-        raise RuntimeError(f"all Google accounts failed: {errors}")
-
-    def _sort_key(e):
-        s = e["start"]
-        return (_gcal_event_start_pt_date(s), "" if len(s) == 10 else _to_pt(s).isoformat())
-    all_events.sort(key=_sort_key)
-    today_events, tomorrow_events = [], []
-    for ev in all_events:
-        d = _gcal_event_start_pt_date(ev["start"])
-        if d == tomorrow.isoformat():
-            tomorrow_events.append(ev)
-        else:
-            today_events.append(ev)  # incl. multi-day events that began before today
-
-    out = {
-        "date": today.isoformat(),
-        "time_min": time_min,
-        "time_max": time_max,
-        "today_count": len(today_events),
-        "tomorrow_count": len(tomorrow_events),
-        "today": today_events,
-        "tomorrow": tomorrow_events,
-        "accounts": accounts_out,
-        "calendars": calendars_out,
+    gc = _gcal_client()
+    tz = gc._tz()
+    d0 = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    out, via = {}, {}
+    for label, off in (("today", 0), ("tomorrow", 1)):
+        # Midnight-to-midnight in the active zone, built from the date so a
+        # DST changeover day is 23/25h, not a fixed 24h offset.
+        day = (d0 + datetime.timedelta(days=off)).date()
+        start = datetime.datetime.combine(day, datetime.time(), tz)
+        end = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(), tz)
+        evs, via[label] = _gcal_day(gc, start, end)
+        out[label] = [_gcal_slim(e) for e in evs]
+        out[f"{label}_date"] = day.isoformat()
+    calendars = {}
+    for ev in out["today"] + out["tomorrow"]:
+        calendars[ev["calendar"]] = calendars.get(ev["calendar"], 0) + 1
+    return {
+        "today_date": out["today_date"],
+        "tomorrow_date": out["tomorrow_date"],
+        "today_count": len(out["today"]),
+        "tomorrow_count": len(out["tomorrow"]),
+        "calendars": calendars,
+        "via": via,
+        "today": out["today"],
+        "tomorrow": out["tomorrow"],
     }
     if errors:
         out["errors"] = errors
@@ -1221,221 +1167,97 @@ def _imessage_recent():
 # Source 12: slack
 # ---------------------------------------------------------------------------
 
-def _on_ix() -> bool:
-    """True on the ix mac mini (same test as did-fast/_on_ix)."""
-    import socket
-    host = socket.gethostname().lower()
-    return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
+# Outlook sources read Straylight's cache, never the live Agency MCP.
+# Ix cron has no work auth (Agency CLI absent; login keychain locked to cron,
+# MSAL -61), so the live calls only ever burned the 30s source timeout
+# (v51..v176: "outlook_inbox timeout" every night). Straylight's
+# tools/tg/outlook-cache-daemon.py writes ~/.cache/janus/outlook-YYYY-MM-DD.json
+# (calendar) and outlook-inbox-YYYY-MM-DD.json (unread, last 48h) every 5 min
+# and rsyncs them to ix:~/.cache/janus/. Missing file = "missing", instantly.
+JANUS_CACHE = Path.home() / ".cache" / "janus"
+OUTLOOK_STALE_HOURS = 6
 
 
-def _outlook_cache_only() -> bool:
-    """Ix (and anything with JANUS_OUTLOOK_CACHE_ONLY=1) never talks to Agency.
-
-    Same rule as tools/tg/outlook_client.cache_only(); straylight's
-    outlook-cache-daemon pushes ~/.cache/janus/outlook-YYYY-MM-DD.json here
-    every ~5 min, so the calendar comes from that cache instead."""
-    return _on_ix() or os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1"
+def _local_today() -> datetime.date:
+    return datetime.datetime.now().astimezone().date()
 
 
-OUTLOOK_CACHE_DIR = Path.home() / ".cache" / "janus"
-OUTLOOK_CACHE_STALE_MIN = 60
+def _file_age_hours(path: Path) -> float:
+    return round((time.time() - path.stat().st_mtime) / 3600, 1)
 
 
-def _outlook_calendar_from_cache(days):
-    """Events for `days` (date objects) from straylight's pushed janus cache."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "_dream_outlook_client",
-        Path(__file__).resolve().parent.parent / "tools" / "tg" / "outlook_client.py")
-    events, missing, ages = [], [], []
-    oc = None
-    try:
-        oc = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(oc)
-    except Exception:
-        oc = None
-    for day in days:
-        f = OUTLOOK_CACHE_DIR / f"outlook-{day.isoformat()}.json"
-        if not f.exists():
-            missing.append(day.isoformat())
-            continue
-        ages.append((time.time() - f.stat().st_mtime) / 60)
-        if oc is not None:
-            for ev in oc._parse_cache(f):
-                events.append({
-                    "subject": ev["title"],
-                    "start": ev["start_dt"].isoformat(),
-                    "end": ev["end_dt"].isoformat(),
-                    "all_day": ev.get("all_day", False),
-                })
-        else:  # raw Graph fields; times are in start_tz
-            for ev in json.loads(f.read_text() or "[]"):
-                events.append({"subject": ev.get("subject", ""),
-                               "start": ev.get("start", ""), "end": ev.get("end", ""),
-                               "all_day": ev.get("is_all_day", False)})
-    # De-dupe multi-day events that appear in several day files
-    seen, uniq = set(), []
-    for ev in events:
-        k = (ev["subject"], ev["start"], ev["end"])
-        if k not in seen:
-            seen.add(k)
-            uniq.append(ev)
-    uniq.sort(key=lambda e: e["start"])
-    # Freshest file = time since the daemon's last push (it stops rewriting
-    # past days, so yesterday's file is always hours old).
-    age = min(ages) if ages else None
-    out = {"events": uniq, "count": len(uniq), "source": f"cache:{OUTLOOK_CACHE_DIR}",
-           "cache_age_min": round(age, 1) if ages else None}
-    if missing:
-        out["missing_days"] = missing
-    if ages and age > OUTLOOK_CACHE_STALE_MIN:
-        out["stale"] = True
-        out["note"] = ("straylight outlook-cache-daemon has not pushed for "
-                       f"{age:.0f} min; calendar may be out of date")
-    if not ages:
-        out["status"] = "skipped"
-        out["reason"] = (f"cache-only: no outlook cache for {', '.join(missing)} in "
-                         f"{OUTLOOK_CACHE_DIR} (straylight daemon not pushing?)")
-    return out
-
-
-def _outlook_skip(server_name: str):
-    """Skip result for an Agency source that cannot authenticate here, or None.
-
-    On ix the dream run is headless: MSAL's keychain read fails (-61) and
-    Agency falls back to interactive sign-in that nobody completes, so every
-    Outlook source sat until the 30s source timeout (v160-v166). Unless an
-    AGENCY_REMOTE_<NAME>_PORT tunnel delegates to a host that can auth,
-    return immediately instead of hanging."""
-    if not _on_ix():
-        return None
-    env_key = f"AGENCY_REMOTE_{server_name.upper()}_PORT"
-    if os.environ.get(env_key):
-        return None
-    return {"status": "skipped",
-            "reason": f"on ix without {env_key}: headless MSAL (keychain -61) "
-                      f"cannot complete interactive auth"}
-
-
-@source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
+@source("outlook_inbox", "Outlook unread emails, last 48h (Straylight cache snapshot)")
 def _outlook_inbox():
-    if _outlook_cache_only() and not os.environ.get("AGENCY_REMOTE_MAIL_PORT"):
-        return {"status": "skipped",
-                "reason": "cache-only: inbox unavailable on ix (no straylight inbox "
-                          "snapshot; set AGENCY_REMOTE_MAIL_PORT to tunnel)"}
-    skip = _outlook_skip("mail")
-    if skip:
-        return skip
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
-    import agency_mcp as mcp
-    from datetime import timezone
-    cutoff = (datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Unread inbox
-    query = (
-        f"?$top=50"
-        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
-        f"&$select=id,subject,from,receivedDateTime,bodyPreview"
-        f"&$orderby=receivedDateTime desc"
-    )
-    # 5s timeout (was 30s). The outlook MCP has been timing out reliably for
-    # weeks; burning 30s per call costs ~60s of every intake. If the MCP is
-    # responsive, 5s is plenty for a single SearchMessages. v51 self-improvement.
-    raw = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
-        "queryParameters": query
-    }, timeout=5)
-    unread = []
-    if raw and raw.get("content"):
-        for item in raw["content"]:
-            text = item.get("text", "")
-            try:
-                data = json.loads(text)
-                messages = data if isinstance(data, list) else data.get("value", [])
-                for msg in messages:
-                    unread.append({
-                        "subject": msg.get("subject", ""),
-                        "from": (msg.get("from", {}).get("emailAddress", {}).get("name", "")
-                                 or msg.get("from", {}).get("emailAddress", {}).get("address", "")),
-                        "received": msg.get("receivedDateTime", ""),
-                        "preview": msg.get("bodyPreview", "")[:200],
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    # Recent sent (last 24h) for context on what JM communicated
-    sent_query = (
-        f"?$top=20"
-        f"&$filter=sentDateTime ge {cutoff}"
-        f"&$select=subject,toRecipients,sentDateTime,bodyPreview"
-        f"&$orderby=sentDateTime desc"
-    )
-    raw_sent = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
-        "queryParameters": f"/me/mailFolders/SentItems/messages{sent_query}"
-    }, timeout=5)
-    sent = []
-    if raw_sent and raw_sent.get("content"):
-        for item in raw_sent["content"]:
-            text = item.get("text", "")
-            try:
-                data = json.loads(text)
-                messages = data if isinstance(data, list) else data.get("value", [])
-                for msg in messages:
-                    to_list = [r.get("emailAddress", {}).get("name", "")
-                               for r in msg.get("toRecipients", [])]
-                    sent.append({
-                        "subject": msg.get("subject", ""),
-                        "to": to_list,
-                        "sent": msg.get("sentDateTime", ""),
-                        "preview": msg.get("bodyPreview", "")[:200],
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    return {"unread": unread, "unread_count": len(unread),
-            "sent": sent, "sent_count": len(sent)}
+    today = _local_today()
+    # Today's snapshot, else yesterday's (Straylight asleep since evening).
+    for day in (today, today - datetime.timedelta(days=1)):
+        path = JANUS_CACHE / f"outlook-inbox-{day.isoformat()}.json"
+        if not path.exists():
+            continue
+        try:
+            snap = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            return {"_status": "error", "error": f"unreadable {path.name}: {e}"}
+        age = _file_age_hours(path)
+        msgs = snap.get("messages", [])
+        unread = [{
+            "subject": m.get("subject", ""),
+            "from": m.get("sender", ""),
+            "from_email": m.get("sender_email", ""),
+            "received": m.get("received", ""),
+            "preview": m.get("preview", ""),
+            "importance": m.get("importance", "normal"),
+            "conversation_id": m.get("conversationId", ""),
+        } for m in msgs if not m.get("isRead")]
+        return {
+            "_status": "stale" if age > OUTLOOK_STALE_HOURS else "ok",
+            "cache_file": str(path),
+            "cache_age_hours": age,
+            "snapshot_at": snap.get("generated_at", ""),
+            "window_hours": snap.get("window_hours"),
+            "unread": unread,
+            "unread_count": len(unread),
+            "high_importance": sum(1 for m in unread if m["importance"] == "high"),
+        }
+    return {
+        "_status": "missing",
+        "error": (f"no outlook-inbox-{today}.json or previous day in {JANUS_CACHE}; "
+                  "Straylight outlook-cache-daemon not running or asleep"),
+    }
 
 
-@source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
+@source("outlook_calendar", "Outlook calendar events, yesterday..tomorrow (Straylight cache)")
 def _outlook_calendar():
-    if _outlook_cache_only():
-        today = datetime.date.today()
-        return _outlook_calendar_from_cache(
-            [today + datetime.timedelta(days=d) for d in (-1, 0, 1)])
-    skip = _outlook_skip("calendar")
-    if skip:
-        return skip
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
-    import agency_mcp as mcp
-    from datetime import timezone
-    yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
-    day_after = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
-    raw = mcp.call_tool("calendar", "ListEvents", {
-        "startDateTime": yesterday,
-        "endDateTime": day_after,
-        "top": "50",
-    }, timeout=5)
-    events = []
-    if raw and raw.get("content"):
-        for item in raw["content"]:
-            text = item.get("text", "")
-            # Strip "Events retrieved successfully.\n" status prefix
-            idx = min((text.find(c) for c in "{[" if text.find(c) != -1), default=-1)
-            if idx > 0:
-                text = text[idx:]
-            try:
-                data = json.loads(text)
-                ev_list = data if isinstance(data, list) else data.get("value", [])
-                for ev in ev_list:
-                    events.append({
-                        "subject": ev.get("subject", ""),
-                        "start": ev.get("start", {}).get("dateTime", ""),
-                        "end": ev.get("end", {}).get("dateTime", ""),
-                        "organizer": ev.get("organizer", {}).get("emailAddress", {}).get("name", ""),
-                        "is_online": bool(ev.get("onlineMeeting")),
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-    return {"events": events, "count": len(events)}
+    today = _local_today()
+    events, files, ages = [], [], []
+    for off in (-1, 0, 1):
+        day = today + datetime.timedelta(days=off)
+        path = JANUS_CACHE / f"outlook-{day.isoformat()}.json"
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        files.append(path.name)
+        ages.append(_file_age_hours(path))
+        for ev in raw if isinstance(raw, list) else []:
+            events.append({
+                "day": day.isoformat(),
+                "subject": ev.get("subject", ""),
+                "start": ev.get("start", ""),
+                "end": ev.get("end", ""),
+                "tz": ev.get("start_tz", ""),
+                "all_day": ev.get("is_all_day", False),
+            })
+    if not files:
+        return {"_status": "missing",
+                "error": f"no outlook-YYYY-MM-DD.json around {today} in {JANUS_CACHE}"}
+    today_file = f"outlook-{today.isoformat()}.json"
+    stale = today_file not in files or ages[files.index(today_file)] > OUTLOOK_STALE_HOURS
+    return {"_status": "stale" if stale else "ok", "cache_files": files,
+            "cache_age_hours": max(ages), "events": events, "count": len(events),
+            "note": "Graph times; tz field is the Windows zone name (UTC if blank)"}
 
 
 @source("slack", "Slack status (stub)")
@@ -1683,12 +1505,19 @@ def run_sources(selected=None, timeout=30):
         try:
             data = info["fn"]()
             elapsed = time.time() - t0
-            skipped = isinstance(data, dict) and data.get("status") == "skipped"
-            return name, {
-                "status": "skipped" if skipped else "ok",
+            # A source may report its own status ("missing", "stale") via a
+            # "_status" key instead of raising (cache-backed sources).
+            status = "ok"
+            if isinstance(data, dict) and "_status" in data:
+                status = data.pop("_status")
+            out = {
+                "status": status,
                 "elapsed_ms": round(elapsed * 1000),
                 "data": data,
             }
+            if status not in ("ok", "stale") and isinstance(data, dict) and "error" in data:
+                out["error"] = data["error"]
+            return name, out
         except Exception as e:
             elapsed = time.time() - t0
             return name, {
@@ -1784,8 +1613,8 @@ def print_test_table(results):
             status_str = "\033[32mok\033[0m"
         elif status == "error":
             status_str = "\033[31merror\033[0m"
-        elif status == "timeout":
-            status_str = "\033[33mtimeout\033[0m"
+        elif status in ("timeout", "stale", "missing"):
+            status_str = f"\033[33m{status}\033[0m"
 
         print(f"{name:<25} {status_str:<19} {elapsed:>8}  {notes}")
 
