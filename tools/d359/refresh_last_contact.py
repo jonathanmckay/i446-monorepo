@@ -40,7 +40,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]  # i446-monorepo
@@ -373,7 +373,11 @@ def _build_initials_map(slugs: set[str]) -> dict[str, str]:
     # User's authoritative initials-style shorthands win over mechanical ones,
     # e.g. 'lr' means Leeroy Phillips even though Lee Redden's initials are also
     # 'lr'. Overlaying both sets the right target and clears the collision.
-    aliases = {"lx": "louisa-xu", "lr": "leeroy-phillips", "hz": "hanzhao"}
+    # 'EL:JM' is Eldon Lei's 1:1 and 'ES:JM' is Elliot Silvers'. Mechanical
+    # initials already agree; pinned so a future 'el'/'es' contact can't drop
+    # them as ambiguous (v177 briefly mis-mapped EL to Elliot).
+    aliases = {"lx": "louisa-xu", "lr": "leeroy-phillips", "hz": "hanzhao",
+               "el": "eldon-lei", "es": "elliot-silvers"}
     for alias, target in aliases.items():
         if target in slugs:
             resolved[alias] = target
@@ -480,8 +484,10 @@ def _fetch_calendar_signal(days: int, slugs: set[str],
     today = date.today()
     cutoff = today - timedelta(days=days)
     time_min = datetime(cutoff.year, cutoff.month, cutoff.day).isoformat() + "Z"
-    time_max = (datetime(today.year, today.month, today.day)
-                + timedelta(days=1)).isoformat() + "Z"
+    # Cap at *now*, not end of day: a meeting later today has not happened yet
+    # (v176/v177: 11-02 and 11-03 1:1s were stamped at ~02:30 before they met).
+    now_utc = datetime.now(timezone.utc)
+    time_max = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     latest: dict[str, date] = {}
 
@@ -513,6 +519,13 @@ def _fetch_calendar_signal(days: int, slugs: set[str],
                 d = _event_date(ev)
                 if not d or d > today or d < cutoff:
                     continue
+                st = (ev.get("start") or {}).get("dateTime")
+                if st:
+                    try:
+                        if datetime.fromisoformat(st.replace("Z", "+00:00")) > now_utc:
+                            continue
+                    except ValueError:
+                        pass
                 emails = [a.get("email") for a in ev.get("attendees", []) or []]
                 for slug in _match_event(ev.get("summary", ""), emails,
                                          initials_map, email_map):
