@@ -70,3 +70,5 @@
 # triage: daily Downloads/Desktop/Documents cleanup (tools/triage, config/triage.json); Sunday review card via --card.
 # Hops through ssh localhost: cron has no TCC access to ~/Downloads|Desktop|Documents, sshd does (same as bin/vault-backup-onedrive.sh)
 30 4 * * * ssh -o BatchMode=yes -o ConnectTimeout=10 localhost /usr/bin/python3 i446-monorepo/tools/triage/triage.py --apply --card >> $HOME/i446-monorepo/tools/triage/.triage.log 2>&1 || $HOME/bin/cron-alert.sh triage apply_failed "daily triage exited non-zero (see tools/triage/.triage.log)"
+# ix-memory sampler for /1-i446 (2026-11-03)
+*/15 * * * * /usr/bin/python3 $HOME/i446-monorepo/tools/vault/ix_mem_sample.py >/dev/null 2>&1 || $HOME/bin/cron-alert.sh ix_mem sample_failed "ix_mem_sample.py exited non-zero"
