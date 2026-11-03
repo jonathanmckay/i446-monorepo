@@ -17,6 +17,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolated_marker(monkeypatch, tmp_path):
     monkeypatch.setattr(am, "_LOGIN_MARKER", tmp_path / "login-pending.json")
+    # These tests exercise the local-server path; on ix it is refused.
+    monkeypatch.setenv("AGENCY_ALLOW_LOCAL", "1")
 
 
 def test_timeout_triggers_restart_and_retry(monkeypatch):

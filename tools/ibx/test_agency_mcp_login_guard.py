@@ -23,6 +23,8 @@ def _fresh_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(am, "_LOGIN_TAB_CACHE", {"at": 0.0, "url": None})
     monkeypatch.setattr(am, "_LOGIN_MARKER", tmp_path / "login-pending.json")
     monkeypatch.delenv("AGENCY_REMOTE_CALENDAR_PORT", raising=False)
+    # These tests exercise the local-server path; on ix it is refused.
+    monkeypatch.setenv("AGENCY_ALLOW_LOCAL", "1")
     am._servers.clear()
 
 
@@ -236,11 +238,79 @@ def test_successful_call_clears_marker(monkeypatch):
 def test_failed_server_start_marks_pending(monkeypatch):
     class P:
         pid = 1
-        stdout = type("S", (), {"readline": lambda self: ""})()
         def kill(self): pass
+        def wait(self, timeout=None): pass
     monkeypatch.setattr(am.subprocess, "Popen", lambda *a, **k: P())
-    t = iter(range(0, 1000, 31))
-    monkeypatch.setattr(am.time, "time", lambda: next(t))
+    monkeypatch.setattr(am, "_read_port", lambda proc, timeout: None)  # no port by the deadline
     with pytest.raises(RuntimeError):
         am._start_server("mail")
     assert am._LOGIN_MARKER.exists()
+
+
+# --- cache-only hosts (2026-11-03, Dream v177) -------------------------------
+# dream-intake called Agency on ix (no work auth) every night: each server sat
+# ~15 min on an interactive sign-in. Ix must never touch a local server.
+
+def test_cache_only_host_refuses_call_without_touching_agency(monkeypatch):
+    started, called = [], []
+    monkeypatch.setattr(am, "local_server_forbidden", lambda: True)
+    monkeypatch.setattr(am, "get_server", lambda name: started.append(name) or 1)
+    monkeypatch.setattr(am, "_call_tool_once", lambda *a: called.append(a) or {})
+    with pytest.raises(am.AgencyUnavailable):
+        am.call_tool("mail", "SearchMessagesQueryParameters", {})
+    assert started == [] and called == []
+    assert issubclass(am.AgencyUnavailable, am.EntraLoginPending)
+
+
+def test_cache_only_host_refuses_adopting_a_running_server(monkeypatch):
+    monkeypatch.setattr(am, "local_server_forbidden", lambda: True)
+    monkeypatch.setattr(am, "_read_pidfile", lambda name: (4242, 5555))
+    monkeypatch.setattr(am, "_is_alive", lambda pid: True)
+    monkeypatch.setattr(am, "_port_responsive", lambda port: True)
+    with pytest.raises(am.AgencyUnavailable):
+        am.get_server("calendar")
+
+
+def test_cache_only_host_still_uses_remote_endpoint(monkeypatch):
+    monkeypatch.setattr(am, "local_server_forbidden", lambda: True)
+    monkeypatch.setenv("AGENCY_REMOTE_CALENDAR_PORT", "7777")
+    monkeypatch.setattr(am, "_call_tool_once", lambda h, p, *a: {"port": p})
+    assert am.call_tool("calendar", "ListEvents", {}) == {"port": 7777}
+
+
+def test_ix_hostname_is_cache_only_unless_overridden(monkeypatch):
+    monkeypatch.delenv("AGENCY_ALLOW_LOCAL", raising=False)
+    monkeypatch.delenv("JANUS_OUTLOOK_CACHE_ONLY", raising=False)
+    monkeypatch.setattr(am.socket, "gethostname", lambda: "ix.local")
+    assert am.local_server_forbidden()
+    monkeypatch.setenv("AGENCY_ALLOW_LOCAL", "1")
+    assert not am.local_server_forbidden()
+    monkeypatch.delenv("AGENCY_ALLOW_LOCAL")
+    monkeypatch.setattr(am.socket, "gethostname", lambda: "straylight-refit.local")
+    assert not am.local_server_forbidden()
+
+
+def test_read_port_honours_deadline_when_child_is_silent():
+    # readline() blocked until the child printed a newline: a silent sign-in
+    # held get_server's lock ~15 min past the 30s deadline.
+    import subprocess, sys as _sys, time as _time
+    proc = subprocess.Popen([_sys.executable, "-c", "import time; time.sleep(30)"],
+                            stdout=subprocess.PIPE, text=True)
+    try:
+        t0 = _time.time()
+        assert am._read_port(proc, 1) is None
+        assert _time.time() - t0 < 3
+    finally:
+        proc.kill(); proc.wait()
+
+
+def test_read_port_finds_port_after_banner_in_one_chunk():
+    import subprocess, sys as _sys
+    proc = subprocess.Popen([_sys.executable, "-c",
+                             "import sys,time; sys.stdout.write('agency v1\\n51234\\n'); "
+                             "sys.stdout.flush(); time.sleep(5)"],
+                            stdout=subprocess.PIPE, text=True)
+    try:
+        assert am._read_port(proc, 3) == 51234
+    finally:
+        proc.kill(); proc.wait()
