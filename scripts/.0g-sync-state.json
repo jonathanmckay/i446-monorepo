@@ -1,14 +1,10 @@
 {
   "version": 1,
   "tasks": {
-    "good interviews": {
-      "todoist_id": "6hvgvgcfP4MpXWf2",
-      "minutes": 40
-    },
     "get back to points driven work asap": {
       "todoist_id": "6hvgvghqQ3G6w2v2",
       "minutes": 40
     }
   },
-  "last_sync": "2026-11-02T18:00:01.688775-08:00"
+  "last_sync": "2026-11-02T20:00:02.638755-08:00"
 }
