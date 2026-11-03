@@ -106,27 +106,17 @@ if [[ ! -f "$BACKFILL_STATE" && -f "$_OLD_BACKFILL_STATE" ]]; then
   [[ "$_OLD_VAL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && echo "$_OLD_VAL" > "$BACKFILL_STATE"
 fi
 BACKFILL_STOP="2026-03-01"  # stop when we reach March 1
-if [[ -f "$BACKFILL_STATE" ]]; then
-  BACKFILL_DATE=$(cat "$BACKFILL_STATE")
-  # Validate YYYY-MM-DD format; reset if corrupted
-  if ! [[ "$BACKFILL_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: corrupted backfill pointer '$BACKFILL_DATE', resetting" >&2
-    BACKFILL_DATE=$(date -v-1d '+%Y-%m-%d')
-    echo "$BACKFILL_DATE" > "$BACKFILL_STATE"
-  fi
-else
-  # Start from yesterday
-  BACKFILL_DATE=$(date -v-1d '+%Y-%m-%d')
-fi
-# Check if backfill is complete
-if [[ "$BACKFILL_DATE" < "$BACKFILL_STOP" ]]; then
-  BACKFILL_DATE=""
+# Pointer logic lives in dream-backfill-pointer.sh (tested by
+# test_dream_backfill_pointer.py). BACKFILL_DAYS_PER_RUN (env, default 1) sets
+# how many days back each run covers.
+read -r BACKFILL_DATE BACKFILL_OLDEST < <("$HOME/i446-monorepo/scripts/dream-backfill-pointer.sh" "$BACKFILL_STATE" "$BACKFILL_STOP"; echo) || true
+BACKFILL_DATE="${BACKFILL_DATE:-}"; BACKFILL_OLDEST="${BACKFILL_OLDEST:-}"
+if [[ -z "$BACKFILL_DATE" ]]; then
   BACKFILL_MSG="Backfill complete (reached $BACKFILL_STOP)."
-else
+elif [[ "$BACKFILL_OLDEST" == "$BACKFILL_DATE" ]]; then
   BACKFILL_MSG="Backfill date: $BACKFILL_DATE. Also scan AI transcripts from this date for loose threads."
-  # Advance pointer one day back for next run
-  NEXT_BACKFILL=$(date -j -f '%Y-%m-%d' "$BACKFILL_DATE" -v-1d '+%Y-%m-%d')
-  echo "$NEXT_BACKFILL" > "$BACKFILL_STATE"
+else
+  BACKFILL_MSG="Backfill dates: $BACKFILL_DATE back through $BACKFILL_OLDEST. Also scan AI transcripts from these dates for loose threads."
 fi
 
 # --- Template the prompt ---
