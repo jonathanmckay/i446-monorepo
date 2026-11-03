@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Q2 m5x2 Goals dashboard. Reads goals.json, renders a grouped goal table."""
+"""m5x2 Goals dashboard. Reads goals.json (current quarter) or goals-<YYYYqN>.json
+(archived quarter, via ?q=2026q2) and renders a grouped goal table.
+
+Goal rows carry p, dri, goal, link plus either the legacy q1_actual field or the
+roadmap fields metric, baseline, target, due, source.
+"""
 
 import json
+import re
+from html import escape
 from pathlib import Path
-from flask import Flask
+from flask import Flask, abort, request
 
 ROOT = Path(__file__).parent
 GOALS_PATH = ROOT / "goals.json"
@@ -11,8 +18,27 @@ GOALS_PATH = ROOT / "goals.json"
 app = Flask(__name__)
 
 
-def load_goals():
-    return json.loads(GOALS_PATH.read_text())
+QUARTER_RE = re.compile(r"^\d{4}q[1-4]$")
+
+
+def goals_path(q=None):
+    if not q:
+        return GOALS_PATH
+    if not QUARTER_RE.match(q):
+        return None
+    path = ROOT / f"goals-{q}.json"
+    return path if path.exists() else None
+
+
+def load_goals(q=None):
+    path = goals_path(q)
+    if path is None:
+        abort(404)
+    return json.loads(path.read_text())
+
+
+def _e(value):
+    return escape("" if value is None else str(value))
 
 
 STYLE = """
@@ -46,6 +72,11 @@ col.c-dri { width: 96px; }
 col.c-goal { width: auto; }
 col.c-actual { width: 120px; }
 col.c-link { width: 72px; }
+col.c-base, col.c-target { width: 18%; }
+col.c-due { width: 92px; }
+col.c-src { width: 14%; }
+.metric { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.due, .src { color: var(--muted); font-size: 11px; }
 thead th { text-align: left; font-weight: normal; color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: 1px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 tbody td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
 tbody tr:last-child td { border-bottom: none; }
@@ -68,32 +99,58 @@ tbody tr:nth-child(even) { background: var(--row-alt); }
 """
 
 
-def render():
-    data = load_goals()
-    quarter = data.get("quarter", "")
+LEGACY_COLS = [("P", "c-p"), ("DRI", "c-dri"), ("Goal", "c-goal"), ("Q1 Actual", "c-actual"), ("Link", "c-link")]
+ROADMAP_COLS = [("P", "c-p"), ("DRI", "c-dri"), ("Goal", "c-goal"), ("Baseline", "c-base"),
+                ("Target", "c-target"), ("Due", "c-due"), ("Source", "c-src")]
+
+
+def _is_roadmap(data):
+    return any("target" in g for s in data.get("sections", []) for g in s.get("goals", []))
+
+
+def _row(g, roadmap):
+    p = _e(g.get("p", ""))
+    cells = [f'<td class="p p-{p}">{p}</td>', f'<td class="dri">{_e(g.get("dri"))}</td>']
+    if roadmap:
+        goal = _e(g.get("goal"))
+        if g.get("metric"):
+            goal += f'<div class="metric">{_e(g["metric"])}</div>'
+        if g.get("link"):
+            goal += f' <a href="{_e(g["link"])}" target="_blank">open →</a>'
+        cells += [f'<td class="goal">{goal}</td>',
+                  f'<td class="actual">{_e(g.get("baseline"))}</td>',
+                  f'<td class="actual">{_e(g.get("target"))}</td>',
+                  f'<td class="due">{_e(g.get("due"))}</td>',
+                  f'<td class="src">{_e(g.get("source"))}</td>']
+    else:
+        link = g.get("link")
+        link_cell = f'<a href="{_e(link)}" target="_blank">open →</a>' if link else '<span class="na">—</span>'
+        cells += [f'<td class="goal">{_e(g.get("goal"))}</td>',
+                  f'<td class="actual">{_e(g.get("q1_actual"))}</td>',
+                  f'<td class="link">{link_cell}</td>']
+    return f'<tr>{"".join(cells)}</tr>'
+
+
+def render(q=None):
+    data = load_goals(q)
+    roadmap = _is_roadmap(data)
+    cols = ROADMAP_COLS if roadmap else LEGACY_COLS
+    title = _e(data.get("title") or "m5x2 GOALS")
+    sub = _e(data.get("quarter", ""))
+    if data.get("as_of"):
+        sub += f" · as of {_e(data['as_of'])}"
+    colgroup = "".join(f'<col class="{c}">' for _, c in cols)
+    thead = "".join(f"<th>{h}</th>" for h, _ in cols)
     sections_html = []
     for section in data.get("sections", []):
-        rows = []
-        for g in section["goals"]:
-            p = g.get("p", "")
-            link = g.get("link")
-            link_cell = f'<a href="{link}" target="_blank">open →</a>' if link else '<span class="na">—</span>'
-            rows.append(
-                f'<tr>'
-                f'<td class="p p-{p}">{p}</td>'
-                f'<td class="dri">{g.get("dri","")}</td>'
-                f'<td class="goal">{g.get("goal","")}</td>'
-                f'<td class="actual">{g.get("q1_actual","")}</td>'
-                f'<td class="link">{link_cell}</td>'
-                f'</tr>'
-            )
+        rows = "".join(_row(g, roadmap) for g in section.get("goals", []))
         sections_html.append(
             f'<div class="section">'
-            f'<h2>{section["name"]}</h2>'
+            f'<h2>{_e(section.get("name"))}</h2>'
             f'<table>'
-            f'<colgroup><col class="c-p"><col class="c-dri"><col class="c-goal"><col class="c-actual"><col class="c-link"></colgroup>'
-            f'<thead><tr><th>P</th><th>DRI</th><th>Goal</th><th>Q1 Actual</th><th>Link</th></tr></thead>'
-            f'<tbody>{"".join(rows)}</tbody>'
+            f'<colgroup>{colgroup}</colgroup>'
+            f'<thead><tr>{thead}</tr></thead>'
+            f'<tbody>{rows}</tbody>'
             f'</table>'
             f'</div>'
         )
@@ -102,13 +159,13 @@ def render():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Q2 m5x2 Goals</title>
+<title>{title}</title>
 {STYLE}
 </head>
 <body>
 <div class="topbar">
-  <h1>Q2 m5x2 GOALS</h1>
-  <span class="quarter">{quarter}</span>
+  <h1>{title}</h1>
+  <span class="quarter">{sub}</span>
 </div>
 {"".join(sections_html)}
 </body>
@@ -119,13 +176,13 @@ def render():
 @app.route("/")
 @app.route("/goals/")
 def index():
-    return render()
+    return render(request.args.get("q"))
 
 
 @app.route("/api/goals")
 @app.route("/goals/api/goals")
 def api_goals():
-    return load_goals()
+    return load_goals(request.args.get("q"))
 
 
 if __name__ == "__main__":
