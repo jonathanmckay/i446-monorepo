@@ -109,3 +109,36 @@ def test_teams_upn_is_matched(tmp_path):
         "  teams_upn: jessicaallen@microsoft.com\n---\nbody\n")
     emap = M._build_email_map([f])
     assert emap.get("jessicaallen@microsoft.com") == "jessica-allen"
+
+
+# ── v177 regressions: EL alias + no future stamps ───────────────────────────
+
+def test_el_is_elliot_not_eldon():
+    # 'EL:JM' is Elliot Silvers' 1:1; Eldon Lei's mechanical initials are 'el'.
+    imap = M._build_initials_map({"eldon-lei", "elliot-silvers"})
+    assert imap["el"] == "elliot-silvers"
+
+
+def test_later_today_meeting_not_stamped(monkeypatch, tmp_path):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    past = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (now + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    items = [{"summary": "JA:JM 1:1", "start": {"dateTime": past}},
+             {"summary": "BL:JM 1:1", "start": {"dateTime": future}}]
+    seen = {}
+
+    class _Req:
+        def __init__(self, kw): seen.update(kw)
+        def execute(self): return {"items": items}
+
+    class _Svc:
+        def events(self): return self
+        def list(self, **kw): return _Req(kw)
+
+    monkeypatch.setattr(M, "_gcal_service", lambda: _Svc())
+    monkeypatch.setattr(M, "GCAL_CAL_IDS", ["x"])
+    out = M._fetch_calendar_signal(7, {"jessica-allen", "bei-lu"}, [])
+    assert "jessica-allen" in out
+    assert "bei-lu" not in out
+    assert seen["timeMax"] <= future
