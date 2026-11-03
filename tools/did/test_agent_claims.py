@@ -414,6 +414,14 @@ def test_release_mode_and_odd_names(hooked, monkeypatch):
     assert "😈 claimed: 4g checkin" in _fast("/2026-4g-checkin 2026-Q3", session="S3")
 
 
+def test_ibxm5x2_releases_its_card(hooked, monkeypatch):
+    """2026-11-03: /ibxm5x2 closes 'ibx m5x2' itself (SKILL.md Step 3), so it
+    must be in SKILL_RELEASES; it sat claimed and spinning since 10-29."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "M5", "content": "ibx m5x2 (10) [10]"}]))
+    out = _fast("/ibxm5x2", session="S9")
+    assert "😈 claimed: ibx m5x2" in out and "releases the claim" in out
+
+
 def test_no_skill_is_both_linked_and_declined():
     assert not set(ac.SKILL_CLAIMS) & set(ac.SKILL_NO_CLAIM)
 
