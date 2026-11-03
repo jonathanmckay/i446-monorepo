@@ -12,9 +12,12 @@ Usage:
              next day's row can be pre-marked at wind-down with the points
              still landing today (2026-10-17, per JM). Points ALWAYS land on
              today, whichever day the mark goes to.
-    [value]  cell value to write (default 1). Cumulative / variable habits
-             (问学, xk20, 冥想, ...) are refused: their points are minute- or
-             Toggl-derived and flow through 1n+, not through 0n row 2.
+    [value]  cell value to write (default 1). Variable / cumulative habits
+             (hiit, 冥想, 问学, xk20, ...) take minutes: '+N' adds to the cell,
+             '=N' sets it, bare N adds for CUMULATIVE_0N and sets otherwise
+             (same as /did). Whatever 0分 change Excel makes on that row is
+             measured and moved; none (points only via weekly 1n+) = nothing
+             moves. Habit and date may come in either order.
     --move-only  the 0n cell is ALREADY marked (by hand, or by an earlier run
              whose 0分 half failed): skip the 0n write and only relocate the
              row-2 weight from the past day to today.
@@ -434,6 +437,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
+    a.habit, a.date = order_args(a.habit, a.date)
     today = daytime.today()
     target = parse_target_date(a.date, today)
     tomorrow = today + timedelta(days=1)
@@ -450,26 +454,37 @@ def main() -> int:
 
     df = _did()
     key, col = resolve_habit(df, a.habit)
-    if key in df.CUMULATIVE_0N or key in df.VARIABLE_0N:
-        raise SystemExit(f"ERROR: {key!r} is a cumulative/variable habit (minute- or "
-                         "Toggl-valued, flows via 1n+); /0n only handles fixed row-2 habits")
+    # Variable/cumulative habits (hiit, 冥想, xk20, ...): minutes, not a
+    # row-2 mark. Their points reach the day's 0分 through formulas of their
+    # own (hiit: 0n!AE*2 → hcbi!Y → 0分!W), so the measured delta is moved
+    # as-is (2026-11-03: '/0n 11.02 hiit +15' used to be refused).
+    variable = key in df.CUMULATIVE_0N or key in df.VARIABLE_0N
     try:
-        value = int(a.value) if float(a.value).is_integer() else float(a.value)
-    except ValueError:
-        raise SystemExit(f"ERROR: value {a.value!r} is not numeric")
+        if variable:
+            vmode, value = parse_value(a.value, key in df.CUMULATIVE_0N)
+        else:
+            vmode, value = None, parse_value(a.value, False)[1]
+    except ValueError as e:
+        raise SystemExit(f"ERROR: {e}")
+    if variable and a.move_only:
+        raise SystemExit(f"ERROR: --move-only can't size a variable habit's points ({key!r} has "
+                         "no row-2 weight model); move them with neon.excel.batch_append")
 
     src = f"0n backfill {key} {target.isoformat()}"
     past_md = f"{target.month}/{target.day}"
     today_md = f"{today.month}/{today.day}"
     out: dict = {"habit": key, "0n_col": col_letter(col), "date": target.isoformat(),
                  "today": today.isoformat(), "value": value, "src": src}
+    if variable:
+        out["mode"] = vmode
     if week_start(target) != week_start(today):
         out["note"] = (f"cross-week move: {past_md} is in the week of "
                        f"{week_start(target).isoformat()}; that week's 1s totals change")
 
     # 1. read (+ write) in one AppleScript
     do_write = not (a.move_only or a.dry_run)
-    res = ix_run(build_script(col, target.month, target.day, value, do_write), timeout=60.0)
+    res = ix_run(build_script(col, target.month, target.day, value, do_write,
+                                variable_mode=vmode), timeout=60.0)
     if res.returncode != 0 or res.stdout.startswith("ERROR"):
         raise SystemExit(f"ERROR: excel read failed: {res.stderr or res.stdout}")
     r = parse_script_output(res.stdout)
@@ -477,14 +492,40 @@ def main() -> int:
     pre0n = r.get("PRE0N", "")
     out.update({"weight": weight, "pre_0n": pre0n, "rows": [r["n_row"], r["f_row"]]})
 
-    if weight <= 0:
+    if weight <= 0 and not variable:
         if do_write and pre0n == "":  # already written: revert, nothing to move anyway
             revert_or_die(col, r["n_row"], pre0n,
                           f"{key!r} has no row-2 weight ({weight}); nothing to move", past_md)
         raise SystemExit(f"ERROR: {key!r} has no row-2 weight ({weight}); nothing to move")
 
     # 2. plan the move
-    if a.move_only:
+    if variable and a.dry_run:
+        pre = parse_num(pre0n)
+        out["planned_0n"] = pre + value if vmode == "add" else value
+        deltas = {}
+        out["basis"] = "unmeasured (variable habit: a real run measures the 0分 change and moves it)"
+    elif variable:
+        pre, post = parse_num(pre0n), parse_num(r.get("POST0N", ""))
+        change = post - pre
+        deltas = compute_deltas(r["PRE"], r["POST"])
+        if not deltas:
+            # Never trust "no change" on the first read: a stalled recalc
+            # looks exactly like a habit whose points flow only via 1n+.
+            rm = ix_run(build_remeasure_script(target.month, target.day), timeout=90.0)
+            if rm.returncode == 0 and not rm.stdout.startswith("ERROR"):
+                deltas = compute_deltas(r["PRE"], parse_script_output(rm.stdout)["POST"])
+                out["recalc"] = "calculate full (re-measured after no visible change)"
+        if not deltas_follow_change(deltas, change):
+            revert_or_die(col, r["n_row"], pre0n,
+                          "measured 0分 change "
+                          f"{ {FEN_NAMES[c]: v for c, v in deltas.items()} } doesn't follow the "
+                          f"0n change {fmt_num(pre)} → {fmt_num(post)} for {key}", past_md)
+        out["basis"] = "measured 0分 delta (variable habit)"
+        out["post_0n"] = r.get("POST0N", "")
+        if not deltas:
+            out["no_daily_points"] = ("no daily 0分 change: this habit's points flow via weekly 1n+, "
+                                      "nothing to move")
+    elif a.move_only:
         if pre0n == "":
             raise SystemExit(f"ERROR: --move-only but 0n!{col_letter(col)} on {past_md} is empty; "
                              "run without --move-only")
@@ -531,11 +572,13 @@ def main() -> int:
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
-    if in_place:
+    if in_place or not moves:
         # Target row IS today: the 0n mark already credited today's 0分 by
         # formula. A back-out/credit pair on the same row would be ledger noise.
-        out["in_place"] = True
-        out["credit"] = {"date": today_md, "ok": True, "note": "credited by formula, no move"}
+        # No moves (variable habit with no daily 0分 change): just save.
+        if in_place:
+            out["in_place"] = True
+            out["credit"] = {"date": today_md, "ok": True, "note": "credited by formula, no move"}
         try:
             out["dashboard"] = save_and_refresh()
         except Exception as e:  # noqa: BLE001
@@ -549,8 +592,13 @@ def main() -> int:
     out["back_out"] = {"date": past_md, "ok": bool(back.get("ok")), "row": back.get("row"),
                        "error": back.get("error")}
     if not back.get("ok"):
-        out["recovery"] = (f"0n is marked but points not moved. Rerun: 0n-backfill.py "
-                           f"{key!r} {target.isoformat()} {value} --move-only")
+        out["recovery"] = (
+            f"0n is marked but points not moved. Append "
+            f"{[(m['col'], signed(-m['pts'])) for m in moves]} to 0分 {past_md} and "
+            f"{[(m['col'], signed(m['pts'])) for m in moves]} to 0分 {today_md} "
+            f"(src {src!r}) via neon.excel.batch_append" if variable else
+            f"0n is marked but points not moved. Rerun: 0n-backfill.py "
+            f"{key!r} {target.isoformat()} {value} --move-only")
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 2
     fwd = neon_excel.batch_append("0分", [(col_letter(c), signed(v)) for c, v in deltas.items()],

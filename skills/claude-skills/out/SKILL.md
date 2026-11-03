@@ -1,63 +1,44 @@
 ---
 name: "out"
-description: "Log outdoor/outside score to hcbi AI column in Neon. Usage: /out <score>"
+description: "Use when JM logs his outdoor score with /out, 'out 10', 'went outside', or 'out -1 yesterday'. Writes hcbi's AI column on the day his text names (today by default). Not for kids' outdoor time (1n+ '1 kids nature') and not for workouts (/hiit)."
 user-invocable: true
 ---
 
-# Log Outdoor Score (/out)
+# Outdoor score (/out)
 
-Write a value to the `AI` column in the `hcbi` sheet of Neon for today.
+Set the `AI` cell of the `hcbi` sheet in Neon for one day.
 
 ## Usage
 
 ```
-/out <score>
+/out <score> [when]
 ```
 
-Common values: `10` (went outside), `-1` (didn't go out).
-
-## Response Style
-
-**Minimal output.** Confirm in one line:
-```
-out → 10 (hcbi AI, row 113)
-```
+Common scores: `10` (went outside), `-1` (didn't). `when` uses the /caf
+grammar: nothing (today), `yesterday`, `3 days ago`, a weekday, `10.30` /
+`10/30`, `2026-10-28`. Order does not matter: `/out yesterday 10` works.
 
 ## Steps
 
-1. **Write to hcbi AI column** through the excel-http daemon (`neon.excel.batch_write`)
-   (executes the AppleScript on Ix). Do NOT call local `osascript`.
-
-   - Workbook: `Neon分v12.2.xlsx`
-   - Sheet: `hcbi`
-   - Column: `AI` (idempotently write header "AI" to AI1 on each run)
-   - Date column: `B` (M/D format)
-   - Find today's row, write the score value
-
-2. **Report** the result.
-
-## Write (excel-http daemon)
-
-Through the daemon on Ix (journaled; Neon-off-Excel step 2c, 2026-10-19). The
-client falls back to ssh+osascript by itself if the daemon is down. Substitute
-`SCORE` with the argument.
+One command, no inference, no confirmation:
 
 ```bash
-python3 - <<'PY'
-import sys
-sys.path.insert(0, "/Users/mckay/i446-monorepo/lib")
-from neon import excel
-import daytime
-t = daytime.today()
-r = excel.batch_write("hcbi", [{"col": "AI", "value": SCORE}], date=f"{t.month}/{t.day}", src="out score")
-print("OK: wrote SCORE to AI%s" % r.get("row") if r.get("ok") else "ERROR: %s" % (r.get("error") or r))
-PY
+python3 ~/i446-monorepo/tools/ate/out.py "<arguments verbatim>"
 ```
 
-## Notes
+It resolves the column through `config/neon-cols.json` (hcbi → AI), finds the
+day's row by `M/D` in column B, and SETS the cell through the excel-http
+daemon on Ix (journaled). Never call local `osascript`.
 
-- All writes go through the excel-http daemon on Ix (journaled). If
-  Ix is unreachable the helper exits 3 with a clear error — do NOT
-  fall back to local `osascript`. Local writes cause OneDrive merge
-  conflicts against the canonical workbook on Ix.
-- Neon must be open on Ix.
+## Response Style
+
+Print the script's one line and stop:
+
+```
+out → 10 (2026-11-03, hcbi AI308)
+out → -1 (2026-11-02, hcbi AI307, was 10.0)
+```
+
+`was` means the day already had a value and this replaced it. An `ERROR:`
+line (no row for that date, daemon down, unreadable date) is shown as is; do
+not retry with a different date.

@@ -192,3 +192,44 @@ def test_main_never_reads_stdin():
     src = (_HERE / "0n-backfill.py").read_text()
     body = src[src.index("def main() -> int:"):]
     assert "os.dup2(os.open(os.devnull, os.O_RDONLY), 0)" in body[:600]
+
+
+# --- variable habits + either-order args (2026-11-03: '/0n 11.02 hiit +15') ---
+@pytest.mark.parametrize("a,b,expect", [
+    ("11.02", "hiit", ("hiit", "11.02")),
+    ("hiit", "11.02", ("hiit", "11.02")),
+    ("yesterday", "0l", ("0l", "yesterday")),
+    ("ibx i9", "9/18", ("ibx i9", "9/18")),
+])
+def test_order_args(zb, a, b, expect):
+    assert zb.order_args(a, b) == expect
+
+
+@pytest.mark.parametrize("raw,cum,expect", [
+    ("+15", False, ("add", 15)), ("=15", False, ("set", 15)),
+    ("15", False, ("set", 15)), ("15", True, ("add", 15)),
+    ("+7.5", True, ("add", 7.5)), ("-5", False, ("set", -5)),
+])
+def test_parse_value(zb, raw, cum, expect):
+    assert zb.parse_value(raw, cum) == expect
+
+
+def test_parse_value_rejects_text(zb):
+    with pytest.raises(ValueError):
+        zb.parse_value("+abc", False)
+
+
+def test_deltas_follow_change(zb):
+    assert zb.deltas_follow_change({23: 30.0}, 15)
+    assert zb.deltas_follow_change({}, 15)               # weekly-1n+ habit: nothing to move
+    assert zb.deltas_follow_change({23: -10.0}, -5)      # =N lowering the cell
+    assert not zb.deltas_follow_change({23: 30.0, 20: -4.0}, 15)
+    assert not zb.deltas_follow_change({23: 30.0}, 0)
+
+
+def test_variable_script_adds_without_blank_guard_and_recalcs_full(zb):
+    s = zb.build_script(31, 11, 2, 15, True, variable_mode="add")
+    assert "(pv as number) + 15" in s and "calculate full" in s
+    assert "SKIPPED" not in s
+    s = zb.build_script(31, 11, 2, 15, True, variable_mode="set")
+    assert "set nv to 15" in s and "pv as number" not in s

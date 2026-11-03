@@ -1,6 +1,6 @@
 ---
 name: "0n"
-description: "Mark a 0₦ habit done usually on a PAST date (although sometimes the habit can be due today or tomorrow) but credit its points to TODAY. Marks the habit's cell on that date's 0n row, measures the points Excel auto-credited to that day (个 usually; 媒/m5/i9/xk/思 for domain columns; 0g's extra +9), backs them out of that day and appends them to today via the excel-http daemon (today's row is credited in place, no move). Tomorrow's row only during 戌/亥. Usage: /0n <habit> <date> [value] [--move-only]  e.g. /0n 0l 09.18"
+description: "Mark a 0₦ habit done usually on a PAST date (although sometimes the habit can be due today or tomorrow) but credit its points to TODAY. Marks the habit's cell on that date's 0n row, measures the points Excel auto-credited to that day (个 usually; 媒/m5/i9/xk/思 for domain columns; 0g's extra +9), backs them out of that day and appends them to today via the excel-http daemon (today's row is credited in place, no move). Tomorrow's row only during 戌/亥. Minute habits (hiit, 冥想, xk20, ...) take +N/=N and move whatever 0分 change Excel makes. Habit and date in either order. Usage: /0n <habit> <date> [value] [--move-only]  e.g. /0n 0l 09.18, /0n 11.02 hiit +15"
 user-invocable: true
 ---
 
@@ -17,13 +17,26 @@ today is when the work of recording it happened.
 python3 ~/i446-monorepo/tools/did/0n-backfill.py "<habit>" <date> [value] [--move-only] [--dry-run]
 ```
 
+Pass the user's arguments through as typed: habit and date may come in either
+order (`/0n 11.02 hiit +15` works), and `+15` / `=15` go through untouched.
+
 - `<habit>`: a 0n row-1 header (`0l`, `0t`, `notes`, `ibx i9`, `早餐`, ...). Case/dash-insensitive.
 - `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, `yesterday`, or `tomorrow`. Usually past. Today's row works too (credited in place, nothing moves). Tomorrow's row is allowed only during 戌/亥 (18:00–22:00) — for a habit done tonight whose row carries tomorrow's date (e.g. 0l on the wake-date row). Points always land on today.
-- `[value]`: cell value, default `1`.
-- `--move-only`: the 0n cell is already marked (by hand, or an earlier run whose 0分 half failed). Skips the 0n write and moves the row-2 weight only.
+- `[value]`: cell value, default `1`. For variable habits it is minutes: `+N` adds to the day's cell, `=N` sets it, bare `N` adds for cumulative habits (`问学`, `xk20/22/26`) and sets for the rest (same as `/did`).
+- `--move-only`: the 0n cell is already marked (by hand, or an earlier run whose 0分 half failed). Skips the 0n write and moves the row-2 weight only. Fixed habits only.
 - `--dry-run`: read-only plan.
 
-Refuses cumulative/variable habits (`问学`, `xk20/22/26`, `冥想`, `o314`, `新闻`, `hiit`, ...): their points are minute- or Toggl-derived and flow through 1n+, not 0n row 2.
+## Variable habits
+
+`hiit`, `冥想`, `o314`, `新闻`, `问学`, `xk20/22/26`, ... carry minutes, not a
+row-2 mark, and their points reach the day's 0分 through formulas of their own
+(hiit: `0n!AE × 2 → hcbi!Y → 0分!W`). For these the script writes the minutes
+(no "already marked" refusal: adding to a partly-filled day is normal), runs
+`calculate full`, and moves exactly the measured 0分 change to today. The
+guard is direction, not size: every changed column must move the same way the
+cell did, or the write is reverted. No measured change after a full recalc
+means the points flow only through weekly 1n+ (`no_daily_points`): the mark
+stays and nothing moves.
 
 ## What it does (one run)
 
@@ -42,7 +55,7 @@ points genuinely still sit on the past day.
 
 ## Report
 
-Relay the JSON: `moves` (column, name, pts), `back_out.date`, `credit.date`, and `note` if the move crosses a Sunday-anchored week (that week's 1s totals change). On exit 2 print the `recovery` line verbatim: it is the exact rerun command.
+Relay the JSON: `moves` (column, name, pts), `back_out.date`, `credit.date`, `pre_0n` → `post_0n` for variable habits, `no_daily_points` if set, and `note` if the move crosses a Sunday-anchored week (that week's 1s totals change). On exit 2 print the `recovery` line verbatim: it is the exact rerun command.
 
 ## Not in scope
 
