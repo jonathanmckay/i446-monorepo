@@ -117,6 +117,9 @@ class Outcomes(unittest.TestCase):
         # Regression: substring "ab" in "Enable"/"Disable" used to read as Promoted.
         self.assertEqual(self._o("Enable for all (100% DC)"), "Rolled out")
         self.assertEqual(self._o("Disable legacy (DC)"), "Rolled out")
+        self.assertEqual(self._o("Tablet layout (DC)"), "Rolled out")
+        self.assertEqual(self._o("Fabric ramp 100%"), "Rolled out")
+        self.assertEqual(self._o("Step 2 (A/B)"), "Promoted")
         self.assertEqual(self._o("", analysis="DataCollection", splits="100%"), "Completed")
         self.assertEqual(self._o(""), "Stopped")
 
