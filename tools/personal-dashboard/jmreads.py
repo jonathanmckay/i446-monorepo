@@ -524,32 +524,29 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
 LAUNCHER = Path(__file__).with_name("open-claude-tab.sh")
 
 
+NEW_NOTES = Path.home() / "vault/z_ibx/new-notes.md"
+NEW_NOTES_URL = "obsidian://open?vault=vault&file=z_ibx%2Fnew-notes"
+
+
 def request_review(book_id: str) -> tuple[bool, str]:
-    """Open a Claude tab on Straylight running /bookreview for one book.
-    Takes a book id (the review file's stem), never free text, so the
-    endpoint can only ever start a review of a book already in the vault."""
-    import socket
-    import subprocess
+    """'Write review' (2026-11-04): seed a heading for the book in the notes
+    inbox and hand back the Obsidian link that opens it. The heading carries
+    an iw01 route to the book's own file, so /notes appends what JM writes
+    under it to the review. (Was: ssh to Straylight to open a /bookreview
+    Claude tab, which broke when Straylight stopped taking inbound ssh.)
+    Takes a book id, never free text."""
+    path = find_book_file(book_id)
     book = next((b for b in load_books() if b["id"] == book_id), None)
-    if not book:
+    if not path or not book:
         return False, f"unknown book {book_id}"
-    if read_date(book) is None:
-        return False, "still reading"
-    prompt = f"/bookreview {book['title']}"
-    if book["author"]:
-        prompt += f" by {book['author']}"
-    if "straylight" in socket.gethostname().lower():
-        cmd = [str(LAUNCHER)]
-    else:
-        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "straylight-refit",
-               "~/i446-monorepo/tools/personal-dashboard/open-claude-tab.sh"]
-    try:
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=25)
-    except subprocess.TimeoutExpired:
-        return False, "Straylight did not answer"
-    if r.returncode != 0:
-        return False, (r.stderr or r.stdout).strip()[-200:] or f"exit {r.returncode}"
-    return True, r.stdout.strip()
+    rel = path.relative_to(Path.home() / "vault").with_suffix("")
+    head = f"## {book['title']} review iw01 -> {rel}"
+    text = NEW_NOTES.read_text(encoding="utf-8") if NEW_NOTES.exists() else ""
+    if head not in text:
+        with NEW_NOTES.open("a", encoding="utf-8") as f:
+            f.write(("" if text.endswith("\n\n") or not text else "\n" if text.endswith("\n") else "\n\n")
+                    + head + "\n\n")
+    return True, NEW_NOTES_URL
 
 
 def find_book_file(book_id: str) -> Path | None:
@@ -582,6 +579,21 @@ def save_draft(book_id: str, text: str) -> tuple[bool, str]:
         f.write(f"\n{quoted}\n")
     invalidate()
     return True, str(path)
+
+
+def view_review(book_id: str) -> tuple[bool, dict | str]:
+    """'View' button (2026-11-04): the review file's body, read-only, for
+    reading a review in the page without the blog or a Claude tab."""
+    path = find_book_file(book_id)
+    if not path:
+        return False, f"unknown book {book_id}"
+    parsed = parse_file(path)
+    if not parsed:
+        return False, f"unreadable {path.name}"
+    fm, body = parsed
+    return True, {"title": str(fm.get("title") or path.stem), "author": str(fm.get("author") or ""),
+                  "score": fm.get("score") if isinstance(fm.get("score"), int) else None,
+                  "status": str(fm.get("status") or ""), "body": body.strip()}
 
 
 def delete_record(book_id: str) -> tuple[bool, str]:
@@ -662,6 +674,21 @@ __SHARED_STYLE__
 .draft-btn:disabled { background: var(--badge-bg); color: var(--h2); border-color: var(--grid); cursor: default; }
 .del-link { font-size: 12px; color: #c0392b !important; border-bottom: 1px dotted #c0392b !important;
             text-decoration: none; cursor: pointer; }
+#viewDlg { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 30;
+           display: none; align-items: center; justify-content: center; }
+#viewDlg.show { display: flex; }
+#viewDlg .box { background: var(--badge-bg, #222); border: 1px solid var(--grid); border-radius: 8px;
+                padding: 18px 22px; width: min(720px, 92vw); max-height: 85vh; overflow-y: auto; }
+#viewDlg h3 { margin: 0 0 4px; font-family: Georgia, serif; font-size: 18px; }
+#viewDlg .body { font: 15px/1.65 Georgia, serif; margin-top: 12px; }
+#viewDlg .body p { margin: 0 0 12px; }
+#viewDlg .body blockquote { margin: 0 0 12px; padding-left: 12px; border-left: 3px solid var(--grid); color: var(--h2); }
+#viewDlg .row { display: flex; justify-content: flex-end; margin-top: 10px; }
+#viewDlg button { font: 12px Georgia, serif; padding: 6px 14px; border-radius: 3px; cursor: pointer;
+                  background: var(--badge-bg); color: var(--h2); border: 1px solid var(--grid); }
+.view-btn { font: 12px Georgia, serif; padding: 5px 12px; margin-right: 10px; border-radius: 3px; cursor: pointer;
+            background: var(--badge-bg); color: var(--nav-text); border: 1px solid var(--grid); }
+.shelf .stars { font-size: 9px; letter-spacing: 0; display: block; text-align: center; margin-top: 2px; }
 #draftDlg { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 30;
             display: none; align-items: center; justify-content: center; }
 #draftDlg.show { display: flex; }
@@ -712,6 +739,15 @@ __SHARED_STYLE__
   <div class="card shelf-col">
     <h2 id="shelfTitle">Read This Year</h2>
     <div class="shelf" id="shelf"></div>
+  </div>
+</div>
+
+<div id="viewDlg">
+  <div class="box">
+    <h3 id="viewTitle"></h3>
+    <div class="muted" id="viewMeta"></div>
+    <div class="body" id="viewBody"></div>
+    <div class="row"><button onclick="closeView()">Close</button></div>
   </div>
 </div>
 
@@ -777,6 +813,37 @@ function saveDraft() {
 }
 document.getElementById('draftDlg').addEventListener('click', ev => { if (ev.target.id === 'draftDlg') closeDraft(); });
 
+// View (2026-11-04): read a review in place. Paragraphs split on blank
+// lines; `>` lines (web drafts, quotes) render as blockquotes.
+function mdLite(text) {
+  return String(text || '').split(/\n\s*\n/).map(par => {
+    const lines = par.split('\n');
+    if (lines.every(l => l.trim().startsWith('>')))
+      return '<blockquote>' + esc(lines.map(l => l.replace(/^\s*>\s?/, '')).join(' ')) + '</blockquote>';
+    const h = par.match(/^#+\s+(.*)$/);
+    if (h && lines.length === 1) return '<p><b>' + esc(h[1]) + '</b></p>';
+    return '<p>' + esc(par.replace(/\n/g, ' ')) + '</p>';
+  }).join('');
+}
+function openView(id) {
+  const dlg = document.getElementById('viewDlg');
+  document.getElementById('viewTitle').textContent = 'Loading…';
+  document.getElementById('viewMeta').innerHTML = '';
+  document.getElementById('viewBody').innerHTML = '';
+  dlg.classList.add('show');
+  fetch('/jmreads/view/' + encodeURIComponent(id)).then(r => r.json()).then(j => {
+    if (!j.ok) { document.getElementById('viewTitle').textContent = 'Failed: ' + (j.error || ''); return; }
+    document.getElementById('viewTitle').textContent = j.title;
+    document.getElementById('viewMeta').innerHTML = [j.author ? 'by ' + esc(j.author) : '', stars(j.score),
+      j.status ? esc(j.status) : ''].filter(Boolean).join(' · ');
+    document.getElementById('viewBody').innerHTML = j.body ? mdLite(j.body)
+      : '<div class="muted">No review written yet.</div>';
+  }).catch(() => { document.getElementById('viewTitle').textContent = 'Failed — offline'; });
+}
+function closeView() { document.getElementById('viewDlg').classList.remove('show'); }
+document.getElementById('viewDlg').addEventListener('click', ev => { if (ev.target.id === 'viewDlg') closeView(); });
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeView(); });
+
 fetch('/api/reads').then(r => r.json()).then(d => {
   // Currently reading
   document.getElementById('reading').innerHTML = d.reading.length ? d.reading.map(b => `
@@ -812,9 +879,10 @@ fetch('/api/reads').then(r => r.json()).then(d => {
     const ex = e.type === 'reviewed' && b.excerpt ? `<div class="excerpt">${esc(b.excerpt)}</div>` : '';
     const writeBtn = (b.status !== 'reading' && !b.reviewed)
       ? `<button class="review-btn" data-id="${esc(b.id)}">Write review</button>` : '';
+    const viewBtn = b.id ? `<button class="view-btn" data-id="${esc(b.id)}">View</button>` : '';
     const draftBtn = b.id ? `<button class="draft-btn" data-id="${esc(b.id)}" data-title="${esc(b.title)}">Draft</button>` : '';
     const delLink = b.id ? `<a class="del-link" data-id="${esc(b.id)}" data-title="${esc(b.title)}">Delete</a>` : '';
-    const links = [writeBtn, draftBtn, b.url ? `<a href="${esc(b.url)}" target="_blank">Read review</a>` : '',
+    const links = [viewBtn, writeBtn, draftBtn, b.url ? `<a href="${esc(b.url)}" target="_blank">Read review</a>` : '',
                    b.goodreads ? `<a href="${esc(b.goodreads)}" target="_blank">Goodreads</a>` : '', delLink].join('');
     return `<div class="ev">
       <div class="avatar">JM</div>
@@ -825,6 +893,7 @@ fetch('/api/reads').then(r => r.json()).then(d => {
         <div class="bookbox">${cover(b, 'lg')}
           <div><div class="t">${esc(b.title)}${series(b)}</div><div class="a">by ${esc(b.author)}</div>
           ${b.pages ? `<div class="a">${b.pages} pages</div>` : ''}
+          ${b.score ? `<div class="a">${stars(b.score)}</div>` : ''}
           <div class="links" style="margin-top:10px">${links}</div></div>
         </div>
       </div>
@@ -836,14 +905,18 @@ fetch('/api/reads').then(r => r.json()).then(d => {
   document.addEventListener('click', ev => {
     const rv = ev.target.closest('.review-btn');
     if (rv && !rv.disabled) {
-      rv.disabled = true; rv.textContent = 'Opening…';
+      rv.disabled = true; rv.textContent = 'Seeding new-notes…';
       fetch('/jmreads/review/' + encodeURIComponent(rv.dataset.id), {method: 'POST'})
         .then(r => r.json()).then(j => {
-          rv.textContent = j.ok ? (j.where === 'cmux' ? 'Opened in cmux' : 'Opened in Terminal') : 'Failed';
-          if (!j.ok) { rv.title = j.error || ''; rv.disabled = false; }
+          if (j.ok) { rv.textContent = 'Opened new-notes'; window.location.href = j.where; }
+          else { rv.textContent = 'Failed'; rv.title = j.error || ''; rv.disabled = false; }
         }).catch(() => { rv.textContent = 'Failed'; rv.disabled = false; });
       return;
     }
+    const vw = ev.target.closest('.view-btn');
+    if (vw) { openView(vw.dataset.id); return; }
+    const sv = ev.target.closest('.shelf-item');
+    if (sv && sv.dataset.id) { openView(sv.dataset.id); return; }
     const dr = ev.target.closest('.draft-btn');
     if (dr) { openDraft(dr.dataset.id, dr.dataset.title); return; }
     const del = ev.target.closest('.del-link');
@@ -859,7 +932,8 @@ fetch('/api/reads').then(r => r.json()).then(d => {
 
   // Shelf
   document.getElementById('shelfTitle').textContent = 'Read in ' + d.year + ' (' + d.read.length + ')';
-  document.getElementById('shelf').innerHTML = d.read.map(b => `<div title="${esc(b.title)}">${cover(b, 'sm')}</div>`).join('');
+  document.getElementById('shelf').innerHTML = d.read.map(b =>
+    `<div class="shelf-item" data-id="${esc(b.id)}" title="${esc(b.title)}" style="cursor:pointer">${cover(b, 'sm')}${stars(b.score)}</div>`).join('');
 }).catch(err => {
   document.getElementById('feed').innerHTML = '<div class="muted">Failed to load /api/reads: ' + esc(err) + '</div>';
 });

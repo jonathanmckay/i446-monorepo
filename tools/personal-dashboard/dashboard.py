@@ -3468,8 +3468,8 @@ def jmreads_cover(key):
 
 @app.route("/jmreads/review/<book_id>", methods=["POST"])
 def jmreads_review(book_id):
-    """'Write review' button: open /bookreview for this book in a new Claude
-    tab on Straylight (cmux, else Terminal)."""
+    """'Write review' button: seed a heading (iw01 → the book's review file)
+    in z_ibx/new-notes.md; `where` is the obsidian:// link that opens it."""
     ok, msg = jmreads.request_review(book_id)
     return jsonify({"ok": ok, "where": msg if ok else None, "error": None if ok else msg}), (200 if ok else 400)
 
@@ -3481,6 +3481,13 @@ def jmreads_draft(book_id):
     text = (request.get_json(silent=True) or {}).get("text", "")
     ok, msg = jmreads.save_draft(book_id, text)
     return jsonify({"ok": ok, "error": None if ok else msg}), (200 if ok else 400)
+
+
+@app.route("/jmreads/view/<book_id>")
+def jmreads_view(book_id):
+    """'View' button: the book's review text, read-only."""
+    ok, res = jmreads.view_review(book_id)
+    return jsonify({"ok": True, **res} if ok else {"ok": False, "error": res}), (200 if ok else 404)
 
 
 @app.route("/jmreads/delete/<book_id>", methods=["POST"])
