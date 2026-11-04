@@ -519,6 +519,14 @@ class TestReviewSheetSupport:
         srv._row_still_matches("0s897", 5, "1/5/27")
         assert "((year of cv) as integer) = 2027" in scripts[-1]
 
+    def test_lookup_excel_failure_is_not_not_found(self, srv, monkeypatch):
+        monkeypatch.setattr(srv, "osascript", lambda s: (1, "", "Excel got an error: busy"))
+        with pytest.raises(srv.ExcelError):
+            srv.lookup_row("0s897", "10/28/26")
+        monkeypatch.setattr(srv, "osascript", lambda s: (0, "0", ""))
+        assert srv.lookup_row("0s897", "10/28/26") is None
+        assert srv.do_lookup({"sheet": "0s897", "date": "10/28/26"})["error"] == "date_not_found"
+
     def test_as_literal_and_text_mode(self, srv):
         lit = srv.as_literal('line "one"\r\nline two\n= not a formula')
         assert lit == 'line \\"one\\"" & linefeed & "line two" & linefeed & "= not a formula'

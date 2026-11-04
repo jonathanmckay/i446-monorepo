@@ -23,7 +23,8 @@ def w(monkeypatch):
     monkeypatch.setattr(mod.excel, "batch_write", fake_bw)
     monkeypatch.setattr(mod.excel, "read",
                         lambda sheet, col, row=None, date=None: {"ok": True, "value": "10.3"})
-    monkeypatch.setattr(mod.excel, "lookup_row", lambda sheet, key: 295)
+    monkeypatch.setattr(mod.excel, "lookup", lambda sheet, key: {"ok": True, "row": 295})
+    monkeypatch.setattr(mod, "LOOKUP_RETRY_WAIT", 0)
     mod._calls = calls
     return mod
 
@@ -79,3 +80,27 @@ def test_chunks_and_refuses_fallback_for_formula_like_prose(w):
     assert w.main(["--sheet", "i9+m5x2", "--row", "44", "--src", "x", *cells]) == 0
     assert [len(c["items"]) for c in w._calls] == [4, 1]
     assert all(c["fallback"] is False for c in w._calls)
+
+
+def test_excel_busy_retries_then_writes(w, monkeypatch):
+    resp = iter([{"ok": False, "error": "excel_error", "detail": "busy"}, {"ok": True, "row": 302}])
+    monkeypatch.setattr(w.excel, "lookup", lambda sheet, key: next(resp))
+    monkeypatch.setattr(w, "merge_top", lambda sheet, col, row: row)
+    assert w.main(["--sheet", "0s897", "--date", "2026-10-28", "--merge-col", "Z",
+                   "--src", "1s897", "Z=460"]) == 0
+    assert w._calls[0]["row"] == 302
+
+
+def test_excel_busy_twice_is_not_reported_as_missing(w, monkeypatch, capsys):
+    monkeypatch.setattr(w.excel, "lookup",
+                        lambda sheet, key: {"ok": False, "error": "excel_error", "detail": "busy"})
+    assert w.main(["--sheet", "0s897", "--date", "2026-10-28", "--src", "1s897", "Z=460"]) == 1
+    err = capsys.readouterr().err
+    assert "Excel busy" in err and "not found" not in err and w._calls == []
+
+
+def test_genuine_missing_date_still_says_not_found(w, monkeypatch, capsys):
+    monkeypatch.setattr(w.excel, "lookup",
+                        lambda sheet, key: {"ok": False, "error": "date_not_found"})
+    assert w.main(["--sheet", "0s897", "--date", "2027-03-01", "--src", "1s897", "Z=1"]) == 1
+    assert "not found in 0s897" in capsys.readouterr().err

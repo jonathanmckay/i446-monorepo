@@ -240,6 +240,12 @@ def lookup_row(sheet: str, date_str: str) -> int | None:
     return None
 
 
+def lookup(sheet: str, date_str: str) -> dict | None:
+    """Raw /lookup response, so callers can tell `date_not_found` from
+    `excel_error` (Excel busy). None = daemon unreachable."""
+    return _curl("/lookup", {"sheet": sheet, "date": date_str})
+
+
 # ── ssh+osascript fallback ────────────────────────────────────────────────────
 
 _DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B",

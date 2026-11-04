@@ -204,7 +204,7 @@ WRITE_CHUNK = 4
 
 def _batch_write_retry(items: list, date: str, src: str) -> dict:
     r = neon_excel.batch_write(SHEET, items, date=date, src=src, fallback=False)
-    if not r.get("ok") and "timeout" in str(r.get("error", "")):
+    if not r.get("ok") and any(k in str(r.get("error", "")) for k in ("timeout", "excel_error")):
         r = neon_excel.batch_write(SHEET, items, date=date, src=src, fallback=False)
     return r
 

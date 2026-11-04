@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.11.0"
+VERSION = "1.12.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -383,6 +383,10 @@ def _date_match_as(md: str, year: int | None, text_target: str) -> str:
             f'        end if')
 
 
+class ExcelError(Exception):
+    """Excel didn't answer a row lookup; do_POST maps it to `excel_error`."""
+
+
 def lookup_row(sheet: str, date_str: str) -> int | None:
     """Find the row in `sheet` whose date column matches `date_str` (M/D,
     M/D/YY, YYYY-MM-DD, or a week label).
@@ -418,13 +422,16 @@ tell application "Microsoft Excel"
 end tell
 '''
     rc, out, err = osascript(script)
+    # An osascript failure (Excel busy mid-save, wedged, workbook closed) is
+    # NOT "date not found": returning None here made /1s897 report a row that
+    # existed as missing (2026-11-04, 0s897 10/28 during a stalled save).
     if rc != 0:
-        return None
+        raise ExcelError(err.strip() or f"osascript rc={rc}")
     try:
         n = int(out)
-        return n if n > 0 else None
     except ValueError:
-        return None
+        raise ExcelError(f"unparseable lookup output: {out!r}")
+    return n if n > 0 else None
 
 
 # (sheet, date_str) -> row. Every /append and /write re-ran lookup_row's full
@@ -1169,6 +1176,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = handler(body)
         except subprocess.TimeoutExpired:
             return self._send(504, {"ok": False, "error": "osascript_timeout"})
+        except ExcelError as e:
+            return self._send(503, {"ok": False, "error": "excel_error", "detail": str(e)})
         except Exception as e:
             return self._send(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         return self._send(200 if result.get("ok") else 400, result)

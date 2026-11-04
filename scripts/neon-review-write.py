@@ -27,6 +27,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
@@ -39,6 +40,9 @@ NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
 # The daemon runs each /batch_write as one osascript call under a 15 s cap;
 # 0s.py found four prose cells per call to be the safe size (2026-10-26).
 CHUNK = 4
+# A /lookup that lands inside a stalled save gets excel_error; osascript's cap
+# is 15 s, so wait out one full stall before the single retry.
+LOOKUP_RETRY_WAIT = 15
 
 
 def parse_cell(spec: str) -> dict:
@@ -121,7 +125,16 @@ def main(argv=None) -> int:
     row = a.row
     if a.date:
         key = mdy(dt.date.fromisoformat(a.date))
-        row = excel.lookup_row(a.sheet, key)
+        r = excel.lookup(a.sheet, key)
+        if not (r and r.get("ok")) and (r is None or r.get("error") == "excel_error"):
+            time.sleep(LOOKUP_RETRY_WAIT)
+            r = excel.lookup(a.sheet, key)
+        if r is None or (not r.get("ok") and r.get("error") != "date_not_found"):
+            why = "daemon unreachable" if r is None else f"{r.get('error')}: {r.get('detail', '')}"
+            print(f"ERROR: Excel busy/unreachable looking up {key} in {a.sheet} ({why}). "
+                  f"Nothing written; re-run.", file=sys.stderr)
+            return 1
+        row = r.get("row") if r.get("ok") else None
         if not row:
             print(f"ERROR: {key} not found in {a.sheet}", file=sys.stderr)
             return 1
