@@ -72,7 +72,7 @@ Create events on the **jbm** archive calendar — `calendarId: jonathan.b.mckay@
 
 ## Output 3: Build Order Actuals
 
-Write Toggl entries into the build order (`~/vault/g245/5e-1/build-order.md`) under each 地支 time block in the `## -1₲a` section.
+Write Toggl entries into the build order (`~/vault/g245/5e-1/build-order.md`) under each 地支 time block in the `## -1₲` section.
 
 ### 地支 Time Block Mapping
 
@@ -127,7 +127,7 @@ This runs after Output 3 so the archive includes the actuals.
 - Check if `~/vault/i156/daily/YYYY/MM-DD.md` already exists
 - If it does, skip unless `--force` flag is passed
 - This makes backfill safe to re-run
-- **Build order actuals**: if any `actual:` blocks already exist in the -1₲a section, warn the user ("Actuals already present, clearing and rewriting") then remove all existing `actual:` sub-trees before writing new ones
+- **Build order actuals**: if any `actual:` blocks already exist in the -1₲ section, warn the user ("Actuals already present, clearing and rewriting") then remove all existing `actual:` sub-trees before writing new ones
 - **Google Calendar**: use `allowDuplicates: false` on create-events to avoid duplicate events on rerun
 
 ## Backfill Mode
@@ -149,4 +149,4 @@ This runs after Output 3 so the archive includes the actuals.
 - Google Calendar is the "m5c7"-authed account (its primary is the m5x2 Cal). The archive (Output 2) writes to **jbm = `jonathan.b.mckay@gmail.com`**, which the m5c7 account owns — pass that calendarId explicitly; never write the archive to primary.
 - Toggl CLI works locally on both machines
 - Create `~/vault/i156/daily/YYYY/` directory if it doesn't exist
-- Build order is a single living document; actuals are written for the current day's -1₲a blocks
+- Build order is a single living document; actuals are written for the current day's -1₲ blocks
