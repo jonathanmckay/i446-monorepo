@@ -539,7 +539,7 @@ def request_review(book_id: str) -> tuple[bool, str]:
     book = next((b for b in load_books() if b["id"] == book_id), None)
     if not path or not book:
         return False, f"unknown book {book_id}"
-    rel = path.relative_to(Path.home() / "vault").with_suffix("")
+    rel = path.relative_to(REVIEWS_DIR.parents[1]).with_suffix("")   # vault-relative
     head = f"## {book['title']} review iw01 -> {rel}"
     text = NEW_NOTES.read_text(encoding="utf-8") if NEW_NOTES.exists() else ""
     if head not in text:
