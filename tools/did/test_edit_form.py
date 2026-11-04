@@ -332,3 +332,32 @@ def test_pty_enter_through_after_points_edit_does_not_uncheck_keep(tmp_path):
     assert rc == 0, screen[-300:]
     j = json.loads(out.read_text())
     assert j["points"] == "9" and j["split"] is None
+
+
+def test_done_name_edit_without_pts_renames_task(ef):
+    """Bug 2026-11-04: "2.5x sessions with Theo" -> "1.5x ..." typed into DONE
+    SO FAR's name, no pts done, ^S: exit 0, nothing reached Todoist. With no
+    done record that field has nowhere else to go, so it is the rename."""
+    vals = {"name": "2.5x sessions", "done_name": "1.5x sessions", "name_pre": "2.5x sessions"}
+    r = ef.result(vals)
+    assert r["name"] == "1.5x sessions"
+    assert r["split"] is None
+
+
+def test_done_name_edit_keeps_links_on_rename(ef):
+    vals = {"name": "read doc", "done_name": "read memo", "name_pre": "read doc",
+            "name_full": "read doc [(link)](https://x.test)", "name_links": ["[(link)](https://x.test)"]}
+    assert ef.result(vals)["name"] == "read memo [(link)](https://x.test)"
+
+
+def test_done_name_stays_the_done_record_on_a_split(ef):
+    vals = {"name": "2.5x sessions", "done_name": "1x sessions", "name_pre": "2.5x sessions",
+            "done_pts": "20", "keep": True}
+    r = ef.result(vals)
+    assert r["name"] == "2.5x sessions"
+    assert r["split"]["name"] == "1x sessions"
+
+
+def test_remainder_name_wins_over_done_name_without_pts(ef):
+    vals = {"name": "new name", "done_name": "other", "name_pre": "old name"}
+    assert ef.result(vals)["name"] == "new name"

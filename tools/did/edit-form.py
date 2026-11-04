@@ -248,6 +248,11 @@ def result(vals: dict) -> dict:
     due = (vals.get("due") or "").strip()
     due_iso = "" if (not due or due == (vals.get("due_pre") or "")) else (parse_date(due) or "")
     name = " ".join((vals.get("name") or "").split())
+    done_name = " ".join((vals.get("done_name") or "").split())
+    if not splitting(vals) and done_name and name == vals.get("name_pre") and done_name != name:
+        # no done record to carry it (bug 2026-11-04: "1.5x sessions with
+        # Theo" typed here saved as no change): the done name is the rename
+        name = done_name
     if vals.get("name_links") and name:
         # untouched name: send the original (links in place, edit-fast sees
         # no change); edited: the links ride along at the end
