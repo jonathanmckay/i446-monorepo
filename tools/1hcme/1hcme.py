@@ -103,12 +103,13 @@ def build_label_script(label: str) -> str:
     return f'''tell application "Microsoft Excel"
   set ws to worksheet "{SHEET}" of workbook "{WORKBOOK}"
   set tmpA to string value of range "A2:A600" of ws
-  set tmpB to string value of range "B2:B600" of ws
+  set tmpB to value of range "B2:B600" of ws
   set tmpC to string value of range "C2:C600" of ws
   repeat with r from 2 to 600
     try
       if ((item 1 of (item (r - 1) of tmpA)) as text) = "{label}" and ((item 1 of (item (r - 1) of tmpC)) as text) = "Th" then
-        return "OK|" & ((item 1 of (item (r - 1) of tmpB)) as text)
+        set cv to item 1 of (item (r - 1) of tmpB)
+        if ((class of cv) as text) is "date" then return "OK|" & ((year of cv) as text) & "-" & (((month of cv) as integer) as text) & "-" & ((day of cv) as text)
       end if
     end try
   end repeat
@@ -121,8 +122,8 @@ def thursday_for_label(label: str) -> _dt.date:
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 or not out.startswith("OK|"):
         raise SystemExit(out or proc.stderr.strip() or "ix-osa failed")
-    m, d, y = out[3:].split("/")
-    return _dt.date(2000 + int(y), int(m), int(d))
+    y, m, d = out[3:].split("-")   # _ymd form: col B's date value, not its display
+    return _dt.date(int(y), int(m), int(d))
 
 
 def window(target: _dt.date, today: _dt.date) -> list[_dt.date]:
@@ -150,6 +151,13 @@ def _mdy(d: _dt.date) -> str:
     return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
 
 
+def _ymd(d: _dt.date) -> str:
+    """Key matched against col B's date VALUE (year-month-day, no padding), so
+    lookups don't depend on the column's display format (2026-11-03: B moved
+    from m/d/yy to yyyy.mm.dd)."""
+    return "%d-%d-%d" % (d.year, d.month, d.day)
+
+
 # ---------------------------------------------------------------------------
 # Fetch: values + display-format colors, one Ix round trip
 # ---------------------------------------------------------------------------
@@ -163,17 +171,18 @@ def build_fetch_script(dates: list[_dt.date]) -> str:
     the rendered columns (2 AppleEvents per cell instead of 3 for every A..X
     cell — the first cut timed out at 90s against a busy Excel)."""
     conds = "\n".join(
-        '    if bv = "%s" then set end of hits to {%d, r}' % (_mdy(d), i)
+        '    if bv = "%s" then set end of hits to {%d, r}' % (_ymd(d), i)
         for i, d in enumerate(dates))
     ccols = ", ".join('"%s"' % c for c in COLOR_COLS)
     return f'''tell application "Microsoft Excel"
   set ws to worksheet "{SHEET}" of workbook "{WORKBOOK}"
-  set tmpB to string value of range "B2:B600" of ws
+  set tmpB to value of range "B2:B600" of ws
   set hits to {{}}
   repeat with r from 2 to 600
     set bv to ""
     try
-      set bv to (item 1 of (item (r - 1) of tmpB)) as text
+      set cv to item 1 of (item (r - 1) of tmpB)
+      if ((class of cv) as text) is "date" then set bv to ((year of cv) as text) & "-" & (((month of cv) as integer) as text) & "-" & ((day of cv) as text)
     end try
 {conds}
   end repeat

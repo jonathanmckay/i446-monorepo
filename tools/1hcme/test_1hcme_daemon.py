@@ -70,3 +70,23 @@ def test_ctrl_s_saves(hm):
 
 def test_ctrl_c_aborts(hm):
     assert _answer(hm, "one\x03") == ""
+
+
+# ── 2026-11-03: 0s897!B display moved m/d/yy -> yyyy.mm.dd ──────────────────
+# Both col-B lookups key on the date VALUE (y-m-d), never the displayed text.
+
+def test_fetch_and_label_scripts_match_date_value_not_display(hm):
+    import datetime as dt
+    f = hm.build_fetch_script([dt.date(2026, 10, 29)])
+    assert 'set tmpB to value of range "B2:B600"' in f and "10/29/26" not in f
+    assert '((class of cv) as text) is "date"' in f and 'if bv = "2026-10-29"' in f
+    lab = hm.build_label_script("11.1")
+    assert 'set tmpB to value of range "B2:B600"' in lab
+    assert 'return "OK|" & ((year of cv) as text)' in lab
+
+
+def test_thursday_for_label_parses_ymd_key(hm, monkeypatch):
+    import datetime as dt
+    import types
+    monkeypatch.setattr(hm, "run_bounded", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="OK|2026-10-29\n", stderr=""))
+    assert hm.thursday_for_label("11.1") == dt.date(2026, 10, 29)

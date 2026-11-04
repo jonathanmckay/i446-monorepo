@@ -25,8 +25,8 @@ def test_build_writes_today_and_tomorrow_and_skips_empty():
     ans = {"title": "Good day", "neon": "8", "motivation": "ship it", "win": ""}
     s = z.build_applescript(ans, TODAY)
     # date lookups for both rows present
-    assert 'if bv = "7/14/26" then set todayRow to i + 2' in s
-    assert 'if bv = "7/15/26" then set tomRow to i + 2' in s
+    assert 'if bv = "2026-7-14" then set todayRow to i + 2' in s
+    assert 'if bv = "2026-7-15" then set tomRow to i + 2' in s
     # text field → today row, quoted
     assert 'set value of range ("E" & todayRow) of ws to "Good day"' in s
     # num field → numeric, no quotes
@@ -95,8 +95,8 @@ def test_review_date_arg_is_the_reviewed_day():
 def test_default_run_writes_main_to_yesterday_motivation_to_today():
     rd = z._review_date(None)                 # yesterday
     s = z.build_applescript({"title": "x", "motivation": "m"}, rd)
-    assert 'if bv = "%s" then set todayRow to i + 2' % z._mdy(rd) in s          # main -> reviewed day
-    assert 'if bv = "%s" then set tomRow to i + 2' % z._mdy(rd + dt.timedelta(days=1)) in s  # motivation -> next day
+    assert 'if bv = "%s" then set todayRow to i + 2' % z._ymd(rd) in s          # main -> reviewed day
+    assert 'if bv = "%s" then set tomRow to i + 2' % z._ymd(rd + dt.timedelta(days=1)) in s  # motivation -> next day
 
 
 def test_points_checked_is_last_and_has_no_column():
@@ -240,10 +240,18 @@ def test_row_lookup_is_one_range_read_not_a_per_row_loop():
     the write timed out at 60 s every time. The script must read B3:B600 once
     and scan in memory."""
     script = z.build_applescript({"title": "x"}, dt.date(2026, 10, 13))
-    assert 'string value of range "B3:B600" of ws' in script
+    assert 'set bvals to value of range "B3:B600" of ws' in script
     assert 'range ("B" & r)' not in script and "repeat with r from 3 to 600" not in script
-    assert 'if bv = "10/13/26" then set todayRow to i + 2' in script
-    assert 'if bv = "10/14/26" then set tomRow to i + 2' in script
+    assert 'if bv = "2026-10-13" then set todayRow to i + 2' in script
+    assert 'if bv = "2026-10-14" then set tomRow to i + 2' in script
+
+
+def test_row_lookup_matches_date_value_not_display_format():
+    """2026-11-03: col B's display moved m/d/yy -> yyyy.mm.dd. The lookup keys
+    on the cell's date value, so no display string may appear in the script."""
+    script = z.build_applescript({"title": "x"}, dt.date(2026, 11, 3))
+    assert "string value" not in script and "11/3/26" not in script and "2026.11.03" not in script
+    assert '((class of cv) as text) is "date"' in script and '"2026-11-3"' in script
 
 
 # ── 2026-10-26: "save 0s in the background ... it hung or took > 10 seconds" ──

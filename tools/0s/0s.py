@@ -9,7 +9,8 @@ YESTERDAY. The forward-looking "motivation" field is written to the FOLLOWING
 day's row (today, by default) — it's the motivation you're setting for the day
 after the one you're reviewing.
 
-Column map (0s897 tab, one row per day, date in col B as M/D/YY):
+Column map (0s897 tab, one row per day; col B holds real dates shown as
+yyyy.mm.dd, matched by value, never by display):
   E Title of the Day        K 霓虹 (num)      P ⌈ (num)   S proud of / others
   F Who did I notice        L 帮助 (num)      Q ⌊ (num)   T learnings / others
   G thankful for            M 身体 (num)      R x̄ (num)   V ⌈ (num)
@@ -80,6 +81,13 @@ def _mdy(d: _dt.date) -> str:
     return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
 
 
+def _ymd(d: _dt.date) -> str:
+    """Key matched against col B's date VALUE (year-month-day, no padding), so
+    lookups don't depend on the column's display format (2026-11-03: B moved
+    from m/d/yy to yyyy.mm.dd)."""
+    return "%d-%d-%d" % (d.year, d.month, d.day)
+
+
 def _parse_date(s: str) -> _dt.date:
     """Accepts YYYY-MM-DD (ISO), YYYY.MM.DD, or MM.DD.YYYY — the two dot-
     separated forms are disambiguated by which segment is 4 digits (the
@@ -122,8 +130,8 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
     0s897 row (`target`), and the forward-looking motivation to the following
     day's row (`target + 1`). Only non-empty fields are written, so blanks never
     clobber existing cells."""
-    target_s = _mdy(target)
-    next_s = _mdy(target + _dt.timedelta(days=1))
+    target_s = _ymd(target)
+    next_s = _ymd(target + _dt.timedelta(days=1))
     L = [
         'tell application "Microsoft Excel"',
         '  set wb to workbook "%s"' % WORKBOOK,
@@ -134,10 +142,14 @@ def build_applescript(answers: dict, target: _dt.date) -> str:
         # `string value of range ("B" & r)` loop was 1,200 Apple events and
         # measured 154 s on ix against 4.6 s for the single read, so every
         # 0s write blew the 60 s budget ("it didn't write to neon").
-        '  set bvals to string value of range "B3:B600" of ws',
+        # `value`, not `string value`: match the date itself, not however
+        # col B happens to be displayed (2026-11-03).
+        '  set bvals to value of range "B3:B600" of ws',
         '  repeat with i from 1 to count of bvals',
-        '    set bv to item i of bvals',
-        '    if class of bv is list then set bv to item 1 of bv',
+        '    set cv to item i of bvals',
+        '    if class of cv is list then set cv to item 1 of cv',
+        '    set bv to ""',
+        '    if ((class of cv) as text) is "date" then set bv to ((year of cv) as text) & "-" & (((month of cv) as integer) as text) & "-" & ((day of cv) as text)',
         '    if bv = "%s" then set todayRow to i + 2' % target_s,
         '    if bv = "%s" then set tomRow to i + 2' % next_s,
         '  end repeat',

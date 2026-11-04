@@ -117,6 +117,13 @@ def _mdy(d: _dt.date) -> str:
     return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
 
 
+def _ymd(d: _dt.date) -> str:
+    """Key matched against col B's date VALUE (year-month-day, no padding), so
+    lookups don't depend on the column's display format (2026-11-03: B moved
+    from m/d/yy to yyyy.mm.dd)."""
+    return "%d-%d-%d" % (d.year, d.month, d.day)
+
+
 def _is_num(s: str) -> bool:
     try:
         float(s)
@@ -140,18 +147,20 @@ def build_context_script(dates: list[_dt.date]) -> str:
     then bulk-read E:T per found row. Field/row markers keep multiline
     answers parseable."""
     conds = "\n".join(
-        '    if bv = "%s" then set end of hits to {%d, r}' % (_mdy(d), i)
+        '    if bv = "%s" then set end of hits to {%d, r}' % (_ymd(d), i)
         for i, d in enumerate(dates))
     return f'''tell application "Microsoft Excel"
   set ws to worksheet "{DAILY_SHEET}" of workbook "{WORKBOOK}"
-  -- string value (displayed M/D/YY), NOT value: col B holds real date cells,
-  -- and a date's `as text` is the long form that never matches M/D/YY.
-  set tmpB to string value of range "B3:B600" of ws
+  -- col B holds real date cells: compare year-month-day of the VALUE, never
+  -- the displayed text (format changed m/d/yy -> yyyy.mm.dd 2026-11-03) nor
+  -- a date's `as text` (the long locale form).
+  set tmpB to value of range "B3:B600" of ws
   set hits to {{}}
   repeat with r from 3 to 600
     set bv to ""
     try
-      set bv to (item 1 of (item (r - 2) of tmpB)) as text
+      set cv to item 1 of (item (r - 2) of tmpB)
+      if ((class of cv) as text) is "date" then set bv to ((year of cv) as text) & "-" & (((month of cv) as integer) as text) & "-" & ((day of cv) as text)
     end try
 {conds}
   end repeat

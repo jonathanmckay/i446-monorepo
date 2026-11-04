@@ -145,13 +145,14 @@ def test_survey_save_marks_1s_done_in_source():
     assert "--no-mark" in src
 
 
-def test_daily_context_uses_string_value_for_dates():
-    """Col B holds real date cells: `value` yields date objects whose text is
-    the long form, silently matching nothing (bug found live 2026-07-21).
-    The context fetch must read the DISPLAYED string."""
+def test_daily_context_matches_date_value_not_display():
+    """Col B holds real date cells. A date's `as text` is the long locale form
+    (bug found live 2026-07-21), and matching the displayed string broke when
+    the display moved m/d/yy -> yyyy.mm.dd (2026-11-03). Compare y-m-d of the value."""
     m = _load()
     script = m.build_context_script([dt.date(2026, 7, 12)])
-    assert 'string value of range "B3:B600"' in script
+    assert 'set tmpB to value of range "B3:B600"' in script and "string value of range \"B3" not in script
+    assert '((class of cv) as text) is "date"' in script and 'if bv = "2026-7-12"' in script
 
 
 # ── Shared BackgroundWriter adoption (2026-08-11) ───────────────────────────
