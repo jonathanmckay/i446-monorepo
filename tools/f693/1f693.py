@@ -142,20 +142,24 @@ def open_doc_in_obsidian() -> None:
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+OPEN_FORM = Path.home() / ".claude/skills/_lib/open-form.sh"
+CLAUDE_TRACKED = Path.home() / "vault/i447/i446/claude-tracked"
+
+
 def launch_stoplight_tab() -> str:
-    """New cmux tab running `cc "/1f693 stoplight"` so the Claude half is
-    waiting when the screenshot has been pasted."""
+    """Open `/1f693 stoplight` in a new cmux tab or tmux window (open-form.sh)
+    so the Claude half is waiting when the screenshot has been pasted.
+    Uses claude-tracked's full path: in a bare shell `cc` is the C compiler."""
+    # zsh -ic: a fresh cmux surface has only cmux's shims on PATH (see /cc).
+    cmd = f"zsh -ic \"{CLAUDE_TRACKED} '/1f693 stoplight'\""
     try:
-        out = subprocess.run(["cmux", "new-surface", "--type", "terminal"], capture_output=True,
-                             text=True, timeout=10).stdout
-        m = re.search(r"surface:(\d+)", out)
-        if not m:
-            return "cmux: no surface id"
-        subprocess.run(["cmux", "respawn-pane", "--surface", f"surface:{m.group(1)}",
-                        "--command", 'cc "/1f693 stoplight"'], capture_output=True, timeout=10)
-        return "cc tab opened: /1f693 stoplight"
+        proc = subprocess.run([str(OPEN_FORM), "f693-stoplight", cmd],
+                              capture_output=True, text=True, timeout=20)
     except Exception as e:  # noqa: BLE001
-        return f"cmux unavailable ({e}); run: cc \"/1f693 stoplight\""
+        return f"stoplight tab not opened ({e}); ask Claude for /1f693 stoplight"
+    if proc.returncode == 0:
+        return "cc opened: /1f693 stoplight (" + proc.stdout.strip().removeprefix("OPENED ") + ")"
+    return "no cmux/tmux surface; after pasting the screenshot, ask Claude for /1f693 stoplight"
 
 
 def mark_done() -> str:

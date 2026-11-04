@@ -51,24 +51,19 @@ filled" and a new answer **replaces** it.
 
 ## Launch
 
-It needs its own terminal for the colors and the prompt — open it in a new
-cmux tab (same pattern as `/0s` and `/1s`):
+It needs its own terminal for the colors and the prompt.
+Open it with the shared launcher, which tries a cmux tab, then a new window in
+this Claude's own tmux session (only if a client is attached, e.g. the
+`cc-*` sessions on Ix), and otherwise exits 10:
 
-1. ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output.
-2. ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/1hcme/1hcme.py [week]"
-   ```
-   Pass the user's week argument through verbatim if given.
-3. ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `1hcme opened in a new cmux tab — read the week, answer the question, blank line to save.`
+```bash
+~/.claude/skills/_lib/open-form.sh 1hcme "python3 ~/i446-monorepo/tools/1hcme/1hcme.py [week]"
+```
 
-Do not block on the form. If cmux is unavailable, tell the user to run it
-themselves: `! python3 ~/i446-monorepo/tools/1hcme/1hcme.py`
+- `OPENED cmux …` / `OPENED tmux …` → confirm: `1hcme opened (<cmux tab|tmux window>) — read the week, answer the question, blank line to save.`
+- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
+  himself.** Ask the form's questions here in chat (show `1hcme.py [week] --print-context` output first, then ask the one question), write his reply
+  to a temp file and run `python3 ~/i446-monorepo/tools/1hcme/1hcme.py [week] --from-text "<answer>"`. Do not block on the form.
 
 Then release the dtd claim the `/1hcme` prompt took, if any (no-op otherwise):
 

@@ -16,20 +16,17 @@ Launch the unified inbox processor — Gmail, iMessages, and Slack in one sorted
 
 ## Steps
 
-Open one new cmux surface:
+Open it with the shared launcher (cmux tab → new window in this Claude's own
+attached tmux session → exit 10):
 
 ```bash
-cmux new-surface --type terminal
+~/.claude/skills/_lib/open-form.sh ibx "bash ~/i446-monorepo/tools/ibx/ibx0_wrapper.sh"
 ```
 
-Parse the surface and pane refs from the output (e.g. `OK surface:6 pane:3 workspace:1`), then use the full ref tokens (e.g. `surface:6`, `pane:3`):
-
-```bash
-cmux respawn-pane --surface surface:<N> --command "bash ~/i446-monorepo/tools/ibx/ibx0_wrapper.sh"
-cmux focus-pane --pane pane:<N>
-```
-
-Then confirm: `ibx opened in a new cmux tab — Gmail + iMessages + Slack in one queue.`
+- `OPENED …` → confirm: `ibx opened (<cmux tab|tmux window>) — Gmail + iMessages + Slack in one queue.`
+- Exit 10 → this TUI has no non-interactive path and cannot run inside Claude's
+  Bash tool (no TTY). Say in one line that no visible terminal is reachable from
+  this session (no cmux, no attached tmux) and stop. Don't hand JM a command to type.
 
 ## Notes
 

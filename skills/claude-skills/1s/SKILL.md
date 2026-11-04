@@ -140,25 +140,22 @@ form runs, not `--from-json`) auto-closes its own cmux tab ~1s later via
 failure the pane is left open instead, so the error and any recovery-file
 path stay visible.
 
-It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
+It needs its own terminal. Do NOT block on it — continue with Step 1 while the
+user fills it. Pass the review-week date only if the user gave one (`MM/DD` →
+`YYYY-MM-DD`); no arg reviews the last completed Sun–Sat week.
 
-1. ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output.
-2. ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
-   ```
-   Pass the review-week date through only if the user gave one (`MM/DD` →
-   convert to `YYYY-MM-DD`); no arg reviews the last completed Sun–Sat week.
-3. ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, finishing the last field autosaves.`
+Open it with the shared launcher, which tries a cmux tab, then a new window in
+this Claude's own tmux session (only if a client is attached, e.g. the
+`cc-*` sessions on Ix), and otherwise exits 10:
 
-Do NOT block on the form — continue with Step 1 while the user fills it. If
-cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/1s/1s-survey.py`
+```bash
+~/.claude/skills/_lib/open-form.sh 1s "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
+```
+
+- `OPENED cmux …` / `OPENED tmux …` → confirm: `1s survey opened (<cmux tab|tmux window>) — daily answers inline, digits pick a day, finishing the last field autosaves.`
+- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
+  himself.** Ask the form's questions here in chat (keys = `FIELDS` in `tools/1s/1s-survey.py`; show `--print-context` daily answers first), write his reply
+  to a temp file and run `python3 ~/i446-monorepo/tools/1s/1s-survey.py [date] --from-json <file>`.
 
 Non-interactive paths (scripting/tests): `--from-json <file>` writes answers
 directly; `--print-script` prints the AppleScript without writing;

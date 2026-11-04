@@ -21,14 +21,19 @@ opens a cc tab running `/1f693 stoplight` so half 2 is waiting).
 
 ## `/1f693` (no args)
 
-Same launch pattern as `/0s` — the form needs its own terminal:
+The form needs its own terminal.
+Open it with the shared launcher, which tries a cmux tab, then a new window in
+this Claude's own tmux session (only if a client is attached, e.g. the
+`cc-*` sessions on Ix), and otherwise exits 10:
 
-1. `cmux new-surface --type terminal` → parse `surface:N` / `pane:N`.
-2. `cmux respawn-pane --surface surface:N --command "python3 ~/i446-monorepo/tools/f693/1f693.py"`
-3. `cmux focus-pane --pane pane:N`
-4. Confirm in one line: `1 f693 opened in a new cmux tab — diagram is in Chrome; fill the 6 slots, Esc saves.`
+```bash
+~/.claude/skills/_lib/open-form.sh 1f693 "python3 ~/i446-monorepo/tools/f693/1f693.py"
+```
 
-If cmux is unavailable: `! python3 ~/i446-monorepo/tools/f693/1f693.py`.
+- `OPENED cmux …` / `OPENED tmux …` → confirm: `1 f693 opened (<cmux tab|tmux window>) — diagram is in Chrome; fill the 6 slots, Esc saves.`
+- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
+  himself.** Ask the form's questions here in chat (up to 6 × initials + what JM must do so they succeed; JSON is `[{"initials": "AB", "task": "..."}]`), write his reply
+  to a temp file and run `python3 ~/i446-monorepo/tools/f693/1f693.py --from-json <file>`.
 
 Do not create the Todoist tasks or edit the doc yourself in this mode — the
 form does it. Do not mark `1 f693` done yourself either (the form calls

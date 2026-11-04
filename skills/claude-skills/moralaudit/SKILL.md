@@ -51,21 +51,19 @@ checking with him; the naming is load-bearing (e.g. "Org/People" vs
 
 ## Launch
 
-Same pattern as `/0s` — the form is full-screen, needs its own terminal:
+The form is full-screen and needs its own terminal.
+Open it with the shared launcher, which tries a cmux tab, then a new window in
+this Claude's own tmux session (only if a client is attached, e.g. the
+`cc-*` sessions on Ix), and otherwise exits 10:
 
-1. Open a new cmux surface:
-   ```bash
-   cmux new-surface --type terminal
-   ```
-2. Run the form in that pane (optional date arg, default today):
-   ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD]"
-   ```
-3. Focus it: `cmux focus-pane --pane pane:<N>`
-4. Confirm: `moralaudit opened in a new cmux tab — fill the grid, last field saves.`
+```bash
+~/.claude/skills/_lib/open-form.sh moralaudit "python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD]"
+```
 
-If cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py`
+- `OPENED cmux …` / `OPENED tmux …` → confirm: `moralaudit opened (<cmux tab|tmux window>) — fill the grid, last field saves.`
+- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
+  himself.** Ask the form's questions here in chat (keys = `FIELDS` built from `ROWS` × `COLS` in `tools/moralaudit/moralaudit.py`; ask one row at a time), write his reply
+  to a temp file and run `python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD] --from-json <file>`. Ratings: `1`-`7`, `n/a`, or blank.
 
 ## Keys (inside the form)
 

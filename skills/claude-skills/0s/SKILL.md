@@ -38,26 +38,19 @@ column — it's an action toggle: enter `1` and on save the form runs `did-fast 
 
 ## Launch
 
-The form is a full-screen prompt_toolkit TUI, so it needs its own terminal —
-open it in a new cmux tab (same pattern as `/ibx`):
+The form is a full-screen prompt_toolkit TUI, so it needs its own terminal.
+Open it with the shared launcher, which tries a cmux tab, then a new window in
+this Claude's own tmux session (only if a client is attached, e.g. the
+`cc-*` sessions on Ix), and otherwise exits 10:
 
-1. Open a new cmux surface:
-   ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output (e.g. `OK surface:6 pane:3 workspace:1`).
-2. Run the form in that pane (pass the optional date arg through if the user gave one):
-   ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD]"
-   ```
-3. Focus it:
-   ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `0s opened in a new cmux tab — fill the form, ^S to save to 0s897.`
+```bash
+~/.claude/skills/_lib/open-form.sh 0s "python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD]"
+```
 
-If cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/0s/0s.py`
+- `OPENED cmux …` / `OPENED tmux …` → confirm: `0s opened (<cmux tab|tmux window>) — fill the form, ^S to save to 0s897.`
+- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
+  himself.** Ask the form's questions here in chat (keys = `FIELDS` in `tools/0s/0s.py`; jog his memory with that day's Toggl), write his reply
+  to a temp file and run `python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD] --from-json <file>`. Blanks never overwrite. One day per round.
 
 ## Keys (inside the form)
 
