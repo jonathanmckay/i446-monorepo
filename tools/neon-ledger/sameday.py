@@ -10,6 +10,10 @@ puts one dtd card up with the fix for each miss, while there is still time.
   sameday.py              snapshot, check today, card if anything drifts
   sameday.py --dry-run    snapshot + check, print the card, create nothing
   sameday.py --date D     check D instead of today (no snapshot)
+  sameday.py adopt SHEET!COL VALUE [--date D]
+                          accept a hand-typed 0n/hcbi cell: re-set the same value
+                          through the daemon (the ledger now has it, Excel is
+                          unchanged) and ack the chain break it causes
 
 Cron on Ix: 30 22 * * * (config/ix.crontab).
 """
@@ -25,7 +29,7 @@ from pathlib import Path
 MONO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(MONO / "lib"))
 
-from neon import rules  # noqa: E402
+from neon import ledger, rules  # noqa: E402
 
 CARD = "⚠ Neon ledger drift today"
 # 0分 point column → the @code a 分 log credits it through (did-fast LABEL_TO_0FEN)
@@ -34,28 +38,7 @@ COL_CODE = {"Q": "0g", "R": "i9", "S": "m5x2", "T": "g245", "U": "hcmc",
 
 _CELL = re.compile(r"^(0n|hcbi)!([A-Z]+)\d*(?:\((.+?)\))?: Excel (\S+), ledger (\S+)")
 HEADERS = Path.home() / ".claude/skills/did/headers.json"
-# hcbi cells whose skill SETS the value (re-running it with the same value is
-# safe); every other hcbi cell is an /ate append, so re-logging would double it.
-HCBI_SET = {"caf": "/caf", "AI": "/out", "ff": "/hiit"}
-
-
-def _col_num(letter: str) -> int:
-    n = 0
-    for ch in letter:
-        n = n * 26 + ord(ch) - 64
-    return n
-
-
-def did_name(cell_letter: str, header: str) -> str:
-    """Shortest /did name that routes to this 0n column (headers.json); the
-    raw header can contain '+' that did-fast would read as a bonus."""
-    try:
-        import json
-        names = [k for k, v in json.loads(HEADERS.read_text()).get("0n", {}).items()
-                 if v == _col_num(cell_letter)]
-    except Exception:  # noqa: BLE001
-        names = []
-    return min(names, key=len) if names else header
+ADOPT = "sameday.py adopt"
 _TYPED = re.compile(r"^([+-]\d+(?:\.\d+)?) in (?:Excel|0分) formula, never journaled")
 _GONE = re.compile(r"^([+-]\d+(?:\.\d+)?) journaled (?:to 0分 )?but gone from Excel")
 
@@ -82,18 +65,11 @@ def fixes(misses: list[dict]) -> list[str]:
                 sheet, cell, hdr, xv, lv = z.groups()
                 hdr = " ".join((hdr or cell).replace("\xa0", " ").split())
                 cleared = xv in ("—", "None", "blank", "''")
-                if sheet == "0n":
-                    name = did_name(cell, hdr)
-                    out.append(f"0n!{cell} ({hdr}) was cleared in Excel; re-log it or `/did {name} 0`"
-                               if cleared else
-                               f"0n!{cell} ({hdr}) = {_num(xv)} typed in Excel → `/did {name} {_num(xv)}`")
-                elif hdr in HCBI_SET:
-                    out.append(f"hcbi!{cell} ({hdr}) = {_num(xv)} typed in Excel → "
-                               f"`{HCBI_SET[hdr]} {_num(xv)}`")
-                else:
-                    out.append(f"hcbi!{cell} ({hdr}) = {_num(xv)} typed in Excel (ledger {lv}) → clear "
-                               "the hand-typed part, then re-log it with `/ate` (it adds, so don't "
-                               "log on top)")
+                # Re-set the same value through the daemon. Not /did: it adds
+                # for cumulative habits, closes the card and can credit again.
+                v = "''" if cleared else _num(xv)
+                what = "cleared" if cleared else f"= {_num(xv)} typed"
+                out.append(f"{sheet}!{cell} ({hdr}) {what} in Excel → `{ADOPT} {sheet}!{cell} {v}`")
             elif t:
                 n = t.group(1)
                 out.append(f"0分!{col} has {n} typed into Excel → delete it from the cell, then "
@@ -118,8 +94,10 @@ def snapshot() -> None:
 
 
 def post_card(day: dt.date, lines: list[str], dry: bool) -> str:
-    body = f"Strict ledger check for {day:%-m/%-d} (22:30). Fix before the 23:55 snapshot:\n" + \
-           "\n".join(f"- {ln}" for ln in lines)
+    body = (f"Strict ledger check for {day:%-m/%-d} (22:30): Excel holds things the ledger never saw. "
+            "Fix them tonight and the 04:05 check passes. Claim this card with /d and an agent runs "
+            f"the `{ADOPT}` lines (tools/neon-ledger/sameday.py):\n"
+            + "\n".join(f"- {ln}" for ln in lines))
     if dry:
         return body
     import todoist
@@ -134,7 +112,37 @@ def post_card(day: dt.date, lines: list[str], dry: bool) -> str:
     return f"created card {t['id']}"
 
 
+def adopt(target: str, value: str, day: dt.date) -> int:
+    """Journal a hand-typed cell as-is: daemon set of the same value + ack."""
+    sheet, col = target.split("!", 1)
+    if sheet not in ("0n", "hcbi"):
+        raise SystemExit("adopt takes 0n!COL or hcbi!COL; a 0分 term is deleted and re-logged as a 分 log")
+    v: object = "" if value in ("''", '""', "") else value
+    try:
+        f = float(v)
+        v = int(f) if f.is_integer() else f
+    except (TypeError, ValueError):
+        pass
+    from neon import excel
+    md = f"{day.month}/{day.day}"
+    r = excel.batch_write(sheet, [{"col": col, "value": v, "mode": "set"}], date=md,
+                          src=f"adopt hand edit {target}")
+    if not r.get("ok"):
+        print(f"ERROR: {r.get('error') or r}")
+        return 1
+    subprocess.run([sys.executable, str(MONO / "scripts/neon-ledger-audit.py"), "--ack", target,
+                    "--date", md, "--note", "adopted hand edit (sameday.py adopt)"],
+                   check=False, capture_output=True, timeout=60)
+    print(f"adopted {target} = {v!r} on {md}")
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "adopt":
+        aa = argparse.ArgumentParser(prog="sameday.py adopt")
+        aa.add_argument("target"); aa.add_argument("value"); aa.add_argument("--date")
+        x = aa.parse_args(sys.argv[2:])
+        return adopt(x.target, x.value, dt.date.fromisoformat(x.date) if x.date else dt.date.today())
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--date")
     ap.add_argument("--dry-run", action="store_true")
@@ -142,6 +150,7 @@ def main() -> int:
     day = dt.date.fromisoformat(a.date) if a.date else dt.date.today()
     if not a.date:
         snapshot()
+    ledger.repair_dates()            # same as neon.py strict: date the row-addressed writes
     res = rules.strict_check(day.isoformat())
     if res["pass"]:
         print(f"{day}: clean")
