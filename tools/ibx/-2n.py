@@ -544,7 +544,7 @@ def _ritual_credit_line(tag: str, res: dict) -> None:
 def spawn_ate_background(food_text):
     """Fire-and-forget: spawn `claude -p /ate <food_text>` as a detached
     subprocess. /ate is a Claude skill (parses food/kcal/protein, writes the
-    hcbi row via `ssh ix`), so it can't run inline in the TUI. The user's raw
+    hcbi row via tools/ate/ate.py → the excel-http daemon), so it can't run inline in the TUI. The user's raw
     answer to the eat card is passed straight through as the /ate input.
 
     stdout/stderr go to ~/.cache/inbound/ate-<unix-ts>.log. Returns the Popen

@@ -31,7 +31,12 @@ AGENCY_BIN = os.environ.get(
 
 _PIDFILE_DIR = Path.home() / ".config" / "agency" / "pids"
 _servers = {}  # name -> {"proc": Popen|None, "port": int}
-_lock = threading.Lock()
+_lock = threading.Lock()  # guards _servers only; never held across a spawn
+# One lock per server name, held across _start_server (2026-11-01, v175). The
+# module _lock used to be held for the whole start: when Agency parked in a
+# 15-min interactive sign-in, every other server (mail behind calendar) queued
+# behind it. Same-name callers still serialize so a server is spawned once.
+_start_locks = {}
 
 # --- Interactive-login guard ------------------------------------------------
 # Agency has no silent/non-interactive mode: when its Entra token cache is
@@ -97,7 +102,20 @@ _LOGIN_MARKER = Path(os.environ.get(
 _LOGIN_MARKER_TTL = 3 * 3600
 
 
+def _unattended():
+    """True when the caller declared itself unattended (AGENCY_UNATTENDED=1).
+
+    Set by dream-intake (03:00 cron). An unattended timeout is not evidence of
+    a sign-in tab a human will see, and the marker it used to write blocked
+    every Agency caller on the host for _LOGIN_MARKER_TTL (2026-11-01: the
+    03:30 calendar timeout refused janus/dashboard until 06:30)."""
+    return os.environ.get("AGENCY_UNATTENDED") == "1"
+
+
 def _mark_login_pending(server_name, why):
+    if _unattended():
+        _LOGIN_TAB_CACHE.update(at=0.0, url=None)
+        return
     try:
         _LOGIN_MARKER.parent.mkdir(parents=True, exist_ok=True)
         _LOGIN_MARKER.write_text(json.dumps(
@@ -217,6 +235,36 @@ def _refuse_if_login_pending(what):
             f"({url[:80]}...) - finish that sign-in instead of opening another")
 
 
+# Hosts with no work (Entra) auth: Ix. A local Agency server there can only
+# sit on an interactive sign-in for ~15 min and open a browser tab (2026-10-18:
+# enough tabs to OOM ix). tools/tg/outlook_client.py already made Janus
+# cache-only there, but dream-intake.py called this module directly and hung
+# 15-30 min every night for weeks (2026-11-03, v177 code-review). Decided here
+# so no caller can forget. AGENCY_ALLOW_LOCAL=1 overrides; remote endpoints
+# (AGENCY_REMOTE_*_PORT) are unaffected.
+CACHE_ONLY_HOSTS = {"ix", "ix.local"}
+
+
+class AgencyUnavailable(EntraLoginPending):
+    """No local Agency on this host (cache-only). Subclasses EntraLoginPending
+    so existing 'MCP unavailable' handlers treat it the same way."""
+
+
+def local_server_forbidden() -> bool:
+    if os.environ.get("AGENCY_ALLOW_LOCAL") == "1":
+        return False
+    if os.environ.get("JANUS_OUTLOOK_CACHE_ONLY") == "1":
+        return True
+    return socket.gethostname().lower() in CACHE_ONLY_HOSTS
+
+
+def _refuse_if_cache_only(what):
+    if local_server_forbidden():
+        raise AgencyUnavailable(
+            f"not {what}: {socket.gethostname()} is a cache-only host with no work "
+            f"auth (set AGENCY_ALLOW_LOCAL=1 to override)")
+
+
 def _pidfile(name):
     return _PIDFILE_DIR / f"{name}.json"
 
@@ -265,25 +313,57 @@ def _port_responsive(port):
         return False
 
 
-def _start_server(name):
-    """Start an agency MCP server on a random port and return (proc, port)."""
+def _read_port(proc, timeout):
+    """First all-digit stdout line of `proc` within `timeout` seconds, else
+    None. Raw os.read under select, not readline(): readline blocks until a
+    newline, so a child sitting silently on a sign-in prompt held get_server's
+    _lock ~15 min past the 30s deadline (2026-11-03). Bypassing the text
+    wrapper also avoids a port line stranded in its buffer after select."""
+    fd = proc.stdout.fileno()
+    deadline = time.time() + timeout
+    buf = b""
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return None
+        ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
+        if not ready:
+            continue
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return None  # child exited / closed stdout
+        buf += chunk
+        *lines, buf = buf.split(b"\n")
+        for line in lines:
+            line = line.strip()
+            if line.isdigit():
+                return int(line)
+
+
+START_TIMEOUT = float(os.environ.get("AGENCY_START_TIMEOUT", "30"))
+
+
+def _start_server(name, timeout=None):
+    """Start an agency MCP server on a random port and return (proc, port).
+
+    Deadline enforced by _read_port (select on the raw fd); readline() used to
+    block ~30 min on an Entra sign-in prompt (intake 2h01m from 2026-10-15)."""
+    timeout = START_TIMEOUT if timeout is None else timeout
     proc = subprocess.Popen(
         [AGENCY_BIN, "mcp", name, "--transport", "http", "--port", "0"],
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        stderr=subprocess.DEVNULL,  # never read; a full PIPE would block Agency
     )
-    deadline = time.time() + 30
-    port = None
-    while time.time() < deadline:
-        line = proc.stdout.readline().strip()
-        if line.isdigit():
-            port = int(line)
-            break
+    port = _read_port(proc, timeout)
     if port is None:
         proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
         _mark_login_pending(name, "server start failed")
-        raise RuntimeError(f"Failed to start agency mcp {name}")
+        raise RuntimeError(
+            f"Failed to start agency mcp {name} (no port within {timeout:.0f}s)")
     _write_pidfile(name, proc.pid, port)
     return proc, port
 
@@ -294,20 +374,27 @@ def get_server(name):
     First checks for an existing process via pidfile. If a healthy process
     exists from a previous Python session, reuses it without spawning a new one.
     """
+    _refuse_if_cache_only(f"using agency mcp {name}")
     with _lock:
+        start_lock = _start_locks.setdefault(name, threading.Lock())
+    with start_lock:
         # Check in-memory cache first
-        if name in _servers:
-            srv = _servers[name]
+        with _lock:
+            srv = _servers.get(name)
+        if srv:
             proc = srv.get("proc")
             if proc is None or proc.poll() is None:
                 if _port_responsive(srv["port"]):
                     return srv["port"]
-            del _servers[name]
+            with _lock:
+                if _servers.get(name) is srv:
+                    del _servers[name]
 
         # Check pidfile for process from a previous session
         pid, port = _read_pidfile(name)
         if pid and _is_alive(pid) and port and _port_responsive(port):
-            _servers[name] = {"proc": None, "port": port, "pid": pid}
+            with _lock:
+                _servers[name] = {"proc": None, "port": port, "pid": pid}
             return port
 
         # Clean up stale pidfile
@@ -323,8 +410,9 @@ def get_server(name):
         # Start fresh -- unless a sign-in tab is already waiting: starting
         # would open a second one (see EntraLoginPending).
         _refuse_if_login_pending(f"starting agency mcp {name}")
-        proc, port = _start_server(name)
-        _servers[name] = {"proc": proc, "port": port, "pid": proc.pid}
+        proc, port = _start_server(name)  # may block up to START_TIMEOUT
+        with _lock:
+            _servers[name] = {"proc": proc, "port": port, "pid": proc.pid}
         return port
 
 
@@ -395,6 +483,7 @@ def call_tool(server_name, tool_name, arguments=None, timeout=120):
     if remote:
         host, port = remote
         return _call_tool_once(host, port, server_name, tool_name, arguments, timeout)
+    _refuse_if_cache_only(f"calling {server_name}/{tool_name}")
     # Even a healthy, already-running server opens a new sign-in tab on the
     # first 401 it meets, so the guard applies per call, not just per start.
     _refuse_if_login_pending(f"calling {server_name}/{tool_name}")

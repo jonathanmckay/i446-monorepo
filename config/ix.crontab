@@ -4,11 +4,11 @@
 # build-order-enrich: populate build order with meetings, time entries (every 2h)
 0 6,8,10,12,14,16,18,20,22 * * * python3 $HOME/i446-monorepo/scripts/build-order-enrich.py >> /tmp/build-order-enrich.log 2>&1
 # 0g-sync: bidirectional sync between build order and Todoist (every 2h)
-0 */2 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
+0 */2 * * * TODOIST_API_KEY="$(cat $HOME/.config/todoist/token)" python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
 # 0g-sync pre-archive: catch completions between 02:00 and the 03:59 archive
-55 3 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
+55 3 * * * TODOIST_API_KEY="$(cat $HOME/.config/todoist/token)" python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
 # 0g-cleanup: move unchecked 0g items to yihou at 5:30am
-30 5 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py cleanup --verbose >> $HOME/i446-monorepo/scripts/.0g-cleanup-stdout.log 2>&1
+30 5 * * * TODOIST_API_KEY="$(cat $HOME/.config/todoist/token)" python3 $HOME/i446-monorepo/scripts/0g-sync.py cleanup --verbose >> $HOME/i446-monorepo/scripts/.0g-cleanup-stdout.log 2>&1
 # copilot-ingest: ingest copilot transcripts
 */30 * * * * python3 $HOME/i446-monorepo/scripts/copilot-ingest.py >> $HOME/i446-monorepo/scripts/.copilot-ingest.log 2>&1
 # decision-capture: scan AI logs for decisions daily at 10pm

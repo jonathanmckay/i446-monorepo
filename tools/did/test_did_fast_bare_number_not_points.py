@@ -78,3 +78,32 @@ def test_cap_shared_with_janus_done():
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
     import janus_done
     assert mod.MAX_INFERRED_POINTS == janus_done.MAX_INFERRED_POINTS == 500
+
+
+def test_forgotten_timer_backfill_over_cap_is_refused(monkeypatch):
+    """Dream v175: a dtd "walk" completed with an 11h timer still running got
+    its elapsed minutes from apply_timer_minutes, AFTER route_items' cap, so
+    +673 分 went to 0分!W. The timer backfill now honors the same cap."""
+    mod = _load()
+    _, results = _route(mod, monkeypatch, "walk")
+    r = results[0]
+    assert r.step == "variable" and not r.fen_points
+    mod.apply_timer_minutes(results, {"description": "walk", "minutes": 673})
+    assert r.step == "refused"
+    assert r.fen_points == 0
+    assert str(mod.MAX_INFERRED_POINTS) in r.error
+
+
+def test_timer_backfill_under_cap_still_credits(monkeypatch):
+    mod = _load()
+    _, results = _route(mod, monkeypatch, "math")
+    mod.apply_timer_minutes(results, {"description": "math", "minutes": 40})
+    assert results[0].step == "variable"
+    assert results[0].fen_points == 45, "40 min + the 5-point session bonus"
+
+
+def test_main_drops_timer_refused_items_before_writes():
+    src = DID_FAST.read_text()
+    i = src.index("apply_timer_minutes(fast, toggl_stop)")
+    j = src.index("# 4. Batch 0₦ writes")
+    assert 'fast = [r for r in fast if r.step != "refused"]' in src[i:j]
