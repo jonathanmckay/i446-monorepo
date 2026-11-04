@@ -169,9 +169,9 @@ def test_revert_landed(zb, out, pre, ok):
 
 
 def test_failed_revert_is_reported_not_claimed(zb, monkeypatch):
-    class R:  # ix_run timed out, as with Excel wedged
-        returncode, stdout, stderr = 3, "", "ix unreachable (timeout)"
-    monkeypatch.setattr(zb, "ix_run", lambda *a, **k: R())
+    def down(*a, **k):  # daemon unreachable, as with Excel wedged
+        raise RuntimeError("ix unreachable (timeout)")
+    monkeypatch.setattr(zb.neon_excel, "batch_write", down)
     with pytest.raises(SystemExit) as e:
         zb.revert_or_die(30, 155, "", "measured 0分 change {} != expected 15", "6/3")
     msg = str(e.value)
@@ -179,9 +179,8 @@ def test_failed_revert_is_reported_not_claimed(zb, monkeypatch):
 
 
 def test_landed_revert_says_so(zb, monkeypatch):
-    class R:
-        returncode, stdout, stderr = 0, "REVERTED\t", ""
-    monkeypatch.setattr(zb, "ix_run", lambda *a, **k: R())
+    monkeypatch.setattr(zb.neon_excel, "batch_write",
+                        lambda *a, **k: {"ok": True, "results": [{"value": ""}]})
     with pytest.raises(SystemExit) as e:
         zb.revert_or_die(30, 155, "", "x", "6/3")
     assert "0n write reverted, nothing moved" in str(e.value)
@@ -234,3 +233,54 @@ def test_variable_script_adds_without_blank_guard_and_recalcs_full(zb):
     assert "SKIPPED" not in s
     s = zb.build_script(31, 11, 2, 15, True, variable_mode="set")
     assert "set nv to 15" in s and "pv as number" not in s
+
+
+# --- the mark goes through the daemon (2026-11-04, Neon off Excel) ----------
+# The AppleScript used to set the 0n cell itself, invisible to the ledger, so
+# the strict check read every /0n mark as typed into 0n. Now the script only
+# reads; daemon_set writes the mark (and any revert) through excel-http.
+
+def test_planned_value_guards_marks_and_adds_minutes(zb):
+    assert zb.planned_value("", 1, None) == 1
+    assert zb.planned_value("1.0", 1, None) is None          # already marked: never overwrite
+    assert zb.planned_value("15", 10, "add") == 25
+    assert zb.planned_value("", 10, "add") == 10
+    assert zb.planned_value("15", 10, "set") == 10
+
+
+def test_daemon_set_writes_a_journaled_set(zb, monkeypatch):
+    calls = []
+
+    def bw(sheet, writes, **kw):
+        calls.append((sheet, writes, kw))
+        return {"ok": True, "results": [{"value": "1.0"}]}
+    monkeypatch.setattr(zb.neon_excel, "batch_write", bw)
+    assert zb.daemon_set(41, "10/29", 1.0, "0n backfill nvc 2026-10-29") == (True, "1.0", "")
+    assert calls == [("0n", [{"col": "AO", "value": 1, "mode": "set"}],
+                      {"date": "10/29", "src": "0n backfill nvc 2026-10-29"})]
+
+
+def test_daemon_set_never_raises(zb, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("daemon down")
+    monkeypatch.setattr(zb.neon_excel, "batch_write", boom)
+    assert zb.daemon_set(41, "10/29", 1, "s") == (False, "", "daemon down")
+
+
+def test_revert_goes_through_the_daemon_and_checks_it_landed(zb, monkeypatch):
+    calls = []
+    monkeypatch.setattr(zb.neon_excel, "batch_write",
+                        lambda sheet, writes, **kw: calls.append(writes) or {"ok": True, "results": [{"value": ""}]})
+    with pytest.raises(SystemExit, match="0n write reverted, nothing moved"):
+        zb.revert_or_die(41, 0, "", "mismatch", "10/29", "src")
+    assert calls == [[{"col": "AO", "value": "", "mode": "set"}]]
+    monkeypatch.setattr(zb.neon_excel, "batch_write",
+                        lambda *a, **k: {"ok": True, "results": [{"value": "1.0"}]})
+    with pytest.raises(SystemExit, match="REVERT DID NOT LAND"):
+        zb.revert_or_die(41, 0, "", "mismatch", "10/29", "src")
+
+
+def test_main_reads_with_a_script_that_never_writes(zb):
+    """The measurement script must stay read-only: the daemon owns the write."""
+    src = zb.build_script(41, 10, 29, 1, False)
+    assert "set value of cell" not in src and "clear contents" not in src

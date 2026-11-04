@@ -375,11 +375,14 @@ def revert_landed(stdout: str, pre_raw: str) -> bool:
     return False
 
 
-def revert_or_die(habit_col: int, n_row: int, pre_raw: str, why: str, where: str) -> None:
-    res = ix_run(build_revert_script(habit_col, n_row, pre_raw), timeout=30.0)
-    if res.returncode == 0 and revert_landed(res.stdout, pre_raw):
+def revert_or_die(habit_col: int, n_row: int, pre_raw: str, why: str, where: str,
+                  src: str = "0n backfill revert") -> None:
+    ok, now, err = daemon_set(habit_col, where, pre_raw, f"{src} (revert)")
+    landed = ok and (parse_num(now) == parse_num(pre_raw) if pre_raw not in ("", "0", "0.0")
+                     else now in ("", "0", "0.0"))
+    if landed:
         raise SystemExit(f"ERROR: {why}; 0n write reverted, nothing moved")
-    raise SystemExit(f"ERROR: {why}; REVERT DID NOT LAND ({(res.stderr or res.stdout).strip()[:160]}): "
+    raise SystemExit(f"ERROR: {why}; REVERT DID NOT LAND ({(err or now)[:160]}): "
                      f"0n!{col_letter(habit_col)} on {where} may still hold the mark and its points "
                      "sit on that day. Check the cell; if it is marked, rerun with --move-only.")
 
@@ -399,6 +402,33 @@ def parse_script_output(stdout: str) -> dict:
 
 
 # --- side effects --------------------------------------------------------------
+def planned_value(pre_raw: str, value: float, vmode: str | None) -> float | None:
+    """The 0n cell's new value, or None when a plain mark is already there
+    (same guard the AppleScript used to apply: a set mark is never
+    overwritten). vmode 'add' = cumulative minutes, 'set' = replace."""
+    if vmode is None:
+        return None if already_credited(pre_raw) else value
+    if vmode == "add":
+        return parse_num(pre_raw) + value
+    return value
+
+
+def daemon_set(habit_col: int, md: str, value, src: str) -> tuple[bool, str, str]:
+    """Set the 0n cell through the excel-http daemon (journaled, chain intact;
+    2026-11-04: the AppleScript write was invisible to the ledger, so the
+    strict check read every /0n mark as typed into 0n). '' clears it.
+    Returns (ok, value now in the cell, error)."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    try:
+        r = neon_excel.batch_write("0n", [{"col": col_letter(habit_col), "value": value, "mode": "set"}],
+                                   date=md, src=src)
+    except Exception as e:  # noqa: BLE001
+        return False, "", str(e)
+    res = (r.get("results") or [{}])[0]
+    return bool(r.get("ok")), str(res.get("value", "")), str(r.get("error") or "")
+
+
 def save_and_refresh() -> str:
     ix_run(f'tell application "Microsoft Excel" to save workbook "{WORKBOOK}"', timeout=15.0)
     script = str(Path.home() / "i446-monorepo/tools/personal-dashboard/refresh-points-cache.sh")
@@ -483,10 +513,9 @@ def main() -> int:
         out["note"] = (f"cross-week move: {past_md} is in the week of "
                        f"{week_start(target).isoformat()}; that week's 1s totals change")
 
-    # 1. read (+ write) in one AppleScript
+    # 1. read the weight, the cell and the 0分 pre-image (read-only script)
     do_write = not (a.move_only or a.dry_run)
-    res = ix_run(build_script(col, target.month, target.day, value, do_write,
-                                variable_mode=vmode), timeout=60.0)
+    res = ix_run(build_script(col, target.month, target.day, value, False), timeout=60.0)
     if res.returncode != 0 or res.stdout.startswith("ERROR"):
         raise SystemExit(f"ERROR: excel read failed: {res.stderr or res.stdout}")
     r = parse_script_output(res.stdout)
@@ -495,10 +524,21 @@ def main() -> int:
     out.update({"weight": weight, "pre_0n": pre0n, "rows": [r["n_row"], r["f_row"]]})
 
     if weight <= 0 and not variable:
-        if do_write and pre0n == "":  # already written: revert, nothing to move anyway
-            revert_or_die(col, r["n_row"], pre0n,
-                          f"{key!r} has no row-2 weight ({weight}); nothing to move", past_md)
         raise SystemExit(f"ERROR: {key!r} has no row-2 weight ({weight}); nothing to move")
+
+    # 1b. write the mark through the daemon, then measure Excel's 0分 change
+    if do_write:
+        nv = planned_value(pre0n, value, vmode)
+        if nv is not None:
+            ok, now, err = daemon_set(col, past_md, nv, src)
+            if not ok:
+                raise SystemExit(f"ERROR: 0n write failed ({err or now}); nothing written, nothing moved")
+            r["POST0N"] = now
+            rm = ix_run(build_remeasure_script(target.month, target.day), timeout=90.0)
+            if rm.returncode != 0 or rm.stdout.startswith("ERROR"):
+                revert_or_die(col, r["n_row"], pre0n, f"0分 re-read failed: {rm.stderr or rm.stdout}",
+                              past_md, src)
+            r["POST"] = parse_script_output(rm.stdout)["POST"]
 
     # 2. plan the move
     if variable and a.dry_run:
@@ -521,7 +561,7 @@ def main() -> int:
             revert_or_die(col, r["n_row"], pre0n,
                           "measured 0分 change "
                           f"{ {FEN_NAMES[c]: v for c, v in deltas.items()} } doesn't follow the "
-                          f"0n change {fmt_num(pre)} → {fmt_num(post)} for {key}", past_md)
+                          f"0n change {fmt_num(pre)} → {fmt_num(post)} for {key}", past_md, src)
         out["basis"] = "measured 0分 delta (variable habit)"
         out["post_0n"] = r.get("POST0N", "")
         if not deltas:
@@ -563,7 +603,7 @@ def main() -> int:
             revert_or_die(col, r["n_row"], pre0n,
                           "measured 0分 change "
                           f"{ {FEN_NAMES[c]: v for c, v in deltas.items()} } != expected "
-                          f"{expected} for {key}", past_md)
+                          f"{expected} for {key}", past_md, src)
         out["basis"] = "measured 0分 delta"
         out["post_0n"] = r.get("POST0N", "")
 

@@ -8748,5 +8748,55 @@
     "unit": "C105",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-04",
+    "effective": "2026-11-30",
+    "kind": "leased",
+    "unit_id": "1190",
+    "prop": "tc68",
+    "unit": "B41",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-04",
+    "effective": "2026-11-03",
+    "kind": "moveout",
+    "unit_id": "1347",
+    "prop": "c702",
+    "unit": "E101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-04",
+    "effective": "2026-11-07",
+    "kind": "ntv",
+    "unit_id": "1097",
+    "prop": "o155-Oak",
+    "unit": "A1",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-04",
+    "effective": "2026-11-04",
+    "kind": "movein",
+    "unit_id": "1323",
+    "prop": "c702",
+    "unit": "C306",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-04",
+    "effective": "2026-11-04",
+    "kind": "movein",
+    "unit_id": "1423",
+    "prop": "c702",
+    "unit": "J201",
+    "tenant": null,
+    "baseline": false
   }
 ]
