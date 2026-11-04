@@ -6012,6 +6012,25 @@ def _entry_pts_add(day: dt.date, pts_by_id: dict, add: bool = False) -> None:
         pass
 
 
+def _entry_pts_pin(day: dt.date, entry_ids, total: int) -> None:
+    """Record a row's whole `total` on its first id, dropping its other ids'
+    records: a retime collapses a merged row onto ids[0], and a rename loses
+    the name-keyed lookup, so the row must not depend on either."""
+    if not entry_ids:
+        return
+    data = _entry_pts(day)
+    for i in entry_ids[1:]:
+        data.pop(str(i), None)
+    data[str(entry_ids[0])] = int(total)
+    try:
+        _ENTRY_PTS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _entry_pts_path(day).with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(_entry_pts_path(day))
+    except OSError:
+        pass
+
+
 def _recorded_entry_pts(day: dt.date, entry_ids) -> int | None:
     """Σ recorded 分 over a row's entry ids on `day`, None when none of them
     has a record."""
@@ -6047,6 +6066,50 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
     adj = sum(int(v) for k, v in _points_adj_today().items()
               if k in {str(i) for i in (entry_ids or [])})
     return (recorded or bool(adj)), pts + adj
+
+
+def _edit_shown_points(item: dict) -> int | None:
+    """The 分 Enter shows on a selected row (JM 2026-11-04), None when it
+    shows none: not logged, still running, a placeholder about to be
+    replaced, or a negative total _EDIT_POINTS_RE couldn't read back."""
+    desc = item.get("raw_desc") or ""
+    if item.get("running") or _is_placeholder(desc):
+        return None
+    recorded, pts = _row_points(desc, item.get("dur_min") or 0, item.get("entry_ids"))
+    return pts if recorded and pts >= 0 else None
+
+
+def _prefill_with_points(text: str, shown: int | None) -> str:
+    """Edit prefill plus the row's [N], replacing any [N] parked in the
+    description: _split_edit_points reads the first bracket only."""
+    if shown is None:
+        return text
+    return f"{' '.join(_EDIT_POINTS_RE.sub('', text).split())} [{shown}]"
+
+
+def _enqueue_points_adjust(app, pe: dict, delta: int) -> None:
+    """Log `delta` 分 for a row and record its new total, shared by ^G and an
+    edited [N]. Needs desc, code, ids, cur, start_dt, end_dt, past_day."""
+    cmd = _points_adjust_cmd(pe["desc"], pe["code"], delta, pe["start_dt"],
+                             pe["end_dt"], pe["past_day"])
+
+    async def _run_adjust():
+        flash(f"$ did {cmd}")
+        app.invalidate()
+        res = await asyncio.to_thread(run_did_fast, cmd)
+        if not res.startswith("err"):
+            day = pe["start_dt"].date()
+            if pe["ids"] and not pe.get("delta_mode"):
+                _entry_pts_pin(day, pe["ids"], pe["cur"] + delta)
+            elif pe["ids"] and _recorded_entry_pts(day, pe["ids"]) is not None:
+                _entry_pts_add(day, {pe["ids"][0]: delta}, add=True)
+        flash(res, 8.0)
+        app.invalidate()
+        await asyncio.to_thread(fetch_today, True)
+        await asyncio.to_thread(fetch_points)
+        app.invalidate()
+
+    _enqueue_work(app, f"did {cmd}", _run_adjust, key=cmd)
 
 
 def _entry_dur_display(dur_min: int, raw_desc: str | None, entry_ids=None) -> str:
@@ -6871,25 +6934,7 @@ def _on_enter(event):
         if delta == 0:
             flash("points unchanged", 3.0)
             return
-        cmd = _points_adjust_cmd(pe["desc"], pe["code"], delta, pe["start_dt"],
-                                 pe["end_dt"], pe["past_day"])
-
-        async def _run_adjust():
-            flash(f"$ did {cmd}")
-            event.app.invalidate()
-            res = await asyncio.to_thread(run_did_fast, cmd)
-            if not res.startswith("err"):
-                if pe["ids"] and _recorded_entry_pts(pe["start_dt"].date(), pe["ids"]) is not None:
-                    _entry_pts_add(pe["start_dt"].date(), {pe["ids"][0]: delta}, add=True)
-                elif not pe["past_day"]:
-                    _points_adj_add(pe["ids"], delta)
-            flash(res, 8.0)
-            event.app.invalidate()
-            await asyncio.to_thread(fetch_today, True)
-            await asyncio.to_thread(fetch_points)
-            event.app.invalidate()
-
-        _enqueue_work(event.app, f"did {cmd}", _run_adjust, key=cmd)
+        _enqueue_points_adjust(event.app, pe, delta)
         return
     if STATE.split_target is not None:
         # Same chokepoint discipline as edit_target below: consumed first,
@@ -6953,6 +6998,14 @@ def _on_enter(event):
             flash("edit cancelled")
             return
         text, points = _split_edit_points(text)
+        # A [N] Enter showed (JM 2026-11-04) is the row's existing total, so
+        # it is never a fresh credit: unchanged or deleted does nothing,
+        # changed logs the difference once the edit lands.
+        shown, new_total = target.get("shown_pts"), None
+        if shown is not None:
+            if points is not None and points != shown:
+                new_total = points
+            points = None
         desc, code, time_range, tags = _parse_edit_text(text)
         pid = PROJECT_MAP.get(code) if code else None
         # Every rejection below has already cleared STATE.edit_target and
@@ -7071,6 +7124,7 @@ def _on_enter(event):
         if not fields:
             flash("nothing to update", 4.0)
             return
+        open_ended = bool(time_range and time_range[1] is None)
         parts = [desc or "(desc unchanged)"]
         if code:
             parts.append(f"@{code}")
@@ -7079,6 +7133,10 @@ def _on_enter(event):
         parts += [f"#{t}" for t in tags]
         if points is not None:
             parts.append(f"[{points}]" + ("" if done_cmd else " (pending — ⌥↵ /done logs it)"))
+        if new_total is not None:
+            parts.append(f"[{shown}] kept (running again)" if open_ended else f"[{shown}]→[{new_total}]")
+            if open_ended:
+                new_total = None
         flash("$ edit " + " ".join(parts))
 
         async def _apply_edit_and_refresh():
@@ -7151,6 +7209,23 @@ def _on_enter(event):
                     res = await asyncio.to_thread(run_did_fast, done_cmd)
                     JE.emit("outcome", "done", ids, f"{time.monotonic() - t0:.1f}s {done_cmd} -> {res}")
                     flash(res, 8.0)
+                if shown is not None:
+                    _entry_pts_pin(edit_date, ids, shown)
+                if new_total is not None:
+                    row = target["row"]
+                    row_start = row["start_dt"]
+                    adj_desc = desc or row["raw_desc"]
+                    adj_code = code or toggl_project_code(pid or row.get("project_id"), adj_desc)
+                    if adj_code:
+                        _enqueue_points_adjust(event.app, {
+                            "desc": re.sub(r"\s*\[\d+\]", "", adj_desc).strip(), "code": adj_code,
+                            "ids": ids, "cur": shown,
+                            "start_dt": start_dt if time_range else row_start,
+                            "end_dt": end_dt if time_range else row_start + dt.timedelta(minutes=row.get("dur_min") or 0),
+                            "past_day": edit_date != dt.datetime.now(_tz()).date(),
+                        }, new_total - shown)
+                    else:
+                        flash("points unchanged: entry has no project code, set one first", 6.0)
             except Exception as e:  # noqa: BLE001 — a stale/deleted id (e.g. trimmed
                 # by did-fast's overlap handling since this row rendered) must flash,
                 # not crash the app
@@ -7195,9 +7270,12 @@ def _on_enter(event):
             # stays distinct from a plain "entry" row's ⌥↵ (which refuses on
             # a running entry).
             STATE.event_sel = None
+            shown = _edit_shown_points(item)
             STATE.edit_target = {"ids": item["entry_ids"], "date": item["start_dt"].date(),
                                  "contiguous": item.get("contiguous", True)}
-            input_buffer.text = _entry_edit_prefill(item)
+            if shown is not None:
+                STATE.edit_target.update(shown_pts=shown, row=item)
+            input_buffer.text = _prefill_with_points(_entry_edit_prefill(item), shown)
             input_buffer.cursor_position = len(input_buffer.text)
             return
         if kind == "empty":

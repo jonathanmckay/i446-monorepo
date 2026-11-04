@@ -119,3 +119,126 @@ def test_open_ended_with_points_parks_value_inline_no_credit(monkeypatch):
     assert updates[0][2]["project_id"] == mod.PROJECT_MAP["xk88"]
     assert not [c for c in calls if c[0] == "did"], "still running: no 分 yet"
     assert mod._resolvable_points("lx chat [17]") == 17
+
+
+def _arm_logged(mod, monkeypatch, tmp_path, pts=17, ids=(4595608454,), desc="lx chat"):
+    """A finished "lx chat" @xk88 row, 09:47-10:02 today, logged for `pts`."""
+    calls, today = _arm_running(mod, monkeypatch)
+    start = today.replace(hour=9, minute=47)
+    pid = mod.PROJECT_MAP["xk88"]
+    mod.STATE.current = None
+    mod.STATE.entries = [{"id": i, "desc": desc, "start_dt": start, "project_id": pid,
+                          "end_dt": today.replace(hour=10, minute=2), "tags": []} for i in ids]
+    monkeypatch.setattr(mod, "_ENTRY_PTS_DIR", tmp_path)
+    monkeypatch.setattr(mod, "toggl_project_code", lambda p, d="": "xk88")
+    mod._entry_pts_add(today.date(), {ids[0]: pts})
+    item = {"kind": "entry", "raw_desc": desc, "dur_min": 15, "start_dt": start,
+            "entry_ids": list(ids), "project_id": pid, "contiguous": True}
+    jobs = []
+    monkeypatch.setattr(mod, "_enqueue_work", lambda app, label, job, key=None: jobs.append(job))
+    return calls, today, item, jobs
+
+
+def _submit(mod, item, today, text, jobs):
+    mod.STATE.edit_target = {"ids": item["entry_ids"], "date": today.date(), "contiguous": True,
+                             "shown_pts": mod._edit_shown_points(item), "row": item}
+    mod.input_buffer.text = text
+    _enter(mod).handler(_Event())
+    import asyncio
+    for job in jobs:
+        asyncio.run(job())
+
+
+def test_prefill_shows_a_logged_rows_points(monkeypatch, tmp_path):
+    mod = _load()
+    _, _, item, _ = _arm_logged(mod, monkeypatch, tmp_path)
+    shown = mod._edit_shown_points(item)
+    assert mod._prefill_with_points(mod._entry_edit_prefill(item), shown) == "lx chat @xk88 0947-1002 [17]"
+
+
+def test_prefill_replaces_an_inline_bracket_in_the_desc(monkeypatch, tmp_path):
+    mod = _load()
+    assert mod._prefill_with_points("x [17] @i9 0900-0930", 42) == "x @i9 0900-0930 [42]"
+
+
+def test_no_points_shown_for_running_unlogged_or_negative_rows(monkeypatch, tmp_path):
+    mod = _load()
+    _, today, item, _ = _arm_logged(mod, monkeypatch, tmp_path)
+    assert mod._edit_shown_points({**item, "running": True}) is None
+    assert mod._edit_shown_points({**item, "entry_ids": [999]}) is None
+    mod._entry_pts_add(today.date(), {item["entry_ids"][0]: -5})
+    assert mod._edit_shown_points(item) is None
+    assert mod._prefill_with_points("x 0900-0930", None) == "x 0900-0930"
+
+
+def test_resubmitting_shown_points_never_credits_again(monkeypatch, tmp_path):
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path)
+    _submit(mod, item, today, "lx chat @xk88 0947-1002 [17]", jobs)
+    assert not [c for c in calls if c[0] == "did"]
+    assert mod._recorded_entry_pts(today.date(), item["entry_ids"]) == 17
+
+
+def test_shown_zero_resubmit_never_credits(monkeypatch, tmp_path):
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path, pts=0)
+    _submit(mod, item, today, "lx chat @xk88 0947-1002 [0]", jobs)
+    assert not [c for c in calls if c[0] == "did"]
+
+
+def test_changing_shown_points_logs_only_the_difference(monkeypatch, tmp_path):
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path)
+    _submit(mod, item, today, "lx chat @xk88 0947-1002 [25]", jobs)
+    did = [c[1] for c in calls if c[0] == "did"]
+    assert did == [mod._points_adjust_cmd("lx chat", "xk88", 8, item["start_dt"], item["start_dt"] + mod.dt.timedelta(minutes=15), False)]
+    assert mod._recorded_entry_pts(today.date(), item["entry_ids"]) == 25
+
+
+def test_failed_edit_posts_no_points_change(monkeypatch, tmp_path):
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("stale id")
+    monkeypatch.setattr(mod.toggl_api, "update_entry", boom, raising=False)
+    _submit(mod, item, today, "lx chat @xk88 0947-1002 [25]", jobs)
+    assert jobs == [] and not [c for c in calls if c[0] == "did"]
+    assert mod._recorded_entry_pts(today.date(), item["entry_ids"]) == 17
+
+
+def test_deleting_the_bracket_changes_nothing(monkeypatch, tmp_path):
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path)
+    _submit(mod, item, today, "lx chat @xk88 0947-1002", jobs)
+    assert not [c for c in calls if c[0] == "did"]
+    assert mod._recorded_entry_pts(today.date(), item["entry_ids"]) == 17
+
+
+def test_merged_row_keeps_its_total_after_a_retime(monkeypatch, tmp_path):
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path, pts=5, ids=(1, 2))
+    mod._entry_pts_add(today.date(), {2: 7})
+    monkeypatch.setattr(mod.toggl_api, "delete_entry", lambda i: calls.append(("delete", i)), raising=False)
+    _submit(mod, item, today, "lx chat @xk88 0947-1002 [12]", jobs)
+    assert ("delete", 2) in calls
+    assert mod._recorded_entry_pts(today.date(), [1]) == 12
+
+
+def test_reopening_a_logged_row_changes_no_points(monkeypatch, tmp_path):
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "_open_ended_fields", lambda s, r: {"start": s.isoformat()})
+    _submit(mod, item, today, "lx chat @xk88 0947- [25]", jobs)
+    assert jobs == [] and not [c for c in calls if c[0] == "did"]
+
+
+def test_rate_sheet_row_correction_stores_the_new_total(monkeypatch, tmp_path):
+    """A 69m per-minute row: ledger 0, shown [69]. Correcting to 80 must leave
+    80 on record, not the 11 a sum into the 0 would."""
+    mod = _load()
+    calls, today, item, jobs = _arm_logged(mod, monkeypatch, tmp_path, pts=0)
+    monkeypatch.setattr(mod, "_row_points", lambda *a: (True, 69))
+    _submit(mod, item, today, "lx chat @xk88 0947-1002 [80]", jobs)
+    assert [c for c in calls if c[0] == "did"]
+    assert mod._recorded_entry_pts(today.date(), item["entry_ids"]) == 80
