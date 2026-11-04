@@ -86,3 +86,22 @@ def test_stale_zero_record_on_a_per_minute_habit_shows_its_minutes(tmp_path, mon
     assert janus._entry_dur_display(69, "o314", [4609785250]) == "[104]"
     janus._entry_pts_add(day, {"5": 0})
     assert janus._entry_dur_display(20, "read memo", [5]) == "[0]"
+
+
+def test_per_minute_habit_row_is_priced_at_the_logged_minutes(tmp_path, monkeypatch):
+    """Bug 2026-11-04: an 80m hiit Toggl entry showed [160] (80 x 2) while
+    JM logged 24 minutes of actual HIIT, so Neon credited 48. A row can't be
+    worth more minutes than the habit's 0n cell holds."""
+    import json as _json
+    ct = tmp_path / "completed-today.json"
+    ct.write_text(_json.dumps({"date": dt.datetime.now(janus._tz()).date().isoformat(),
+                               "names": ["hiit"], "points": {}}))
+    monkeypatch.setattr(janus, "_COMPLETED_TODAY", ct)
+    monkeypatch.setattr(janus.STATE, "habits_today", [("hiit", 24.0), ("o314", 70.0)])
+    assert janus._points_recorded_today("hiit", 80) == (True, 48)
+    # a session shorter than the day's logged total keeps its own minutes
+    monkeypatch.setattr(janus.STATE, "habits_today", [("hiit", 95.0)])
+    assert janus._points_recorded_today("hiit", 80) == (True, 160)
+    # nothing logged in 0n yet (strip not loaded): fall back to the entry
+    monkeypatch.setattr(janus.STATE, "habits_today", [])
+    assert janus._points_recorded_today("hiit", 80) == (True, 160)

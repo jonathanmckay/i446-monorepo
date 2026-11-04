@@ -5837,6 +5837,16 @@ def _norm_done_name(s: str) -> str:
     return " ".join(_ANNOT_RE.sub(" ", s).split()).lower()
 
 
+def _logged_0n_minutes(name: str) -> float | None:
+    """Today's 0n cell value for habit `name` from the habit strip's read of
+    the row (STATE.habits_today); None when the strip hasn't loaded it."""
+    key = _norm_done_name(name)
+    for hdr, v in STATE.habits_today or []:
+        if v is not None and _norm_done_name(hdr) == key:
+            return v
+    return None
+
+
 def _points_recorded_today(desc: str, minutes: int | None = None) -> tuple[bool, int]:
     """(recorded, 分) for a desc completed TODAY, from completed-today.json —
     did-fast's own idempotency record. Only meaningful for today's view:
@@ -5876,6 +5886,12 @@ def _points_recorded_today(desc: str, minutes: int | None = None) -> tuple[bool,
                 try:
                     from neon.rates import zero_n_done_points, zero_n_points
                     if minutes is not None:
+                        # Priced at what the 0n cell holds when that is less
+                        # than the entry (bug 2026-11-04: an 80m hiit entry
+                        # with 24 logged showed [160]; Neon credited 48).
+                        logged = _logged_0n_minutes(n)
+                        if logged is not None:
+                            minutes = min(minutes, logged)
                         rp = zero_n_points(n, minutes)
                         if rp is not None:
                             return True, rp
@@ -6016,7 +6032,9 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
         # did_points priced it (bug 2026-11-03: a 69m o314 showed [0]).
         try:
             from neon.rates import zero_n_points
-            sheet = zero_n_points(_norm_done_name(raw_desc) or raw_desc, dur_min)
+            nm = _norm_done_name(raw_desc) or raw_desc
+            logged = _logged_0n_minutes(nm)
+            sheet = zero_n_points(nm, min(dur_min, logged) if logged is not None else dur_min)
         except Exception:
             sheet = None
         if sheet:
