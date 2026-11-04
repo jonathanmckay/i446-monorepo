@@ -199,13 +199,24 @@ O314_FAMILY = {"o314", "hcmr"}
 LONG_TO_BASE_0N: dict[str, str] = {"长o314": "o314"}
 
 
-def _adds_0n(w) -> bool:
-    """True when this 0n write ADDS to the cell instead of setting it."""
+def _0n_mode(w) -> str:
+    """How this 0n write lands: "add" (to the cell), "set", or "max" (never
+    below the cell's current value). An explicit w.write_mode wins."""
+    mode = getattr(w, "write_mode", None)
+    if mode:
+        return mode
     name = w.item.name
     if name in CUMULATIVE_0N:
-        return True
-    return (name.lower() in O314_FAMILY
-            and (w.item.time_range is not None or w.item.time_value is not None))
+        return "add"
+    if (name.lower() in O314_FAMILY
+            and (w.item.time_range is not None or w.item.time_value is not None)):
+        return "add"
+    return "set"
+
+
+def _adds_0n(w) -> bool:
+    """True when this 0n write ADDS to the cell instead of setting it."""
+    return _0n_mode(w) == "add"
 
 
 def variable_1n_points(resolved_1n: str, minutes: int) -> int:
@@ -1483,6 +1494,8 @@ class RouteResult:
     # Set on a 0n result synthesized by synth_kid_time_writes: the name of
     # the task (card / ad-hoc item) whose minutes this write carries.
     kid_time_for: Optional[str] = None
+    # 0n write mode override ("max"); None = _0n_mode's default rule.
+    write_mode: Optional[str] = None
 
 
 def route_items(items: list[ParsedItem], headers: dict, tq: dict,
@@ -1703,6 +1716,14 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             is_cumulative = item.name in CUMULATIVE_0N
 
             r = RouteResult(item=item, step="0n", col_num=col, write_value=val)
+            if (name_lower in O314_FAMILY and not item.time_range
+                    and item.time_value is None):
+                # A bare o314/hcmr completion carries the DAY total (or 1
+                # when Toggl is unreachable / has no matching entry), so it
+                # must never LOWER AQ: Toggl down set 70 → 1 (-69分), and a
+                # typed session vanished when a later bare one set AQ to the
+                # Toggl total (bug 2026-11-04). "max" keeps the larger.
+                r.write_mode = "max"
 
             # Find matching Todoist task to close -- never for a past-day
             # write (past_ok): the open card is TODAY's occurrence.
@@ -2110,6 +2131,13 @@ def build_0n_script(writes: list[RouteResult], target_date: str) -> Optional[str
     else
         set value of cell {col} of row todayRow of ws to (oldVal as number) + {val}
     end if''')
+        elif _0n_mode(w) == "max":
+            set_lines.append(f'''    set oldVal to value of cell {col} of row todayRow of ws
+    if oldVal is missing value or (oldVal as text) = "" then
+        set value of cell {col} of row todayRow of ws to {val}
+    else if (oldVal as number) < {val} then
+        set value of cell {col} of row todayRow of ws to {val}
+    end if''')
         else:
             set_lines.append(f"    set value of cell {col} of row todayRow of ws to {val}")
         verify_lines.append(
@@ -2146,7 +2174,7 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
     body = []
     for w in writes:
         body.append({"col": neon_cols.col_letter(w.col_num), "value": w.write_value,
-                     "mode": "add" if _adds_0n(w) else "set"})
+                     "mode": _0n_mode(w)})
     try:
         resp = neon_excel.batch_write(
             "0n", body, date=target_date,
@@ -2171,6 +2199,14 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
         if prev == "missing value":
             prev = ""
         pre_lines.append(f"PRE\t{w.col_num}\t{prev}")
+        if _0n_mode(w) == "max":
+            try:
+                if prev and float(r.get("value") or 0) < float(prev):
+                    print(f"⚠ 0n col {w.col_num}: daemon lowered {prev} → {r.get('value')} "
+                          f"on a max write (excel-http predates mode max? restart it); "
+                          f"ctrl-z restores {prev}", file=sys.stderr)
+            except ValueError:
+                pass
     broken = resp.get("chain_broken_cols")
     if broken:
         print(f"0n ledger chain broken on {broken} (edited outside the daemon)", file=sys.stderr)
@@ -2179,18 +2215,43 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
                                        stderr="")
 
 
-def _long_bonus_results(on_writes: list, stdout: str, tq: dict) -> list:
-    """1n RouteResults for the long-session bonus earned by these 0n writes,
-    from each cell's value before (PRE line) and after (echo) the write; the
-    daemon and raw-script paths print the same shape."""
-    from neon import long_bonus
-    pre = parse_pre_lines(stdout)
+def _echo_after(stdout: str) -> dict:
+    """{col: value} from the first (OK:row=...|col=val|...) echo line."""
     after: dict[str, str] = {}
     head = stdout.splitlines()[0] if stdout else ""
     for seg in head.split("|")[1:]:
         if "=" in seg:
             k, v = seg.split("=", 1)
             after[k.strip()] = v.strip()
+    return after
+
+
+def _credited_0n(w, pre: dict, after: dict) -> Optional[float]:
+    """Minutes a "max" 0n write actually added (after - before, >= 0); None
+    for other modes or when the echo lacks the column. A bare o314 whose
+    write_value is the day total must not be priced at that total
+    (janus did_points, bug 2026-11-04)."""
+    if _0n_mode(w) != "max":
+        return None
+    col = str(w.col_num)
+    if col not in after:
+        return None
+    try:
+        a = float(after[col] or 0)
+        b = float(pre.get(col) or 0)
+    except ValueError:
+        return None
+    d = max(0.0, a - b)
+    return int(d) if d == int(d) else d
+
+
+def _long_bonus_results(on_writes: list, stdout: str, tq: dict) -> list:
+    """1n RouteResults for the long-session bonus earned by these 0n writes,
+    from each cell's value before (PRE line) and after (echo) the write; the
+    daemon and raw-script paths print the same shape."""
+    from neon import long_bonus
+    pre = parse_pre_lines(stdout)
+    after = _echo_after(stdout)
     out = []
     for w in on_writes:
         base = ZERO_N_ALIASES.get(w.item.name.lower(), w.item.name.lower())
@@ -2314,7 +2375,7 @@ def verify_0n_output(stdout: str, writes: list) -> Optional[str]:
         got = echoed.get(col)
         if got is None:
             return f"0n verify: column {col} missing from echo"
-        if _adds_0n(w):
+        if _0n_mode(w) != "set":   # add/max: the cell may differ from `want`
             continue
         try:
             if abs(float(got) - float(want)) > 1e-6:
@@ -2691,6 +2752,8 @@ def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
         if r.step == "0n" and r.item.name.lower() in var_0n and r.write_value == 1:
             r.write_value = mins
             r.item.time_value = mins
+            # Now a typed-like session: o314's day-total "max" no longer applies.
+            r.write_mode = None
         elif r.step == "1n" and getattr(r, "is_variable_1n", False):
             # Same base + rate×minutes formula as the routing path — raw
             # minutes would over/under-credit rated habits (长冥想 .5/m,
@@ -4753,6 +4816,9 @@ def main():
         # (a failed/ERROR script emits no PRE lines — undo must not guess).
         if r.step == "0n" and r.col_num is not None and str(r.col_num) in pre_0n:
             entry["undo"] = {"prev_0n": pre_0n[str(r.col_num)]}
+            credited = _credited_0n(r, pre_0n, _echo_after(on_result.stdout))
+            if credited is not None:
+                entry["credited"] = credited
         if r.step == "1n" and r.col_letter:
             entry["col_letter"] = r.col_letter
             entry["week_row"] = week_row

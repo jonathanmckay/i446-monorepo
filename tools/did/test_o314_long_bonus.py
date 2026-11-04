@@ -35,7 +35,7 @@ CARD = {"id": "c1", "content": "long o314 (30) [15]", "labels": ["1neon", "hcm"]
 
 
 def test_bare_completion_sets_day_total_session_adds():
-    assert not df._adds_0n(_w())                               # Toggl day total → set
+    assert not df._adds_0n(_w())                               # Toggl day total → not add
     assert df._adds_0n(_w(time_value=20))                      # typed session → add
     assert df._adds_0n(_w(time_range=("0715", "0824")))       # janus range → add
     assert df._adds_0n(_w("hcmr", time_value=10))

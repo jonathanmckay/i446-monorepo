@@ -377,6 +377,18 @@ class TestBatchWrite:
         assert ae["value"] == "1" and ae["before_value"] == "" and ae["mode"] == "set"
         assert aj["value"] == "45" and aj["before_value"] == "30" and aj["mode"] == "add"
 
+    def test_max_mode_never_lowers_the_cell(self, srv, monkeypatch):
+        """o314 day total (did-fast 2026-11-04): a bare completion whose Toggl
+        total is below AQ (or 1 when Toggl is down) must leave AQ alone."""
+        req = {"sheet": "0n", "date": "11/4", "src": "did o314",
+               "writes": [{"col": "AQ", "value": 1, "mode": "max"}]}
+        resp, script = self._run(srv, monkeypatch, req, "\t70\t70\t70\x1e")
+        assert 'if oldValue = "" then' in script
+        assert "else if (oldValue as number) < 1 then" in script
+        assert "(oldValue as number) + 1" not in script
+        [aq] = resp["results"]
+        assert aq["value"] == "70" and aq["before_value"] == "70" and aq["mode"] == "max"
+
     def test_each_cell_is_journaled_and_in_the_semantic_ledger(self, srv, monkeypatch):
         req = {"sheet": "0n", "date": "10/19", "src": "did hiit",
                "writes": [{"col": "AE", "value": 1}, {"col": "AF", "value": 1830}]}

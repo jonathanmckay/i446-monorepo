@@ -163,8 +163,12 @@ def did_points(result: dict) -> int:
         # A per-minute 0n habit (o314: 1分/min) is credited by the sheet
         # formula, so did-fast reports no 0分 points for it; price the
         # minutes it wrote (bug 2026-11-03: a 69m o314 showed [0]).
+        # A bare o314 writes the DAY total in "max" mode; did-fast reports
+        # what the cell actually gained as `credited` (bug 2026-11-04: a
+        # second 30m session was priced at the day's 70).
         from neon.rates import zero_n_points
-        pts += zero_n_points(result.get("name") or "", result.get("value") or 0) or 0
+        minutes = result["credited"] if "credited" in result else result.get("value")
+        pts += zero_n_points(result.get("name") or "", minutes or 0) or 0
     if not pts and result.get("variable_1n"):
         pts = result.get("variable_value") or 0
     return int(math.floor(pts + 0.5))   # half points (0.5/m bonuses) round up
