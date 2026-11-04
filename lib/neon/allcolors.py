@@ -73,6 +73,9 @@ def evaluate(day: dt.date, core: list[Cell], habits: list[Cell], handicap: int,
     completion time count as done at `unknown` (default 23:59 — conservative
     for a closed day; the live path passes now)."""
     fallback = unknown or dt.datetime.combine(day, dt.time(23, 59))
+    if fallback.tzinfo is not None:
+        # Ledger times are naive local; --live passes an aware now.
+        fallback = fallback.replace(tzinfo=None)
 
     def when(c: Cell) -> dt.datetime:
         return c.at or fallback
