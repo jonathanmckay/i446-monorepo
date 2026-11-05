@@ -235,9 +235,10 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
         task = None
     if not task or not task.get("id"):
         return {"ok": False, "error": "split: task not found"}
-    # split.sh reads name/[N]/(N) from the dtd cache (what the user sees);
-    # the live Todoist content is the fallback for a task the cache lacks.
-    content = _cache_content(cache_file, task_id) or task.get("content", "")
+    # The live title, not the cache: a rename just before the split is not in
+    # a stale snapshot, and the remainder would write the old name back
+    # (2026-11-05). The cache is the fallback.
+    content = task.get("content", "") or _cache_content(cache_file, task_id)
     p = plan(content, pts=pts, bonus=bonus, minutes=minutes, done_name=done_name,
              rem_name=rem_name, rem_pts=rem_pts, rem_min=rem_min, rem_bonus=rem_bonus,
              rem_due=rem_due, keep=keep)

@@ -86,3 +86,24 @@ def test_run_unlogged_credit_is_flagged(tmp_path):
 def test_run_needs_points(tmp_path):
     res = sf.run("A1", cache_file=tmp_path / "none.json", api=lambda *a, **k: 1 / 0)
     assert not res["ok"]
+
+
+def test_run_names_remainder_from_live_task_not_stale_cache(tmp_path):
+    # 2026-11-05: a rename followed by a split reverted to the cached title.
+    cache = tmp_path / "c.json"
+    cache.write_text('{"today": [{"id": "A1", "content": "old name (60) [40]"}]}')
+    api, _calls = _fake({"id": "A1", "content": "new name (60) [40]", "labels": [], "project_id": "P"})
+    res = sf.run("A1", cache_file=cache, pts=15, api=api,
+                 credit=lambda item: {"results": [{}]},
+                 label_for=lambda labels: "", tie=lambda n, i: None)
+    assert res["new_content"] == "new name (60) [25]"
+
+
+def test_run_falls_back_to_cache_when_live_title_is_blank(tmp_path):
+    cache = tmp_path / "c.json"
+    cache.write_text('{"today": [{"id": "A1", "content": "cached (60) [40]"}]}')
+    api, _calls = _fake({"id": "A1", "content": "", "labels": [], "project_id": "P"})
+    res = sf.run("A1", cache_file=cache, pts=15, api=api,
+                 credit=lambda item: {"results": [{}]},
+                 label_for=lambda labels: "", tie=lambda n, i: None)
+    assert res["new_content"] == "cached (60) [25]"

@@ -3301,6 +3301,11 @@ project_id = task.get('project_id')
 # Pre-image for ctrl-z undo
 prev_content = task.get('content', '')
 prev_due = (task.get('due') or {}).get('date', '')
+# The live title, not the cache snapshot: the watcher and bgrefresh cp the live
+# cache over it, so a rename saved with this split could be missing and the
+# remainder would write the old name back (bug 2026-11-05).
+_live = re.sub(r' *\([0-9]*\)| *\[[0-9]*\]| *\[[0-9.+]*/m\]| *\{[0-9]*\}', '', prev_content)
+clean = re.sub(r'  +', ' ', _live).rstrip() or clean
 
 # 1. Create completed posthoc for today's portion
 today_label = done_desc if done_desc else clean
