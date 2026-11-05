@@ -15,7 +15,7 @@ TOKEN_FILE="$HOME/.claude/oauth-token"
 # --- Config ---
 DREAM_RUNS="$HOME/vault/i447/i446/.dream-runs"
 PROMPT_BASE="$HOME/vault/i447/i446/dream-prompt-base.md"
-CLAUDE="/opt/homebrew/bin/claude"
+CLAUDE="${DREAM_CLAUDE:-/opt/homebrew/bin/claude}"  # env override for tests only
 DEFAULT_BUDGET=300
 DEFAULT_FLOOR=150
 
@@ -58,7 +58,7 @@ RUN_DIR="$DREAM_RUNS/${DATE_DOT}${DRY_RUN}-${VERSION}"
 RUN_START_UTC=$(date -u '+%Y-%m-%dT%H:%M:%S')  # for the post-run Todoist mutation audit
 
 # --- Prevent double-launch (acquire lock BEFORE creating run dir) ---
-LOCK="/tmp/dream-launch.lock"
+LOCK="${DREAM_LOCK:-/tmp/dream-launch.lock}"  # env override for tests only
 MAX_LOCK_AGE_SEC=14400  # 4 hours; any dream run beyond this is stuck
 if [[ -f "$LOCK" ]]; then
   LOCK_PID=$(cat "$LOCK")
@@ -205,13 +205,15 @@ fi
 # 2026-10-26 first-match-not-newest bug that killed v166-v168.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dream-watchdog-lib.sh"
 cd "$HOME/vault"
-STALL_THRESHOLD=1500  # 25 min with no write anywhere in RUN_DIR = stalled (subagents run 20+ min silently)
-WATCHDOG_INTERVAL=180  # check every 3 min
-DEADLINE=$(($(date +%s) + 10800))  # hard stop at 3h regardless
+STALL_THRESHOLD=${DREAM_STALL_THRESHOLD:-1500}  # 25 min with no write anywhere in RUN_DIR = stalled (subagents run 20+ min silently)
+WATCHDOG_INTERVAL=${DREAM_WATCHDOG_INTERVAL:-180}  # check every 3 min
+DEADLINE=$(($(date +%s) + ${DREAM_DEADLINE_SEC:-10800}))  # hard stop at 3h regardless
+PASS3_GRACE=${DREAM_PASS3_GRACE_SEC:-2700}  # pass3-retry always gets >=45 min, even past DEADLINE
 
 _run_claude() {
   local prompt_file="$1"
   local label="$2"
+  local deadline="${3:-$DEADLINE}"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting claude ($label)" >> "$LOG"
 
   caffeinate -s "$CLAUDE" \
@@ -231,7 +233,7 @@ _run_claude() {
     sleep "$WATCHDOG_INTERVAL"
 
     # Hard deadline check
-    if [[ $(date +%s) -ge $DEADLINE ]]; then
+    if [[ $(date +%s) -ge $deadline ]]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] DEADLINE reached, killing claude ($label)" >> "$LOG"
       dream_kill_tree "$CLAUDE_PID"
       return 124
@@ -256,9 +258,13 @@ _run_claude() {
 EXIT_CODE=0
 _run_claude "$RUN_DIR/PROMPT.md" "full-run" || EXIT_CODE=$?
 
-# --- If stalled, check what's missing and retry the remaining pass ---
-if [[ $EXIT_CODE -ne 0 && $(date +%s) -lt $DEADLINE ]]; then
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Checking for incomplete passes..." >> "$LOG"
+# --- Drafts but no brief -> retry Pass 3 (2026-11-05, v178) ---
+# Keyed on the run's OUTPUT, not claude's exit code: a stall (rc 1), the hard
+# DEADLINE (rc 124), a nonzero exit, and a clean exit 0 at the budget/turn
+# limit all leave drafts without a brief. The retry gets its own deadline
+# (max of DEADLINE and now+PASS3_GRACE) so a 3h-deadline kill still ships.
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] full-run exit=$EXIT_CODE; checking for incomplete passes..." >> "$LOG"
 
   HAS_DRAFTS=$( (ls "$RUN_DIR/drafts/"*.md 2>/dev/null || true) | wc -l | tr -d ' ')
   HAS_BRIEF=$(test -f "$RUN_DIR/morning-brief.md" && echo 1 || echo 0)
@@ -279,9 +285,18 @@ Read $RUN_DIR/PROMPT.md for the Pass 3 instructions, then:
 5. Write cards.json, manifest.json, staged/changelog.md
 6. Write READY marker
 PASS3EOF
+    PASS3_DEADLINE=$(( $(date +%s) + PASS3_GRACE ))
+    [[ $DEADLINE -gt $PASS3_DEADLINE ]] && PASS3_DEADLINE=$DEADLINE
     EXIT_CODE=0
-    _run_claude "$PASS3_PROMPT" "pass3-retry" || EXIT_CODE=$?
+    _run_claude "$PASS3_PROMPT" "pass3-retry" "$PASS3_DEADLINE" || EXIT_CODE=$?
   fi
+}
+
+# --- Last resort: never ship nothing ---
+# If Pass 3 still produced no brief, write a mechanical one listing the drafts
+# so the email + GUI surface carry the night's work (v178 had 20 unsurfaced).
+if [[ ! -f "$RUN_DIR/morning-brief.md" ]]; then
+  dream_fallback_brief "$RUN_DIR" "$VERSION" "$EXIT_CODE" >> "$LOG" 2>&1 || true
 fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dream $VERSION finished (exit=$EXIT_CODE)" >> "$LOG"

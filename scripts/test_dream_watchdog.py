@@ -93,3 +93,82 @@ def test_launcher_uses_lib_and_tolerates_nonzero():
     calls = [l for l in src.splitlines() if re.match(r'\s*_run_claude "', l)]
     assert calls and all("|| EXIT_CODE=$?" in l for l in calls), calls
     assert re.search(r'python3 "\$AUDIT_SCRIPT".*\|\| AUDIT_RC=\$\?', src)
+
+
+# --- 2026-11-05 (v178): stall with 20 drafts shipped NO brief ----------------
+# Launcher died under set -e right after the STALL line (no "finished", no
+# READY). End-to-end: real dream-launch.sh, fake HOME, fake claude.
+
+FAKE_CLAUDE = r'''#!/bin/bash
+[[ "${1:-}" == "--version" ]] && { echo fake; exit 0; }
+RUN=$(ls -d "$HOME"/vault/i447/i446/.dream-runs/*-v* | tail -1)
+prompt=$(cat)
+n=$(cat "$HOME/calls" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$HOME/calls"
+mode=$(sed -n "${n}p" "$HOME/modes")
+case "$mode" in
+  stall)  echo "# Draft A" > "$RUN/drafts/a.md"; sleep 60 ;;
+  exit0)  echo "# Draft A" > "$RUN/drafts/a.md"; exit 0 ;;
+  exit1)  echo "# Draft A" > "$RUN/drafts/a.md"; exit 1 ;;
+  brief)  [[ "$prompt" == *"Complete Pass 3"* ]] && echo "# real brief" > "$RUN/morning-brief.md"; exit 0 ;;
+esac
+'''
+
+
+def _launch(tmp_path: Path, modes, deadline=600):
+    home = tmp_path / "home"
+    base = home / "vault" / "i447" / "i446"
+    base.mkdir(parents=True)
+    (base / "dream-prompt-base.md").write_text("Dream {{VERSION}} {{RUN_DIR}}\n")
+    (home / "modes").write_text("\n".join(modes) + "\n")
+    fake = tmp_path / "claude"; fake.write_text(FAKE_CLAUDE); fake.chmod(0o755)
+    env = {"HOME": str(home), "PATH": os.environ["PATH"],
+           "CLAUDE_CODE_OAUTH_TOKEN": "test", "DREAM_CLAUDE": str(fake),
+           "DREAM_LOCK": str(tmp_path / "lock"), "DREAM_STALL_THRESHOLD": "2",
+           "DREAM_WATCHDOG_INTERVAL": "1", "DREAM_DEADLINE_SEC": str(deadline)}
+    rc = subprocess.run(["bash", str(LAUNCH)], env=env, timeout=120).returncode
+    run = next((base / ".dream-runs").glob("*-v*"))
+    log = (run / "logs" / "agent-run.log").read_text()
+    calls = int((home / "calls").read_text())
+    return rc, run, log, calls
+
+
+def test_stall_then_pass3_retry_ships_brief(tmp_path):
+    rc, run, log, calls = _launch(tmp_path, ["stall", "brief"])
+    assert rc == 0 and calls == 2, log
+    assert "STALL detected (full-run)" in log and "retrying Pass 3" in log
+    assert (run / "morning-brief.md").read_text() == "# real brief\n"
+    assert (run / "READY").exists() and "complete. Run dir" in log
+
+
+def test_clean_exit_without_brief_still_retries(tmp_path):
+    # budget/turn limit: claude exits 0 with drafts but no brief
+    rc, run, log, calls = _launch(tmp_path, ["exit0", "brief"])
+    assert calls == 2 and (run / "morning-brief.md").read_text() == "# real brief\n", log
+
+
+def test_nonzero_exit_retries(tmp_path):
+    rc, run, log, calls = _launch(tmp_path, ["exit1", "brief"])
+    assert calls == 2 and (run / "morning-brief.md").read_text() == "# real brief\n", log
+
+
+def test_retry_runs_past_deadline(tmp_path):
+    # hard DEADLINE already spent: pass3 still gets PASS3_GRACE
+    rc, run, log, calls = _launch(tmp_path, ["stall", "brief"], deadline=1)
+    assert calls == 2 and (run / "morning-brief.md").read_text() == "# real brief\n", log
+
+
+def test_both_passes_fail_fallback_brief(tmp_path):
+    rc, run, log, calls = _launch(tmp_path, ["stall", "stall"])
+    brief = (run / "morning-brief.md").read_text()
+    assert "FALLBACK brief" in brief and "drafts/a.md" in brief and "Draft A" in brief
+    assert (run / "READY").exists() and "FALLBACK brief written: 1 items" in log
+
+
+def test_fallback_noop_without_drafts_or_with_brief(tmp_path):
+    rd = tmp_path / "r"; (rd / "drafts").mkdir(parents=True)
+    sh = f'set -euo pipefail; source "{LIB}"; dream_fallback_brief "$1" v0 1'
+    subprocess.run(["bash", "-c", sh, "_", str(rd)], check=True)
+    assert not (rd / "morning-brief.md").exists()
+    (rd / "drafts" / "x.md").write_text("# X\n"); (rd / "morning-brief.md").write_text("keep")
+    subprocess.run(["bash", "-c", sh, "_", str(rd)], check=True)
+    assert (rd / "morning-brief.md").read_text() == "keep"
