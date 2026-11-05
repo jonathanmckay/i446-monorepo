@@ -8,15 +8,17 @@ user-invocable: true
 
 The `1 hcme` 1neon card (Thursday, 30分, hcm domain). Everything lives in the
 Neon `0s897` tab: the daily 0s survey rows are the input, and column **X**
-(`1 hcme`) of the week's **Thursday row** is where every weekly check-in has
-been written since 1/1/26 (col A's M.W label on that row names the week).
+(`1 hcme`) of the **Thursday that starts the reviewed week** is where every
+weekly check-in lives (col A's M.W label on that row names the week). A check-in
+done Th 11/5 reviews 10/29–11/4 and goes on the 10/29 row, `11.1`, never on 11/5,
+whose week is the next 7 days.
 
 `tools/1hcme/1hcme.py` does the whole thing in one go:
 
 1. One Ix round trip reads the week's rows (values **and** `display format`
    fill/font colors, so conditional formatting comes through) for the window
-   **Thursday → Wednesday**: the previous check-in's Thursday through the
-   day before the target Thursday, clipped to today. The previous Thursday's own check-in text is shown first.
+   **Thursday → Wednesday**, ending the day before the card's Thursday, clipped
+   to today. The previous week's check-in text is shown first.
 2. Renders one **table row per day** with truecolor cells painted in their
    Excel colors: day, then the numbers (⌈ ⌊ x̄ 他⌈ 他⌊ 霓 帮 身 ₹), then
    text columns in priority order (Title, Win, Learning, Thankful, Proud·o,
@@ -28,7 +30,7 @@ been written since 1/1/26 (col A's M.W label on that row names the week).
    remember?** One thought per line; Enter on an empty line or `Ctrl+S` saves
    and exits (`^D` too); `Ctrl+C` or an empty answer aborts without writing.
 4. Writes the answer (one `• ` bullet per line, matching the existing cells)
-   to `0s897!X{thursday row}` via `ix-osa.sh`, then marks the habit done
+   to `0s897!X{window's first Thursday}` via `ix-osa.sh`, then marks the habit done
    through the normal `/did` path (`tools/did/run.py "1 hcme"` → 1n+ col X
    credit + Todoist close), followed by a foreground `did-fast.py
    --refresh-cache` so an open dtd reloads. On success the cmux tab closes
@@ -37,11 +39,10 @@ been written since 1/1/26 (col A's M.W label on that row names the week).
 
 ## Which week
 
-- No arg → the most recent Thursday on/before today. If that row's X is
-  already filled, the next Thursday (the open card) is targeted when its row
-  exists.
+- No arg → the card of the most recent Thursday on/before today. If its
+  check-in is already filled, the next card is targeted when its row exists.
 - `YYYY-MM-DD` → the Thursday of the Sun–Sat week containing that date.
-- `M.W` → looked up in `0s897` col A (Thursday row with that label). Note
+- `M.W` → reviews the 7 days from the `0s897` col A Thursday with that label. Note
   this sheet labels the week containing Jan 1 as `1.1`, one week ahead of the
   fiscal labels `/1s` and `/1s897` compute, so the label is resolved against
   the sheet, never calculated.

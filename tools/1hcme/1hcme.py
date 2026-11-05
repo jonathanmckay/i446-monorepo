@@ -15,14 +15,15 @@ close).
 
 Which week: the `1 hcme` card recurs on Thursday (1n+ row 3 = 5). With no
 argument the target is the most recent Thursday on/before today; if that
-row's X is already filled and a later Thursday exists on the sheet, the next
-Thursday (the open card) is targeted instead. `YYYY-MM-DD` targets the
-Thursday of the Sun-Sat week containing that date; `M.W` targets that fiscal
-week's Thursday (same label system as /1s897).
+card's check-in is already filled and the next one's row exists on the sheet,
+the next Thursday (the open card) is targeted instead. `YYYY-MM-DD` targets the
+Thursday of the Sun-Sat week containing that date; `M.W` reviews the 7 days
+starting on that label's Thursday row.
 
-Display window: Thursday through Wednesday, i.e. the previous check-in's
-Thursday through the day before the target Thursday (clipped to today). The
-previous check-in's own text is shown first for continuity.
+Display window: Thursday through Wednesday, ending the day before the target
+Thursday (clipped to today). The answer goes in column X of the window's first
+Thursday, so the row's label names the week reviewed. The previous check-in's
+own text is shown first for continuity.
 
 Usage:
   python3 1hcme.py                       # interactive
@@ -91,7 +92,7 @@ def resolve_target(arg: str | None, today: _dt.date) -> _dt.date:
         t = thursday_of_week(today)
         return t if t <= today else t - _dt.timedelta(days=7)
     if re.fullmatch(r"\d{1,2}\.\d{1,2}", arg):
-        return thursday_for_label(arg)
+        return thursday_for_label(arg) + _dt.timedelta(days=7)  # label = week under review
     return thursday_of_week(_dt.date.fromisoformat(arg))
 
 
@@ -135,16 +136,17 @@ def window(target: _dt.date, today: _dt.date) -> list[_dt.date]:
 
 
 def load(target: _dt.date, today: _dt.date):
-    """(dates, recs-by-date-index, prev check-in rec, target Thursday rec).
+    """(dates, recs-by-date-index, prev check-in rec, check-in row's rec).
 
-    The target Thursday sits just past the Thu-Wed window, so it is fetched
-    as an extra leading date; the prior check-in is the window's first day."""
+    A check-in lives on the Thursday that starts the week it reviews, the
+    window's first day (2026-11-05: "the last 7 days, not the next 7"). The
+    prior check-in sits a week before the window, so it is fetched as an
+    extra leading date."""
     dates = window(target, today)
-    raw = fetch([target] + dates)
-    trec = raw.pop(0, None)
+    raw = fetch([target - _dt.timedelta(days=14)] + dates)
+    prev = raw.pop(0, None)
     recs = {i - 1: r for i, r in raw.items()}
-    prev = recs.get(0) if dates[0] == target - _dt.timedelta(days=7) else None
-    return dates, recs, prev, trec
+    return dates, recs, prev, recs.get(0)
 
 
 def _mdy(d: _dt.date) -> str:
@@ -358,12 +360,13 @@ def render(dates: list[_dt.date], recs: dict[int, dict], target: _dt.date,
     text_cols, cell_w = layout(width, cell_w, max_text)
     out = []
     tlabel = (trec or {}).get("cells", {}).get("A", ("",))[0]
+    row_day = target - _dt.timedelta(days=7)
     out.append(BOLD + "1 hcme · week %s · check-in row Th %d/%d" % (
-        tlabel or "?", target.month, target.day) + RESET)
+        tlabel or "?", row_day.month, row_day.day) + RESET)
     if prev:
         pv = prev["cells"].get(HCME_COL, ("",))[0].strip()
         if pv:
-            out.append(DIM + "last check-in (Th %s):" % _mdy(target - _dt.timedelta(days=7)) + RESET)
+            out.append(DIM + "last check-in (Th %s):" % _mdy(target - _dt.timedelta(days=14)) + RESET)
             for ln in pv.splitlines():
                 if ln.strip():
                     out.append("  " + _clip(ln.strip(), width - 4))
@@ -527,8 +530,8 @@ def main(argv=None) -> int:
         print("✗ could not read %s from Ix: %s" % (SHEET, str(e).strip()[:300]))
         _hold_pane(args)
         return 1
-    # No arg + this week's card already filled → roll forward to the next
-    # Thursday if the sheet has that row.
+    # No arg + this week's check-in already filled → roll forward to the next
+    # card if the sheet has its row.
     if not args.week and trec and trec["cells"].get(HCME_COL, ("",))[0].strip():
         nxt = target + _dt.timedelta(days=7)
         if nxt <= today + _dt.timedelta(days=6):
@@ -540,7 +543,8 @@ def main(argv=None) -> int:
     print(render(dates, recs, target, prev, trec, cell_w=args.cell, max_text=args.cols))
 
     if trec is None:
-        print("✗ no %s row for Th %s — cannot write %s" % (SHEET, _mdy(target), HCME_COL))
+        print("✗ no %s row for Th %s — cannot write %s" % (
+            SHEET, _mdy(target - _dt.timedelta(days=7)), HCME_COL))
         _hold_pane(args)
         return 1
     existing = trec["cells"].get(HCME_COL, ("",))[0].strip()

@@ -50,6 +50,32 @@ def test_window_is_thursday_through_wednesday(hm):
     assert days[-1] == dt.date(2026, 10, 21) and days[-1].weekday() == 2
 
 
+def test_checkin_row_is_the_thursday_that_starts_the_reviewed_week(hm, monkeypatch):
+    # 2026-11-05: "should be the last 7 days, not the next 7". The check-in
+    # reviewing Th 10/29 - We 11/4 belongs on the 10/29 row (11.1), not on
+    # 11/5, whose week is the next 7 days.
+    import datetime as dt
+    seen = []
+
+    def fake_fetch(dates):
+        seen.extend(dates)
+        return {i: {"row": d.toordinal(), "cells": {}} for i, d in enumerate(dates)}
+    monkeypatch.setattr(hm, "fetch", fake_fetch)
+    target, today = dt.date(2026, 11, 5), dt.date(2026, 11, 5)
+    dates, recs, prev, trec = hm.load(target, today)
+    assert dates[0] == dt.date(2026, 10, 29) and dates[-1] == dt.date(2026, 11, 4)
+    assert trec["row"] == dt.date(2026, 10, 29).toordinal()
+    assert prev["row"] == dt.date(2026, 10, 22).toordinal()
+    assert target not in seen
+    assert len(recs) == 7 and recs[6]["row"] == dt.date(2026, 11, 4).toordinal()
+
+
+def test_week_label_names_the_week_under_review(hm, monkeypatch):
+    import datetime as dt
+    monkeypatch.setattr(hm, "thursday_for_label", lambda label: dt.date(2026, 10, 29))
+    assert hm.resolve_target("11.1", dt.date(2026, 11, 5)) == dt.date(2026, 11, 5)
+
+
 def _answer(hm, keys):
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
