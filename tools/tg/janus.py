@@ -148,6 +148,7 @@ def _sync_width() -> None:
         _cols = cols
         _apply_width(cols)
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
+BLOCK_VIEW_GAP_MIN = 2  # same, on the ^G block view
 NO_TIMER_FLASH_DELAY = 15  # s with no running timer before the idle nag starts
 # flashing (user request 2026-08-11: switching tasks always has a beat of no
 # timer running between stop and the next start, and the whole-screen invert
@@ -5149,9 +5150,10 @@ def render_block_view() -> list[tuple[str, str]]:
     """^G: one block, full-screen, every raw Toggl entry in it — no merging,
     no 3-row cap, no tiny-entry absorption (JM 2026-11-02: "look at all time
     entries in a block … same way I can look at the details of a task").
-    Untracked stretches between them show as gap rows. Every row registers
-    in STATE.visible_events, so ↑/↓, ↵, ⌥↵, ^P, ^X and ^G (points) act here
-    exactly as on the main timeline. Esc returns."""
+    Untracked stretches of 2+ minutes show as gap rows, and rows carry start
+    times only, the end being the next row's start (JM 2026-11-05). Every
+    row registers in STATE.visible_events, so ↑/↓, ↵, ⌥↵, ^P, ^X and ^G
+    (points) act here exactly as on the main timeline. Esc returns."""
     name, sh = STATE.block_view
     day = view_now().replace(hour=0, minute=0, second=0, microsecond=0)
     bs = day + dt.timedelta(hours=sh)
@@ -5176,12 +5178,12 @@ def render_block_view() -> list[tuple[str, str]]:
 
     def gap_row(gs, ge):
         mins = int((ge - gs).total_seconds() // 60)
-        if mins < 1:
+        if mins < BLOCK_VIEW_GAP_MIN:
             return
         item = {"kind": "empty", "start_dt": gs, "dur_min": mins}
         STATE.visible_events.append(item)
         is_sel, click, marker = _row_selection(_sel_key(item))
-        tcol = f"{gs:%H:%M}–{ge:%H:%M} "
+        tcol = f" {gs:%H:%M}  "
         out.extend(marker)
         out.append(_frag("class:selected_accent" if is_sel else "class:time", tcol, click))
         out.append(_frag("class:selected_bg" if is_sel else "class:no_entry",
@@ -5200,10 +5202,10 @@ def render_block_view() -> list[tuple[str, str]]:
                 "dur_min": dur, "running": running, "contiguous": True}
         STATE.visible_events.append(item)
         is_sel, click, marker = _row_selection(_sel_key(item))
-        # Real start/end even when the entry spills across the block edge;
+        # Real start even when the entry spills across the block edge;
         # ↳ / ↦ say which side it crosses.
-        tcol = (f"{'↳' if e['start_dt'] < bs else ' '}{e['start_dt']:%H:%M}–"
-                f"{'now  ' if running else f'{end:%H:%M}'}{'↦' if end > be else ' '} ")
+        tcol = (f"{'↳' if e['start_dt'] < bs else ' '}{e['start_dt']:%H:%M}"
+                f"{'↦' if end > be else ' '} ")
         tail = ("▶ " if running else "") + _entry_dur_display(dur, e["desc"], [e["id"]])
         tags = _visible_tags(e.get("tags"))
         avail = max(1, WIDTH_HINT - dwidth(tcol) - dwidth(tail) - _tag_chips_width(tags) - 1)

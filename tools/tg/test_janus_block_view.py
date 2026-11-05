@@ -79,7 +79,7 @@ def test_ctrl_o_lists_every_entry_in_the_selected_rows_block(monkeypatch):
     assert "lunch" not in out
     assert "6 entries" in out
     # 14:29–14:40 and 15:42–16:00 are untracked.
-    assert "14:29–14:40" in out and "15:42–16:00" in out
+    assert "14:29 " in out and "15:42 " in out and "14:29–14:40" not in out
 
     entries = [it for it in mod.STATE.visible_events if it.get("kind") == "entry"]
     gaps = [it for it in mod.STATE.visible_events if it.get("kind") == "empty"]
@@ -118,3 +118,39 @@ def test_ctrl_g_still_fixes_points_not_block_view(monkeypatch):
     _select(mod, 100)
     _binding(mod, "c-g")(_Event())
     assert mod.STATE.block_view is None
+
+
+def _block_rows(mod, monkeypatch, entries):
+    _setup(mod, monkeypatch)
+    mod.STATE.entries = entries
+    mod.STATE.block_view = ("申", 14)
+    return _text(mod.render_block_view())
+
+
+def _entry(mod, i, sh, sm, ss, eh, em, es):
+    start = _yesterday_at(sh, sm).replace(second=ss)
+    return {"id": i, "desc": f"e{i}", "project_id": None, "tags": [], "running": False,
+            "start_dt": start, "end_dt": _yesterday_at(eh, em).replace(second=es)}
+
+
+def test_block_view_hides_gaps_under_two_minutes(monkeypatch):
+    # JM 2026-11-05: gaps under 120 s are noise on this screen.
+    mod = _load_tui()
+    _block_rows(mod, monkeypatch, [
+        _entry(mod, 1, 14, 0, 0, 14, 30, 0),
+        _entry(mod, 2, 14, 31, 59, 15, 0, 0),    # 119 s after e1: hidden
+        _entry(mod, 3, 15, 2, 0, 16, 0, 0),      # exactly 120 s after e2: shown
+    ])
+    gaps = [it for it in mod.STATE.visible_events if it.get("kind") == "empty"]
+    assert [g["start_dt"].strftime("%H:%M") for g in gaps] == ["15:00"]
+
+
+def test_block_view_shows_start_times_only(monkeypatch):
+    # JM 2026-11-05: an end time is by definition the next row's start.
+    mod = _load_tui()
+    out = _block_rows(mod, monkeypatch, [
+        _entry(mod, 1, 14, 0, 0, 14, 30, 0),
+        _entry(mod, 2, 14, 40, 0, 16, 0, 0),
+    ])
+    assert "14:00 " in out and "14:30 " in out and "14:40 " in out
+    assert "14:00–14:30" not in out and "14:30–14:40" not in out
