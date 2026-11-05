@@ -996,18 +996,6 @@
     "rent": "850.00"
   },
   {
-    "unit_id": 1256,
-    "property_name": "tc68",
-    "unit": "D107",
-    "tenant_name": "Lamping, Emie G.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2026-01-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-01-01",
-    "rent": "1725.00"
-  },
-  {
     "unit_id": 721,
     "property_name": "c313",
     "unit": "13",
@@ -1060,7 +1048,7 @@
     "property_name": "c313",
     "unit": "35",
     "tenant_name": "Stewart, William S.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2026-02-05",
     "move_in": "2026-02-22",
     "renewal_start_date": null,
@@ -1372,7 +1360,7 @@
     "property_name": "tc34",
     "unit": "A102",
     "tenant_name": "Simmons, Marlie R.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2026-02-03",
     "move_in": "2026-02-07",
     "renewal_start_date": null,
@@ -4162,18 +4150,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1118.00"
-  },
-  {
-    "unit_id": 673,
-    "property_name": "e328",
-    "unit": "2",
-    "tenant_name": "McCormack , Adam  P.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-02-08",
-    "move_in": "2025-02-08",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-06-01",
-    "rent": "1100.00"
   },
   {
     "unit_id": 506,

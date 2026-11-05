@@ -8798,5 +8798,25 @@
     "unit": "J201",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-05",
+    "effective": "2026-11-06",
+    "kind": "ntv",
+    "unit_id": "1347",
+    "prop": "c702",
+    "unit": "E101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-05",
+    "effective": "2026-11-05",
+    "kind": "movein",
+    "unit_id": "2",
+    "prop": "a916",
+    "unit": "1",
+    "tenant": null,
+    "baseline": false
   }
 ]
