@@ -51,21 +51,17 @@ checking with him; the naming is load-bearing (e.g. "Org/People" vs
 
 ## Launch
 
-Same pattern as `/0s` — the form is full-screen, needs its own terminal:
+The form is full-screen, so it needs its own terminal (optional date arg,
+default today):
 
-1. Open a new cmux surface:
-   ```bash
-   cmux new-surface --type terminal
-   ```
-2. Run the form in that pane (optional date arg, default today):
-   ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD]"
-   ```
-3. Focus it: `cmux focus-pane --pane pane:<N>`
-4. Confirm: `moralaudit opened in a new cmux tab — fill the grid, last field saves.`
+```bash
+~/i446-monorepo/scripts/open-tui.sh moralaudit "python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD]"
+```
 
-If cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py`
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: fill the grid, last field saves.
 
 ## Keys (inside the form)
 

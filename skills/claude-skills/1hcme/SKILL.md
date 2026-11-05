@@ -51,24 +51,19 @@ filled" and a new answer **replaces** it.
 
 ## Launch
 
-It needs its own terminal for the colors and the prompt — open it in a new
-cmux tab (same pattern as `/0s` and `/1s`):
+It needs its own terminal for the colors and the prompt. Pass the user's week
+argument through verbatim if given (`--no-hold`: the script holds its own pane
+on failure):
 
-1. ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output.
-2. ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/1hcme/1hcme.py [week]"
-   ```
-   Pass the user's week argument through verbatim if given.
-3. ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `1hcme opened in a new cmux tab — read the week, answer the question, blank line to save.`
+```bash
+~/i446-monorepo/scripts/open-tui.sh --no-hold 1hcme "python3 ~/i446-monorepo/tools/1hcme/1hcme.py [week]"
+```
 
-Do not block on the form. If cmux is unavailable, tell the user to run it
-themselves: `! python3 ~/i446-monorepo/tools/1hcme/1hcme.py`
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: read the week, answer the question, blank line to save. Do not
+block on the form.
 
 Then release the dtd claim the `/1hcme` prompt took, if any (no-op otherwise):
 

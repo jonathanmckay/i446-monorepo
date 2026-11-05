@@ -86,27 +86,18 @@ sheet is a week ahead/behind another.
 
 ## Launch
 
-The form is a full-screen prompt_toolkit TUI — open it in a new cmux tab
-(same pattern as `/0s` / `/1s`):
+The form is a full-screen prompt_toolkit TUI, so it needs its own terminal
+(pass the optional week arg through if given: an `M.W` label like `7.4` or any
+ISO date in the week):
 
-1. Open a new cmux surface:
-   ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output.
-2. Run the form in that pane (pass the optional week arg through if given —
-   either an `M.W` label like `7.4` or any ISO date in the week):
-   ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [M.W|YYYY-MM-DD]"
-   ```
-3. Focus it:
-   ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `xk887 opened in a new cmux tab — fill the form, ^S to save.`
+```bash
+~/i446-monorepo/scripts/open-tui.sh xk887 "python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [M.W|YYYY-MM-DD]"
+```
 
-If cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/xk887/xk887-survey.py`
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: fill the form, ^S to save.
 
 ## Keys (inside the form)
 

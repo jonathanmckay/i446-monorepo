@@ -38,26 +38,17 @@ column — it's an action toggle: enter `1` and on save the form runs `did-fast 
 
 ## Launch
 
-The form is a full-screen prompt_toolkit TUI, so it needs its own terminal —
-open it in a new cmux tab (same pattern as `/ibx`):
+The form is a full-screen prompt_toolkit TUI, so it needs its own terminal
+(pass the optional date arg through if the user gave one):
 
-1. Open a new cmux surface:
-   ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output (e.g. `OK surface:6 pane:3 workspace:1`).
-2. Run the form in that pane (pass the optional date arg through if the user gave one):
-   ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD]"
-   ```
-3. Focus it:
-   ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `0s opened in a new cmux tab — fill the form, ^S to save to 0s897.`
+```bash
+~/i446-monorepo/scripts/open-tui.sh 0s "python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD]"
+```
 
-If cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/0s/0s.py`
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: fill the form, ^S to save to 0s897.
 
 ## Keys (inside the form)
 

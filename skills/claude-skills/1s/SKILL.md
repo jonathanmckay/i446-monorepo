@@ -140,25 +140,20 @@ form runs, not `--from-json`) auto-closes its own cmux tab ~1s later via
 failure the pane is left open instead, so the error and any recovery-file
 path stay visible.
 
-It needs its own terminal — open it in a new cmux tab (same pattern as `/0s`):
+It needs its own terminal. Pass the review-week date through only if the user
+gave one (`MM/DD` → convert to `YYYY-MM-DD`); no arg reviews the last completed
+Sun–Sat week:
 
-1. ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output.
-2. ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
-   ```
-   Pass the review-week date through only if the user gave one (`MM/DD` →
-   convert to `YYYY-MM-DD`); no arg reviews the last completed Sun–Sat week.
-3. ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `1s survey opened in a new cmux tab — daily answers inline, digits pick a day, finishing the last field autosaves.`
+```bash
+~/i446-monorepo/scripts/open-tui.sh 1s "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
+```
 
-Do NOT block on the form — continue with Step 1 while the user fills it. If
-cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/1s/1s-survey.py`
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: daily answers inline, digits pick a day, finishing the last field
+autosaves. Do NOT block on the form — continue with Step 1 while the user fills
+it.
 
 Non-interactive paths (scripting/tests): `--from-json <file>` writes answers
 directly; `--print-script` prints the AppleScript without writing;

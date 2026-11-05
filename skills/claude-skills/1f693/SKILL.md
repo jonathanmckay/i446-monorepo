@@ -21,14 +21,17 @@ opens a cc tab running `/1f693 stoplight` so half 2 is waiting).
 
 ## `/1f693` (no args)
 
-Same launch pattern as `/0s` — the form needs its own terminal:
+The form needs its own terminal:
 
-1. `cmux new-surface --type terminal` → parse `surface:N` / `pane:N`.
-2. `cmux respawn-pane --surface surface:N --command "python3 ~/i446-monorepo/tools/f693/1f693.py"`
-3. `cmux focus-pane --pane pane:N`
-4. Confirm in one line: `1 f693 opened in a new cmux tab — diagram is in Chrome; fill the 6 slots, Esc saves.`
+```bash
+~/i446-monorepo/scripts/open-tui.sh 1f693 "python3 ~/i446-monorepo/tools/f693/1f693.py"
+```
 
-If cmux is unavailable: `! python3 ~/i446-monorepo/tools/f693/1f693.py`.
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm in one line: diagram is in Chrome; fill the 6 slots, Esc saves.
+From Ix, the diagram opens in Ix's Chrome, not on the user's screen: say so.
 
 Do not create the Todoist tasks or edit the doc yourself in this mode — the
 form does it. Do not mark `1 f693` done yourself either (the form calls
