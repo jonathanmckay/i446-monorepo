@@ -924,6 +924,13 @@ def test_hiit_and_hit_rows_show_2x_points(jm, monkeypatch):
     assert jm._habit_rate_points("hiit", 27) == 54
     assert jm._habit_rate_points("HIT", 27) == 54
     assert jm._habit_rate_points("work", 27) is None
+    # session habits preview what did-fast credits (2026-11-05): 18m of 中文
+    # showed 18, credits 23.
+    assert jm._habit_rate_points("中文", 18) == 23
+    assert jm._habit_rate_points("math", 40) == 45
+    assert jm._habit_rate_points("english", 23) == 28
+    assert jm._habit_rate_points("一起饭", 20) == 35
+    assert jm._habit_rate_points("一起发", 20) == 35
 
 
 def test_logged_rows_are_not_dimmed(jm):

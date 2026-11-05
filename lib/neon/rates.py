@@ -33,6 +33,21 @@ def rate_points(cell, minutes: float) -> int | None:
     return int(round(base + per * minutes))
 
 
+# Base 分 per occurrence of a habit priced at base + 1分/min. did-fast credits
+# them; janus previews the same number.
+VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
+# Teaching sessions with the kids (fen.md xk87, 2026-10-29). "math" used to
+# alias to the retired 问学 0n habit.
+VARIABLE_SESSION_BONUS: dict[str, int] = {"math": 5, "english": 5, "中文": 5}
+
+
+def session_points(name: str, minutes: float) -> int | None:
+    """base + 1分/min for a session-priced habit, else None."""
+    key = (name or "").strip().lower()
+    base = VARIABLE_1N_BASES.get(key, VARIABLE_SESSION_BONUS.get(key))
+    return None if base is None else int(round(base + minutes))
+
+
 # 0n habits whose minutes Neon credits at a multiple (minutes → 分). The
 # multiplier lives in a sheet formula, not row 5, so it is mirrored here for
 # display only (writes still go through 0n and let the sheet do the math).

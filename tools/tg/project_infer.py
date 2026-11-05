@@ -139,11 +139,23 @@ def _confident(hit, min_count: int) -> str:
     return ""
 
 
+def _habit_aliases() -> dict:
+    """{normalized alias: normalized habit name} from config/tasks.json, so a
+    variant with no history of its own (一起发) borrows the habit's."""
+    try:
+        habits = json.loads(TASKS_JSON.read_text()).get("habits", {})
+    except (OSError, ValueError):
+        return {}
+    return {normalize(a): normalize(h.get("name") or "")
+            for h in habits.values() for a in h.get("aliases") or []}
+
+
 def from_history(desc: str, hmap: dict, valid: set | None = None) -> str:
     norm = normalize(desc)
     if not norm or not hmap:
         return ""
-    proj = _confident(hmap.get("exact", {}).get(norm), MIN_EXACT)
+    exact = hmap.get("exact", {})
+    proj = _confident(exact.get(norm) or exact.get(_habit_aliases().get(norm)), MIN_EXACT)
     if not proj:
         for kind, key in _prefixes(norm):
             proj = _confident(hmap.get(kind, {}).get(key), MIN_PREFIX)
@@ -166,6 +178,7 @@ def _api_key() -> str | None:
 
 
 SERVER_PY = Path(__file__).resolve().parent.parent.parent / "mcp/toggl_server/server.py"
+TASKS_JSON = Path(__file__).resolve().parent.parent.parent / "config/tasks.json"
 
 
 def _code_hints() -> dict:

@@ -1448,15 +1448,19 @@ def registered_habit_names() -> set[str]:
 
 def _habit_rate_points(desc: str, minutes: int) -> int | None:
     """分 Neon will credit for a multiplied 0n habit entry (hiit: 2×min via
-    hcbi!Y), resolving did-fast's ALIASES first so "hit" counts too. Display
-    only — the swipe still sends minutes to 0n and the sheet multiplies."""
-    from neon.rates import zero_n_points
+    hcbi!Y) or a base + 1分/min session (中文, 一起饭), resolving did-fast's
+    aliases first so "hit" counts too. Display only — the swipe still sends
+    minutes and the sheet or did-fast prices them."""
+    from neon.rates import session_points, zero_n_points
     key = _norm_key(desc)
     try:
-        key = _load_df_mod().ALIASES.get(key, key)
+        df = _load_df_mod()
+        key = df.ALIASES.get(key, key)
+        key = df.ONENEON_ALIASES.get(key, key)
     except Exception:
         pass
-    return zero_n_points(key, minutes)
+    pts = zero_n_points(key, minutes)
+    return pts if pts is not None else session_points(key, minutes)
 
 
 def habit_tags(tags: list[str]) -> list[str]:

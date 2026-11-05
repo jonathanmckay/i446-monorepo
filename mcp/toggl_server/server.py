@@ -27,7 +27,8 @@ mcp = FastMCP(
 - i9 — Microsoft / GitHub work: meetings, coding (work), 1:1s, reviews, standups
 - m5x2 — McKay Capital: real estate, property, tenant, rental
 - qz12 — personal finance: investing, stocks, portfolio, taxes, budgeting
-- 家 — home & family: cooking, cleaning, kids, errands, chores, groceries, family time
+- 家 — strictly extended family: parents, siblings, in-laws, relatives outside the household
+- xk87 — immediate family and home life: kids, spouse, family meals, cooking, chores, errands, groceries, home admin
 - 睡觉 — sleep: 睡觉, nap, sleep
 - xk88 — social: friends, dinner out, party, socializing, dates
 - s897 — social (extended): community events, networking

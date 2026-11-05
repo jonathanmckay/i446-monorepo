@@ -603,6 +603,10 @@
     },
     "一起饭": {
       "name": "一起饭",
+      "aliases": [
+        "一起吃",
+        "一起发"
+      ],
       "category": "1n+",
       "neon_header": "一起饭",
       "domain": "xk87",

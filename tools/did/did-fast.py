@@ -87,6 +87,7 @@ ix_run = _ix_mod.run
 # and other sheets (0n/1n+/hcbi) still use ix_run.
 from neon import excel as neon_excel  # noqa: E402 (path inserted above)
 from neon import cols as neon_cols  # noqa: E402
+from neon.rates import VARIABLE_1N_BASES, VARIABLE_SESSION_BONUS  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code": one task, several domains
 from neon import weeks as neon_weeks  # noqa: E402
 from blocks import BLOCK_START, is_future_block  # noqa: E402 (path inserted above)
@@ -152,7 +153,6 @@ VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
 # Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
 # Keys are header_normalize()d (lowercase).
 VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
-VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
 # Habits whose 1n+ week cell records the BASE points per occurrence, not the
 # minutes (2026-10-24, JM: "if I do /did on 一起饭 I want 15分 to go to the 1n
 # ... and then the number of minutes goes direct on the day in the xk87
@@ -242,12 +242,9 @@ VARIABLE_DOMAIN: dict[str, tuple[str, str]] = {
     "english": ("xk87", "X"),
     "中文": ("xk87", "X"),
 }
-# Teaching sessions with the kids (fen.md xk87, 2026-10-29): 1分/min plus a
-# fixed bonus per session, added on top of the minutes. "math" used to alias
-# to the retired 问学 0n habit. These skip the by-name Todoist match: "math"
-# would otherwise fully overlap "goodnight math & lights out [15]" and close
-# that card instead of pricing the session.
-VARIABLE_SESSION_BONUS: dict[str, int] = {"math": 5, "english": 5, "中文": 5}
+# Teaching sessions (VARIABLE_SESSION_BONUS, lib/neon/rates.py) skip the by-name
+# Todoist match: "math" would otherwise fully overlap "goodnight math & lights
+# out [15]" and close that card instead of pricing the session.
 
 # Habits that also write to the hcbi sheet (append +N to formula).
 # key = habit name (lowercase), value = hcbi column letter
@@ -260,6 +257,7 @@ ONENEON_ALIASES: dict[str, str] = {
     "家": "family",
     "relax": "relax {60}",
     "一起吃": "一起饭",
+    "一起发": "一起饭",   # IME slip: janus asked for points, Haiku filed it under 家
     "long o314": "长o314",
     # Card is "1 groceries" but the 1n+ header is bare "groceries" — without
     # this the completion closed the card and silently skipped the column
