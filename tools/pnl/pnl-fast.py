@@ -86,9 +86,52 @@ def noi_flag_phrase(actual, budget, units):
 # ---------------------------------------------------------------------------
 
 VHOST = "mckay"
-API_USER = "74a8e81d16c91110e9985fedf53d7f24"
-API_PASS = "4920d4f8c58a8e9fbcaf22268ec0689a"
 BASE_URL = f"https://{VHOST}.appfolio.com/api/v2/reports"
+
+# Credentials are never hard-coded (this repo is public). Lookup order mirrors
+# the Todoist token (~/.config/todoist/token first, then env):
+#   1. ~/.config/appfolio/credentials (or $APPFOLIO_CREDENTIALS_FILE), env-file
+#      style lines: APPFOLIO_CLIENT_ID=... / APPFOLIO_CLIENT_SECRET=...
+#   2. $APPFOLIO_CLIENT_ID / $APPFOLIO_CLIENT_SECRET (the names the other
+#      AppFolio tools and .env.example already use).
+# Resolved lazily so importing this module (tests, portfolio-pnl-fast) needs
+# no credentials.
+APPFOLIO_CREDENTIALS_FILE = Path(os.environ.get(
+    "APPFOLIO_CREDENTIALS_FILE",
+    str(Path.home() / ".config" / "appfolio" / "credentials")))
+
+
+def _read_cred_file(path):
+    vals = {}
+    try:
+        text = Path(path).read_text()
+    except OSError:
+        return vals
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if k.startswith("export "):
+            k = k[len("export "):].strip()
+        vals[k] = v.strip().strip('"').strip("'")
+    return vals
+
+
+def appfolio_credentials():
+    """Return (client_id, client_secret). Exits with a message naming the
+    config file, never echoing any secret, when neither source has both."""
+    f = _read_cred_file(APPFOLIO_CREDENTIALS_FILE)
+    cid, sec = f.get("APPFOLIO_CLIENT_ID", ""), f.get("APPFOLIO_CLIENT_SECRET", "")
+    if not (cid and sec):
+        cid = os.environ.get("APPFOLIO_CLIENT_ID", "").strip()
+        sec = os.environ.get("APPFOLIO_CLIENT_SECRET", "").strip()
+    if not (cid and sec):
+        sys.exit(f"AppFolio credentials missing: write APPFOLIO_CLIENT_ID= and "
+                 f"APPFOLIO_CLIENT_SECRET= lines to {APPFOLIO_CREDENTIALS_FILE} "
+                 f"(chmod 600) or export both env vars.")
+    return cid, sec
 
 VAULT = Path.home() / "vault"
 # PNL_REPORTS_BASE overrides the output root (used to regenerate into a scratch
@@ -349,7 +392,8 @@ def overlay_backfill(monthly, months, code):
 # ---------------------------------------------------------------------------
 
 def _auth_header():
-    creds = f"{API_USER}:{API_PASS}"
+    cid, sec = appfolio_credentials()
+    creds = f"{cid}:{sec}"
     b64 = base64.b64encode(creds.encode()).decode()
     return f"Basic {b64}"
 

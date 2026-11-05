@@ -126,3 +126,47 @@ def test_reports_base_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv("PNL_REPORTS_BASE", str(tmp_path))
     mod = _load("pnl_fast_env", "pnl-fast.py")
     assert mod.REPORTS_BASE == tmp_path
+
+
+# --- AppFolio credentials: never hard-coded (public repo), file then env ---
+
+_FAKE_ID = "id-" + "0" * 8
+_FAKE_SECRET = "sec-" + "1" * 8
+
+
+def test_no_hardcoded_appfolio_credentials():
+    src = (PNL_DIR / "pnl-fast.py").read_text()
+    assert "API_USER =" not in src and "API_PASS =" not in src
+
+
+def test_appfolio_credentials_from_file(monkeypatch, tmp_path):
+    f = tmp_path / "credentials"
+    f.write_text(f"# comment\nAPPFOLIO_CLIENT_ID={_FAKE_ID}\n"
+                 f"export APPFOLIO_CLIENT_SECRET='{_FAKE_SECRET}'\n")
+    monkeypatch.setenv("APPFOLIO_CREDENTIALS_FILE", str(f))
+    monkeypatch.setenv("APPFOLIO_CLIENT_ID", "env-id")
+    monkeypatch.setenv("APPFOLIO_CLIENT_SECRET", "env-secret")
+    mod = _load("pnl_fast_cred_file", "pnl-fast.py")
+    assert mod.appfolio_credentials() == (_FAKE_ID, _FAKE_SECRET)
+    import base64
+    hdr = mod._auth_header()
+    assert hdr == "Basic " + base64.b64encode(
+        f"{_FAKE_ID}:{_FAKE_SECRET}".encode()).decode()
+
+
+def test_appfolio_credentials_env_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPFOLIO_CREDENTIALS_FILE", str(tmp_path / "missing"))
+    monkeypatch.setenv("APPFOLIO_CLIENT_ID", _FAKE_ID)
+    monkeypatch.setenv("APPFOLIO_CLIENT_SECRET", _FAKE_SECRET)
+    mod = _load("pnl_fast_cred_env", "pnl-fast.py")
+    assert mod.appfolio_credentials() == (_FAKE_ID, _FAKE_SECRET)
+
+
+def test_appfolio_credentials_missing_exits_without_import_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPFOLIO_CREDENTIALS_FILE", str(tmp_path / "missing"))
+    monkeypatch.delenv("APPFOLIO_CLIENT_ID", raising=False)
+    monkeypatch.delenv("APPFOLIO_CLIENT_SECRET", raising=False)
+    mod = _load("pnl_fast_cred_none", "pnl-fast.py")   # import must not need creds
+    with pytest.raises(SystemExit) as e:
+        mod.appfolio_credentials()
+    assert "credentials" in str(e.value)

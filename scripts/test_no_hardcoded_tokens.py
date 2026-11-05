@@ -19,6 +19,8 @@ PATTERNS = [
     r"token\s*=\s*['\"][0-9a-f]{40}['\"]",
     r"TODOIST_API_KEY=['\"]?[0-9a-f]{40}\b",
     r"<key>TODOIST_API_KEY</key>\s*<string>[0-9a-f]{40}</string>",
+    # AppFolio API client id/secret: 32 hex (pnl-fast.py held both until v179).
+    r"(API_USER|API_PASS|CLIENT_ID|CLIENT_SECRET)\s*=\s*['\"][0-9a-f]{32}['\"]",
 ]
 
 
