@@ -1880,7 +1880,7 @@ fi
 # no record": it was stamped unconditionally, and the ✗ line lived only in
 # the header, which the next action overwrites). A failure stamps edit-failed
 # and appends a kind=edit record (rc, edit-fast's output, the form's answers)
-# to the synced record log, so `dtd-log.py` shows it on either machine.
+# to the synced record log, so dtd-log.py shows it on either machine.
 if (( _efrc == 0 )); then
   print -- "\$EPOCHREALTIME\tedit-saved\t\$1" >> "\$TIMING" 2>/dev/null
 else
