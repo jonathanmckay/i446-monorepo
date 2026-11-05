@@ -135,6 +135,6 @@ printing an empty list. If both are 0: `No books started or finished W
   time, and never changes — it's the started date. `finished:` is set by
   `/book finished`. A book can show in both buckets the same week if it was
   read start-to-finish within it.
-- Apart from the Step 2c survey cell (`1分+1s!AO`) and the media-tag fix, this skill doesn't write to Neon. The weekly books-read
+- Apart from the Step 2d survey cell (`1分+1s!AO`) and the media-tag fix, this skill doesn't write to Neon. The weekly books-read
   counter (`1分+1s!AM`) is already incremented live by `/book finished`
   itself; nothing here needs to reconcile it.
