@@ -117,7 +117,7 @@ PY
 
 Open the 1s survey — a full-screen TUI form (same pattern as `/0s`) that asks
 the manual questions of the `1分+1s` row (Title for the Week, Biggest Win,
-Biggest missed opportunity, Proud/Regret w/others, Notes). Rating and
+Biggest missed opportunity, Proud/Regret w/others). Rating and
 High/Low/Avg are NOT asked: those cells hold live formulas computed from the
 week's daily surveys (P pulls `'i9'!B{row}`; W/X/Y aggregate `0s897` ⌈/⌊/x̄)
 and must never be written. Above each question the form surfaces the week's

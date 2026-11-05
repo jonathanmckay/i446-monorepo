@@ -96,11 +96,12 @@ def test_no_formula_fields_in_form():
 
 def test_applescript_targets_week_row_and_skips_blanks():
     m = _load()
-    script = m.build_applescript({"title": "T", "win": "", "notes": "n"},
+    script = m.build_applescript({"title": "T", "win": "", "missed": "n"},
                                  dt.date(2026, 7, 12))
     assert '"7.2"' in script
     assert '("R" & weekRow)' in script          # title col
-    assert '("AO" & weekRow)' in script         # notes col
+    assert '("T" & weekRow)' in script          # missed col
+    assert '("AO" & weekRow)' not in script     # AO belongs to /1hcmc
     assert '("S" & weekRow)' not in script      # blank win skipped
     assert "save wb" in script
 
