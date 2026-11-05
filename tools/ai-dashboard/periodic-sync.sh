@@ -38,6 +38,20 @@ if [[ "$HOST" == straylight* ]]; then
   python3 "$SCRIPT_DIR/build-stats-cache.py" >>"$SCRIPT_DIR/.build-stats-cache.log" 2>&1 || true
 fi
 
+# Session ingest (2026-11-05): llm-sessions.db is kept fresh by the 5555
+# server's own 15-min ingest thread. If that thread or the server dies, the DB
+# goes stale silently (it sat 8 days stale before 2026-10-26). Backstop: when
+# the DB hasn't been written in 30 min, run the same incremental ingest
+# directly (idempotent upserts; unchanged JSONLs are skipped). Capped at 150 s
+# with SIGALRM since macOS has no timeout(1). Runs before the stats-cache
+# early exits so a host without stats-cache.json still ingests.
+LLM_DB="$HOME/vault/i447/i446/llm-sessions.db"
+if [ -f "$LLM_DB" ] && [ -n "$(find "$LLM_DB" -mmin +30 2>/dev/null)" ]; then
+  (cd "$SCRIPT_DIR" && python3 -c 'import signal; signal.alarm(150); import dashboard; dashboard.ingest_claude_sessions()') \
+    >>"$SCRIPT_DIR/.periodic-sync.log" 2>&1 \
+    || echo "[$(date '+%F %T')] session ingest failed (exit=$?)" >>"$SCRIPT_DIR/.periodic-sync.log"
+fi
+
 [ -f "$STATS_FILE" ] || exit 0
 [ -d "$REPO_DIR/.git" ] || exit 0
 
