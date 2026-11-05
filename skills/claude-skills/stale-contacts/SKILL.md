@@ -11,7 +11,7 @@ Scan ~/vault/d359/ for contacts with overdue outreach cadence, then create Todoi
 ## Primary path (use this)
 
 ```bash
-python3 ~/i446-monorepo/scripts/stale-contacts.py --apply   # omit --apply to dry-run
+python3 ~/i446-monorepo/scripts/stale-contacts.py --apply   # omit --apply to dry-run (read-only: skips the refresher)
 ```
 
 The script is the single implementation: it refreshes `last_contact` from Toggl/d358, scans every d359 file for overdue `cadence`+`last_contact`, dedupes against open `d359/<slug>`-labelled tasks, and creates the tasks. It also runs daily via launchd (`com.mckay.stale-contacts`). Echo its output.
@@ -62,6 +62,7 @@ For each contact with both fields, calculate days since `last_contact` relative 
 | quarterly     | 100       |
 | semi-annual   | 200       |
 | annual        | 400       |
+| biennial      | 800       |
 
 A contact is **overdue** if `days_since_last_contact > threshold`.
 
@@ -111,7 +112,7 @@ Do NOT auto-update `last_contact` fields. The user updates these manually after 
 - Files with `cadence` but no `last_contact`: skip silently (contact not yet baselined)
 - Files with `last_contact` but no `cadence`: skip silently
 - `last_contact` in the future: skip (likely a data entry error, mention in report)
-- Unknown cadence values: skip and warn
+- Unknown cadence values: skip and warn (`none`/`never` skip silently)
 
 ## Dependencies
 

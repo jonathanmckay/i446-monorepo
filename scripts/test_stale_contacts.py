@@ -84,3 +84,45 @@ def test_outreach_task_override_wins_and_is_marked():
 def test_slug_strips_d359_suffix():
     assert sc.slug_of(Path("mark-mckay-d359.md")) == "mark-mckay"
     assert sc.slug_of(Path("carol-bryan-d359.md")) == "carol-bryan"
+
+
+# ── 2026-11-05: biennial cadence, loud unknown cadences, read-only dry-run ──
+
+def test_biennial_cadence_is_scanned(tmp_path):
+    _write(tmp_path, "cold-d359", "biennial", "2021-01-12")   # ~5y > 800d
+    _write(tmp_path, "warm-d359", "biennial", "2025-06-01")   # ~1.4y ≤ 800d
+    slugs = {c["slug"] for c in sc.overdue_contacts(date(2026, 11, 5), tmp_path)}
+    assert slugs == {"cold"}
+
+
+def test_unknown_cadence_warns_but_none_is_silent(tmp_path, capsys):
+    _write(tmp_path, "typo-d359", "fortnightly", "2020-01-01")
+    _write(tmp_path, "off-d359", "none", "2020-01-01")
+    assert sc.overdue_contacts(date(2026, 11, 5), tmp_path) == []
+    err = capsys.readouterr().err
+    assert "typo-d359.md" in err and "fortnightly" in err
+    assert "off-d359" not in err
+
+
+def test_dry_run_never_runs_refresher(monkeypatch, tmp_path):
+    fake = tmp_path / "refresh_last_contact.py"
+    fake.write_text("")
+    monkeypatch.setattr(sc, "REFRESH", fake)
+    assert sc.refresh_cmd(apply=False, no_refresh=False) is None
+    assert sc.refresh_cmd(apply=True, no_refresh=True) is None
+    cmd = sc.refresh_cmd(apply=True, no_refresh=False)
+    assert cmd[-1] == "--apply" and str(fake) in cmd
+
+
+def test_main_dry_run_does_not_spawn_refresher(monkeypatch, tmp_path):
+    fake = tmp_path / "refresh_last_contact.py"
+    fake.write_text("")
+    calls = []
+    monkeypatch.setattr(sc, "REFRESH", fake)
+    monkeypatch.setattr(sc, "overdue_contacts", lambda today: [])
+    monkeypatch.setattr(sc.subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(sc, "_token", lambda: "t")
+    monkeypatch.setattr(sc, "_open_label_set", lambda t, r: set())
+    monkeypatch.setattr(sc.sys, "argv", ["stale-contacts.py"])
+    assert sc.main() == 0
+    assert calls == []
