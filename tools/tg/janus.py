@@ -5813,7 +5813,7 @@ def run_tg_fast(text: str) -> str:
     post-429 cooldown, with no bug in tg-fast.py itself. 15s was too tight
     and killed the subprocess mid-transaction (2026-08-07: a comma-delimited
     range create timed out and errored, same failure mode did-fast.py's own
-    45s timeout already exists to avoid — see run_did_fast)."""
+    90s timeout already exists to avoid — see run_did_fast)."""
     try:
         proc = subprocess.run(
             ["python3", TG_FAST, text],
@@ -6301,7 +6301,7 @@ def run_did_fast_data(text: str, flags: tuple[str, ...] | None = None) -> tuple[
     try:
         proc = subprocess.run(
             _did_argv(text, flags),
-            capture_output=True, text=True, timeout=45,
+            capture_output=True, text=True, timeout=90,
         )
         if proc.stdout and "{" in proc.stdout:
             try:
@@ -6312,7 +6312,7 @@ def run_did_fast_data(text: str, flags: tuple[str, ...] | None = None) -> tuple[
         out = (proc.stdout or proc.stderr or "").strip()
         return (out.splitlines()[-1] if out else "(no output)"), None
     except subprocess.TimeoutExpired:
-        return "err: did-fast timed out", None
+        return "err: did-fast timed out, points may have landed: check before redoing", None
     except Exception as e:
         return f"err: {e}", None
 
