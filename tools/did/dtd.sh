@@ -1863,9 +1863,9 @@ else
     _today="\$(date +%Y-%m-%d)"
     _reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$_today' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
     if [[ -n "\$FZF_API_KEY" ]]; then
-      curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+      curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$_port" --data "reload-sync(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
     else
-      curl -s -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+      curl -s -XPOST "localhost:\$_port" --data "reload-sync(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
     fi
   fi
   "/tmp/dtd-$DTD_ID.bgrefresh.sh"   # then the ctrl-r pull, so Todoist-side changes show (2026-10-22)
@@ -3698,9 +3698,9 @@ _port="\$(cat "$DTD_PORT" 2>/dev/null)"
 [[ -n "\$_port" ]] || exit 0
 _reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$(date +%Y-%m-%d)' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
 if [[ -n "\$FZF_API_KEY" ]]; then
-  curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+  curl -s -H "X-API-Key: \$FZF_API_KEY" -XPOST "localhost:\$_port" --data "reload-sync(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
 else
-  curl -s -XPOST "localhost:\$_port" --data "reload(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
+  curl -s -XPOST "localhost:\$_port" --data "reload-sync(\$_reload)+transform-header($DTD_HDRGEN)" >/dev/null 2>&1
 fi
 BGREFRESHEOF
 chmod +x "$DTD_BGREFRESH"
@@ -3736,6 +3736,14 @@ chmod +x "$DTD_REFRESH"
 # Clear leftover terminal scrollback so the picker starts on a clean screen
 # (fzf --height renders inline below whatever was already on the terminal).
 clear
+
+# --id-nth=2 keys shift-marks on the hidden id, so they survive reload-sync
+# though the row text changes (spinner, elapsed). fzf clears marks on any other
+# reload, and the watcher's fires every ~1 s while a timer runs or an agent
+# works (bug 2026-11-05: "it starts but then disappears"). An fzf too old for
+# the flag exits 2 on it and would kill dtd, so probe rather than assume.
+DTD_FZF_IDS="--id-nth=2"
+fzf --id-nth=2 --filter=x </dev/null >/dev/null 2>&1; (( $? == 2 )) && DTD_FZF_IDS=""
 
 # Keybinding hints shown on the status line. Exported so the transform-header
 # bindings (which run in fzf's child shell) can read it. With --header-first the
@@ -4153,7 +4161,7 @@ while true; do
       --bind "start:execute-silent(echo \$FZF_PORT > $DTD_PORT)" \
       --bind "load:transform-header($DTD_HDRGEN)+transform-footer($DTD_HDRGEN footer)" \
       $( : "no result: binding (2026-10-21). It re-ran the header script on every keystroke and after every reload, a synchronous spawn each time; the only header that depends on the query is the schedule screen's '↵ delay N days' hint, which domainsearch now pushes itself over the listen port. Header writes from action scripts still repaint via their binding's transform-header or the load event after a reload" ) \
-      --delimiter=$'\t' --with-nth=1 \
+      --delimiter=$'\t' --with-nth=1 $DTD_FZF_IDS \
       --bind "change:first+execute-silent($DTD_DOMAINSEARCH {q})" \
       --bind "resize:reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --multi \
