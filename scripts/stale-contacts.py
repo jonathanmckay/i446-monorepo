@@ -10,7 +10,11 @@ a custom task body (e.g. "call mom (20) [20]" for parents).
 
 Usage:
     stale-contacts.py            # dry-run: list who's overdue + what it would create
-    stale-contacts.py --apply    # create the Todoist tasks
+    stale-contacts.py --apply    # refresh last_contact, then create the Todoist tasks
+
+The dry-run is read-only: it does NOT run the last_contact refresher (which
+writes d359 when given --apply), so it can over-report contacts the refresher
+would have bumped.
 """
 from __future__ import annotations
 
@@ -34,7 +38,12 @@ DEFAULT_POINTS = 10  # [N] value on the default "Reach out to <name>" body
 THRESHOLDS = {
     "weekly": 10, "biweekly": 17, "monthly": 38, "quarterly": 100,
     "semi-annual": 200, "semiannual": 200, "annual": 400, "yearly": 400,
+    "biennial": 800,
 }
+# Cadences that deliberately mean "never nag". Anything else not in THRESHOLDS
+# is a typo or a new word and gets a warning instead of a silent skip
+# (2026-11-05: `biennial` contacts were dropped for years without notice).
+NO_NAG = {"none", "never", "n/a", "na", "-"}
 SKIP_FILES = {"CLAUDE.md", "d359-index.md"}
 
 
@@ -84,7 +93,12 @@ def overdue_contacts(today: date, d359_dir: Path = D359) -> list[dict]:
         fm = parse_frontmatter(p.read_text())
         cadence = (fm.get("cadence") or "").lower()
         lc = fm.get("last_contact")
-        if not cadence or not lc or cadence not in THRESHOLDS:
+        if not cadence or not lc:
+            continue
+        if cadence not in THRESHOLDS:
+            if cadence not in NO_NAG:
+                print(f"warn: {p.name}: unknown cadence {cadence!r}; skipped",
+                      file=sys.stderr)
             continue
         try:
             lc_date = datetime.strptime(lc, "%Y-%m-%d").date()
@@ -155,19 +169,31 @@ def _create(token: str, content: str, slug: str, rollup: str) -> None:
     urllib.request.urlopen(req)
 
 
+def refresh_cmd(apply: bool, no_refresh: bool) -> list[str] | None:
+    """argv for the last_contact refresher, or None when it must not run.
+    It runs only on --apply: a dry-run must never write d359 (2026-11-05: the
+    default dry-run ran `refresh_last_contact.py --apply` and stamped files)."""
+    if not apply or no_refresh or not REFRESH.exists():
+        return None
+    return [sys.executable, str(REFRESH), "--days", "90", "--apply"]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="create the tasks (default: dry-run)")
     ap.add_argument("--no-refresh", action="store_true", help="skip the last_contact refresh")
     args = ap.parse_args()
 
-    # Refresh last_contact from Toggl/d358 so stale manual values don't false-positive.
-    if not args.no_refresh and REFRESH.exists():
+    # Refresh last_contact from Toggl/d358/gcal so stale manual values don't
+    # false-positive. The refresher writes d359, so only on --apply.
+    cmd = refresh_cmd(args.apply, args.no_refresh)
+    if cmd:
         try:
-            subprocess.run([sys.executable, str(REFRESH), "--days", "90", "--apply"],
-                           capture_output=True, timeout=120)
+            subprocess.run(cmd, capture_output=True, timeout=120)
         except Exception:
             pass
+    elif not args.apply and not args.no_refresh:
+        print("(dry-run: last_contact refresh skipped; --apply refreshes first)")
 
     today = date.today()
     overdue = overdue_contacts(today)
