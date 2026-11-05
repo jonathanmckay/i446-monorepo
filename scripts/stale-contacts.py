@@ -38,12 +38,12 @@ DEFAULT_POINTS = 10  # [N] value on the default "Reach out to <name>" body
 THRESHOLDS = {
     "weekly": 10, "biweekly": 17, "monthly": 38, "quarterly": 100,
     "semi-annual": 200, "semiannual": 200, "annual": 400, "yearly": 400,
-    "biennial": 800,
+    "6 months": 200, "biennial": 800,
 }
 # Cadences that deliberately mean "never nag". Anything else not in THRESHOLDS
 # is a typo or a new word and gets a warning instead of a silent skip
 # (2026-11-05: `biennial` contacts were dropped for years without notice).
-NO_NAG = {"none", "never", "n/a", "na", "-"}
+NO_NAG = {"none", "never", "n/a", "na", "-", "ad-hoc", "adhoc", "as-needed"}
 SKIP_FILES = {"CLAUDE.md", "d359-index.md"}
 
 
