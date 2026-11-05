@@ -59,3 +59,29 @@ dream_reap_keepalive() {
   done
   return 0
 }
+
+# dream_fallback_brief RUN_DIR VERSION EXIT_CODE
+#   Writes a mechanical morning-brief.md (one line per draft/approval/branch
+#   note, with its first heading) when every claude pass failed to write one.
+#   No-op if a brief already exists or there is nothing to surface.
+dream_fallback_brief() {
+  local dir="$1" ver="$2" rc="${3:-?}" brief="$1/morning-brief.md" f n=0 title
+  [[ -f "$brief" ]] && return 0
+  for f in "$dir"/drafts/*.md "$dir"/approvals/*.md "$dir"/branches/*.md; do
+    [[ -f "$f" ]] && n=$((n + 1))
+  done
+  [[ $n -eq 0 ]] && return 0
+  {
+    echo "# Dream $ver — FALLBACK brief (Pass 3 never wrote one; exit=$rc)"
+    echo
+    echo "Every claude pass died before ranking cards. Raw Pass-2 output, unranked,"
+    echo "unfiltered — read before acting. Log: logs/agent-run.log"
+    echo
+    for f in "$dir"/drafts/*.md "$dir"/approvals/*.md "$dir"/branches/*.md; do
+      [[ -f "$f" ]] || continue
+      title=$(grep -m1 -E '^(#|title:)' "$f" 2>/dev/null | sed -E 's/^(#+|title:)[[:space:]]*//' || true)
+      echo "- [${f#"$dir"/}](${f#"$dir"/})${title:+ — $title}"
+    done
+  } > "$brief"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] FALLBACK brief written: $n items"
+}
