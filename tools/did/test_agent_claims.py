@@ -542,6 +542,23 @@ def test_release_drops_the_agents_file(tmp_path):
     assert not (root / "by-session/S1.agents").exists()
 
 
+def test_busy_mode_tells_stop_a_background_agent_is_running(tmp_path):
+    # 2026-11-05: blue means waiting on JM, so the Stop colour hook skips it
+    # while the session's background agents still run.
+    assert _hook_json(tmp_path, "busy", {"session_id": "S1"}).returncode == 1
+    _hook_json(tmp_path, "subagent-start", {"session_id": "S1", "agent_id": "a1"})
+    assert _hook_json(tmp_path, "busy", {"session_id": "S1"}).returncode == 0
+    _hook_json(tmp_path, "subagent-stop", {"session_id": "S1", "agent_id": "a1"})
+    assert _hook_json(tmp_path, "busy", {"session_id": "S1"}).returncode == 1
+
+
+def test_stop_colour_hook_is_gated_on_busy():
+    cfg = json.loads((Path.home() / ".claude/settings.json").read_text())
+    cmds = [h.get("command", "") for g in cfg["hooks"]["Stop"] for h in g["hooks"]]
+    blue = next(c for c in cmds if "term-color.sh blue" in c)
+    assert "agent-claim-hook.sh busy ||" in blue
+
+
 def test_subagent_hooks_are_registered_in_claude_settings():
     cfg_path = Path.home() / ".claude/settings.json"
     if not cfg_path.exists():

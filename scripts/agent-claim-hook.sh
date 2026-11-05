@@ -1,5 +1,5 @@
 #!/bin/zsh
-# agent-claim-hook.sh <working|idle|release|subagent-start|subagent-stop>
+# agent-claim-hook.sh <working|idle|release|subagent-start|subagent-stop|busy>
 # Claude Code hook for /claim. UserPromptSubmit → working, Stop → idle,
 # SessionEnd → release, SubagentStart/SubagentStop → track in-flight
 # subagents. See tools/did/agent_claims.py for the store. 2026-10-05.
@@ -56,6 +56,12 @@ _live_agents() {   # prints the still-fresh entries, minus $1 if given
   done
   (( ${#out} )) && print -rl -- "${out[@]}"
 }
+# busy (2026-11-05): exit 0 while this session's background agents run, so the
+# Stop colour hook leaves the tab black. Blue means waiting on JM, same as 🕐.
+if [[ "$1" == busy ]]; then
+  [[ -n "$sid" && -n "$(_live_agents)" ]]
+  exit $?
+fi
 if [[ -n "$sid" ]]; then
   case "$1" in
     subagent-start)
