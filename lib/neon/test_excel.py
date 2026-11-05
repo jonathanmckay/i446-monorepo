@@ -131,7 +131,7 @@ def test_fallback_write_keeps_numbers_numeric(monkeypatch):
 
 
 def test_batch_write_fallback_maps_modes(monkeypatch):
-    monkeypatch.setattr(excel, "_curl", lambda *a, **k: None)      # daemon down
+    monkeypatch.setattr(excel, "_curl_ex", lambda *a, **k: (None, False))      # daemon down
     calls = []
 
     def fake_fallback(op, sheet, col, date, row, value, src=None):
@@ -152,7 +152,7 @@ def test_batch_write_fallback_maps_modes(monkeypatch):
 
 
 def test_batch_write_prefers_daemon(monkeypatch):
-    monkeypatch.setattr(excel, "_curl", lambda path, body=None, **k: {"ok": True, "row": 1, "path": path})
+    monkeypatch.setattr(excel, "_curl_ex", lambda path, body=None, **k: ({"ok": True, "row": 1, "path": path}, False))
     monkeypatch.setattr(excel, "_ssh_fallback", lambda *a, **k: pytest.fail("fallback must not run"))
     assert excel.batch_write("0n", [{"col": "AE", "value": 1}], date="10/19")["path"] == "/batch_write"
 
@@ -172,9 +172,65 @@ def test_live_calls_are_refused_under_pytest(monkeypatch):
 
 
 def test_batch_write_fallback_false_reports_unreachable_without_ssh(monkeypatch):
-    monkeypatch.setattr(excel, "_curl", lambda *a, **k: None)
+    monkeypatch.setattr(excel, "_curl_ex", lambda *a, **k: (None, False))
     monkeypatch.setattr(excel, "_ssh_fallback", lambda *a, **k: pytest.fail("no per-cell ssh fallback"))
     out = excel.batch_write("0s897", [{"col": "E", "value": "x", "mode": "text"}], date="10/18/26",
                             fallback=False)
     assert out == {"ok": False, "error": "daemon_unreachable", "fallback": True}
     assert excel._DATE_COL["0s897"] == "B" and excel._DATE_COL["1分+1s"] == "A"
+
+
+# --- a daemon TIMEOUT is not "daemon down" (2026-11-04) -----------------------
+# Excel lagging 45s+: the client gave up, fell back to ssh+osascript, and the
+# daemon's request landed too, so one /ate appended twice (hcbi BD =550+550).
+
+class _Proc:
+    def __init__(self, rc, out=""):
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def _transport(monkeypatch, rc):
+    import subprocess as _sp
+    from neon import excel
+    calls = []
+    monkeypatch.setenv("NEON_TEST_TRANSPORT_OK", "1")
+    monkeypatch.setattr(excel.subprocess, "run", lambda *a, **k: _Proc(rc))
+    monkeypatch.setattr(excel, "_ssh_fallback", lambda *a, **k: calls.append(a) or {"ok": True})
+    return excel, calls
+
+
+def test_timed_out_batch_append_is_not_retried_by_fallback(monkeypatch):
+    excel, calls = _transport(monkeypatch, 28)          # curl: operation timed out
+    r = excel.batch_append("hcbi", [("BD", "+550"), ("BE", "+32")], date="11/4", src="t")
+    assert r["ok"] is False and r["timeout"] is True and calls == []
+
+
+def test_python_side_timeout_is_also_not_retried(monkeypatch):
+    import subprocess as _sp
+    from neon import excel
+    calls = []
+    monkeypatch.setenv("NEON_TEST_TRANSPORT_OK", "1")
+    def slow(*a, **k):
+        raise _sp.TimeoutExpired("curl", 25)
+    monkeypatch.setattr(excel.subprocess, "run", slow)
+    monkeypatch.setattr(excel, "_ssh_fallback", lambda *a, **k: calls.append(a) or {"ok": True})
+    assert excel.append("0分", "Q", date="11/4", value="+50")["timeout"] is True
+    assert calls == []
+
+
+def test_timed_out_add_mode_batch_write_is_not_retried(monkeypatch):
+    excel, calls = _transport(monkeypatch, 28)
+    r = excel.batch_write("0n", [{"col": "AJ", "value": 15, "mode": "add"}], date="11/4")
+    assert r["timeout"] is True and calls == []
+
+
+def test_refused_daemon_still_falls_back(monkeypatch):
+    excel, calls = _transport(monkeypatch, 7)            # curl: couldn't connect
+    r = excel.batch_append("hcbi", [("BD", "+550")], date="11/4", src="t")
+    assert r.get("fallback") is True and len(calls) == 1
+
+
+@pytest.mark.parametrize("rc", [52, 56])
+def test_daemon_dying_mid_request_is_not_retried(monkeypatch, rc):
+    excel, calls = _transport(monkeypatch, rc)
+    assert excel.batch_append("hcbi", [("BD", "+1")], date="11/4")["timeout"] is True and calls == []

@@ -59,8 +59,32 @@ def _guard_tests() -> None:
                            "or set NEON_TEST_TRANSPORT_OK=1 with subprocess faked")
 
 
+# 2026-11-04: a TIMEOUT is not "daemon down". Excel lagging 45s+ made the
+# client give up while the daemon's request was still running; the append
+# fell back to ssh+osascript and the daemon's copy landed too (hcbi BD
+# =550+550 from one /ate). Same bug as 2026-08-09, which only raised the
+# timeouts. Now a timed-out non-idempotent write is never retried.
+# curl exit codes after which the request may have reached the daemon: 28
+# timed out, 52 empty reply, 56 receive failure (ssh passes them through).
+CURL_AMBIGUOUS = {28, 52, 56}
+TIMEOUT_ERROR = ("excel-http timed out; the write may have landed, so it was not "
+                 "retried (a retry would apply it twice). Check the cell before rerunning.")
+
+
+def _timeout_result() -> dict[str, Any]:
+    return {"ok": False, "timeout": True, "error": TIMEOUT_ERROR}
+
+
 def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict | None:
     """Invoke the daemon (over SSH, or locally when already on ix). Returns parsed JSON, or None on failure."""
+    return _curl_ex(path, body, method=method)[0]
+
+
+def _curl_ex(path: str, body: dict | None = None, *,
+             method: str = "POST") -> tuple[dict | None, bool]:
+    """(parsed JSON or None, timed_out). timed_out = the request may still be
+    running on the daemon; anything else (refused, ssh down, bad JSON) is a
+    plain failure the caller may fall back from."""
     _guard_tests()
     if body is None:
         cmd = f"curl -sS -m {CURL_TIMEOUT} http://localhost:{DAEMON_PORT}{path}"
@@ -78,13 +102,15 @@ def _curl(path: str, body: dict | None = None, *, method: str = "POST") -> dict 
             timeout=DAEMON_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        return None
+        return None, True
+    if r.returncode in CURL_AMBIGUOUS:
+        return None, True
     if r.returncode != 0 or not r.stdout.strip():
-        return None
+        return None, False          # refused / ssh down / nothing sent
     try:
-        return json.loads(r.stdout)
+        return json.loads(r.stdout), False
     except json.JSONDecodeError:
-        return None
+        return None, True           # a reply came back mangled: the request was processed
 
 
 def health() -> bool:
@@ -122,9 +148,11 @@ def append(sheet: str, col: str, *, date: str | None = None,
     if src:
         body["src"] = src
     body.update(_surface())
-    out = _curl("/append", body)
+    out, timed_out = _curl_ex("/append", body)
     if out:
         return out
+    if timed_out:
+        return _timeout_result()
     return _ssh_fallback("append", sheet, col, date, row, value, src=src)
 
 
@@ -158,9 +186,11 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
     if src:
         body["src"] = src
     body.update(_surface())
-    out = _curl("/batch", body)
+    out, timed_out = _curl_ex("/batch", body)
     if out:
         return out
+    if timed_out:
+        return _timeout_result()
     results = [_ssh_fallback("append", sheet, it["col"], date, row, it["value"],
                              src=it.get("src") or src) for it in items]
     return {"ok": all(r.get("ok") for r in results), "results": results, "fallback": True}
@@ -187,9 +217,12 @@ def batch_write(sheet: str, writes: list, *, date: str | None = None,
     if src:
         body["src"] = src
     body.update(_surface())
-    out = _curl("/batch_write", body)
+    out, timed_out = _curl_ex("/batch_write", body)
     if out:
         return out
+    if timed_out and any((w.get("mode") or "set") in ("add", "append") for w in writes):
+        # add/append are not idempotent: the daemon may still apply this.
+        return _timeout_result()
     if not fallback:
         # Callers that keep their own raw-script fallback (review-sheet
         # writers) must not get a second, per-cell ssh write on top of it.

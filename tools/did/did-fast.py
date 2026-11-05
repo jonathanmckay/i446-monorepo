@@ -2154,6 +2154,12 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
     except Exception as e:  # noqa: BLE001
         print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
+    if resp and resp.get("timeout"):
+        # The daemon may still apply it (2026-11-04): the raw-script retry
+        # would double an add/append. Fail the write; no fallback.
+        print(f"0n daemon write timed out ({resp.get('error')}); not retried", file=sys.stderr)
+        return subprocess.CompletedProcess(args=["excel-http", "/batch_write"], returncode=1,
+                                           stdout="", stderr=resp.get("error") or "timeout")
     if not resp or not resp.get("ok") or resp.get("fallback"):
         print(f"0n daemon write unavailable ({(resp or {}).get('error')}), falling back to ix-osa",
               file=sys.stderr)
@@ -2271,6 +2277,12 @@ def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
     except Exception as e:  # noqa: BLE001
         print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
+    if resp and resp.get("timeout"):
+        # The daemon may still apply it (2026-11-04): the raw-script retry
+        # would double an add/append. Fail the write; no fallback.
+        print(f"1n+ daemon write timed out ({resp.get('error')}); not retried", file=sys.stderr)
+        return subprocess.CompletedProcess(args=["excel-http", "/batch_write"], returncode=1,
+                                           stdout="", stderr=resp.get("error") or "timeout")
     if not resp or not resp.get("ok") or resp.get("fallback"):
         print(f"1n+ daemon write unavailable ({(resp or {}).get('error')}), falling back to ix-osa",
               file=sys.stderr)
