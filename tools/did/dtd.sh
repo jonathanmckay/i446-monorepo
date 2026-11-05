@@ -1840,6 +1840,10 @@ print -- "\$EPOCHREALTIME\tedit-end\t\$1" >> "\$TIMING" 2>/dev/null
 {
 trap '' HUP
 out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --json "\$_out" 2>&1)
+_efrc=\$?
+# Failed save (2026-11-05): keep the form's answers for the record log below
+# before the result file goes, so the typed edit can be recovered.
+_form=""; (( _efrc != 0 )) && _form="\$(<"\$_out")" 2>/dev/null
 rm -f "\$_out"
 # Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
 rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
@@ -1858,6 +1862,8 @@ if [[ -n "\$_split_line" ]]; then
   "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "\$rem_pts" "\$done_min" "\$rem_min" "\$done_short" "\$rem_short" "\$done_bonus" "\$rem_bonus" "\$rem_due" "\$keep"
 else
   echo "\${out:-✗ edit failed}" > "\$HDR"
+  # a crash (traceback, no ✗ line): show its last line, not the first
+  (( _efrc != 0 )) && [[ "\$out" != ✗* ]] && echo "✗ edit not saved (rc \$_efrc): \${\${\${(f)out}[-1]}:0:120}" > "\$HDR"
   _port="\$(cat "$DTD_PORT" 2>/dev/null)"
   if [[ -n "\$_port" ]]; then
     _today="\$(date +%Y-%m-%d)"
@@ -1870,7 +1876,17 @@ else
   fi
   "/tmp/dtd-$DTD_ID.bgrefresh.sh"   # then the ctrl-r pull, so Todoist-side changes show (2026-10-22)
 fi
-print -- "\$EPOCHREALTIME\tedit-saved\t\$1" >> "\$TIMING" 2>/dev/null
+# edit-saved only when edit-fast succeeded (2026-11-05, "a failed save leaves
+# no record": it was stamped unconditionally, and the ✗ line lived only in
+# the header, which the next action overwrites). A failure stamps edit-failed
+# and appends a kind=edit record (rc, edit-fast's output, the form's answers)
+# to the synced record log, so `dtd-log.py` shows it on either machine.
+if (( _efrc == 0 )); then
+  print -- "\$EPOCHREALTIME\tedit-saved\t\$1" >> "\$TIMING" 2>/dev/null
+else
+  print -- "\$EPOCHREALTIME\tedit-failed\t\$1 rc=\$_efrc" >> "\$TIMING" 2>/dev/null
+  DTD_EF_OUT="\$out" DTD_EF_FORM="\$_form" python3 -c 'import json, os, sys, time; print(json.dumps({"ts": time.time(), "host": sys.argv[1], "sid": sys.argv[2], "kind": "edit", "status": "failed", "id": sys.argv[3], "rc": int(sys.argv[4]), "output": os.environ.get("DTD_EF_OUT", "")[-600:], "form": os.environ.get("DTD_EF_FORM", "")[:4000]}, ensure_ascii=False))' "$DTD_HOSTSLUG" "$DTD_ID" "\$1" "\$_efrc" >> "$DTD_RECLOG" 2>/dev/null
+fi
 } </dev/null >> "/tmp/dtd-edit.log" 2>&1 &!
 
 EDITEOF
