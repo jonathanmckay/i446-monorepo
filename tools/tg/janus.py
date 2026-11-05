@@ -6051,18 +6051,21 @@ def _holds_done_claim(desc: str, entry_ids) -> bool:
     completion shows on one row (janus_done.done_entry_claims). Per-minute
     habits aren't in "points", so every session keeps its own."""
     try:
-        flat = json.loads(_COMPLETED_TODAY.read_text()).get("points") or {}
+        data = json.loads(_COMPLETED_TODAY.read_text())
     except Exception:
         return True
     key = _norm_done_name(desc)
+    flat = data.get("points") or {}
     if not entry_ids or key not in {_norm_done_name(n) for n, v in flat.items() if v}:
         return True
-    rows = [(e["id"], e.get("desc")) for e in sorted(STATE.entries, key=lambda e: e["start_dt"])]
-    same = [i for i, d in rows if _norm_done_name(d or "") == key]
-    logged = {str(i) for i in same if _recorded_entry_pts(view_now().date(), [i]) is not None}
+    rows = [(e["id"], e.get("desc"), e["start_dt"].timestamp(), e["end_dt"].timestamp())
+            for e in sorted(STATE.entries, key=lambda e: e["start_dt"])]
+    same = [r[0] for r in rows if _norm_done_name(r[1] or "") == key]
     if not same:
         return True
-    claim = janus_done.done_entry_claims(rows, {key}, logged, _norm_done_name).get(key)
+    logged = {str(i) for i in same if _recorded_entry_pts(view_now().date(), [i]) is not None}
+    at = {_norm_done_name(n): t for n, t in (data.get("done_at") or {}).items()}.get(key)
+    claim = janus_done.done_entry_claims(rows, {key: at}, logged, _norm_done_name).get(key)
     return claim in {str(i) for i in entry_ids}
 
 

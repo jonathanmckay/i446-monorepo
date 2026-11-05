@@ -206,11 +206,15 @@ def test_task_done_in_dtd_marks_its_timer_entry_logged_with_points(tmp_path, mon
     assert not rows[1]["logged"]   # only the latest same-name entry is claimed
 
 
-def test_done_claim_is_the_last_same_name_entry():
+def test_done_claim_is_the_entry_the_completion_fell_in():
     # 2026-11-05: one completion, one row, same rule on every client.
     import janus_done as jd
-    rows = [(1, "1 hcb"), (2, "other"), (3, "1 hcb")]
-    norm = str.lower
-    assert jd.done_entry_claims(rows, {"1 hcb"}, set(), norm) == {"1 hcb": "3"}
-    assert jd.done_entry_claims(rows, {"1 hcb"}, {"3"}, norm) == {}    # already logged by janus
+    rows = [(1, "1 hcb", 100, 200), (2, "other", 200, 300), (3, "1 hcb", 400, 500)]
+    claim = lambda at, logged=(): jd.done_entry_claims(rows, {"1 hcb": at}, set(logged), str.lower)
+    assert claim(150) == {"1 hcb": "1"}          # inside the first session
+    assert claim(450) == {"1 hcb": "3"}
+    assert claim(300) == {"1 hcb": "1"}          # closed after the timer stopped
+    assert claim(50) == {"1 hcb": "1"}           # entries typed in after the fact
+    assert claim(None) == {"1 hcb": "3"}         # no time recorded: the latest
+    assert claim(150, {"3"}) == {}               # already logged by janus
 

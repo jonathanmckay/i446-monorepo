@@ -263,6 +263,17 @@ def _dtd_done_points(today: _dt.date) -> dict[str, int]:
     return out
 
 
+def _dtd_done_times(today: _dt.date) -> dict[str, float]:
+    """{normalized name: completion epoch} from completed-today.json."""
+    try:
+        data = json.loads((COMPLETED_TODAY or STATE_DIR / "completed-today.json").read_text())
+    except Exception:
+        return {}
+    if data.get("date") != today.isoformat():
+        return {}
+    return {_norm_key(n): t for n, t in (data.get("done_at") or {}).items()}
+
+
 def _resolvable_points(desc: str, registered: set[str] | None = None) -> int | None:
     """The points value did-fast would resolve for `desc` on its own — an
     inline [N] already in `desc` itself, or a [N] on a matching OPEN task in
@@ -926,13 +937,15 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     else:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
     logged, logged_pts = _logged_view(today)
-    # A task closed in dtd marks the LAST timer entry with its name as
-    # logged (one completion = one entry; an earlier same-name session can
-    # still be swiped).
+    # A task closed in dtd marks the timer entry it was closed in as logged
+    # (one completion = one entry; another same-name session can still be
+    # swiped). The rule is janus_done.done_entry_claims.
     dtd_done = _dtd_done_points(today) if is_today else {}
+    dtd_times = _dtd_done_times(today) if dtd_done else {}
     dtd_entry = janus_done.done_entry_claims(
-        [(e["id"], e.get("desc")) for e in sorted(entries, key=lambda e: e["start"])],
-        dtd_done, {str(i) for i in logged}, _norm_key)
+        [(e["id"], e.get("desc"), e["start"].timestamp(), e["end"].timestamp())
+         for e in sorted(entries, key=lambda e: e["start"])],
+        {k: dtd_times.get(k) for k in dtd_done}, {str(i) for i in logged}, _norm_key)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     # The timeline's "live edge": gaps and dividers run to now on today, but a

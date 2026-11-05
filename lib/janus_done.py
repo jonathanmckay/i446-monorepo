@@ -87,15 +87,27 @@ def crossed_off(completed: dict, desc: str, norm: Callable[[str], str]) -> bool:
     return target in ids and any(norm(n) == target for n in completed.get("names") or [])
 
 
-def done_entry_claims(rows, done_keys, logged_ids, norm: Callable[[str], str]) -> dict[str, str]:
+def done_entry_claims(rows, done_at: dict, logged_ids, norm: Callable[[str], str]) -> dict[str, str]:
     """{name key: entry id} for tasks closed outside janus: one completion
-    marks one row, the LAST entry with that name, so an earlier same-name
-    session stays open. A name janus already logged today claims nothing.
-    `rows` is (id, desc) in start order (JM 2026-11-05: a card closed before
-    its Toggl entries existed, so only the name can link them)."""
-    logged = {norm(d or "") for i, d in rows if str(i) in logged_ids}
-    return {k: str(i) for i, d in rows
-            for k in [norm(d or "")] if k in done_keys and k not in logged}
+    marks one row, the entry it happened in (JM 2026-11-05: "it should be when
+    I did it"), else the latest one started before it, else the first (typed
+    in afterwards). No recorded time: the latest. Other same-name sessions stay
+    open, and a name janus already logged today claims nothing. `rows` is
+    (id, desc, start epoch, end epoch) in start order; `done_at` is {name key:
+    completion epoch or None}."""
+    out: dict[str, str] = {}
+    for key, at in done_at.items():
+        same = [r for r in rows if norm(r[1] or "") == key]
+        if not same or any(str(r[0]) in logged_ids for r in same):
+            continue
+        if at is None:
+            pick = same[-1]
+        else:
+            during = [r for r in same if r[2] <= at <= r[3]]
+            before = [r for r in same if r[2] <= at]
+            pick = (during or before or same[:1])[-1]
+        out[key] = str(pick[0])
+    return out
 
 
 def is_time_based(name: str, *, is_habit: Callable[[str], bool], df) -> bool:
