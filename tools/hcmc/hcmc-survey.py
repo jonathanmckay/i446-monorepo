@@ -3,6 +3,9 @@
 
 Question: What did I learn about media consumption this week? How can I do better next week?
 
+First, 3 bullets on each book finished in the week and not yet reviewed. Those go
+to the book's review file as a draft jmreads shows, not to Neon (2026-11-05).
+
 The answer lives in Neon `1分+1s` column AO (the media "Notes" column, next to the
 新闻/词汇/-1/-2/-3/书 counts) on the row of the current Sunday-anchored fiscal week,
 the same row `/book finished` bumps for books (col AM), unless last week's note is
@@ -12,7 +15,9 @@ Usage:
   hcmc-survey.py --show                 print last week's and this week's AO notes + the target row
   hcmc-survey.py --from-text "…"        write the answer (one "• " bullet per line) to AO<row>
   hcmc-survey.py --from-text "…" --mark ...and mark the `1 hcmc` habit done (did-fast) + refresh dtd
-  hcmc-survey.py                        interactive: show, ask, write, mark
+  hcmc-survey.py --books                print the week's unreviewed books: id, title, author
+  hcmc-survey.py --book-note ID --from-text "…"   save one book's bullets to its review file
+  hcmc-survey.py                        interactive: books, show, ask, write, mark
 Options: --today YYYY-MM-DD (tests), --print-script (dump the AppleScript instead of running it)
 """
 from __future__ import annotations
@@ -20,15 +25,20 @@ from __future__ import annotations
 import argparse
 import datetime
 import os
+import re
 import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib"))
+from survey_input import read_line  # noqa: E402
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location("book_finish", os.path.join(os.path.dirname(os.path.abspath(__file__)), "book-finish.py"))
 _bf = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_bf)   # reuse week_row_label
 
 IX_OSA = os.path.expanduser("~/.claude/skills/_lib/ix-osa.sh")
+JMREADS = os.path.expanduser("~/i446-monorepo/tools/personal-dashboard/jmreads.py")
+WEEK_CALC = os.path.expanduser("~/.claude/skills/1s897/week_calc.py")
 DID_FAST = os.path.expanduser("~/i446-monorepo/tools/did/did-fast.py")
 WORKBOOK = "Neon分v12.2.xlsx"
 SHEET = "1分+1s"
@@ -36,6 +46,54 @@ COL = "AO"
 HABIT = "1 hcmc"
 QUESTION = "What did I learn about media consumption this week? How can I do better next week?"
 FIRST_ROW, LAST_ROW = 2, 120
+
+
+def _jmreads():
+    """jmreads.py, whose review-file reads and save_draft these notes share."""
+    if "jmreads_mod" not in sys.modules:
+        spec = _ilu.spec_from_file_location("jmreads_mod", JMREADS)
+        mod = _ilu.module_from_spec(spec)
+        sys.modules["jmreads_mod"] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules["jmreads_mod"]
+
+
+def report_week() -> tuple[datetime.date, datetime.date]:
+    """The Wed-Tue week /1hcmc's book report covers."""
+    out = subprocess.run([sys.executable, WEEK_CALC], capture_output=True, text=True).stdout
+    start, end = out.split()[:2]
+    return datetime.date.fromisoformat(start), datetime.date.fromisoformat(end)
+
+
+def unreviewed_books(start: datetime.date, end: datetime.date, jr=None) -> list[dict]:
+    """Books finished in [start, end] with no review, score or draft notes."""
+    jr = jr or _jmreads()
+    out = []
+    for b in jr.load_books(jr.REVIEWS_DIR, jr.BLOG_REVIEWS_DIR):
+        if b["reviewed"] or not b["finished"] or not start <= b["finished"] <= end:
+            continue
+        path = jr.find_book_file(b["id"])
+        if path and not re.search(r"^> draft ", path.read_text(encoding="utf-8"), re.M):
+            out.append(b)
+    return out
+
+
+def save_book_notes(book_id: str, text: str, jr=None) -> tuple[bool, str]:
+    return (jr or _jmreads()).save_draft(book_id, bulletize(text))
+
+
+def ask_book_notes(start: datetime.date, end: datetime.date, jr=None) -> None:
+    """Up to 3 bullets per book; a blank line ends that book."""
+    for b in unreviewed_books(start, end, jr):
+        print(f"\n{b['title']} — {b['author']}\nWhat did you think? (3 bullets; blank skips)")
+        lines = []
+        for i in range(1, 4):
+            ln = read_line(f"{i}> ")
+            if not ln:
+                break
+            lines.append(ln)
+        if lines:
+            print(save_book_notes(b["id"], "\n".join(lines), jr)[1])
 
 
 def sunday_of(d: datetime.date) -> datetime.date:
@@ -113,7 +171,18 @@ def main() -> None:
     ap.add_argument("--mark", action="store_true")
     ap.add_argument("--today")
     ap.add_argument("--print-script", action="store_true")
+    ap.add_argument("--books", action="store_true")
+    ap.add_argument("--book-note", metavar="ID")
     a = ap.parse_args()
+    if a.books:
+        for b in unreviewed_books(*report_week()):
+            print(f"{b['id']}\t{b['title']}\t{b['author']}")
+        return
+    if a.book_note:
+        ok, msg = save_book_notes(a.book_note, a.from_text or "")
+        raise SystemExit(0 if ok else msg)
+    if a.from_text is None and not (a.show or a.print_script):
+        ask_book_notes(*report_week())
     today = datetime.date.fromisoformat(a.today) if a.today else datetime.date.today()
     sun = sunday_of(today)
     label = _bf.week_row_label(sun)

@@ -63,7 +63,27 @@ or a backfilled span silently earn nothing (2026-09-27: week 9.16-9.22 had
   behind them; report them, do not change them.
 - Include the table (or "media tags: all matched") in the Step 3 report.
 
-### Step 2c: Media survey (the card's manual part, 2026-10-17)
+### Step 2c: Book notes (2026-11-05)
+
+Every book finished in the week and not yet reviewed gets 3 bullets on what JM
+thought. They go to the book's review file, which jmreads shows, and never to
+Neon. `/bookreview` can use them later.
+
+```bash
+python3 ~/i446-monorepo/tools/hcmc/hcmc-survey.py --books
+```
+
+prints `id, title, author` per book, nothing if there are none. Ask for each
+one in chat, with the media question below if you like, then save:
+
+```bash
+python3 ~/i446-monorepo/tools/hcmc/hcmc-survey.py --book-note <id> --from-text "<3 lines>"
+```
+
+A book JM skips stays unreviewed; write nothing for it. Run without flags, the
+script asks these itself before the media question.
+
+### Step 2d: Media survey (the card's manual part, 2026-10-17)
 
 The weekly media note lives in Neon `1分+1s` column **AO** (the "Notes" cell
 beside the 新闻/词汇/-1/-2/-3/书 counts) on the row of the **current
