@@ -40,7 +40,7 @@ SPLIT_MIN_POINTS = 100
 MAX_INFERRED_POINTS = 500
 
 
-# did-fast's own watchdog (default 60s, sized for dtd's worker) exits it mid-run,
+# did-fast's own watchdog (default 120s, sized for dtd's worker) exits it mid-run,
 # whatever the caller's timeout says. Janus runs it off the UI, so a slow Excel
 # may take longer: killing a run after the 分 land leaves the rest undone
 # (2026-11-05: 19分 credited, row blank, entry duplicated). The caller's timeout

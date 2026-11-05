@@ -3612,11 +3612,13 @@ def _install_watchdog():
     clearing tasks / invariant fired" incident. A SIGALRM watchdog converts any
     such hang into a fast, clean non-zero exit; the worker then logs "✗ ..." and
     moves on to the next item instead of wedging. Tune/disable with
-    DIDFAST_WATCHDOG_SECS (0 disables)."""
+    DIDFAST_WATCHDOG_SECS (0 disables). 120s (was 60, 2026-11-05): Excel at 8s
+    a write can need more than 60, and a kill after the 分 land leaves the
+    entry and its record undone."""
     try:
-        secs = int(os.environ.get("DIDFAST_WATCHDOG_SECS", "60"))
+        secs = int(os.environ.get("DIDFAST_WATCHDOG_SECS", "120"))
     except ValueError:
-        secs = 60
+        secs = 120
     if secs <= 0:
         return
 
