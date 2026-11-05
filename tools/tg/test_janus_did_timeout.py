@@ -2,7 +2,7 @@
 
 Excel took 8s a write: 一起发's credits landed 34s in, the 45s timeout killed
 did-fast before it finished, and the row showed no points. A second ⌥↵ would
-then have credited it twice. Mobile janus already allows 90s."""
+then have credited it twice."""
 import importlib.util
 import subprocess
 import sys
@@ -19,7 +19,9 @@ def _load():
     return mod
 
 
-def test_did_fast_timeout_matches_mobile(monkeypatch):
+def test_janus_outlasts_did_fast_and_lifts_its_watchdog(monkeypatch):
+    """did-fast exits itself at DIDFAST_WATCHDOG_SECS (60 by default), so a
+    longer timeout alone changes nothing."""
     mod = _load()
     seen = {}
 
@@ -29,7 +31,8 @@ def test_did_fast_timeout_matches_mobile(monkeypatch):
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     mod.run_did_fast_data("一起发 0738-0742", ())
-    assert seen["timeout"] >= 90
+    watchdog = int(seen["env"]["DIDFAST_WATCHDOG_SECS"])
+    assert watchdog >= 240 and seen["timeout"] > watchdog
 
 
 def test_timeout_warns_that_the_points_may_have_landed(monkeypatch):

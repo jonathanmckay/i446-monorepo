@@ -17,7 +17,7 @@ credits a second session's minutes.
 from __future__ import annotations
 
 import math
-
+import os
 import re
 from typing import Callable
 
@@ -38,6 +38,20 @@ SPLIT_MIN_POINTS = 100
 # surface the refusal instead of logging. 2026-10-22: a year in task text
 # ("... readjustment 2028") was credited as +2028 分.
 MAX_INFERRED_POINTS = 500
+
+
+# did-fast's own watchdog (default 60s, sized for dtd's worker) exits it mid-run,
+# whatever the caller's timeout says. Janus runs it off the UI, so a slow Excel
+# may take longer: killing a run after the 分 land leaves the rest undone
+# (2026-11-05: 19分 credited, row blank, entry duplicated). The caller's timeout
+# stays just above the watchdog so did-fast is the one that gives up.
+DID_WATCHDOG_SECS = 300
+DID_TIMEOUT_SECS = DID_WATCHDOG_SECS + 10
+
+
+def did_env() -> dict:
+    """Environment for a did-fast run from a janus client."""
+    return {**os.environ, "DIDFAST_WATCHDOG_SECS": str(DID_WATCHDOG_SECS)}
 
 
 def refusal(did_fast_output: dict | None) -> str | None:

@@ -1508,7 +1508,8 @@ def _run_did_fast(text: str, flags: tuple[str, ...] = ()) -> dict:
     "credits" (2026-10-26) is where the 分 went, for the phone's toast."""
     try:
         proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), *flags, text],
-                              capture_output=True, text=True, timeout=90)
+                              capture_output=True, text=True, env=janus_done.did_env(),
+                              timeout=janus_done.DID_TIMEOUT_SECS)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "did-fast timeout"}
     out = proc.stdout.strip()
@@ -1973,7 +1974,8 @@ def _run_did_cmd(text: str) -> dict:
     write over ssh + Todoist), hence the longer timeout (see _run_did_fast)."""
     try:
         proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
-                              capture_output=True, text=True, timeout=90)
+                              capture_output=True, text=True, env=janus_done.did_env(),
+                              timeout=janus_done.DID_TIMEOUT_SECS)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "did-fast timed out"}
     if proc.stdout and "{" in proc.stdout:

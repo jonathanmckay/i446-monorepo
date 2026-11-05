@@ -1166,3 +1166,10 @@ def test_did_fast_record_outranks_a_mobile_minutes_fallback(jm, tmp_path, monkey
     jm.entry_points.record(day, {"7": 19})
     jm._logged_points_add(day, "7", 4, [])
     assert jm.entry_points.for_day(day)["7"] == 19
+
+
+def test_every_did_fast_run_lifts_the_watchdog():
+    """did-fast's 60s watchdog would end the run whatever the timeout says."""
+    src = (Path(__file__).parent / "mobile.py").read_text()
+    runs = [ln for ln in src.splitlines() if "str(DID_FAST)" in ln and "subprocess.run" in ln]
+    assert runs and src.count("env=janus_done.did_env()") == len(runs)
