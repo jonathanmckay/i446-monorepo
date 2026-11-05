@@ -68,6 +68,8 @@ or a backfilled span silently earn nothing (2026-09-27: week 9.16-9.22 had
 The weekly media note lives in Neon `1分+1s` column **AO** (the "Notes" cell
 beside the 新闻/词汇/-1/-2/-3/书 counts) on the row of the **current
 Sunday-anchored fiscal week**, the same row `/book finished` bumps for books.
+If last week's note is blank the script targets last week instead, and `--show`
+prints that row.
 
 ```bash
 python3 ~/i446-monorepo/tools/hcmc/hcmc-survey.py --show

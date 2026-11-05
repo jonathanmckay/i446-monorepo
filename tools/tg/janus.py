@@ -72,6 +72,7 @@ sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
 import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
 from neon.rates import speedy_meeting_points  # noqa: E402  25m→30 / 50m→60 meetings
+import entry_points  # noqa: E402  分 per entry, shared across clients and hosts
 import janus_done  # noqa: E402  /done points paths, shared with mobile.py
 import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with mobile.py
 import outlook_client  # noqa: E402
@@ -6003,8 +6004,10 @@ def _entry_pts_add(day: dt.date, pts_by_id: dict, add: bool = False) -> None:
     if not pts_by_id:
         return
     data = _entry_pts(day)
+    shown = entry_points.overlay(data, day)   # a ^G delta sums on the row's real total
     for k, v in pts_by_id.items():
-        data[str(k)] = (int(data.get(str(k), 0)) if add else 0) + int(v)
+        data[str(k)] = (int(shown.get(str(k), 0)) if add else 0) + int(v)
+    entry_points.record(day, {str(k): data[str(k)] for k in pts_by_id}, "janus")
     try:
         _ENTRY_PTS_DIR.mkdir(parents=True, exist_ok=True)
         tmp = _entry_pts_path(day).with_suffix(".tmp")
@@ -6024,6 +6027,8 @@ def _entry_pts_pin(day: dt.date, entry_ids, total: int) -> None:
     for i in entry_ids[1:]:
         data.pop(str(i), None)
     data[str(entry_ids[0])] = int(total)
+    entry_points.record(day, {str(entry_ids[0]): int(total),
+                              **{str(i): None for i in entry_ids[1:]}}, "janus pin")
     try:
         _ENTRY_PTS_DIR.mkdir(parents=True, exist_ok=True)
         tmp = _entry_pts_path(day).with_suffix(".tmp")
@@ -6035,8 +6040,8 @@ def _entry_pts_pin(day: dt.date, entry_ids, total: int) -> None:
 
 def _recorded_entry_pts(day: dt.date, entry_ids) -> int | None:
     """Σ recorded 分 over a row's entry ids on `day`, None when none of them
-    has a record."""
-    data = _entry_pts(day)
+    has a record. Any client, any host (lib/entry_points.py)."""
+    data = entry_points.overlay(_entry_pts(day), day)
     hits = [int(data[str(i)]) for i in (entry_ids or []) if str(i) in data]
     return sum(hits) if hits else None
 
@@ -7648,6 +7653,12 @@ def _(event):
     # carries the viewed M/D, so the key is distinct per day.
     if _cmd_done_today(cmd):
         flash(f"already recorded: {cmd} — not re-running", 6.0)
+        return
+    # _cmd_done_today is this host's own memory: the entry's record also
+    # covers a log from dtd, mobile or the other machine.
+    rec = _recorded_entry_pts(start.date(), item.get("entry_ids") or [])
+    if rec is not None:
+        flash(f"already logged [{rec}]: not re-running", 6.0)
         return
     STATE.event_sel = None
     # Same three paths as the running timer's /done (JM 2026-10-28): a task

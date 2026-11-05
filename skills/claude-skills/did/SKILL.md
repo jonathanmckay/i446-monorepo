@@ -241,6 +241,8 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
    - Examples: Fri Apr 24 2026 → Sun Apr 19 → `4.3`. Sun Mar 29 2026 → `3.5`. Sun Aug 30 2026 → `9.1` (NOT `8.5`). Thu Oct 1 2026 → Sun Sep 27 → `9.5`.
    - Do NOT use "which Sunday of the calendar month" (`(sunday.day - 1) // 7 + 1`) and do NOT use `ceil(day/7)`. The calendar count silently drifts one row after any non-quarter-end month with 5 Sundays (2026-10-01 bug: every 1n+ write from Aug 30 landed one week early).
 
+   **Blank last week fills first** (`lib/neon/week_fill.py`, JM 2026-11-05): a same-day completion lands on last week's row when that cell is blank (explicit 0 = N/A, not blank). Off for past dates, rate cards, cumulative cards, and nails / groceries / 2 hci / 1 kids nature. Points still land on today. did-fast reports it as `filled_prev_week`.
+
    Read points from row 3. Write points to cell. Use "1n+ write" template.
    - **一起饭**: the week cell gets **+15** per meal (not the minutes); the day gets `+15+<minutes>` in the xk column (see Parsing above).
 2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`, resolved through `cols.domain_col("0分", domain)` (not a hardcoded letter). For 一起饭 → domain xk87/xk88 → 0分 column X (xk), as `+15+<minutes>`.

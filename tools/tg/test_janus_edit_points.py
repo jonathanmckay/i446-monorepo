@@ -242,3 +242,45 @@ def test_rate_sheet_row_correction_stores_the_new_total(monkeypatch, tmp_path):
     _submit(mod, item, today, "lx chat @xk88 0947-1002 [80]", jobs)
     assert [c for c in calls if c[0] == "did"]
     assert mod._recorded_entry_pts(today.date(), item["entry_ids"]) == 80
+
+
+# ── lib/entry_points.py: a row's 分 are the same on every client and host ─────
+
+def _shared(mod, tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(shared))
+    monkeypatch.setattr(mod, "_ENTRY_PTS_DIR", tmp_path)
+
+
+def test_a_record_from_another_host_shows_on_the_row(monkeypatch, tmp_path):
+    mod = _load()
+    _shared(mod, tmp_path, monkeypatch)
+    day = dtm.date(2026, 11, 5)
+    mod.entry_points.record(day, {"4612720841": 19})
+    assert mod._recorded_entry_pts(day, [4612720841]) == 19
+
+
+def test_pin_tombstones_the_merged_ids_so_they_cant_come_back(monkeypatch, tmp_path):
+    mod = _load()
+    _shared(mod, tmp_path, monkeypatch)
+    day = dtm.date(2026, 11, 5)
+    mod._entry_pts_add(day, {1: 10, 2: 20})
+    mod._entry_pts_pin(day, [1, 2], 30)
+    assert mod._recorded_entry_pts(day, [1, 2]) == 30
+
+
+def test_a_delta_sums_on_the_shared_total_not_the_local_blank(monkeypatch, tmp_path):
+    mod = _load()
+    _shared(mod, tmp_path, monkeypatch)
+    day = dtm.date(2026, 11, 5)
+    mod.entry_points.record(day, {"7": 19})      # logged on the other machine
+    mod._entry_pts_add(day, {7: 5}, add=True)
+    assert mod._recorded_entry_pts(day, [7]) == 24
+    assert mod.entry_points.for_day(day)["7"] == 24
+
+
+def test_done_refuses_a_row_logged_anywhere_else():
+    src = (HERE / "janus.py").read_text()
+    body = src[src.index("if _cmd_done_today(cmd):"):]
+    guard = body.index('already logged [{rec}]')
+    assert guard < body.index("STATE.event_sel = None")

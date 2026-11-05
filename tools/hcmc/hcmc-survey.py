@@ -5,7 +5,8 @@ Question: What did I learn about media consumption this week? How can I do bette
 
 The answer lives in Neon `1分+1s` column AO (the media "Notes" column, next to the
 新闻/词汇/-1/-2/-3/书 counts) on the row of the current Sunday-anchored fiscal week,
-the same row `/book finished` bumps for books (col AM). Writes go through ix-osa.sh.
+the same row `/book finished` bumps for books (col AM), unless last week's note is
+blank: then it fills last week first. Writes go through ix-osa.sh.
 
 Usage:
   hcmc-survey.py --show                 print last week's and this week's AO notes + the target row
@@ -97,6 +98,14 @@ def parse_show(raw: str) -> dict:
     return out
 
 
+def target(info: dict, label: str, prev_label: str) -> tuple[str, int, str]:
+    """(label, row, text in the cell) the answer writes to: a blank last week
+    first, else this week. Week 1.1's previous row is last year's."""
+    if "PREV" in info and not info["PREV"][1] and label != "1.1":
+        return (prev_label, *info["PREV"])
+    return (label, *info["CUR"])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--show", action="store_true")
@@ -113,9 +122,9 @@ def main() -> None:
     info = parse_show(osa(show_script(label, prev_label)))
     if "CUR" not in info:
         raise SystemExit(f"no row labelled {label} in {SHEET}!A")
-    row, current = info["CUR"]
     prev = info.get("PREV", (None, ""))[1]
-    print(f"week {label} → {SHEET}!{COL}{row}  (Sun {sun})")
+    label, row, current = target(info, label, prev_label)
+    print(f"week {label} → {SHEET}!{COL}{row}  (this week's Sun {sun})")
     print(f"last week ({prev_label}): {prev or '·'}")
     if current:
         print(f"already filled: {current}")

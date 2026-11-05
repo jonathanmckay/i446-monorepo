@@ -209,6 +209,7 @@ def _resolve_project(code: str) -> tuple[int | None, str]:
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import state_paths  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with janus.py
+import entry_points  # noqa: E402  分 per entry, shared across clients and hosts
 TASK_QUEUE = state_paths.TASK_QUEUE
 _POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
 
@@ -363,10 +364,29 @@ def _logged_points(day: _dt.date) -> dict:
         return {}
 
 
+def _logged_view(day: _dt.date) -> tuple[dict, dict]:
+    """(ledger, points) with lib/entry_points.py on top: an entry logged in
+    dtd, the terminal or on the other machine reads as logged here, and an
+    undone one reads as open. For display and the double-credit guard; the
+    edit checks stay on the plain ledger, this host's own."""
+    ledger, pts = dict(_ledger(day)), dict(_logged_points(day))
+    for eid, v in entry_points.for_day(day).items():
+        if v is None:
+            ledger.pop(eid, None)
+            pts.pop(eid, None)
+        else:
+            ledger.setdefault(eid, "logged elsewhere")
+            pts[eid] = {"points": v, "credits": (pts.get(eid) or {}).get("credits") or []}
+    return ledger, pts
+
+
 def _logged_points_add(day: _dt.date, entry_id: str, points: int | None,
                        credits: list[dict]) -> None:
     d = _logged_points(day)
     d[str(entry_id)] = {"points": points, "credits": credits}
+    # did-fast's own record wins: this total can be a minutes fallback.
+    if points is not None and str(entry_id) not in entry_points.for_day(day):
+        entry_points.record(day, {str(entry_id): points}, "mobile")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = _points_path(day).with_suffix(".tmp")
     tmp.write_text(json.dumps(d, ensure_ascii=False))
@@ -905,8 +925,7 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
         events = []
     else:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
-    logged = _ledger(today)
-    logged_pts = _logged_points(today)
+    logged, logged_pts = _logged_view(today)
     # A task closed in dtd marks the LAST timer entry with its name as
     # logged (one completion = one entry; an earlier same-name session can
     # still be swiped).
@@ -1565,7 +1584,7 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     with the viewed M/D appended and --past-ok, so the 分 land on THAT day
     (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
     today = day or _dt.datetime.now(_tz()).date()
-    if str(entry_id) in _ledger(today):
+    if str(entry_id) in _logged_view(today)[0]:
         return {"ok": True, "already": True}
     # The entry's own HHMM-HHMM range rides the command (JM 2026-11-01, the
     # desktop janus's ⌥↵ form): did-fast credits the 地支 block the entry
@@ -1825,7 +1844,7 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
     try:
         if not project:
             return {"ok": False, "error": "entry has no project code — edit it first"}
-        cur = (_logged_points(today).get(str(entry_id)) or {}).get("points")
+        cur = (_logged_view(today)[1].get(str(entry_id)) or {}).get("points")
         if cur is None:
             cur = _dtd_done_points(today).get(_norm_key(desc)) if day is None else None
         if cur is None:
@@ -1845,6 +1864,7 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
         r = _run_did_fast(cmd, ("--past-ok",) if day is not None else ())
         if r["ok"]:
             _logged_points_add(today, entry_id, new, r.get("credits") or [])
+            entry_points.record(today, {str(entry_id): new}, "mobile adjust")
             _ledger_add(today, entry_id, f"{desc} points {cur} → {new} ({delta:+d})")
             r.update(points=new, delta=delta)
         return r

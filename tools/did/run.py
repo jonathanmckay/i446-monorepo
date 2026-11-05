@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from neon import excel  # noqa: E402
 from neon import weeks  # noqa: E402
 from neon import rates  # noqa: E402
+from neon import week_fill  # noqa: E402
 import registry  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code": one task, several domains
 import todoist  # noqa: E402
@@ -643,6 +644,13 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         print(f"  ✗ M.W lookup failed: {e}", file=sys.stderr)
         return 1
 
+    # A blank last week takes the completion first (lib/neon/week_fill.py).
+    fill = None
+    if target_date == _today_md() and not d.get("cumulative_increment"):
+        fill = week_fill.resolve(name, col, _target_date_obj(target_date))
+        if fill:
+            week_row = fill.row
+
     # Close BEFORE crediting: a card already rolled past this Sun-Sat week
     # means the habit is done for the week, so nothing may be written.
     # Closing early within the week (Thursday's card on Monday) stays allowed.
@@ -654,8 +662,12 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
             d.get("todoist_label") or "1neon", name, d.get("aliases", []),
             not_due_after=week_sat)
     except AlreadyDoneThisPeriod as e:
-        print(f"  = {name} already done this week: {e}; no credit, card left alone")
-        return 0
+        # A card that caught up last week rolled past this week with this
+        # week's cell still blank: the second completion is real.
+        if not (fill and fill.open):
+            print(f"  = {name} already done this week: {e}; no credit, card left alone")
+            return 0
+        closed, closed_id = None, None
 
     toggl = d.get("toggl") or {}
     # Compute minutes — explicit > time range > Toggl auto-detect > 1 (same
@@ -735,6 +747,7 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
     cell_note = (f"+{_VARIABLE_1N_BASES[name]} ({minutes}m to the day)" if inc and name in _BASE_IN_CELL_1N
                  else f"{minutes}m")
     print(f"  ✓ {name} → 1n+!{col}{week_row} = {cell_note}, 0分!{fen_col} +{points}"
+          + (f" (filled {fill.label})" if fill and fill.shifted else "")
           + (" + todoist closed" if closed else ""))
     return 0
 

@@ -156,7 +156,17 @@ def onen_for(d: dt.date, conn) -> ac.Cell:
         vals = week_vals[row]
         idx = col_index(letter) - base
         raw = vals[idx] if idx < len(vals) else ""
-        cards.append(_timed(name.strip(), raw, _done_at(conn, "1n+", letter, row), d))
+        cell = _timed(name.strip(), raw, _done_at(conn, "1n+", letter, row), d)
+        if cell.status == ac.BLANK:
+            prev_row = label_row.get(weeks.prev_habit_week_label(name, d))
+            if prev_row:
+                if prev_row not in week_vals:
+                    week_vals[prev_row] = _rows("1n+", f"C{prev_row}:AL{prev_row}")[0]
+                prev_vals = week_vals[prev_row]
+                prev_raw = prev_vals[idx] if idx < len(prev_vals) else ""
+                cell = ac.caught_up(cell, prev_raw, _done_at(conn, "1n+", letter, prev_row),
+                                    weeks.cycle_start(name, d), d)
+        cards.append(cell)
     return ac.onen_cell(cards)
 
 

@@ -90,6 +90,7 @@ from neon import cols as neon_cols  # noqa: E402
 from neon.rates import VARIABLE_1N_BASES, VARIABLE_SESSION_BONUS  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code": one task, several domains
 from neon import weeks as neon_weeks  # noqa: E402
+from neon import week_fill as neon_week_fill  # noqa: E402
 from blocks import BLOCK_START, is_future_block  # noqa: E402 (path inserted above)
 
 # Import mark-completed
@@ -2831,7 +2832,9 @@ def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
             ["python3", str(TOGGL_CLI), "stop"],
             capture_output=True, text=True, timeout=10,
         )
+        _id = re.search(r"\[id:(\d+)\]", line)
         return {"description": desc, "stopped": stop_proc.returncode == 0,
+                "id": _id.group(1) if _id else None,
                 "output": stop_proc.stdout.strip(),
                 "minutes": _parse_stop_minutes(stop_proc.stdout)}
     except Exception:
@@ -4167,6 +4170,9 @@ def main():
     one_n_writes = [r for r in fast if r.step == "1n" and r.col_letter]
     one_n_result = None
     week_row = None
+    pre_1n: dict = {}
+    week_row_by_col: dict = {}  # a batch can span weeks: 1n+ col → its row
+    filled_prev_week: dict = {}  # col → label, when a blank last week took it
     if one_n_writes:
         # A past-day write (past_ok) belongs to THAT date's week, which may
         # not be this week.
@@ -4176,25 +4182,40 @@ def main():
         # (neon_weeks.CYCLE_START_WEEKDAY, e.g. 1 -2g / 1 -1n run Monday to
         # Sunday) belongs to its cycle's week, so a Sunday run lands in the
         # week that is ending rather than the one that Sunday opens.
+        # A blank last week takes the completion first (lib/neon/week_fill.py).
         by_week: dict[str, list] = {}
+        _fill_sheet = None if past_target else neon_week_fill.load()
         for r in one_n_writes:
             _hname = ONENEON_ALIASES.get(r.item.name.lower(), r.item.name)
-            by_week.setdefault(neon_weeks.habit_week_label(_hname, _week_date), []).append(r)
+            _week = neon_weeks.habit_week_label(_hname, _week_date)
+            if _fill_sheet and not (r.is_variable_1n or r.is_cumulative_1n):
+                _target = neon_week_fill.resolve(_hname, r.col_letter, _week_date, _fill_sheet)
+                if _target:
+                    _week = _target.label
+                    if _target.shifted:
+                        filled_prev_week[r.col_letter] = _week
+            by_week.setdefault(_week, []).append(r)
         for week_mw, group in by_week.items():
             # Daemon first (journaled + semantic ledger); raw ix-osa script is
             # the daemon-down fallback only (Neon-off-Excel step 2b).
-            one_n_result = write_1n_via_daemon(group, week_mw)
-            if one_n_result is None:
+            _group_result = write_1n_via_daemon(group, week_mw)
+            if _group_result is None:
                 script = build_1n_script(group, week_mw)
                 if script:
-                    one_n_result = ix_run(script, timeout=30.0)
-            if one_n_result is not None:
+                    _group_result = ix_run(script, timeout=30.0)
+            if _group_result is not None:
+                # A failed group must stay visible past later successes.
+                if one_n_result is None or one_n_result.returncode == 0:
+                    one_n_result = _group_result
                 # Parse weekRow from output for 0分 cell references
-                if one_n_result.returncode == 0:
+                if _group_result.returncode == 0:
+                    pre_1n.update(parse_pre_lines(_group_result.stdout))
                     import re as _re
-                    m = _re.search(r"weekRow=(\d+)", one_n_result.stdout)
+                    m = _re.search(r"weekRow=(\d+)", _group_result.stdout)
                     if m:
                         week_row = m.group(1)
+                        for _w in group:
+                            week_row_by_col[_w.col_letter] = week_row
 
     # 4c. Batch 1n+ → 0分 appends (via the excel-http daemon, one round-trip).
     # The week cell holds MINUTES (2026-07-27 redesign), so 0分 must NOT
@@ -4207,7 +4228,7 @@ def main():
         ref_names = []
         ref_idem = []
         for r in one_n_writes:
-            if not r.fen_col:
+            if not r.fen_col or r.col_letter not in week_row_by_col:
                 continue
             if r.is_variable_1n:
                 # Row 5 is a RATE string ("1/m") for these, never a number:
@@ -4750,7 +4771,6 @@ def main():
 
     # Pre-image maps for undo (captured by the write scripts themselves)
     pre_0n = parse_pre_lines(on_result.stdout) if on_result and on_result.returncode == 0 else {}
-    pre_1n = parse_pre_lines(one_n_result.stdout) if one_n_result and one_n_result.returncode == 0 else {}
 
     for r in fast:
         entry = {
@@ -4765,8 +4785,10 @@ def main():
             entry["undo"] = {"prev_0n": pre_0n[str(r.col_num)]}
         if r.step == "1n" and r.col_letter:
             entry["col_letter"] = r.col_letter
-            entry["week_row"] = week_row
+            entry["week_row"] = week_row_by_col.get(r.col_letter, week_row)
             entry["fen_col"] = r.fen_col
+            if r.col_letter in filled_prev_week:
+                entry["filled_prev_week"] = filled_prev_week[r.col_letter]
             if r.col_letter in pre_1n:
                 entry["undo"] = {"prev_1n_formula": pre_1n[r.col_letter]}
         if r.item.curly_points and r.item.curly_points > 0:
@@ -4839,6 +4861,8 @@ def main():
         if r.item.name in night_hcmc_results:
             entry["night_hcmc_toggl"] = night_hcmc_results[r.item.name]
         output["results"].append(entry)
+        _note_entry_points(output, entry, toggl_stop,
+                           target_date_iso(r.item.target_date, _daytime.today()))
 
     for r in threshold_skipped:
         entry = {"name": r.item.name, "step": "skipped", "reason": r.error}
@@ -4960,6 +4984,8 @@ def main():
 
     _emit(output)
     failed = _write_failures(output)
+    if not failed:
+        _record_entry_points(output)
     if failed:
         # A completion whose Excel write did not land is a failed completion:
         # exit nonzero so dtd's worker queues the item for its idle-tick retry
@@ -4967,6 +4993,41 @@ def main():
         # that redirects did-fast's output can still see something went wrong.
         print("did-fast: " + "; ".join(failed), file=sys.stderr)
         sys.exit(2)
+
+
+def _entry_point_id(entry: dict, toggl_stop: Optional[dict]) -> Optional[str]:
+    """The Toggl entry a result's 分 belong to: the one did-fast created for
+    its range, else the timer it just stopped for this name."""
+    toggl = entry.get("toggl") or {}
+    if toggl.get("ok") and toggl.get("ids"):
+        return str(toggl["ids"][0])
+    if (toggl_stop and toggl_stop.get("stopped") and toggl_stop.get("id")
+            and _timer_key(toggl_stop.get("description", "")) == _timer_key(entry.get("name", ""))):
+        return str(toggl_stop["id"])
+    return None
+
+
+def _note_entry_points(output: dict, entry: dict, toggl_stop: Optional[dict], day_iso: str) -> None:
+    """output["entry_points"] = {day: {entry id: 分}}; undo-fast reads it back
+    from the journal. Zero stays out: a sheet-priced habit reports no points
+    here and its clients price it from the minutes."""
+    try:
+        from janus_done import did_points
+        pts, eid = did_points(entry), _entry_point_id(entry, toggl_stop)
+        if pts > 0 and eid and entry.get("step") not in ("refused", "skipped"):
+            day = output.setdefault("entry_points", {}).setdefault(day_iso, {})
+            day[eid] = day.get(eid, 0) + pts
+    except Exception:  # noqa: BLE001 -- a record must not cost the completion
+        pass
+
+
+def _record_entry_points(output: dict) -> None:
+    try:
+        import entry_points
+        for day, pts in (output.get("entry_points") or {}).items():
+            entry_points.record(day, pts, "did-fast")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _write_failures(output: dict) -> list[str]:

@@ -1137,3 +1137,32 @@ def test_adjust_points_refuses_an_unlogged_entry(jm, monkeypatch):
     seen = _capture_did(jm, monkeypatch)
     r = jm.adjust_points("77", "never logged", "i9", "10")
     assert not r["ok"] and "not logged" in r["error"] and "text" not in seen
+
+
+# ── lib/entry_points.py on mobile (2026-11-05) ───────────────────────────────
+
+def test_logged_view_reads_another_clients_record_and_an_undo(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record(day, {"7": 19})
+    ledger, pts = jm._logged_view(day)
+    assert "7" in ledger and pts["7"]["points"] == 19
+    jm.entry_points.record(day, {"7": None})
+    ledger, pts = jm._logged_view(day)
+    assert "7" not in ledger and "7" not in pts
+
+
+def test_log_entry_wont_recredit_a_row_logged_elsewhere(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record(day, {"7": 19})
+    assert jm.log_entry("7", "一起发", 4, "xk87", day=day) == {"ok": True, "already": True}
+
+
+def test_did_fast_record_outranks_a_mobile_minutes_fallback(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    monkeypatch.setattr(jm, "STATE_DIR", tmp_path)
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record(day, {"7": 19})
+    jm._logged_points_add(day, "7", 4, [])
+    assert jm.entry_points.for_day(day)["7"] == 19
