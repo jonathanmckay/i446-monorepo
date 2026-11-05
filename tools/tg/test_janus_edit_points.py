@@ -284,3 +284,9 @@ def test_done_refuses_a_row_logged_anywhere_else():
     body = src[src.index("if _cmd_done_today(cmd):"):]
     guard = body.index('already logged [{rec}]')
     assert guard < body.index("STATE.event_sel = None")
+
+
+def test_done_claims_an_open_credit_before_it_can_run():
+    src = (HERE / "janus.py").read_text()
+    body = src[src.index("if _cmd_done_today(cmd):"):]
+    assert body.index("entry_points.claim(") < body.index("already logged [{rec}]")

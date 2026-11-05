@@ -351,6 +351,8 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
     # The credit is going away, so its entries read as open again everywhere.
     for day, pts in (out.get("entry_points") or {}).items():
         entry_points.record(day, {eid: None for eid in pts}, "undo")
+    for c in out.get("unlinked") or []:
+        entry_points.void_credit(c["id"])
 
     # Per-script success flags: don't strip/negate a term whose original
     # append never landed (that would subtract points never added). A

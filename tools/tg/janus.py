@@ -1025,8 +1025,10 @@ def fetch_today(force=False):
                 "running": stop_raw is None,
                 "id": e.get("id"),
                 "tags": e.get("tags") or [],
+                "at": e.get("at"),
             })
         out.sort(key=lambda x: x["start_dt"])
+        entry_points.link(out)
         STATE.entries = out
         STATE.entries_day = today
         STATE.entries_known = True
@@ -7685,7 +7687,10 @@ def _(event):
         flash(f"already recorded: {cmd} — not re-running", 6.0)
         return
     # _cmd_done_today is this host's own memory: the entry's record also
-    # covers a log from dtd, mobile or the other machine.
+    # covers a log from dtd, mobile or the other machine. A task closed with
+    # no entry yet is this row's points too, even before a fetch linked it.
+    if item.get("entry_ids"):
+        entry_points.claim(item["entry_ids"][0], desc, start.date())
     rec = _recorded_entry_pts(start.date(), item.get("entry_ids") or [])
     if rec is not None:
         flash(f"already logged [{rec}]: not re-running", 6.0)

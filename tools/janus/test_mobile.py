@@ -1173,3 +1173,11 @@ def test_every_did_fast_run_lifts_the_watchdog():
     src = (Path(__file__).parent / "mobile.py").read_text()
     runs = [ln for ln in src.splitlines() if "str(DID_FAST)" in ln and "subprocess.run" in ln]
     assert runs and src.count("env=janus_done.did_env()") == len(runs)
+
+
+def test_log_entry_claims_a_task_closed_before_the_entry(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record_credit("t", ["1 i447 10.31"], 25, day, "2026-11-07")
+    assert jm.log_entry("7", "1 i447", 15, "i447", day=day) == {"ok": True, "already": True}
+    assert jm._logged_view(day)[1]["7"]["points"] == 25

@@ -519,9 +519,11 @@ def _fetch_today(day: _dt.date | None = None) -> list[dict]:
             "project": code,
             "color": COLORS.get(code, DEFAULT_COLOR),
             "tags": e.get("tags") or [],
+            "at": e.get("at"),
             "start": st_c, "end": en_c, "running": running,
         })
     out.sort(key=lambda r: r["start"])
+    entry_points.link(out)
     return out
 
 
@@ -1592,6 +1594,7 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     with the viewed M/D appended and --past-ok, so the 分 land on THAT day
     (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
     today = day or _dt.datetime.now(_tz()).date()
+    entry_points.claim(entry_id, desc, today)   # a task closed before this entry existed
     if str(entry_id) in _logged_view(today)[0]:
         return {"ok": True, "already": True}
     # The entry's own HHMM-HHMM range rides the command (JM 2026-11-01, the
@@ -1652,6 +1655,7 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
         flags = ("--past-ok",)
     if rate_answer:
         flags += ("--rate",)  # a rate-priced total is still per-minute: split-eligible
+    flags += ("--no-credit",)  # this row is the task's entry: no credit to leave open
     r = _run_did_fast(text, flags)
     if r["ok"]:
         note = f"{desc} {pts if pts is not None else minutes} → {r['step']}"

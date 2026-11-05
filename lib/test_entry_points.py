@@ -76,3 +76,88 @@ def test_record_never_raises_on_an_unwritable_dir(tmp_path, monkeypatch):
     blocker.write_text("x")
     monkeypatch.setenv("ENTRY_POINTS_DIR", str(blocker / "sub"))
     ep.record(DAY, {"7": 19})
+
+
+# ── open credits: 1 i447 closed in dtd, its time entered afterwards ──────────
+import datetime as dt  # noqa: E402
+
+TODAY = dt.date(2026, 11, 5)
+SAT = dt.date(2026, 11, 7)
+
+
+def _entry(id_="9", desc="1 i447", when=(2026, 11, 5, 18, 0), at="2099-01-01T00:00:00+00:00", **kw):
+    return {"id": id_, "desc": desc, "start_dt": dt.datetime(*when), "at": at, "running": False, **kw}
+
+
+def _credit(cid="t@2026-11-05"):
+    ep.record_credit(cid, ["1 i447 10.31 (20) [25]"], 25, TODAY, SAT)
+
+
+@pytest.mark.parametrize("raw", ["1 i447 10.31 (20) [25]", "1 i447", "1 i447 @i447", "1 I447 10/31"])
+def test_normalize_drops_annotations_and_the_date_suffix(raw):
+    assert ep.normalize(raw) == "1 i447"
+
+
+def test_a_post_hoc_entry_takes_the_points(store):
+    _credit()
+    assert ep.link([_entry()], TODAY) == {"9": 25}
+    assert ep.for_day(DAY) == {"9": 25}
+
+
+def test_a_credit_is_taken_once_by_the_earliest_entry(store):
+    _credit()
+    late, early = _entry("8", when=(2026, 11, 5, 20, 0)), _entry("9", when=(2026, 11, 5, 18, 0))
+    assert ep.link([late, early], TODAY) == {"9": 25}
+    assert ep.link([late, early], TODAY) == {}
+
+
+def test_entries_made_before_the_close_are_left_alone(store):
+    _credit()
+    assert ep.link([_entry(at="2026-01-01T00:00:00+00:00")], TODAY) == {}
+
+
+def test_next_cycle_is_a_new_session(store):
+    _credit()
+    assert ep.link([_entry(when=(2026, 11, 8, 9, 0))], dt.date(2026, 11, 8)) == {}
+
+
+def test_running_timers_and_other_names_wait(store):
+    _credit()
+    assert ep.link([_entry(running=True), _entry("7", desc="1 hcb")], TODAY) == {}
+
+
+def test_a_recorded_entry_is_not_overwritten(store):
+    _credit()
+    ep.record(DAY, {"9": 40})
+    assert ep.link([_entry()], TODAY) == {} and ep.for_day(DAY) == {"9": 40}
+
+
+def test_claim_takes_the_credit_at_done_without_at(store):
+    _credit()
+    assert ep.claim("9", "1 i447", TODAY) == 25
+    assert ep.claim("8", "1 i447", TODAY) is None
+
+
+def test_undo_voids_the_credit_and_clears_its_entry(store):
+    _credit()
+    ep.link([_entry()], TODAY)
+    ep.void_credit("t@2026-11-05")
+    assert ep.for_day(DAY) == {"9": None}
+    ep.void_credit("gone@x")     # unknown id: no-op
+    assert ep.link([_entry("8")], TODAY) == {}
+
+
+def test_a_voided_credit_links_nothing(store):
+    _credit()
+    ep.void_credit("t@2026-11-05")
+    assert ep.link([_entry()], TODAY) == {} and ep.claim("9", "1 i447", TODAY) is None
+
+
+def test_credit_lines_stay_out_of_entry_records(store):
+    _credit()
+    assert ep.for_day(DAY) == {}
+
+
+def test_no_credits_is_a_no_op_and_tests_stay_out(monkeypatch):
+    monkeypatch.delenv("ENTRY_POINTS_DIR", raising=False)
+    assert ep.link([_entry()], TODAY) == {} and ep.claim("9", "1 i447", TODAY) is None

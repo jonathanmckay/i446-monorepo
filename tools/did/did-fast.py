@@ -3940,6 +3940,11 @@ def main():
     # Script runs only (see __main__): in-process callers keep sys.stdout.
     # --points-only: log points to 0分/completed-today but skip all Todoist
     # side effects (match/close/posthoc/build-order). Used by dtd's split.
+    # --no-credit: a janus row log that has its own entry but no range, so an
+    # open credit must not outlive it and take the next session's points.
+    no_credit = "--no-credit" in argv
+    if no_credit:
+        argv = [a for a in argv if a != "--no-credit"]
     points_only = "--points-only" in argv
     if points_only:
         argv = [a for a in argv if a != "--points-only"]
@@ -4865,6 +4870,9 @@ def main():
         output["results"].append(entry)
         _note_entry_points(output, entry, toggl_stop,
                            target_date_iso(r.item.target_date, _daytime.today()))
+        if not (points_only or past_target or no_credit):
+            _note_open_credit(output, entry, r,
+                              target_date_iso(r.item.target_date, _daytime.today()), toggl_stop)
 
     for r in threshold_skipped:
         entry = {"name": r.item.name, "step": "skipped", "reason": r.error}
@@ -5023,11 +5031,51 @@ def _note_entry_points(output: dict, entry: dict, toggl_stop: Optional[dict], da
         pass
 
 
+def _card_points(content: str) -> int:
+    """A card's [N]. A fixed 1n+ card credits a sheet reference, so did-fast
+    holds no number for it; its [N] matches 1n+ row 5."""
+    m = re.search(r"\[(\d+)\]", content or "")
+    return int(m.group(1)) if m else 0
+
+
+def _credit_until(labels: list, day: date) -> date:
+    """A weekly card's credit lasts to the Saturday its fiscal week ends, a
+    daily task's to the end of the day: next cycle's session is a new one."""
+    return day + timedelta(days=(5 - day.weekday()) % 7) if "1neon" in labels else day
+
+
+def _note_open_credit(output: dict, entry: dict, r, day_iso: str,
+                      toggl_stop: Optional[dict]) -> None:
+    """A fixed-value task closed with no entry: output["unlinked"], so a
+    post-hoc entry of that name can take its 分 and undo-fast can void it."""
+    try:
+        from janus_done import did_points
+        td = entry.get("todoist") or {}
+        fixed = entry.get("step") == "todoist" or (entry.get("step") == "1n"
+                                                   and not entry.get("variable_1n"))
+        if not (fixed and td.get("closed") and td.get("id") and not r.item.time_range
+                and not _entry_point_id(entry, toggl_stop)):
+            return
+        pts = did_points(entry) or _card_points(td.get("content"))
+        if pts > 0:
+            name = r.item.name
+            output.setdefault("unlinked", []).append({
+                "id": f"{td['id']}@{day_iso}", "names": [name, td.get("content", ""),
+                                                         ONENEON_ALIASES.get(name.lower(), name)],
+                "pts": pts, "day": day_iso,
+                "until": _credit_until((r.todoist_task or {}).get("labels") or [],
+                                       date.fromisoformat(day_iso)).isoformat()})
+    except Exception:  # noqa: BLE001 -- a record must not cost the completion
+        pass
+
+
 def _record_entry_points(output: dict) -> None:
     try:
         import entry_points
         for day, pts in (output.get("entry_points") or {}).items():
             entry_points.record(day, pts, "did-fast")
+        for c in output.get("unlinked") or []:
+            entry_points.record_credit(c["id"], c["names"], c["pts"], c["day"], c["until"], "did-fast")
     except Exception:  # noqa: BLE001
         pass
 
