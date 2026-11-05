@@ -146,3 +146,27 @@ def test_reopen_via_update_writes_entry_as_running(monkeypatch, tmp_path):
                         lambda req, *a, **k: _FakeResp(b'{"id": 77, "duration": -1700000000}'))
     toggl_api.update_entry(77, stop=None, duration=-1700000000)
     assert json.loads(cache.read_text())["entry"]["id"] == 77
+
+
+def test_started_timer_start_parses_on_python_39(tmp_path, monkeypatch):
+    """Bug 2026-11-04: POST /time_entries answers "...Z" where GET answers
+    "+00:00". Written through, the Z made fromisoformat raise on 3.9, so
+    janus's timer sat at 0m00.0s until the next live read."""
+    import datetime
+    monkeypatch.setattr(toggl_api, "CURRENT_CACHE", tmp_path / "current.json")
+    monkeypatch.setattr(toggl_api, "_record_create", lambda e: None)
+    monkeypatch.setattr(toggl_api, "_request", lambda *a, **k: {
+        "id": 1, "start": "2026-11-05T04:01:18Z", "stop": None, "duration": -1})
+    entry = toggl_api.start_timer("冥想")
+    assert entry["start"] == "2026-11-05T04:01:18+00:00"
+    cached = toggl_api.get_current_cached()
+    assert datetime.datetime.fromisoformat(cached["start"]).utcoffset() == datetime.timedelta(0)
+
+
+def test_cache_write_normalises_a_z_stop_and_leaves_offsets_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(toggl_api, "CURRENT_CACHE", tmp_path / "current.json")
+    toggl_api._write_current_cache({"id": 2, "start": "2026-11-05T04:01:18+00:00", "stop": "2026-11-05T05:00:00Z"})
+    cached = toggl_api._read_current_cache()
+    entry = cached[1] if isinstance(cached, tuple) else cached
+    assert entry["start"] == "2026-11-05T04:01:18+00:00"
+    assert entry["stop"] == "2026-11-05T05:00:00+00:00"

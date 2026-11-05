@@ -65,6 +65,18 @@ def _notify_tui():
         pass
 
 
+def _offset_times(entry):
+    """Rewrite an entry's trailing-Z start/stop as +00:00, the form GET returns.
+    POST answers "...Z", which fromisoformat rejects on Python 3.9 (bug
+    2026-11-04: janus's timer sat at 0m00.0s until the next live read)."""
+    if isinstance(entry, dict):
+        for k in ("start", "stop"):
+            v = entry.get(k)
+            if isinstance(v, str) and v.endswith("Z"):
+                entry[k] = v[:-1] + "+00:00"
+    return entry
+
+
 def _write_current_cache(entry):
     """Persist the last-known running entry (or None when idle) so concurrent
     pollers can share one fetch. Atomic tmp+replace so a reader never sees a
@@ -72,7 +84,7 @@ def _write_current_cache(entry):
     try:
         CURRENT_CACHE.parent.mkdir(parents=True, exist_ok=True)
         tmp = CURRENT_CACHE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"ts": time.time(), "entry": entry}))
+        tmp.write_text(json.dumps({"ts": time.time(), "entry": _offset_times(entry)}))
         tmp.replace(CURRENT_CACHE)
     except OSError:
         pass
@@ -285,7 +297,7 @@ def start_timer(description, project_id=None, tags=None, start_time=None):
         body["project_id"] = project_id
     if tags:
         body["tags"] = tags
-    entry = _request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body)
+    entry = _offset_times(_request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body))
     _record_create(entry)
     if isinstance(entry, dict):
         _write_current_cache(entry)  # we KNOW what's running now: no re-read
