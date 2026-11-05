@@ -234,3 +234,59 @@ def test_refused_daemon_still_falls_back(monkeypatch):
 def test_daemon_dying_mid_request_is_not_retried(monkeypatch, rc):
     excel, calls = _transport(monkeypatch, rc)
     assert excel.batch_append("hcbi", [("BD", "+1")], date="11/4")["timeout"] is True and calls == []
+
+
+# Fallback lines reach the ledger (2026-11-05): 11/4's `did 1s` fallback had no
+# points and no idem, so strict called the real journal line "typed into Excel".
+def _fallback_journal(monkeypatch, stdout):
+    lines = []
+
+    class FakeResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        res = FakeResult()
+        res.stdout = stdout if "tell application" in cmd[-1] else ""
+        if "printf" in cmd[-1]:
+            lines.append(cmd[-1])
+        return res
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("NEON_TEST_TRANSPORT_OK", "1")   # subprocess is faked above
+    return lines
+
+
+def test_fallback_journals_values_and_idem(monkeypatch):
+    lines = _fallback_journal(monkeypatch, "213.0|=1+'1n+'!C5\x1f168.0\n")
+    out = excel._ssh_fallback("append", "0分", "T", None, 306, "+'1n+'!C5", src="did 1s", idem="k")
+    assert out["value"] == "213.0" and out["formula"] == "=1+'1n+'!C5"
+    assert '"before_value": "168.0"' in lines[0] and '"after_value": "213.0"' in lines[0]
+    assert '"idem": "k"' in lines[0]
+
+
+def test_fallback_append_to_empty_cell_starts_from_zero(monkeypatch):
+    lines = _fallback_journal(monkeypatch, "15.0|=15\x1f\n")
+    excel._ssh_fallback("append", "0分", "T", None, 306, "+15")
+    assert '"before_value": "0"' in lines[0]
+
+
+def test_fallback_without_formula_drops_idem(monkeypatch):
+    """idem_dup matches any formula against an empty `after`, so every replay
+    of the key would read as a duplicate."""
+    lines = _fallback_journal(monkeypatch, "15.0|\x1f0\n")
+    excel._ssh_fallback("append", "0分", "T", None, 306, "+15", idem="k")
+    assert '"idem"' not in lines[0]
+
+
+def test_batch_append_fallback_passes_idem(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(excel, "_curl_ex", lambda *a, **k: (None, False))
+
+    def fake_fallback(op, sheet, col, date, row, value, src=None, idem=None):
+        seen[col] = idem
+        return {"ok": True, "fallback": True}
+
+    monkeypatch.setattr(excel, "_ssh_fallback", fake_fallback)
+    excel.batch_append("0分", [{"col": "T", "value": "+1", "idem": "k"}], row=306)
+    assert seen == {"T": "k"}

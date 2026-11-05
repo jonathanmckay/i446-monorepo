@@ -41,6 +41,7 @@ STREAK_TARGET = 5
 def run_strict(dates: list, write: bool) -> dict:
     """Strict-check each date; with write, merge into the streak file."""
     import json as _json
+    ledger.catch_up()
     ledger.repair_dates()
     state = {"target": STREAK_TARGET, "days": {}}
     if STREAK_PATH.exists():
@@ -74,6 +75,7 @@ def run_diff(date_iso: str, write: bool) -> dict:
     """Derive the day, compare, optionally persist. Repairs date-less
     row-addressed events first (locks that beat the first dated write)."""
     import json as _json
+    ledger.catch_up()
     repaired = ledger.repair_dates()
     day = rules.derive_day(date_iso)
     day["event_blocks"] = rules.event_blocks(date_iso)

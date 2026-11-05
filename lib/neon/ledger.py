@@ -48,6 +48,7 @@ from typing import Iterable, Iterator, Optional
 from . import blocks, cols
 
 DB_PATH = Path(os.environ.get("NEON_DB") or Path.home() / ".local/share/neon/neon.db")
+JSONL_DIR = Path.home() / "vault/g245/neon-ledger"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -339,6 +340,17 @@ def import_jsonl(paths: Iterable[Path], conn: Optional[sqlite3.Connection] = Non
             c.close()
 
 
+def catch_up(conn: Optional[sqlite3.Connection] = None,
+             ledger_dir: Optional[Path] = None) -> dict:
+    """Import this and last month's JSONL. The daemon mirrors its own writes
+    into the DB, but a client fallback only reaches the JSONL, so without this
+    a fallback reads as typed into Excel. Idempotent via the line hash."""
+    d = ledger_dir or JSONL_DIR
+    first = _dt.date.today().replace(day=1)
+    prev = first - _dt.timedelta(days=1)
+    return import_jsonl([d / f"{m:%Y-%m}.jsonl" for m in (prev, first)], conn)
+
+
 # ── reads ────────────────────────────────────────────────────────────────────
 
 def day(date_iso: str, sheet: str = "0分", conn: Optional[sqlite3.Connection] = None) -> list:
@@ -394,7 +406,8 @@ def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None,
     """What the ledger last saw in each cell of `sheet` on `date_iso`:
     {col: {"value": float|None, "text": str|None, "kind": str, "ts": str,
     "field": str|None, "formula": str|None}}. The newest event per column
-    wins. A column with no event is ABSENT — callers must treat absence as
+    wins, by write time: catch_up inserts fallback lines late, so id order
+    would let one outrank a later repair. A column with no event is ABSENT — callers must treat absence as
     UNKNOWN, not blank (cells marked before the double-write began have no
     event). Row-addressed events that landed before their row's date was
     learned (date NULL) are included via row_dates.
@@ -410,12 +423,14 @@ def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None,
         rows = c.execute(
             f"""SELECT e.col, e.field, e.kind, e.ts, e.after_value, e.value, e.after_formula
                  FROM events e
-                 JOIN (SELECT e2.col, MAX(e2.id) AS mid FROM events e2
+                 JOIN (SELECT e2.id AS mid,
+                              ROW_NUMBER() OVER (PARTITION BY e2.col
+                                                 ORDER BY e2.ts DESC, e2.id DESC) AS rn
+                         FROM events e2
                         LEFT JOIN row_dates rd ON rd.sheet = e2.sheet AND rd.row = e2.row
                         WHERE e2.sheet=? AND COALESCE(e2.date, rd.date) = ?
                           AND e2.kind IN ('set','observe','text','lock','credit','credit_ref')
-                          {obs}
-                        GROUP BY e2.col) m ON m.mid = e.id
+                          {obs}) m ON m.mid = e.id AND m.rn = 1
                 ORDER BY e.col""", (sheet, date_iso)).fetchall()
         out = {}
         for col, field, kind, ts, av, raw, formula in rows:

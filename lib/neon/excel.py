@@ -192,7 +192,7 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
     if timed_out:
         return _timeout_result()
     results = [_ssh_fallback("append", sheet, it["col"], date, row, it["value"],
-                             src=it.get("src") or src) for it in items]
+                             src=it.get("src") or src, idem=it.get("idem")) for it in items]
     return {"ok": all(r.get("ok") for r in results), "results": results, "fallback": True}
 
 
@@ -285,14 +285,38 @@ _DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B",
              "0s897": "B", "1分+1s": "A", "i9+m5x2": "A"}   # mirror of the daemon's DATE_COL
 
 
+# The pre-write value, returned after the formula behind a separator no cell
+# text uses, so the "value|formula" split stays as it was.
+_PRE_SEP = "\x1f"
+_PRE_VALUE = ('  set pre to ""\n'
+              '  try\n'
+              '    set pre to (value of theCell) as string\n'
+              '  end try\n')
+_RETURN_WITH_PRE = ('  return ((value of theCell) as string) & "|" & (formula of theCell)'
+                    ' & (character id 31) & pre\n')
+
+
+def _is_number(s: str) -> bool:
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
                       date: str | None, value: str | None,
-                      after_formula: str, src: str | None) -> None:
+                      after_formula: str, src: str | None, idem: str | None = None,
+                      before_value: str | None = None,
+                      after_value: str | None = None) -> None:
     """Best-effort ledger entry for a write that bypassed the daemon.
 
     The daemon couldn't journal it (it was down), so append the JSONL line
     ourselves on ix. before_formula is unknown (null) — the audit treats
-    fallback entries as warn-only chain links, not breaks.
+    fallback entries as warn-only chain links, not breaks. before_value /
+    after_value give a credit_ref its points in the ledger; idem needs a real
+    `after`, because the daemon's idem_dup treats an empty one as matching
+    every replay.
     """
     now = datetime.datetime.now()
     entry = {
@@ -302,6 +326,12 @@ def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
         "src": src, "fallback": True, "host": socket.gethostname(),
         **_surface(),
     }
+    if idem and after_formula:
+        entry["idem"] = idem
+    if before_value is not None:
+        entry["before_value"] = before_value
+    if after_value is not None:
+        entry["after_value"] = after_value
     line = json.dumps(entry, ensure_ascii=False)
     path = f"{LEDGER_DIR}/{now.strftime('%Y-%m')}.jsonl"
     cmd = f"mkdir -p {shlex.quote(LEDGER_DIR)} && printf '%s\\n' {shlex.quote(line)} >> {shlex.quote(path)}"
@@ -314,7 +344,8 @@ def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
 
 def _ssh_fallback(op: str, sheet: str, col: str,
                   date: str | None, row: int | None,
-                  value: Any, src: str | None = None) -> dict[str, Any]:
+                  value: Any, src: str | None = None,
+                  idem: str | None = None) -> dict[str, Any]:
     """If the daemon is unreachable, fall back to one-shot ssh+osascript."""
     _guard_tests()
     if row is None and date is not None:
@@ -390,12 +421,13 @@ def _ssh_fallback(op: str, sheet: str, col: str,
             f'tell application "Microsoft Excel"\n'
             f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of workbook "{WORKBOOK}"\n'
             f'  set f to formula of theCell\n'
+            f'{_PRE_VALUE}'
             f'  if f = "" or f = "0" then\n'
             f'    {empty_set}'
             f'  else\n'
             f'    {nonempty_set}'
             f'  end if\n'
-            f'  return ((value of theCell) as string) & "|" & (formula of theCell)\n'
+            f'{_RETURN_WITH_PRE}'
             f'end tell'
         )
     else:  # write
@@ -411,8 +443,9 @@ def _ssh_fallback(op: str, sheet: str, col: str,
         script = (
             f'tell application "Microsoft Excel"\n'
             f'  set theCell to cell "{col}{row}" of sheet "{sheet}" of workbook "{WORKBOOK}"\n'
+            f'{_PRE_VALUE}'
             f'{set_line}'
-            f'  return ((value of theCell) as string) & "|" & (formula of theCell)\n'
+            f'{_RETURN_WITH_PRE}'
             f'end tell'
         )
     osa = f"osascript -e {shlex.quote(script)}"
@@ -427,9 +460,15 @@ def _ssh_fallback(op: str, sheet: str, col: str,
     )
     if r.returncode != 0:
         return {"ok": False, "error": r.stderr.strip(), "fallback": True}
-    parts = r.stdout.strip().split("|", 1)
+    out, _, before = r.stdout.partition(_PRE_SEP)
+    parts = out.strip().split("|", 1)
     val, formula = (parts + [""])[:2]
     if op in ("append", "write"):
-        _journal_fallback(op, sheet, col, row, date, value, formula, src)
+        before = before.strip()
+        if op == "append" and not _is_number(before):
+            before = "0"    # an append onto an empty cell starts from 0
+        _journal_fallback(op, sheet, col, row, date, value, formula, src, idem=idem,
+                          before_value=before if _is_number(before) else None,
+                          after_value=val if _is_number(val) else None)
     return {"ok": True, "row": row, "col": col, "value": val,
             "formula": formula, "fallback": True}
