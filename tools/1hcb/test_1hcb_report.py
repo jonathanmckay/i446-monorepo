@@ -79,12 +79,19 @@ def test_food_groups_vs_daily_dozen():
     out = _report()
     food = next(l for l in out if l.startswith("food"))
     assert "/day vs 86" in food and "/21 per day (7 days)" in food, food
-    short = next(l for l in out if "short:" in l)
+    rows = [l.split() for l in out if re.match(r" {7}[a-z]", l)]
     # worst ratio first: beans 5 servings / 7 days = 0.7 of 3
-    assert short.split("short: ")[1].startswith("beans 0.7/3"), short
-    assert "greens 1.0/2" in short and "water 2.0/3" in short, short
-    hit = next(l for l in out if "hit:" in l)
-    assert "spices" in hit and "vegetables" in hit, hit
+    assert rows[0] == ["beans", "0.7", "/", "3"], rows
+    assert ["water", "2.0", "/", "3"] in rows, rows
+    assert len(rows) == 10, rows
+
+
+def test_gr_is_greens_and_grains_have_no_goal():
+    """hcbi I is gr (greens) and L is g (grains), as in /ate; the report had
+    them swapped, and grains carry no goal (JM 2026-11-05)."""
+    rows = {l.split()[0]: l.split() for l in _report() if re.match(r" {7}[a-z]", l)}
+    assert rows["greens"][1:] == ["1.6", "/", "2"], rows    # 11 servings of col I / 7 days
+    assert "grains" not in rows, rows
 
 
 def test_ledger_start_and_end_of_week_mirror_excel_countif():
@@ -103,6 +110,47 @@ def test_food_column_switches_to_AA_from_q3():
     r = _row("1/1", "Th", (0,) * 11, 0, 0, 100, 0, 10)
     assert hcb.ledger_contrib(r, 187) == 100 - 86
     assert hcb.ledger_contrib(r, 188) == 10 - 86
+
+
+class _Client:
+    """client.beta.messages.create -> a canned response, or an error."""
+
+    def __init__(self, resp=None, boom=None):
+        self.calls, self.resp, self.boom = [], resp, boom
+        self.beta = self
+        self.messages = self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        if self.boom:
+            raise self.boom
+        return self.resp
+
+
+class _Resp:
+    def __init__(self, text, stop="end_turn"):
+        self.stop_reason = stop
+        self.content = [type("B", (), {"type": "thinking"})(),
+                        type("B", (), {"type": "text", "text": text})()]
+
+
+def test_analysis_sees_the_report_without_colors_and_last_weeks_goals():
+    c = _Client(_Resp("  Calories ran high. Cut the evening snack.  "))
+    got = hcb.week_analysis(["cal \x1b[31m1907\x1b[0m"], "• more beans", client=c)
+    assert got == "Calories ran high. Cut the evening snack."
+    prompt = c.calls[0]["messages"][0]["content"]
+    assert "cal 1907" in prompt and "\x1b" not in prompt and "more beans" in prompt
+    assert "1-4 sentences" in prompt
+
+
+def test_analysis_failure_or_refusal_never_blocks_the_survey():
+    assert hcb.week_analysis(["x"], "", client=_Client(boom=RuntimeError("down"))) == ""
+    assert hcb.week_analysis(["x"], "", client=_Client(_Resp("no", stop="refusal"))) == ""
+
+
+def test_survey_answers_use_the_shared_editor_not_input():
+    src = Path(__file__).with_name("1hcb.py").read_text()
+    assert "read_multiline()" in src and "input(" not in src.replace("read_line(", "")
 
 
 def test_report_runs_before_survey_and_never_blocks_it():

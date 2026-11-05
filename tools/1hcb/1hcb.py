@@ -17,7 +17,8 @@ Above the survey it prints a report on the week just ended (the previous
 Thursday through yesterday's Wednesday): hcbp vs 45分/day, days moved,
 s+hcbp (social) vs 60, calories vs 1800, food groups vs the Daily Dozen,
 and the year's hcb ledger (hcbi X384) at the start and end of that week
-(2026-10-30).
+(2026-10-30), then a 1-4 sentence read on the week with suggestions for this
+one (2026-11-05).
 
 Usage:
   python3 1hcb.py                    # this hcb week (Thursday on/before today)
@@ -29,14 +30,17 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import os
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from neon import excel  # noqa: E402
 from neon.weeks import fiscal_week_label  # noqa: E402
 from review_form_writer import run_bounded  # noqa: E402
+from survey_input import read_line, read_multiline  # noqa: E402
 
 SHEET = "hcbi"
 COLS = {"weight": "BG", "learned": "BH", "goals": "BJ"}
@@ -57,11 +61,17 @@ FOOD_TARGET, HCBP_TARGET, CAL_CEILING, PROTEIN_TARGET = 86, 45, 1800, 100
 SOCIAL_TARGET = 60          # 1n+ s+hcbp weekly target (the /1s reviews' x/60)
 FOOD_AA_FROM_ROW = 188
 REPORT_LAST_ROW = 400       # day rows end at 369, the ledger rows sit below
-# hcbi E..O, Daily Dozen order; the per-group numbers sum to the 21 the score uses.
+# hcbi E..O, Daily Dozen order, codes as in /ate: gr is greens, g is grains.
+# Grains have no goal (JM 2026-11-05), but AA still scores their servings, so
+# the report's total keeps them; the goals sum to 18 of AA's 21.
 FOOD_GROUPS = (("bn", "beans", 3), ("br", "berries", 1), ("fr", "fruit", 3),
-               ("cr", "cruciferous", 1), ("gr", "grains", 3), ("vg", "vegetables", 2),
-               ("fx", "flax", 1), ("g", "greens", 2), ("nt", "nuts", 1),
+               ("cr", "cruciferous", 1), ("gr", "greens", 2), ("vg", "vegetables", 2),
+               ("fx", "flax", 1), ("g", "grains", None), ("nt", "nuts", 1),
                ("sp", "spices", 1), ("wtr", "water", 3))
+ANALYSIS_MODEL = "claude-opus-5-5"
+ANALYSIS_TIMEOUT = 30       # s; the survey must not wait on it for long
+KEY_FILES = (Path.home() / "vault" / ".env", Path.home() / ".zshrc")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 WEEKDAYS = {"M", "T", "W", "Th", "F", "S"}
 # Offsets inside a B:AA read_range row.
 _B, _C, _E, _P, _U, _X, _Y, _AA = 0, 1, 3, 14, 19, 22, 23, 25
@@ -183,12 +193,9 @@ def build_report(rows: list, first_row: int, social: dict | None = None) -> list
         total = sum(a for *_, a in avgs)
         out.append(f"food   {mark(food >= FOOD_TARGET, f'{food:.0f}分')}/day vs {FOOD_TARGET} · "
                    f"Daily Dozen {mark(total >= 21, f'{total:.1f}')}/21 per day ({n} days)")
-        short = sorted((a / tgt, name, a, tgt) for code, name, tgt, a in avgs if a < tgt)
-        hit = [name for code, name, tgt, a in avgs if a >= tgt]
-        if short:
-            out.append("       short: " + ", ".join(f"{nm} {a:.1f}/{t}" for _, nm, a, t in short))
-        if hit:
-            out.append("       hit:   " + ", ".join(hit))
+        goals = sorted((a / tgt, name, a, tgt) for code, name, tgt, a in avgs if tgt)
+        out += [f"       {name:<12}{mark(a >= tgt, f'{a:>4.1f}')} / {tgt}"
+                for _, name, a, tgt in goals]
     else:
         out.append("food   nothing logged")
 
@@ -226,6 +233,55 @@ def week_report(thu: _dt.date) -> list[str]:
     return [head] + build_report(r["rows"], row, social)
 
 
+def _api_key() -> str | None:
+    """ANTHROPIC_API_KEY from the env, else ~/vault/.env or ~/.zshrc (dtd's
+    forms don't source .zshrc). Same lookup as tools/did/shorten.py."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    for path in KEY_FILES:
+        try:
+            m = re.search(r"^(?:export\s+)?ANTHROPIC_API_KEY=[\"']?([^\"'\s]+)",
+                          path.read_text(), re.M)
+        except OSError:
+            continue
+        if m:
+            return m.group(1)
+    return None
+
+
+def analysis_prompt(report: list[str], last_goals: str) -> str:
+    body = "\n".join(_ANSI.sub("", ln) for ln in report)
+    return (
+        "This is one person's weekly health report: exercise points (hcbp), calories, "
+        "protein, daily servings by food group against goals, and a running score "
+        f"ledger.\n\n{body}\n\nLast week's goals:\n{last_goals or '(none recorded)'}\n\n"
+        "Write 1-4 sentences in total: what actually drove this week, whether last "
+        "week's goals held, and the one or two specific changes most worth making this "
+        "week. Use the report's numbers. Plain prose, no headers, no bullets, no preamble."
+    )
+
+
+def week_analysis(report: list[str], last_goals: str, client=None) -> str:
+    """The 1-4 sentence read on the week, "" if it can't be had: this sits in
+    front of the survey and must never block it."""
+    try:
+        if client is None:
+            import anthropic
+            key = _api_key()
+            client = anthropic.Anthropic(api_key=key, timeout=ANALYSIS_TIMEOUT, max_retries=0) \
+                if key else anthropic.Anthropic(timeout=ANALYSIS_TIMEOUT, max_retries=0)
+        resp = client.beta.messages.create(
+            model=ANALYSIS_MODEL, max_tokens=2000, output_config={"effort": "low"},
+            betas=["server-side-fallback-2026-07-01"], extra_body={"fallbacks": "default"},
+            messages=[{"role": "user", "content": analysis_prompt(report, last_goals)}])
+        if resp.stop_reason == "refusal":
+            return ""
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception:  # noqa: BLE001 -- an extra, never a blocker
+        return ""
+
+
 def mark_done() -> str:
     proc = run_bounded(["/usr/bin/python3", str(DID_RUN), HABIT], timeout=120)
     msg = (proc.stdout or proc.stderr or "").strip().splitlines()
@@ -236,23 +292,10 @@ def mark_done() -> str:
     return msg[-1] if msg else "(no output from did run.py)"
 
 
-def ask(prompt: str) -> str:
-    try:
-        return input(prompt).strip()
-    except EOFError:
-        return ""
-
-
 def ask_multiline(question: str) -> str:
     print(BOLD + question + RESET)
     print(DIM + "(one item per line; blank line to finish)" + RESET)
-    lines: list[str] = []
-    while True:
-        ln = ask("> ")
-        if not ln:
-            break
-        lines.append(ln)
-    return "\n".join(lines)
+    return read_multiline()
 
 
 def show(label: str, text: str) -> None:
@@ -296,6 +339,12 @@ def main(argv=None) -> int:
         for ln in report:
             print("  " + ln)
         print()
+        if not args.weight:
+            print(DIM + "reading the week…" + RESET, flush=True)
+            read = week_analysis(report, last["goals"])
+            if read:
+                print(textwrap.fill(read, width=88, initial_indent="  ", subsequent_indent="  "))
+                print()
     if any(cur.values()):
         print(DIM + "already recorded this week:" + RESET)
         for key in COLS:
@@ -312,11 +361,11 @@ def main(argv=None) -> int:
             return 1
         learned, goals = bullets(args.learned or ""), bullets(args.goals or "")
     else:
-        if any(cur.values()) and ask("overwrite this week's answers? [y/N] ").lower() != "y":
+        if any(cur.values()) and read_line("overwrite this week's answers? [y/N] ").lower() != "y":
             print("nothing written")
             return 2
         while True:
-            raw = ask(BOLD + "1. What was your lowest weight this week? " + RESET)
+            raw = read_line(BOLD + "1. What was your lowest weight this week? " + RESET)
             if not raw:
                 print("aborted: no weight, nothing written")
                 return 2
