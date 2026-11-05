@@ -283,10 +283,20 @@ def _auto_detect_minutes(toggl_desc: str, project_code: str, default: int = 1) -
         return default
 
 
-def _append_completed(name: str, task_id: str | None = None) -> None:
+def _append_completed(name: str, task_id: str | None = None,
+                      points: int | None = None) -> None:
     """Record a completion via the shared, locked, atomic mark-completed.py
-    writer (see the mc import above) — not a local reimplementation."""
-    mc.append_names([name], ids={name: task_id} if task_id else None)
+    writer (see the mc import above) — not a local reimplementation. `points`
+    is what links the name to its time entries: without it janus shows
+    minutes (2026-11-05: "1 hcb" earned 15 分)."""
+    kw = {"points": {name: points}} if points else {}
+    mc.append_names([name], ids={name: task_id} if task_id else None, **kw)
+
+
+def _completed_points(fen_col: str | None, points: int, target_date: str) -> int | None:
+    """分 today's record may claim: a backfill's credit went to another day,
+    so it must not show on today's row."""
+    return points if fen_col and points and target_date == _today_md() else None
 
 
 def _drop_from_queue(task_id: str) -> None:
@@ -742,7 +752,7 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         except Exception:
             pass
 
-    _append_completed(name, closed_id)
+    _append_completed(name, closed_id, _completed_points(fen_col, points, target_date))
     _fire_refresh()
     cell_note = (f"+{_VARIABLE_1N_BASES[name]} ({minutes}m to the day)" if inc and name in _BASE_IN_CELL_1N
                  else f"{minutes}m")
@@ -832,6 +842,7 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
     # takes the task's label; an unknown @code falls back to it too.
     td_pairs = fen_split.parse_points(content)
     splits = user_split or (td_pairs if (user_sq is None and bo_sq is None and len(td_pairs) >= 2) else None)
+    split_pts = 0
     if splits:
         merged: dict[str, int] = {}
         for n, code in splits:
@@ -846,6 +857,7 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         for col, n in merged.items():
             if n > 0:
                 excel.append("0分", col, date=target_date, value=f"+{n}", src=f"did {content[:60]}")
+        split_pts = sum(merged.values())
         points_sq = 0
     if points_sq:
         if not domain:
@@ -875,7 +887,8 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         from neon.blocks import flip_checkbox
         flipped = flip_checkbox(content)
 
-    _append_completed(content[:50], best["id"])
+    _append_completed(content[:50], best["id"],
+                      _completed_points("0分", split_pts + points_sq + points_cu, target_date))
     _fire_refresh()
     msg = f"  ✓ {content!r} (overlap={best_score:.2f})"
     if fen_writes:

@@ -87,6 +87,17 @@ def crossed_off(completed: dict, desc: str, norm: Callable[[str], str]) -> bool:
     return target in ids and any(norm(n) == target for n in completed.get("names") or [])
 
 
+def done_entry_claims(rows, done_keys, logged_ids, norm: Callable[[str], str]) -> dict[str, str]:
+    """{name key: entry id} for tasks closed outside janus: one completion
+    marks one row, the LAST entry with that name, so an earlier same-name
+    session stays open. A name janus already logged today claims nothing.
+    `rows` is (id, desc) in start order (JM 2026-11-05: a card closed before
+    its Toggl entries existed, so only the name can link them)."""
+    logged = {norm(d or "") for i, d in rows if str(i) in logged_ids}
+    return {k: str(i) for i, d in rows
+            for k in [norm(d or "")] if k in done_keys and k not in logged}
+
+
 def is_time_based(name: str, *, is_habit: Callable[[str], bool], df) -> bool:
     """`name` (normalized, no @code) is a 0n/1n+ habit (`is_habit`, each
     client's own header lookup) or one of did-fast's time-priced names:

@@ -6046,6 +6046,26 @@ def _recorded_entry_pts(day: dt.date, entry_ids) -> int | None:
     return sum(hits) if hits else None
 
 
+def _holds_done_claim(desc: str, entry_ids) -> bool:
+    """False for a row that must not repeat a completion's flat 分: one
+    completion shows on one row (janus_done.done_entry_claims). Per-minute
+    habits aren't in "points", so every session keeps its own."""
+    try:
+        flat = json.loads(_COMPLETED_TODAY.read_text()).get("points") or {}
+    except Exception:
+        return True
+    key = _norm_done_name(desc)
+    if not entry_ids or key not in {_norm_done_name(n) for n, v in flat.items() if v}:
+        return True
+    rows = [(e["id"], e.get("desc")) for e in sorted(STATE.entries, key=lambda e: e["start_dt"])]
+    same = [i for i, d in rows if _norm_done_name(d or "") == key]
+    logged = {str(i) for i in same if _recorded_entry_pts(view_now().date(), [i]) is not None}
+    if not same:
+        return True
+    claim = janus_done.done_entry_claims(rows, {key}, logged, _norm_done_name).get(key)
+    return claim in {str(i) for i in entry_ids}
+
+
 def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[bool, int]:
     """(recorded, 分) for a row on the viewed day: its per-entry record, else
     (today only) completed-today.json plus its ^G adjustments."""
@@ -6070,6 +6090,8 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
     if STATE.day_offset != 0:
         return False, 0
     recorded, pts = _points_recorded_today(raw_desc, dur_min)
+    if recorded and not _holds_done_claim(raw_desc, entry_ids):
+        recorded, pts = False, 0
     adj = sum(int(v) for k, v in _points_adj_today().items()
               if k in {str(i) for i in (entry_ids or [])})
     return (recorded or bool(adj)), pts + adj
@@ -6121,16 +6143,15 @@ def _enqueue_points_adjust(app, pe: dict, delta: int) -> None:
 
 def _entry_dur_display(dur_min: int, raw_desc: str | None, entry_ids=None) -> str:
     """Duration text for a past/current (non-event, non-spill) entry row:
-    its own [N] points once today's did-fast run has recorded them — the
-    point total is the more useful number at that point, and the raw
-    minutes next to it is just noise (user request 2026-08-10) — else the
-    ordinary Nm/Nh duration. Past-day views have no per-entry points record
+    the ordinary Nm/Nh duration, then its own [N] points once today's
+    did-fast run has recorded them (JM 2026-11-05: minutes left of the 分,
+    as in dtd). Past-day views have no per-entry points record
     (_points_recorded_today is today-only), so they show points only once
     janus itself logged the row (_entry_pts, JM 2026-11-02)."""
     if raw_desc:
         recorded, pts = _row_points(raw_desc, dur_min, entry_ids)
         if recorded:
-            return f"[{pts}]"
+            return f"{fmt_dur(dur_min)} [{pts}]"
     return fmt_dur(dur_min)
 
 

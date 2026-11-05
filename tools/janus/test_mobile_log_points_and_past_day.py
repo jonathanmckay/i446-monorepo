@@ -204,3 +204,13 @@ def test_task_done_in_dtd_marks_its_timer_entry_logged_with_points(tmp_path, mon
     rows = {r["id"]: r for r in tl["rows"] if r.get("type") == "entry"}
     assert rows[2]["logged"] and rows[2]["logged_points"] == 17 and rows[2]["done_in"] == "dtd"
     assert not rows[1]["logged"]   # only the latest same-name entry is claimed
+
+
+def test_done_claim_is_the_last_same_name_entry():
+    # 2026-11-05: one completion, one row, same rule on every client.
+    import janus_done as jd
+    rows = [(1, "1 hcb"), (2, "other"), (3, "1 hcb")]
+    norm = str.lower
+    assert jd.done_entry_claims(rows, {"1 hcb"}, set(), norm) == {"1 hcb": "3"}
+    assert jd.done_entry_claims(rows, {"1 hcb"}, {"3"}, norm) == {}    # already logged by janus
+

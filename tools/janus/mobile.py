@@ -930,15 +930,9 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     # logged (one completion = one entry; an earlier same-name session can
     # still be swiped).
     dtd_done = _dtd_done_points(today) if is_today else {}
-    dtd_entry: dict[str, str] = {}
-    janus_logged_keys = {_norm_key(e.get("desc") or "") for e in entries
-                         if e["id"] in logged or str(e["id"]) in logged}
-    for e in sorted(entries, key=lambda e: e["start"]):
-        k = _norm_key(e.get("desc") or "")
-        # A completion that janus itself logged is already shown; only a
-        # name closed in dtd (no janus log of that name today) claims a row.
-        if k in dtd_done and k not in janus_logged_keys:
-            dtd_entry[k] = str(e["id"])
+    dtd_entry = janus_done.done_entry_claims(
+        [(e["id"], e.get("desc")) for e in sorted(entries, key=lambda e: e["start"])],
+        dtd_done, {str(i) for i in logged}, _norm_key)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     # The timeline's "live edge": gaps and dividers run to now on today, but a

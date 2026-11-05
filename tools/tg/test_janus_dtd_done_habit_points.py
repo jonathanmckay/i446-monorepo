@@ -33,6 +33,6 @@ def test_multiplied_habit_row_shows_rate_times_minutes_not_row2_weight(tmp_path,
     monkeypatch.setattr(nr, "zero_n_done_points", lambda h: {"hiit": 7, "0g": 17}.get(h))
     monkeypatch.setattr(janus.STATE, "day_offset", 0)
     assert janus._points_recorded_today("hiit", 18) == (True, 36)
-    assert janus._entry_dur_display(18, "hiit") == "[36]"
+    assert janus._entry_dur_display(18, "hiit") == "18m [36]"
     # plain habits keep their row-2 weight regardless of minutes
     assert janus._points_recorded_today("0g", 2) == (True, 17)

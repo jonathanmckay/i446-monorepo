@@ -43,7 +43,7 @@ def test_past_day_row_shows_the_points_janus_logged(tmp_path, monkeypatch):
     _view(monkeypatch, tmp_path, day, -1)
     assert janus._entry_dur_display(120, "interview prep", [4608630595]) == janus.fmt_dur(120)
     janus._entry_pts_add(day, {"4608630595": 420})
-    assert janus._entry_dur_display(120, "interview prep", [4608630595]) == "[420]"
+    assert janus._entry_dur_display(120, "interview prep", [4608630595]) == "120m [420]"
     # a same-name entry on that day that was not logged keeps its minutes
     assert janus._entry_dur_display(90, "interview prep", [4607267560]) == janus.fmt_dur(90)
 
@@ -80,12 +80,12 @@ def test_stale_zero_record_on_a_per_minute_habit_shows_its_minutes(tmp_path, mon
     day = dt.date(2026, 11, 1)
     _view(monkeypatch, tmp_path, day, -1)
     janus._entry_pts_add(day, {"4609785250": 0})
-    assert janus._entry_dur_display(69, "o314", [4609785250]) == "[69]"
+    assert janus._entry_dur_display(69, "o314", [4609785250]) == "69m [69]"
     # a real record still wins, and a 0 on an ordinary task stays 0
     janus._entry_pts_add(day, {"4609785250": 104})
-    assert janus._entry_dur_display(69, "o314", [4609785250]) == "[104]"
+    assert janus._entry_dur_display(69, "o314", [4609785250]) == "69m [104]"
     janus._entry_pts_add(day, {"5": 0})
-    assert janus._entry_dur_display(20, "read memo", [5]) == "[0]"
+    assert janus._entry_dur_display(20, "read memo", [5]) == "20m [0]"
 
 
 def test_per_minute_habit_row_is_priced_at_the_logged_minutes(tmp_path, monkeypatch):
