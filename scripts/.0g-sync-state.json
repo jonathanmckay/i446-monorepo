@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-05T06:00:07.419905-08:00"
+  "tasks": {
+    "1.5x hiit": {
+      "todoist_id": "6hwH4hhHH9QHwh6R",
+      "minutes": 30
+    },
+    "1600": {
+      "todoist_id": "6hwH4hpXQWxQMJxR",
+      "minutes": 40
+    },
+    "update the org chart doc": {
+      "todoist_id": "6hwH4hjgr54jfjp2",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-11-05T06:33:23.795043-08:00"
 }
