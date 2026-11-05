@@ -4965,7 +4965,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     ]
 
 
-HINT_LINE = " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^O block · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit"
+HINT_LINE = " type to run · Tab/↓↑ select · ↵ edit/fill · ⌥↵ did · ^O block · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit"
 
 
 def render_footer() -> list[tuple[str, str]]:
@@ -6807,7 +6807,7 @@ def _convert_selected_event(ev: dict, app) -> None:
     covering entry via the MECE trim); a not-yet-ended one starts a tg-fast
     timer backdated to the event's start AND kicks off a d357 recording
     session (user request 2026-08-02), finalizing any previous one first.
-    Shared by plain Enter and ⌥↵ (user request 2026-07-29)."""
+    ⌥↵ on a calendar row; plain Enter only loads the text box (2026-11-05)."""
     now = view_now()
     is_past = ev["end_dt"] <= now
     cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
@@ -7292,9 +7292,15 @@ def _on_enter(event):
             input_buffer.text = _empty_gap_prefill(item)
             input_buffer.cursor_position = len(input_buffer.text)
             return
-        # Anything else is a raw gcal event dict (kind absent) — the
-        # convert-to-Toggl-entry path, shared with ⌥↵ (2026-07-29).
-        _convert_selected_event(item, event.app)
+        # Anything else is a raw gcal event dict (kind absent). Enter loads it
+        # for editing, like every other row; ⌥↵ is what runs it (JM
+        # 2026-11-05). A later Enter or ⌥↵ takes the typed path, which adds
+        # the viewed day itself.
+        STATE.event_sel = None
+        now = view_now()
+        input_buffer.text = (_event_to_did_command(item) if item["end_dt"] <= now
+                             else _event_to_tg_command(item, now))
+        input_buffer.cursor_position = len(input_buffer.text)
         return
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
@@ -7582,9 +7588,9 @@ def _(event):
         if item is None or sel_desc == rec_desc:
             return
     if isinstance(item, dict) and item.get("kind") is None and item.get("end_dt"):
-        # A raw calendar event: ⌥↵ = "did this meeting" — same conversion
-        # as plain Enter (an ended event did-fasts: Toggl entry + points in
-        # one shot; a live one starts a backdated timer). One gesture for
+        # A raw calendar event: ⌥↵ = "did this meeting" (an ended event
+        # did-fasts: Toggl entry + points in one shot; a live one starts a
+        # backdated timer and its d357 recording). One gesture for
         # "give me credit" whether the row is an entry or a meeting
         # (user request 2026-07-29).
         _convert_selected_event(item, event.app)
