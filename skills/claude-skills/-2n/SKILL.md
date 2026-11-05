@@ -30,16 +30,17 @@ No arguments. Opens in a cmux surface (replaces the ibx tab).
 
 ## Launch
 
-Open a new cmux surface and run the TUI:
+Open it with the shared launcher (cmux tab → new window in this Claude's own
+attached tmux session → exit 10):
 
 ```bash
-cmux new-surface --type terminal
-# parse surface:N and pane:N from output, then:
-cmux respawn-pane --surface surface:<N> --command "bash ~/i446-monorepo/tools/ibx/-2n_wrapper.sh"
-cmux focus-pane --pane pane:<N>
+~/.claude/skills/_lib/open-form.sh -2n "bash ~/i446-monorepo/tools/ibx/-2n_wrapper.sh"
 ```
 
-Then confirm: `-2n opened in a new cmux tab`
+- `OPENED …` → confirm: `-2n opened (<cmux tab|tmux window>)`
+- Exit 10 → this TUI has no non-interactive path and cannot run inside Claude's
+  Bash tool (no TTY). Say in one line that no visible terminal is reachable from
+  this session (no cmux, no attached tmux) and stop. Don't hand JM a command to type.
 
 ## TUI Implementation
 

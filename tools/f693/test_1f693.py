@@ -62,3 +62,26 @@ def test_dry_run_from_json_writes_nothing(tmp_path):
     assert "--- f693.md entry ---" in r.stdout
     after = m.F693_DOC.read_text() if m.F693_DOC.exists() else None
     assert before == after
+
+
+def _fake_open_form(tmp_path, monkeypatch, exit_code, out):
+    stub = tmp_path / "open-form.sh"
+    log = tmp_path / "argv"
+    stub.write_text(f'#!/bin/bash\nprintf "%s\\n" "$@" > {log}\necho "{out}"\nexit {exit_code}\n')
+    stub.chmod(0o755)
+    monkeypatch.setattr(m, "OPEN_FORM", stub)
+    return log
+
+
+def test_stoplight_tab_goes_through_open_form(tmp_path, monkeypatch):
+    log = _fake_open_form(tmp_path, monkeypatch, 0, "OPENED tmux cc-055349:f693-stoplight")
+    assert m.launch_stoplight_tab() == "cc opened: /1f693 stoplight (tmux cc-055349:f693-stoplight)"
+    name, cmd = log.read_text().splitlines()
+    assert name == "f693-stoplight"
+    assert "claude-tracked '/1f693 stoplight'" in cmd and not cmd.startswith("cc ")
+
+
+def test_stoplight_tab_no_surface_never_says_run(tmp_path, monkeypatch):
+    _fake_open_form(tmp_path, monkeypatch, 10, "NO_SURFACE")
+    msg = m.launch_stoplight_tab()
+    assert "run:" not in msg and "/1f693 stoplight" in msg

@@ -86,27 +86,20 @@ sheet is a week ahead/behind another.
 
 ## Launch
 
-The form is a full-screen prompt_toolkit TUI — open it in a new cmux tab
-(same pattern as `/0s` / `/1s`):
+The form is a full-screen prompt_toolkit TUI and needs its own terminal. Pass the
+optional week arg through (`M.W` like `7.4`, or any ISO date in the week).
+Open it with the shared launcher, which tries a cmux tab, then a new window in
+this Claude's own tmux session (only if a client is attached, e.g. the
+`cc-*` sessions on Ix), and otherwise exits 10:
 
-1. Open a new cmux surface:
-   ```bash
-   cmux new-surface --type terminal
-   ```
-   Parse the surface and pane refs from the output.
-2. Run the form in that pane (pass the optional week arg through if given —
-   either an `M.W` label like `7.4` or any ISO date in the week):
-   ```bash
-   cmux respawn-pane --surface surface:<N> --command "python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [M.W|YYYY-MM-DD]"
-   ```
-3. Focus it:
-   ```bash
-   cmux focus-pane --pane pane:<N>
-   ```
-4. Confirm: `xk887 opened in a new cmux tab — fill the form, ^S to save.`
+```bash
+~/.claude/skills/_lib/open-form.sh xk887 "python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [M.W|YYYY-MM-DD]"
+```
 
-If cmux is unavailable, tell the user to run it themselves:
-`! python3 ~/i446-monorepo/tools/xk887/xk887-survey.py`
+- `OPENED cmux …` / `OPENED tmux …` → confirm: `xk887 opened (<cmux tab|tmux window>) — fill the form, ^S to save.`
+- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
+  himself.** Ask the form's questions here in chat (keys = `field_key(sheet, key)` over `SHEETS` in `tools/xk887/xk887-survey.py`; one person per round), write his reply
+  to a temp file and run `python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [week] --from-json <file>`. Blanks never clobber.
 
 ## Keys (inside the form)
 

@@ -29,52 +29,28 @@ To restore the comms dive, drop the `INBOUND_SKIP_COMMS` env set in
 
 ## Launch
 
-Pick the first available path. **Do not skip detection** — invoking `cmux` blindly will fail on machines without it.
+Claude is the caller here, and its Bash tool has no TTY, so the TUI must land in
+a terminal JM can see. Order:
 
-### Path A — cmux available (`command -v cmux` succeeds)
+1. **Shared launcher** (cmux tab → new window in this Claude's own tmux session,
+   only if a client is attached, e.g. the `cc-*` sessions on Ix):
+   ```bash
+   ~/.claude/skills/_lib/open-form.sh inbound "bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh"
+   ```
+   `OPENED …` → confirm: `inbound opened (<cmux tab|tmux window>)`.
+2. **Exit 10, and this is a local macOS session** (`[[ "$OSTYPE" == darwin* && -z "$SSH_CONNECTION" ]]`):
+   open a Terminal.app tab.
+   ```bash
+   osascript -e 'tell application "Terminal" to do script "bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh"' \
+             -e 'tell application "Terminal" to activate'
+   ```
+   Confirm: `inbound opened in a new Terminal.app tab`.
+3. **Otherwise** say in one line that no visible terminal is reachable from this
+   session and stop. Never run the wrapper inline from Claude's Bash tool (no TTY),
+   and don't hand JM a command to type.
 
-```bash
-cmux new-surface --type terminal
-# parse surface:N and pane:N from output, then:
-cmux respawn-pane --surface surface:<N> --command "bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh"
-cmux focus-pane --pane pane:<N>
-```
-
-Confirm: `inbound opened in a new cmux tab`
-
-### Path B — macOS without cmux, local session (Straylight today)
-
-Open a new Terminal.app tab via osascript:
-
-```bash
-osascript -e 'tell application "Terminal" to do script "bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh"' \
-          -e 'tell application "Terminal" to activate'
-```
-
-Confirm: `inbound opened in a new Terminal.app tab`
-
-### Path C — remote SSH / no GUI (phone, Termius, any SSH session)
-
-Run inline in the current shell:
-
-```bash
-bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh
-```
-
-The wrapper handles Straylight delegation automatically. No special flags needed.
-
-### Detection (one-liner)
-
-```bash
-if command -v cmux &>/dev/null; then
-  # Path A — cmux flow
-elif [[ "$OSTYPE" == "darwin"* ]] && [[ -z "$SSH_CONNECTION" ]]; then
-  # Path B — Terminal.app
-else
-  # Path C — inline (phone SSH, Termius, remote session)
-  bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh
-fi
-```
+`--here` is for a human shell only: `bash ~/i446-monorepo/tools/ibx/inbound_wrapper.sh`
+runs inline, and the wrapper handles Straylight delegation itself.
 
 ## Daily reset (today-only focus)
 
