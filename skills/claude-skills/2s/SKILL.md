@@ -14,12 +14,19 @@ mechanical paste step of the monthly 2s review.
 Run the helper with the args verbatim and echo its one-line output:
 
 ```bash
-python3 ~/i446-monorepo/tools/2s/2s-fast.py [month] [--year YYYY] [--dry-run]
+python3 ~/i446-monorepo/tools/2s/2s-fast.py [month] [--year YYYY] [--dry-run] [--raw]
 ```
 
 `[month]` accepts `4`, `april`, `apr`, or `2026-04`; omitted → the **previous
 calendar month** (it's a month-end review). Year defaults to the current year.
 `--dry-run` prints the resolved rows + values without writing.
+`--raw` computes C (sd 0₦), D (com0), E (∀clr) and J (0₦/d) straight from the
+month's 0分 rows (E, F, Q; read-only via excel-http `/read_range`) instead of
+the `1分+1s` M.1 formulas, which pointed at wrong rows/columns for Apr, Jun,
+Jul, Aug, Sep and Oct 2026. Y (分/d) is recomputed from 0分 D only when the
+formula cell is blank/`#REF!` (Oct: `C43`'s `+#REF!` tail); a readable Y is
+kept because weekly C cells can hold manual adjustments (`C43`'s `-161`).
+Overridden cells are listed as `formula→raw` in the output.
 
 ## What it does
 

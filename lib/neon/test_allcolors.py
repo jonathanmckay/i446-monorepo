@@ -70,3 +70,14 @@ def test_habit_headers():
     assert not ac.is_habit_header("⎣∀clr")
     assert not ac.is_habit_header("N color")
     assert ac.is_habit_header("NVC\xa0+ e")
+
+
+def test_live_aware_now_mixes_with_naive_ledger_times():
+    """--live passes daytime.local_now() (tz-aware) while ledger times are
+    naive local. A done cell with no ledger trace (typed in Excel that day)
+    used to raise "can't compare offset-naive and offset-aware datetimes"
+    and the live AG stamp died (bug 2026-11-04)."""
+    import zoneinfo
+    now = dt.datetime.combine(D, dt.time(20, 5), zoneinfo.ZoneInfo("America/Los_Angeles"))
+    habits = [done("a", t(7)), done("typed-in-excel")]
+    assert ac.evaluate(D, CORE, habits, handicap=0, unknown=now) == t(20, 5)

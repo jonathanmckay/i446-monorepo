@@ -5,6 +5,8 @@ Mirrors gcal_client.py: returns a list of event dicts with start_dt, end_dt,
 title, calendar. Uses a file cache to avoid hammering the Agency server.
 """
 
+from __future__ import annotations
+
 import datetime as dt
 import json
 import os
@@ -215,3 +217,108 @@ def _normalize(raw_events: list[dict]) -> list[dict]:
             continue
     out.sort(key=lambda e: e["start_dt"])
     return out
+
+
+# ── Unread-inbox snapshot (2026-11-02, Dream v176) ───────────────────────────
+# Ix's cron (dream-intake) cannot reach Microsoft: no Agency CLI / work auth,
+# and the login keychain is locked to cron (MSAL -61). Every night the intake's
+# live outlook_inbox call burned its 30s timeout and Dream was blind to the
+# work inbox. Straylight's outlook-cache-daemon now also writes this snapshot
+# with the same Agency auth it already uses for the calendar, and pushes it
+# with the calendar files (the outlook-*.json rsync glob covers it). Readers
+# on Ix (dream-intake) only ever read the file.
+
+INBOX_WINDOW_HOURS = 48
+INBOX_PREVIEW_CHARS = 300
+
+
+def inbox_cache_path(day: dt.date) -> Path:
+    return CACHE_DIR / f"outlook-inbox-{day.isoformat()}.json"
+
+
+def _parse_mail_messages(raw: dict | None) -> list[dict] | None:
+    """Messages from an Agency SearchMessagesQueryParameters result.
+
+    The tool returns either a double-encoded payload (`{"rawResponse":
+    "<graph json>"}`, what ibx's outlook_agency sees) or a plain Graph body
+    (`{"value": [...]}` / a bare list), sometimes behind a status line.
+    Returns None when nothing parseable came back (a failure, not "zero
+    unread")."""
+    if not raw or not raw.get("content"):
+        return None
+    found = None
+    for item in raw["content"]:
+        text = item.get("text", "") or ""
+        brace = min((i for i in (text.find("{"), text.find("[")) if i != -1),
+                    default=-1)
+        if brace < 0:
+            continue
+        try:
+            data = json.loads(text[brace:])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(data, dict) and "rawResponse" in data:
+            inner = data["rawResponse"]
+            try:
+                data = json.loads(inner) if isinstance(inner, str) else inner
+            except (json.JSONDecodeError, TypeError):
+                continue
+        msgs = data if isinstance(data, list) else (data or {}).get("value")
+        if isinstance(msgs, list):
+            found = (found or []) + msgs
+    return found
+
+
+def _slim_message(msg: dict) -> dict:
+    addr = (msg.get("from") or {}).get("emailAddress") or {}
+    preview = " ".join((msg.get("bodyPreview") or "").split())
+    return {
+        "id": msg.get("id", ""),
+        "sender": addr.get("name") or addr.get("address") or "",
+        "sender_email": (addr.get("address") or "").lower(),
+        "subject": msg.get("subject") or "(no subject)",
+        "received": msg.get("receivedDateTime", ""),
+        "preview": preview[:INBOX_PREVIEW_CHARS],
+        "importance": msg.get("importance", "normal"),
+        "isRead": bool(msg.get("isRead", False)),
+        "conversationId": msg.get("conversationId", ""),
+    }
+
+
+def fetch_unread_inbox(hours: int = INBOX_WINDOW_HOURS,
+                       now: dt.datetime | None = None) -> dict:
+    """Fetch unread mail from the last `hours` and write the day's snapshot.
+
+    Raises on any failure WITHOUT touching the existing snapshot, so a flaky
+    fetch never replaces a good file with an empty one (an empty-but-valid
+    result does overwrite: zero unread is a real state)."""
+    if mcp is None or cache_only():
+        raise RuntimeError("inbox fetch only runs on the host with Agency auth")
+    now = now or dt.datetime.now(dt.timezone.utc)
+    cutoff = (now.astimezone(dt.timezone.utc) - dt.timedelta(hours=hours)
+              ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = (
+        "?$top=100"
+        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
+        "&$select=id,subject,from,receivedDateTime,bodyPreview,importance,"
+        "isRead,conversationId,parentFolderId"
+        "&$orderby=receivedDateTime desc"
+    )
+    raw = mcp.call_tool("mail", "SearchMessagesQueryParameters",
+                        {"queryParameters": query}, timeout=30)
+    msgs = _parse_mail_messages(raw)
+    if msgs is None:
+        raise RuntimeError("inbox fetch returned no parseable payload")
+    snap = {
+        "generated_at": now.astimezone(_tz()).isoformat(timespec="seconds"),
+        "window_hours": hours,
+        "source": "agency mail SearchMessagesQueryParameters (straylight)",
+        "count": len(msgs),
+        "messages": [_slim_message(m) for m in msgs],
+    }
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = inbox_cache_path(now.astimezone(_tz()).date())
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(snap, ensure_ascii=False, indent=1))
+    tmp.replace(path)
+    return snap

@@ -118,6 +118,11 @@ def plan(layout: dict, domain: str, goals: list[dict]) -> dict:
             {"col": "E", "value": _num(g.get("fen", 0))},
             {"col": "F", "value": _num(g.get("focus", 0))},
         ]
+        # A new goal starts at 0% done: blank last week's G ("% Done") on the
+        # row it lands on, unless G holds a formula (2026-10-31, Dream v174).
+        g_old = layout.get(header + 1 + i, {}).get("G", "")
+        if g_old != "" and not _is_formula(g_old):
+            rows[header + 1 + i].append({"col": "G", "value": "", "mode": "text"})
     for r in range(header + 1 + len(goals), stop):
         clears = [{"col": c, "value": "", "mode": "text"} for c in CLEAR_COLS
                   if layout.get(r, {}).get(c, "") != "" and not _is_formula(layout[r][c])]

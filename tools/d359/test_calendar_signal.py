@@ -109,3 +109,86 @@ def test_teams_upn_is_matched(tmp_path):
         "  teams_upn: jessicaallen@microsoft.com\n---\nbody\n")
     emap = M._build_email_map([f])
     assert emap.get("jessicaallen@microsoft.com") == "jessica-allen"
+
+
+# ── only meetings that have already ended count (2026-11-02) ────────────────
+
+from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+_PST = _tz(_td(hours=-8))
+_NOW = _dt(2026, 11, 2, 2, 36, tzinfo=_PST)
+
+
+def _ev(start, end):
+    return {"start": {"dateTime": start}, "end": {"dateTime": end}}
+
+
+def test_meeting_later_today_not_counted():
+    ev = _ev("2026-11-02T13:30:00-08:00", "2026-11-02T14:00:00-08:00")
+    assert M._event_contact_date(ev, _NOW) is None
+
+
+def test_meeting_in_progress_not_counted():
+    now = _dt(2026, 11, 2, 13, 45, tzinfo=_PST)
+    ev = _ev("2026-11-02T13:30:00-08:00", "2026-11-02T14:00:00-08:00")
+    assert M._event_contact_date(ev, now) is None
+
+
+def test_meeting_ended_today_counted():
+    now = _dt(2026, 11, 2, 14, 1, tzinfo=_PST)
+    ev = _ev("2026-11-02T13:30:00-08:00", "2026-11-02T14:00:00-08:00")
+    assert M._event_contact_date(ev, now) == _date(2026, 11, 2)
+
+
+def test_yesterday_meeting_counted_utc_input():
+    ev = _ev("2026-11-01T21:00:00Z", "2026-11-01T21:30:00Z")
+    assert M._event_contact_date(ev, _NOW) == _date(2026, 11, 1)
+
+
+def test_all_day_today_not_counted_until_tomorrow():
+    ev = {"start": {"date": "2026-11-02"}, "end": {"date": "2026-11-03"}}
+    assert M._event_contact_date(ev, _NOW) is None
+    ev = {"start": {"date": "2026-11-01"}, "end": {"date": "2026-11-02"}}
+    assert M._event_contact_date(ev, _NOW) == _date(2026, 11, 1)
+
+
+# ── v177 regressions: EL alias + no future stamps ───────────────────────────
+
+def test_el_is_eldon_es_is_elliot():
+    # 'EL:JM' = Eldon Lei, 'ES:JM' = Elliot Silvers (v177 mis-mapped EL).
+    imap = M._build_initials_map({"eldon-lei", "elliot-silvers"})
+    assert imap["el"] == "eldon-lei"
+    assert imap["es"] == "elliot-silvers"
+
+
+def test_el_es_survive_a_colliding_contact():
+    # A second 'el'/'es' contact must not make the 1:1 shorthands ambiguous.
+    imap = M._build_initials_map({"eldon-lei", "elliot-silvers",
+                                  "emma-lin", "eric-smith"})
+    assert imap["el"] == "eldon-lei"
+    assert imap["es"] == "elliot-silvers"
+
+
+def test_later_today_meeting_not_stamped(monkeypatch, tmp_path):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    past = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (now + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    items = [{"summary": "JA:JM 1:1", "start": {"dateTime": past}},
+             {"summary": "BL:JM 1:1", "start": {"dateTime": future}}]
+    seen = {}
+
+    class _Req:
+        def __init__(self, kw): seen.update(kw)
+        def execute(self): return {"items": items}
+
+    class _Svc:
+        def events(self): return self
+        def list(self, **kw): return _Req(kw)
+
+    monkeypatch.setattr(M, "_gcal_service", lambda: _Svc())
+    monkeypatch.setattr(M, "GCAL_CAL_IDS", ["x"])
+    out = M._fetch_calendar_signal(7, {"jessica-allen", "bei-lu"}, [])
+    assert "jessica-allen" in out
+    assert "bei-lu" not in out
+    assert seen["timeMax"] <= future

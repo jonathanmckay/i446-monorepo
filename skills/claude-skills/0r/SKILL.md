@@ -72,27 +72,31 @@ Create events on the **jbm** archive calendar — `calendarId: jonathan.b.mckay@
 
 ## Output 3: Build Order Actuals
 
-Write Toggl entries into the build order (`~/vault/g245/5e-1/build-order.md`) under each 地支 time block in the `## -1₲a` section.
+Write Toggl entries into the build order (`~/vault/g245/5e-1/build-order.md`) under each 地支 time block in the `## -1₲` section.
 
 ### 地支 Time Block Mapping
 
+JM's blocks are shifted one hour earlier than the classical 時辰 (classical 卯 = 05-07; here 卯 = 04-06, the 04:00 wake). Canonical source: `lib/blocks.py` `BLOCK_SCHEDULE`; `scripts/build-order-daemon.py` `BRANCH_HOURS` and `tools/tg/janus.py` `BLOCKS` agree. The build order's `## -1₲` section has one `- 卯` … `- 亥` header per block.
+
 | 地支 | Hours |
 |------|-------|
-| 卯 | 05:00-07:00 |
-| 辰 | 07:00-09:00 |
-| 巳 | 09:00-11:00 |
-| 午 | 11:00-13:00 |
-| 未 | 13:00-15:00 |
-| 申 | 15:00-17:00 |
-| 酉 | 17:00-19:00 |
-| 戌 | 19:00-21:00 |
-| 亥 | 21:00-23:00 |
+| 卯 | 04:00-06:00 |
+| 辰 | 06:00-08:00 |
+| 巳 | 08:00-10:00 |
+| 午 | 10:00-12:00 |
+| 未 | 12:00-14:00 |
+| 申 | 14:00-16:00 |
+| 酉 | 16:00-18:00 |
+| 戌 | 18:00-20:00 |
+| 亥 | 20:00-22:00 |
+
+子 (22-24), 丑 (00-02), 寅 (02-04) are sleep blocks with no build-order header. Like `build-order-daemon.py`'s branch lookup, clamp: an entry starting before 04:00 goes under 卯, one starting at 22:00 or later under 亥.
 
 ### Routing Rule
 
 Each Toggl entry is placed in the block where it **starts**. If an entry spans two blocks, it appears only once, in the starting block, with its full original time range.
 
-Skip 睡觉 entries (they start before 卯).
+Skip 睡觉 entries (sleep blocks have no header).
 
 ### Format
 
@@ -127,7 +131,7 @@ This runs after Output 3 so the archive includes the actuals.
 - Check if `~/vault/i156/daily/YYYY/MM-DD.md` already exists
 - If it does, skip unless `--force` flag is passed
 - This makes backfill safe to re-run
-- **Build order actuals**: if any `actual:` blocks already exist in the -1₲a section, warn the user ("Actuals already present, clearing and rewriting") then remove all existing `actual:` sub-trees before writing new ones
+- **Build order actuals**: if any `actual:` blocks already exist in the `## -1₲` section, warn the user ("Actuals already present, clearing and rewriting") then remove all existing `actual:` sub-trees before writing new ones
 - **Google Calendar**: use `allowDuplicates: false` on create-events to avoid duplicate events on rerun
 
 ## Backfill Mode
@@ -149,4 +153,4 @@ This runs after Output 3 so the archive includes the actuals.
 - Google Calendar is the "m5c7"-authed account (its primary is the m5x2 Cal). The archive (Output 2) writes to **jbm = `jonathan.b.mckay@gmail.com`**, which the m5c7 account owns — pass that calendarId explicitly; never write the archive to primary.
 - Toggl CLI works locally on both machines
 - Create `~/vault/i156/daily/YYYY/` directory if it doesn't exist
-- Build order is a single living document; actuals are written for the current day's -1₲a blocks
+- Build order is a single living document; actuals are written for the current day's `## -1₲` blocks

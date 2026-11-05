@@ -16,6 +16,8 @@ what the caller MEANT rather than by what the cell's value did:
   text        any non-numeric append/write (hcbi food, review prose)
   observe     reconcile / baseline / excel-edit        → an observed cell value
                                                          with no request behind it
+  (adopt)     hand edit adopted from an observation    → set / text, source
+              (lib/neon/adopt.py, nightly)                 "hand"; no points
 
 Why not "points = after_value - before_value" (the obvious primitive): most 0分
 domain cells are `='0n'!BF<row> + literals` — their value moves whenever a 0n
@@ -202,7 +204,10 @@ def classify(entry: dict) -> Optional[dict]:
                       if after_v is not None and before_v is not None else None)
         else:
             kind, points = "text", None
-    elif jk == "write":
+    elif jk in ("write", "adopt"):
+        # adopt = a hand-typed Excel edit taken into the ledger by
+        # lib/neon/adopt.py (source "hand"): it carries Excel's content and is
+        # a write for every strict-mode purpose, never a points credit.
         if src.startswith(_LOCK_SRC):
             kind, points = "lock", None
         elif sval.startswith("=") or _LITERAL_RE.match(sval) or after_v is not None:
@@ -405,12 +410,27 @@ def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None,
     invisible here by design."""
     own = conn is None
     c = conn or connect()
-    obs = ("AND (e2.kind != 'observe' OR e2.jsonl_kind = 'baseline')" if writes_only else "")
+    # Hand-edit adoptions (lib/neon/adopt.py) are writes in the ledger-as-source
+    # view, but add nothing to the Excel view (the observation they copy is
+    # already there) and are recorded after the fact with an in-place ts, so
+    # the newest is chosen by (ts, id) there, not by insertion id.
+    if writes_only:
+        obs = "AND (e2.kind != 'observe' OR e2.jsonl_kind = 'baseline')"
+        newest = """(SELECT e3.id FROM events e3 LEFT JOIN row_dates rd3
+                       ON rd3.sheet = e3.sheet AND rd3.row = e3.row
+                     WHERE e3.sheet = e2.sheet AND e3.col = e2.col
+                       AND COALESCE(e3.date, rd3.date) = COALESCE(e2.date, rd.date)
+                       AND e3.kind IN ('set','observe','text','lock','credit','credit_ref')
+                       AND (e3.kind != 'observe' OR e3.jsonl_kind = 'baseline')
+                     ORDER BY e3.ts DESC, e3.id DESC LIMIT 1)"""
+    else:
+        obs = "AND e2.jsonl_kind != 'adopt'"
+        newest = "MAX(e2.id)"
     try:
         rows = c.execute(
             f"""SELECT e.col, e.field, e.kind, e.ts, e.after_value, e.value, e.after_formula
                  FROM events e
-                 JOIN (SELECT e2.col, MAX(e2.id) AS mid FROM events e2
+                 JOIN (SELECT e2.col, {newest} AS mid FROM events e2
                         LEFT JOIN row_dates rd ON rd.sheet = e2.sheet AND rd.row = e2.row
                         WHERE e2.sheet=? AND COALESCE(e2.date, rd.date) = ?
                           AND e2.kind IN ('set','observe','text','lock','credit','credit_ref')

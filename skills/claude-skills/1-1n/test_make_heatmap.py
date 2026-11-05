@@ -78,3 +78,11 @@ def test_classify_device_rules():
     assert _cls(mh, host='straylight-refit', via='janus', tty=True, net='highgarden') == D
     assert _cls(mh, host='straylight-refit', via='janus', tty=True, net='other') is None
     assert _cls(mh, host='straylight-refit', via='janus') is None               # no net recorded
+
+
+def test_ttyless_prompt_is_no_device_signal():
+    # cron's hourly `claude -p` and Dream log prompts on ix with tty False
+    # (scripts/ai-timing-log.sh, 2026-11-03); they must not paint 🖥️ desk.
+    import make_heatmap as mh
+    assert _cls(mh, host='ix', metric='prompt', via='claude', tty=False) is None
+    assert _cls(mh, host='ix', metric='prompt', via='claude', tty=True) == mh.DESK

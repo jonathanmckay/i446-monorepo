@@ -53,7 +53,8 @@ def test_last_section_stops_at_totals_row():
 def test_goal_writes_and_numbers():
     p = s.plan(LIVE, "xk87", [{"text": " Plan outing ", "fen": "20", "focus": 40.0}])
     assert p["rows"][35] == [{"col": "D", "value": "Plan outing", "mode": "text"},
-                             {"col": "E", "value": 20}, {"col": "F", "value": 40}]
+                             {"col": "E", "value": 20}, {"col": "F", "value": 40},
+                             {"col": "G", "value": "", "mode": "text"}]
 
 
 def test_too_many_goals_refused():
@@ -79,3 +80,14 @@ def test_apply_one_batch_write_per_row(monkeypatch):
     p = s.plan(LIVE, "s897", [{"text": "Dinner", "fen": 20, "focus": 40}])
     assert s.apply(p, "s897") == []
     assert calls == [("1g", 42, "1g s897", True), ("1g", 43, "1g s897", True)]
+
+
+def test_new_goal_clears_stale_percent_done():
+    # row 35 carries last week's G=0 ("% Done") and row 42 G=1; a new goal
+    # must not inherit it. A row whose G is already blank gets no G write.
+    lay = _layout({41: ("s897", "", "", "", ""), 42: ("", "old", "20", "40", "1"),
+                   43: ("", "old2", "15", "30", ""),
+                   46: ("", "", "", "=SUM(F42:F43)", "=I46/F46")})
+    p = s.plan(lay, "s897", [{"text": "A", "fen": 1, "focus": 2}, {"text": "B", "fen": 1, "focus": 2}])
+    assert {"col": "G", "value": "", "mode": "text"} in p["rows"][42]
+    assert [it["col"] for it in p["rows"][43]] == ["D", "E", "F"]

@@ -57,3 +57,10 @@ def test_other_hci_excludes_habit_cards_and_defers():
         assert not m.is_other_hci({"content": c, "labels": ["hci"]})
     assert not m.is_other_hci({"content": "deferred: nails", "labels": ["hci", "posthoc"]})
     assert not m.is_other_hci({"content": "gym", "labels": ["hcb"]})
+
+
+def test_bare_future_month_means_last_year():
+    jan = date(2027, 1, 26)
+    assert m.parse_month("12", jan) == (2026, 12)
+    assert m.parse_month("dec", jan) == (2026, 12)
+    assert m.parse_month("1", jan) == (2027, 1)

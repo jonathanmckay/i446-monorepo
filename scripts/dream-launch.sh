@@ -35,6 +35,7 @@ done
 # --- Date strings ---
 DATE_ISO=$(date '+%Y-%m-%d')
 DATE_DOT=$(date '+%Y.%m.%d')
+WEEKDAY=$(date '+%A')  # prompt line "Today's date: {{DATE}} ({{WEEKDAY}})"; unrendered through v172
 
 # --- Auto-increment version ---
 # Find latest run for today, extract version number, increment
@@ -83,7 +84,10 @@ if [[ -f "$LOCK" ]]; then
   fi
 fi
 echo $$ > "$LOCK"
-trap 'rm -f "$LOCK"' EXIT
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dream-watchdog-lib.sh"
+# EXIT trap also reaps a dispatcher keepalive (RUN/tmp/keepalive.sh) that would
+# otherwise outlive claude: v171's ran orphaned for 22h, one autopush per beat.
+trap 'dream_reap_keepalive "$RUN_DIR"; rm -f "$LOCK"' EXIT
 
 # --- Create run dir ---
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/staged" "$RUN_DIR/drafts" "$RUN_DIR/approvals" "$RUN_DIR/branches" "$RUN_DIR/tmp"
@@ -106,27 +110,17 @@ if [[ ! -f "$BACKFILL_STATE" && -f "$_OLD_BACKFILL_STATE" ]]; then
   [[ "$_OLD_VAL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && echo "$_OLD_VAL" > "$BACKFILL_STATE"
 fi
 BACKFILL_STOP="2026-03-01"  # stop when we reach March 1
-if [[ -f "$BACKFILL_STATE" ]]; then
-  BACKFILL_DATE=$(cat "$BACKFILL_STATE")
-  # Validate YYYY-MM-DD format; reset if corrupted
-  if ! [[ "$BACKFILL_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: corrupted backfill pointer '$BACKFILL_DATE', resetting" >&2
-    BACKFILL_DATE=$(date -v-1d '+%Y-%m-%d')
-    echo "$BACKFILL_DATE" > "$BACKFILL_STATE"
-  fi
-else
-  # Start from yesterday
-  BACKFILL_DATE=$(date -v-1d '+%Y-%m-%d')
-fi
-# Check if backfill is complete
-if [[ "$BACKFILL_DATE" < "$BACKFILL_STOP" ]]; then
-  BACKFILL_DATE=""
+# Pointer logic lives in dream-backfill-pointer.sh (tested by
+# test_dream_backfill_pointer.py). BACKFILL_DAYS_PER_RUN (env, default 1) sets
+# how many days back each run covers.
+read -r BACKFILL_DATE BACKFILL_OLDEST < <("$HOME/i446-monorepo/scripts/dream-backfill-pointer.sh" "$BACKFILL_STATE" "$BACKFILL_STOP"; echo) || true
+BACKFILL_DATE="${BACKFILL_DATE:-}"; BACKFILL_OLDEST="${BACKFILL_OLDEST:-}"
+if [[ -z "$BACKFILL_DATE" ]]; then
   BACKFILL_MSG="Backfill complete (reached $BACKFILL_STOP)."
-else
+elif [[ "$BACKFILL_OLDEST" == "$BACKFILL_DATE" ]]; then
   BACKFILL_MSG="Backfill date: $BACKFILL_DATE. Also scan AI transcripts from this date for loose threads."
-  # Advance pointer one day back for next run
-  NEXT_BACKFILL=$(date -j -f '%Y-%m-%d' "$BACKFILL_DATE" -v-1d '+%Y-%m-%d')
-  echo "$NEXT_BACKFILL" > "$BACKFILL_STATE"
+else
+  BACKFILL_MSG="Backfill dates: $BACKFILL_DATE back through $BACKFILL_OLDEST. Also scan AI transcripts from these dates for loose threads."
 fi
 
 # --- Template the prompt ---
@@ -136,6 +130,7 @@ sed \
   -e "s|{{RUN_DIR}}|$RUN_DIR|g" \
   -e "s|{{DATE}}|$DATE_ISO|g" \
   -e "s|{{DATE_DOT}}|$DATE_DOT|g" \
+  -e "s|{{WEEKDAY}}|$WEEKDAY|g" \
   -e "s|{{COMPUTE_FLOOR}}|$FLOOR|g" \
   -e "s|{{BUDGET_USD}}|$BUDGET|g" \
   -e "s|{{BACKFILL_DATE}}|$BACKFILL_DATE|g" \
@@ -198,18 +193,28 @@ if [[ "$KEYCHAIN_OK" == "0" ]]; then
 fi
 
 # --- Run claude with activity watchdog ---
-# Watchdog checks every 3 min: if no new file writes in RUN_DIR for 15 min,
-# kill claude (stalled). Launcher then checks what pass completed and retries
-# the remaining pass with a fresh session.
+# Watchdog checks every 3 min: if no file anywhere in RUN_DIR (logs and
+# logs/heartbeat included) has been written for STALL_THRESHOLD, kill claude
+# (stalled). Launcher then checks what pass completed and retries the
+# remaining pass with a fresh session. See dream-watchdog-lib.sh for the
+# 2026-10-26 first-match-not-newest bug that killed v166-v168.
 cd "$HOME/vault"
-STALL_THRESHOLD=900  # 15 min with no new file or log output = stalled
+STALL_THRESHOLD=1500  # 25 min with no write anywhere in RUN_DIR = stalled (subagents run 20+ min silently)
 WATCHDOG_INTERVAL=180  # check every 3 min
 DEADLINE=$(($(date +%s) + 10800))  # hard stop at 3h regardless
+# Print mode stops background subagents 10 min after the dispatcher's last turn
+# ("Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely"). That is
+# what killed v171: the dispatcher ended its turn with Pass-2 subagents still
+# running. Wait indefinitely; DEADLINE, the stall watchdog and --max-budget-usd
+# still bound the run.
+export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
+CLAUDE_START_UTC=""  # set at the first claude start; opens the Todoist audit window
 
 _run_claude() {
   local prompt_file="$1"
   local label="$2"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting claude ($label)" >> "$LOG"
+  [[ -n "$CLAUDE_START_UTC" ]] || CLAUDE_START_UTC=$(date -u '+%Y-%m-%dT%H:%M:%S')
 
   caffeinate -s "$CLAUDE" \
     --print \
@@ -230,36 +235,37 @@ _run_claude() {
     # Hard deadline check
     if [[ $(date +%s) -ge $DEADLINE ]]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] DEADLINE reached, killing claude ($label)" >> "$LOG"
-      kill "$CLAUDE_PID" 2>/dev/null; sleep 2; kill -9 "$CLAUDE_PID" 2>/dev/null
+      dream_kill_tree "$CLAUDE_PID"
+      dream_reap_keepalive "$RUN_DIR"
       return 124
     fi
 
-    # Activity check: any file in RUN_DIR modified in last STALL_THRESHOLD seconds?
-    NEWEST=$(find "$RUN_DIR" -type f -not -name "*.log" -newer "$RUN_DIR/PROMPT.md" -print -quit 2>/dev/null)
-    if [[ -z "$NEWEST" ]]; then
-      # No files newer than PROMPT.md at all — check log growth instead
-      NEWEST="$LOG"
-    fi
-    FILE_AGE=$(( $(date +%s) - $(stat -f %m "$NEWEST" 2>/dev/null || echo 0) ))
+    # Activity check: newest write anywhere in RUN_DIR (max mtime, not first match)
+    FILE_AGE=$(dream_activity_age "$RUN_DIR" "$RUN_DIR/PROMPT.md")
     if [[ $FILE_AGE -gt $STALL_THRESHOLD ]]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] STALL detected ($label): no activity for ${FILE_AGE}s, killing" >> "$LOG"
-      kill "$CLAUDE_PID" 2>/dev/null; sleep 2; kill -9 "$CLAUDE_PID" 2>/dev/null
+      dream_kill_tree "$CLAUDE_PID"
+      dream_reap_keepalive "$RUN_DIR"
       return 1
     fi
   done
-  wait "$CLAUDE_PID"
-  return $?
+  local rc=0
+  wait "$CLAUDE_PID" || rc=$?
+  dream_reap_keepalive "$RUN_DIR"
+  return $rc
 }
 
 # --- Main run ---
-_run_claude "$RUN_DIR/PROMPT.md" "full-run"
-EXIT_CODE=$?
+# `|| EXIT_CODE=$?` is load-bearing: under set -e a bare non-zero return here
+# aborted the launcher, so a stall never reached pass3-retry, READY or email.
+EXIT_CODE=0
+_run_claude "$RUN_DIR/PROMPT.md" "full-run" || EXIT_CODE=$?
 
 # --- If stalled, check what's missing and retry the remaining pass ---
 if [[ $EXIT_CODE -ne 0 && $(date +%s) -lt $DEADLINE ]]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Checking for incomplete passes..." >> "$LOG"
 
-  HAS_DRAFTS=$(ls "$RUN_DIR/drafts/"*.md 2>/dev/null | wc -l)
+  HAS_DRAFTS=$( (ls "$RUN_DIR/drafts/"*.md 2>/dev/null || true) | wc -l | tr -d ' ')
   HAS_BRIEF=$(test -f "$RUN_DIR/morning-brief.md" && echo 1 || echo 0)
 
   if [[ $HAS_DRAFTS -gt 0 && $HAS_BRIEF -eq 0 ]]; then
@@ -278,8 +284,8 @@ Read $RUN_DIR/PROMPT.md for the Pass 3 instructions, then:
 5. Write cards.json, manifest.json, staged/changelog.md
 6. Write READY marker
 PASS3EOF
-    _run_claude "$PASS3_PROMPT" "pass3-retry"
-    EXIT_CODE=$?
+    EXIT_CODE=0
+    _run_claude "$PASS3_PROMPT" "pass3-retry" || EXIT_CODE=$?
   fi
 fi
 
@@ -312,8 +318,8 @@ fi
 AUDIT_SCRIPT="$HOME/i446-monorepo/scripts/dream-audit-todoist.py"
 if [[ -f "$AUDIT_SCRIPT" ]]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running Todoist mutation audit..." >> "$LOG"
-  python3 "$AUDIT_SCRIPT" --run-dir "$RUN_DIR" --since "$RUN_START_UTC" >> "$LOG" 2>&1
-  AUDIT_RC=$?
+  AUDIT_RC=0
+  python3 "$AUDIT_SCRIPT" --run-dir "$RUN_DIR" --since "${CLAUDE_START_UTC:-$RUN_START_UTC}" >> "$LOG" 2>&1 || AUDIT_RC=$?
   if [[ $AUDIT_RC -eq 2 ]]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ MUTATION BUDGET EXCEEDED — alert prepended to brief" >> "$LOG"
   elif [[ $AUDIT_RC -ne 0 ]]; then
