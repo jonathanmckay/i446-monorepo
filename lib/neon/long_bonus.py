@@ -1,4 +1,4 @@
-"""Long-session bonus: a day's o314 minutes earn a weekly 长o314 bonus.
+"""Long-session bonus: a day's o314 or 冥想 minutes earn a weekly 长 bonus.
 
 JM 2026-11-03: o314 is 1分/min (the 0n sheet formula already credits that).
 When the DAY's o314 total reaches 30 min, every one of the day's minutes
@@ -17,6 +17,7 @@ import math
 # 0n habit → (weekly 1n+ habit header, threshold minutes, 分 per minute)
 LONG_BONUS: dict[str, tuple[str, int, float]] = {
     "o314": ("长o314", 30, 0.5),
+    "冥想": ("长冥想", 30, 0.5),
 }
 
 

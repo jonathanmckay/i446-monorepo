@@ -39,7 +39,7 @@ def test_bare_completion_sets_day_total_session_adds():
     assert df._adds_0n(_w(time_value=20))                      # typed session → add
     assert df._adds_0n(_w(time_range=("0715", "0824")))       # janus range → add
     assert df._adds_0n(_w("hcmr", time_value=10))
-    assert not df._adds_0n(_w("冥想", time_value=10))          # other habits unchanged
+    assert not df._adds_0n(_w("其他人", time_value=10))        # other habits unchanged
 
 
 def test_crossing_30_credits_whole_day_and_closes_weekly_card():
@@ -70,8 +70,22 @@ def test_resend_or_downward_correction_credits_nothing():
 
 
 def test_other_habits_never_get_the_bonus():
-    w = _w("冥想")
+    w = _w("其他人")
     assert df._long_bonus_results([w], _echo("", "60"), {}) == []
+
+
+def test_meditation_day_total_earns_the_long_bonus():
+    [r] = df._long_bonus_results([_w("冥想")], _echo("28", "45"), {})
+    assert r.item.name == "长冥想" and r.variable_value == 22.5
+
+
+def test_meditation_sessions_add_instead_of_overwriting():
+    assert df._adds_0n(_w("冥想", time_range=("2001", "2018")))
+    assert not df._adds_0n(_w("冥想"))                         # bare close: Toggl day total
+
+
+def test_long_meditation_routes_as_meditation():
+    assert df.LONG_TO_BASE_0N["长冥想"] == "冥想"
 
 
 @pytest.mark.parametrize("text", ["long o314", "长o314"])

@@ -194,11 +194,14 @@ ZERO_N_ALIASES: dict[str, str] = {"hcmr": "o314"}
 # and ADDS to it. (Before this an hcmr completion overwrote AQ with hcmr's
 # own minutes and a second session overwrote the first.)
 O314_FAMILY = {"o314", "hcmr"}
+# 冥想's AR works the same way (JM 2026-11-06): sessions of 10, 18 and 17 left
+# AR at 17, and the day's 45m never reached the 30m 长冥想 bonus.
+DAY_TOTAL_0N = O314_FAMILY | {"冥想"}
 # A long-session weekly habit is earned from its base 0n habit's day total
 # (JM 2026-11-03): "/did long o314" is "/did o314", and the 长o314 bonus
 # follows from AQ's before/after change (_long_bonus_results), so the two
 # paths can never credit the same minutes twice.
-LONG_TO_BASE_0N: dict[str, str] = {"长o314": "o314"}
+LONG_TO_BASE_0N: dict[str, str] = {"长o314": "o314", "长冥想": "冥想"}
 
 
 def _adds_0n(w) -> bool:
@@ -206,7 +209,7 @@ def _adds_0n(w) -> bool:
     name = w.item.name
     if name in CUMULATIVE_0N:
         return True
-    return (name.lower() in O314_FAMILY
+    return (name.lower() in DAY_TOTAL_0N
             and (w.item.time_range is not None or w.item.time_value is not None))
 
 

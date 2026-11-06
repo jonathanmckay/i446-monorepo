@@ -31,5 +31,13 @@ def test_correction_downward_is_negative():
 
 
 def test_other_habits_have_no_bonus():
-    assert lb.bonus_delta("冥想", "", "60") is None
+    assert lb.bonus_delta("其他人", "", "60") is None
     assert lb.weekly_header("o314") == "长o314"
+
+
+def test_meditation_sessions_cross_the_threshold_as_a_day_total():
+    # 11/4: 18m, 10m, 17m. The third session takes the day to 45m.
+    assert lb.bonus_delta("冥想", "", "18") is None
+    assert lb.bonus_delta("冥想", "18", "28") is None
+    assert lb.bonus_delta("冥想", "28", "45") == (45, 22.5)
+    assert lb.weekly_header("冥想") == "长冥想"

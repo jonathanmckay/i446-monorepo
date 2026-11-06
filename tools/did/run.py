@@ -942,9 +942,9 @@ def run_defer(query: str, defer_date: str, claimed_points: int) -> int:
 # a day total and its 30m 长o314 bonus is computed from AQ's before/after
 # change there (lib/neon/long_bonus.py). run.py's own run_0n/apply_long_bonus
 # would write the cell and miss or double the bonus, so hand the item over.
-# hiit's AE is a day total too: run_0n would add to it.
+# hiit's AE is a day total too: run_0n would add to it. 冥想 follows o314.
 # 0t/0l: did-fast spawns allcolors --live, which stamps N color (0n!AF).
-VIA_DID_FAST = {"0t", "0l", "o314", "hcmr", "long-o314", "长o314", "hiit"}
+VIA_DID_FAST = {"0t", "0l", "o314", "hcmr", "long-o314", "长o314", "冥想", "长冥想", "hiit"}
 DID_FAST = Path(__file__).resolve().parent / "did-fast.py"
 
 
