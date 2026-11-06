@@ -87,9 +87,84 @@ def test_outlook_calendar_reads_cache(cache):
     assert out["data"]["events"][0]["day"] == "2026-11-02"
 
 
-def test_outlook_calendar_without_today_file_is_stale(cache):
+def _no_gcal(today):
+    raise RuntimeError("offline")
+
+
+def test_outlook_calendar_without_today_file_is_stale(cache, monkeypatch):
+    monkeypatch.setattr(di, "_gcal_import_events", _no_gcal)
     (cache / "outlook-2026-11-01.json").write_text("[]")
-    assert di.run_sources(["outlook_calendar"])["outlook_calendar"]["status"] == "stale"
+    out = di.run_sources(["outlook_calendar"])["outlook_calendar"]
+    assert out["status"] == "stale"
+    assert out["data"]["gcal_import_error"] == "RuntimeError: offline"
+
+
+# v180: stale/missing cache -> MSFT (Slow Sync) Google import calendar.
+IMPORT_EV = {"day": "2026-11-02", "subject": "JA: JM 1:1",
+             "start": "2026-11-02T09:30:00-08:00", "end": "2026-11-02T10:00:00-08:00",
+             "tz": "America/Los_Angeles", "all_day": False}
+
+
+def test_outlook_calendar_stale_cache_uses_import_calendar(cache, monkeypatch):
+    monkeypatch.setattr(di, "_gcal_import_events", lambda today: [IMPORT_EV])
+    (cache / "outlook-2026-11-01.json").write_text("[]")
+    out = di.run_sources(["outlook_calendar"])["outlook_calendar"]
+    assert out["status"] == "ok"
+    d = out["data"]
+    assert d["via"] == "gcal_import" and d["cache_status"] == "stale"
+    assert d["calendar_id"] == "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com"
+    assert d["events"] == [IMPORT_EV]
+
+
+def test_outlook_calendar_missing_cache_uses_import_calendar(cache, monkeypatch):
+    monkeypatch.setattr(di, "_gcal_import_events", lambda today: [IMPORT_EV])
+    out = di.run_sources(["outlook_calendar"])["outlook_calendar"]
+    assert out["status"] == "ok" and out["data"]["cache_status"] == "missing"
+
+
+def test_outlook_calendar_fresh_cache_skips_import_calendar(cache, monkeypatch):
+    monkeypatch.setattr(di, "_gcal_import_events", _no_gcal)
+    (cache / "outlook-2026-11-02.json").write_text("[]")
+    out = di.run_sources(["outlook_calendar"])["outlook_calendar"]
+    assert out["status"] == "ok" and out["data"]["via"] == "janus_cache"
+
+
+class _FakeCal:
+    def __init__(self, items):
+        self.items, self.kw = items, None
+
+    def events(self):
+        return self
+
+    def list(self, **kw):
+        self.kw = kw
+        return self
+
+    def execute(self):
+        return {"items": self.items}
+
+
+def test_gcal_import_events_maps_and_windows():
+    svc = _FakeCal([
+        {"summary": "Daily Scrum", "start": {"dateTime": "2026-11-06T08:35:00-08:00",
+                                             "timeZone": "America/Los_Angeles"},
+         "end": {"dateTime": "2026-11-06T08:50:00-08:00"}},
+        {"summary": "Schnak | OOF", "start": {"date": "2026-11-06"}, "end": {"date": "2026-11-07"}},
+        {"summary": "x", "status": "cancelled", "start": {"date": "2026-11-06"}, "end": {}},
+    ])
+    ev = di._gcal_import_events(dt.date(2026, 11, 6), service=svc)
+    assert [e["subject"] for e in ev] == ["Daily Scrum", "Schnak | OOF"]
+    assert ev[0]["day"] == "2026-11-06" and ev[1]["all_day"] is True
+    assert svc.kw["calendarId"] == di.MSFT_IMPORT_CAL
+    assert svc.kw["timeMin"].startswith("2026-11-05T00:00:00")
+    assert svc.kw["timeMax"].startswith("2026-11-08T00:00:00")
+
+
+def test_conflicts_under_z_old_are_excluded(tmp_path):
+    v = tmp_path / "vault"
+    paths = [str(v / "z_old/a.sync-conflict-1.md"), str(v / "z_old/d/b.sync-conflict-2.md"),
+             str(v / "g245/c.sync-conflict-3.md"), str(v / "z_older/d.sync-conflict-4.md")]
+    assert di._live_conflicts(paths, v) == paths[2:]
 
 
 # ── gmail_inbox: every account, Promotions excluded, uncapped count ────────
