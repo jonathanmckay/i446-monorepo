@@ -4971,7 +4971,7 @@ def main():
                 entry["credited"] = credited
         if r.step == "1n" and r.col_letter:
             entry["col_letter"] = r.col_letter
-            entry["week_row"] = week_row_by_col.get(r.col_letter, week_row)
+            entry["week_row"] = week_row_by_col.get(r.col_letter)  # failed batch: no row (b073b48e)
             entry["fen_col"] = r.fen_col
             if r.col_letter in filled_prev_week:
                 entry["filled_prev_week"] = filled_prev_week[r.col_letter]
