@@ -5842,6 +5842,31 @@ def _norm_done_name(s: str) -> str:
     return " ".join(_ANNOT_RE.sub(" ", s).split()).lower()
 
 
+def _row_0n_minutes(name: str, minutes: int, entry_ids=None) -> int:
+    """A row's share of the day's 0n cell. The cell covers every same-name
+    session, so a row keeps its own minutes unless the cell is short of the
+    day's total; then earlier sessions take theirs first. No ids: the cell caps
+    the row, as before (bug 2026-11-04: an 80m hiit with 24 logged showed [160]).
+    A 22m hiit with 17 logged from the morning showed that morning's [34]."""
+    logged = _logged_0n_minutes(name)
+    if logged is None:
+        return minutes
+    if not entry_ids:
+        return min(minutes, logged)
+    key = _norm_done_name(name)
+    rows = sorted((e for e in STATE.entries if _norm_done_name(e.get("desc") or "") == key),
+                  key=lambda e: e["start_dt"])
+    mins = [int((e["end_dt"] - e["start_dt"]).total_seconds() // 60) for e in rows]
+    if logged >= sum(mins) - 2:      # Toggl's seconds round differently than the cell
+        return minutes
+    left = logged
+    for e, m in zip(rows, mins):
+        if e.get("id") in entry_ids:
+            return max(0, min(minutes, left))
+        left -= m
+    return min(minutes, logged)
+
+
 def _logged_0n_minutes(name: str) -> float | None:
     """Today's 0n cell value for habit `name` from the habit strip's read of
     the row (STATE.habits_today); None when the strip hasn't loaded it."""
@@ -5852,7 +5877,8 @@ def _logged_0n_minutes(name: str) -> float | None:
     return None
 
 
-def _points_recorded_today(desc: str, minutes: int | None = None) -> tuple[bool, int]:
+def _points_recorded_today(desc: str, minutes: int | None = None,
+                           entry_ids=None) -> tuple[bool, int]:
     """(recorded, 分) for a desc completed TODAY, from completed-today.json —
     did-fast's own idempotency record. Only meaningful for today's view:
     past days keep no completion record, so callers must treat (False, 0)
@@ -5894,10 +5920,7 @@ def _points_recorded_today(desc: str, minutes: int | None = None) -> tuple[bool,
                         # Priced at what the 0n cell holds when that is less
                         # than the entry (bug 2026-11-04: an 80m hiit entry
                         # with 24 logged showed [160]; Neon credited 48).
-                        logged = _logged_0n_minutes(n)
-                        if logged is not None:
-                            minutes = min(minutes, logged)
-                        rp = zero_n_points(n, minutes)
+                        rp = zero_n_points(n, _row_0n_minutes(n, minutes, entry_ids))
                         if rp is not None:
                             return True, rp
                     hp = zero_n_done_points(n)
@@ -6084,8 +6107,7 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
         try:
             from neon.rates import zero_n_points
             nm = _norm_done_name(raw_desc) or raw_desc
-            logged = _logged_0n_minutes(nm)
-            sheet = zero_n_points(nm, min(dur_min, logged) if logged is not None else dur_min)
+            sheet = zero_n_points(nm, _row_0n_minutes(nm, dur_min, entry_ids))
         except Exception:
             sheet = None
         if sheet:
@@ -6094,7 +6116,7 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
         return True, rec
     if STATE.day_offset != 0:
         return False, 0
-    recorded, pts = _points_recorded_today(raw_desc, dur_min)
+    recorded, pts = _points_recorded_today(raw_desc, dur_min, entry_ids)
     if recorded and not _holds_done_claim(raw_desc, entry_ids):
         recorded, pts = False, 0
     adj = sum(int(v) for k, v in _points_adj_today().items()

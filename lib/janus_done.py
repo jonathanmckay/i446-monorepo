@@ -201,7 +201,8 @@ def did_points(result: dict) -> int:
         # formula, so did-fast reports no 0分 points for it; price the
         # minutes it wrote (bug 2026-11-03: a 69m o314 showed [0]).
         from neon.rates import zero_n_points
-        pts += zero_n_points(result.get("name") or "", result.get("value") or 0) or 0
+        minutes = result.get("session_value", result.get("value")) or 0
+        pts += zero_n_points(result.get("name") or "", minutes) or 0
     if not pts and result.get("variable_1n"):
         pts = result.get("variable_value") or 0
     return int(math.floor(pts + 0.5))   # half points (0.5/m bonuses) round up

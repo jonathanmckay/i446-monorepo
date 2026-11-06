@@ -1034,7 +1034,11 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
             if not r["logged"] and dtd_entry.get(_k) == str(e["id"]) and not e["running"]:
                 r["logged"] = True
                 r["done_in"] = "dtd"
-                logged_pts.setdefault(str(e["id"]), {"points": dtd_done[_k]})
+                # A per-minute habit's row is worth its own minutes, not the
+                # flat row-2 weight (a 22m hiit showed 7).
+                logged_pts.setdefault(str(e["id"]), {"points": r["rate_points"]
+                                                     if r["rate_points"] is not None
+                                                     else dtd_done[_k]})
             would = next(v for v in (r["points"], r["rate_points"],
                                      _speedy_meeting_pts(e["desc"], mins, day=today), mins)
                          if v is not None)
@@ -1857,6 +1861,7 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
         if not project:
             return {"ok": False, "error": "entry has no project code — edit it first"}
         cur = (_logged_view(today)[1].get(str(entry_id)) or {}).get("points")
+        closed_in_dtd = cur is None
         if cur is None:
             cur = _dtd_done_points(today).get(_norm_key(desc)) if day is None else None
         if cur is None:
@@ -1866,6 +1871,9 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
             return {"ok": False, "error": "entry not found or still running"}
         start, end = _parse_iso(e["start"]), _parse_iso(e["stop"])
         minutes = int((end - start).total_seconds() // 60)
+        if closed_in_dtd:       # what the row shows, not a flat row-2 weight
+            rate = _habit_rate_points(desc, minutes)
+            cur = rate if rate is not None else cur
         new = janus_done.points_from_answer(answer, minutes)
         if new is None:
             return {"ok": False, "error": f"not a number or rate: {answer!r}"}

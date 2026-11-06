@@ -1181,3 +1181,8 @@ def test_log_entry_claims_a_task_closed_before_the_entry(jm, tmp_path, monkeypat
     jm.entry_points.record_credit("t", ["1 i447 10.31"], 25, day, "2026-11-07")
     assert jm.log_entry("7", "1 i447", 15, "i447", day=day) == {"ok": True, "already": True}
     assert jm._logged_view(day)[1]["7"]["points"] == 25
+
+
+def test_a_per_minute_habit_closed_in_dtd_logs_its_rate_not_row_2_weight():
+    src = (Path(__file__).parent / "mobile.py").read_text()
+    assert 'r["rate_points"]\n' in src and 'closed_in_dtd' in src

@@ -1487,6 +1487,7 @@ class RouteResult:
     fen_extra: list = field(default_factory=list)
     fen_cell_ref: Optional[str] = None  # 1n+ cell ref like "'1n+'!D20"
     is_cumulative_1n: bool = False
+    session_minutes: Optional[int] = None  # this run's minutes when write_value is a day total
     cumulative_increment: int = 0
     is_variable_1n: bool = False
     variable_value: Optional[int] = None
@@ -2691,6 +2692,56 @@ def _parse_stop_minutes(output: str) -> Optional[int]:
     if m:
         return int(m.group(1)) * 60
     return None
+
+
+def _range_in_toggl(name: str, tr: tuple, day: date) -> bool:
+    """An entry named `name` already overlaps the HHMM-HHMM range `tr` (run
+    toggl_minutes_for first: it fills _TOGGL_TODAY)."""
+    lo = datetime(day.year, day.month, day.day, int(tr[0][:2]), int(tr[0][2:]), tzinfo=_tz())
+    hi = datetime(day.year, day.month, day.day, int(tr[1][:2]), int(tr[1][2:]), tzinfo=_tz())
+    for e in _TOGGL_TODAY or []:
+        if header_normalize(e.get("description") or "") != header_normalize(name):
+            continue
+        start = datetime.fromisoformat(e["start"].replace("Z", "+00:00")).astimezone(_tz())
+        stop = (datetime.fromisoformat(e["stop"].replace("Z", "+00:00")).astimezone(_tz())
+                if e.get("stop") else datetime.now(_tz()))
+        if start < hi and stop > lo:
+            return True
+    return False
+
+
+def hiit_day_minutes(session, typed: Optional[int], tr, toggl_total: int, cell: float,
+                     in_toggl: bool) -> int:
+    """The day's hiit minutes for 0n. JM does several sessions a day, and the
+    cell is SET so a retry or a second log of one session can't double it:
+    the day's Toggl total, plus a range Toggl doesn't have yet, or a typed
+    value when Toggl has nothing. Never below the cell: a bare close with Toggl
+    down must not wipe it (and a hand edit there survives)."""
+    total = toggl_total
+    if tr and not in_toggl:
+        total += time_range_minutes(tr[0], tr[1])
+    elif not toggl_total and typed:
+        total = typed
+    return int(max(total, cell, 1))
+
+
+def apply_hiit_day_total(results: list, target_date: str) -> None:
+    """Runs after the timer stop, so the session just ended is in the total."""
+    for r in results:
+        if r.step != "0n" or r.item.name.lower() != "hiit":
+            continue
+        typed = r.item.time_value
+        if r.item.time_range or typed is not None:
+            r.session_minutes = r.write_value
+        toggl_total = toggl_minutes_for("hiit") or 0
+        tr = r.item.time_range
+        in_toggl = bool(tr) and _range_in_toggl("hiit", tr, _daytime.today())
+        cur = neon_excel.read("0n", neon_cols.col_letter(r.col_num), date=target_date)
+        try:
+            cell = float(cur.get("value") or 0)
+        except (TypeError, ValueError):
+            cell = 0.0
+        r.write_value = hiit_day_minutes(r.write_value, typed, tr, toggl_total, cell, in_toggl)
 
 
 def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
@@ -4113,6 +4164,8 @@ def main():
     toggl_stop = (stop_matching_toggl(all_names)
                   if all_names and not points_log_run and not past_target else None)
     apply_timer_minutes(fast, toggl_stop)
+    if not past_target:
+        apply_hiit_day_total(fast, target_date)
     # 3c. xk20 / xk22 domain cards -> kid-time minutes in their 0n column
     # (joins the step-4 0n batch below; see synth_kid_time_writes).
     fast.extend(synth_kid_time_writes(fast, toggl_stop, headers))
@@ -4825,6 +4878,8 @@ def main():
                 and not (r.step == "1n" and not r.is_variable_1n)):
             # Points, not minutes; undo-fast strips "+pts" from hcbi!<col>.
             entry["hcbi"] = {"col": dom_col, "pts": r.fen_points}
+        if r.session_minutes is not None:
+            entry["session_value"] = r.session_minutes   # value is the day's total
         if r.is_variable_1n:
             entry["variable_1n"] = True
             entry["variable_value"] = r.variable_value
