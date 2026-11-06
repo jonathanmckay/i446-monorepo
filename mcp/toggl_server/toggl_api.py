@@ -143,6 +143,12 @@ def _guard_network():
             and urllib.request.urlopen is _REAL_URLOPEN):
         raise RuntimeError("Toggl API call blocked under pytest (set TOGGL_ALLOW_NETWORK=1 to allow)")
 _MAX_429_DELAY = float(os.environ.get("TOGGL_MAX_429_DELAY", "30"))
+# Per-request socket timeout (2026-11-06). urlopen() without one blocks
+# forever on a connection that went half-open across a laptop sleep — the
+# 2026-11-05 06:01 janus/dtd freeze class. It bounds connect and each read;
+# it does NOT bound DNS (getaddrinfo), which is why janus also keeps every
+# Toggl call off its event loop (janus._off_loop).
+HTTP_TIMEOUT = float(os.environ.get("TOGGL_HTTP_TIMEOUT", "20"))
 
 
 def _request(method, path, body=None, base=None, want_headers=False):
@@ -182,7 +188,7 @@ def _request(method, path, body=None, base=None, want_headers=False):
         req.add_header("Authorization", _auth_header())
         req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
                 if resp.status == 200:
                     raw = resp.read()
                     result = json.loads(raw) if raw else None
@@ -501,7 +507,7 @@ def delete_entry(entry_id):
     req = urllib.request.Request(f"{BASE_URL}{path}", method="DELETE")
     req.add_header("Authorization", _auth_header())
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             ok = resp.status in (200, 204)
             _log_request("DELETE", path, resp.status, getattr(resp, "headers", None))
             if ok:

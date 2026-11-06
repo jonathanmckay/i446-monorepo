@@ -3711,7 +3711,15 @@ DTD_BGREFRESH="/tmp/dtd-$DTD_ID.bgrefresh.sh"
 cat > "$DTD_BGREFRESH" << BGREFRESHEOF
 #!/bin/zsh
 [[ -n "\${DTD_WARM:-}" ]] && exit 0
-python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 && cp "$CACHE" "$DTD_CACHE_FILE"
+# ctrl-r's worker (2026-11-06, see DTD_REFRESH): runs detached, so it owns the
+# header — success or failure lands in \$DTD_HDR and is pushed to fzf below.
+if python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; then
+  cp "$CACHE" "$DTD_CACHE_FILE"
+  echo "🔄 refreshed" > "$DTD_HDR"
+else
+  echo "⚠ refresh failed (offline?) — showing the saved list" > "$DTD_HDR"
+fi
+rm -f "$DTD_BGREFRESH.pid"
 _port="\$(cat "$DTD_PORT" 2>/dev/null)"
 [[ -n "\$_port" ]] || exit 0
 _reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$(date +%Y-%m-%d)' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
@@ -3736,10 +3744,31 @@ cat > "$DTD_REFRESH" << REFRESHEOF
 #!/bin/zsh
 [[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}refresh\${_T}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
-python3 "$DID_FAST" --refresh-cache
-cp "$CACHE" "$DTD_CACHE_FILE"
+# Never block fzf on the network (freeze 2026-11-05 06:01, "both dtd and
+# janus are frozen... I'll have to manually kill the tab"): this script runs
+# under execute-silent, which takes no keys until it exits, and the refresh it
+# used to run inline (lock wait <=20s, then Todoist reads that each sat ~30s in
+# DNS on a laptop that woke offline, with retries) held dtd dead for minutes.
+# Now the refresh runs detached in \$DTD_BGREFRESH, which writes the header and
+# reload-syncs fzf itself when it lands. A healthy refresh (1-4 s) still lands
+# inside the 3 s grace below, so online ctrl-r looks the same as before. One
+# refresh at a time: mashing ctrl-r offline must not stack did-fast processes.
+_pf="$DTD_BGREFRESH.pid"
+if [[ -r "\$_pf" ]] && kill -0 "\$(<"\$_pf")" 2>/dev/null; then
+  echo "⏳ refresh still running (offline?) — the list updates when it lands" > "$DTD_HDR"
+else
+  echo "⏳ refreshing…" > "$DTD_HDR"
+  "$DTD_BGREFRESH" </dev/null >/dev/null 2>&1 &!
+  _bp=\$!
+  print -r -- "\$_bp" > "\$_pf"
+  # Builtins only (zselect, EPOCHREALTIME): an external sleep per 0.1 s
+  # turn more than doubled the wall time under Defender exec scans.
+  zmodload zsh/zselect 2>/dev/null
+  _dl=\$(( EPOCHREALTIME + 3 ))
+  while (( EPOCHREALTIME < _dl )) && kill -0 "\$_bp" 2>/dev/null; do zselect -t 10; done
+  kill -0 "\$_bp" 2>/dev/null && echo "⏳ refresh still running (offline?) — the list updates when it lands" > "$DTD_HDR"
+fi
 : > "$DTD_DOMAIN"   # ctrl-r also clears the domain-search scope
-echo "🔄 refreshed" > "$DTD_HDR"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the refresh above
 # — leaked SGR motion sequences type themselves into fzf's query as literal
@@ -4348,5 +4377,5 @@ kill "$TALLY_PID" 2>/dev/null
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
 stty susp '^Z' < /dev/tty 2>/dev/null   # give ^Z back to the shell (see DTD_ID)
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_BGREFRESH.pid" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
 rm -rf "$DTD_RESOLVED_DIR" 2>/dev/null
