@@ -23,6 +23,7 @@ import datetime
 import json
 import sys
 import urllib.request
+from pathlib import Path
 
 URL = "http://127.0.0.1:9876/reconcile"
 
@@ -46,6 +47,41 @@ def span(a: str, b: str) -> list:
     return [col_letter(i) for i in range(col_num(a), col_num(b) + 1)]
 
 
+MAX_BACKFILL_DAYS = 14      # how far back a backfilled day is re-snapshotted
+MAX_EXTRA_DATES = 5         # cap per run: 3 daemon calls per date
+
+
+def backfilled_dates(today: datetime.date) -> list:
+    """Days before yesterday that got a pipeline write in the last 26 h
+    (/0n, caf, out, hiit backfills). Without a fresh snapshot their 0分
+    observation stays the pre-backfill value and the strict check reports
+    phantom misses (11-01 W: +100 reported, live gap 2.6). Newest first,
+    capped; any failure → [] (the old two-day behaviour)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+        from neon import ledger
+        c = ledger.connect()
+        try:
+            ledger.catch_up(c)          # client fallbacks reach only the JSONL
+            ledger.repair_dates(c)
+            since = (datetime.datetime.now() - datetime.timedelta(hours=26)).strftime("%Y-%m-%dT%H:%M:%S")
+            lo = (today - datetime.timedelta(days=MAX_BACKFILL_DAYS)).isoformat()
+            hi = (today - datetime.timedelta(days=1)).isoformat()
+            rows = c.execute(
+                """SELECT DISTINCT COALESCE(e.date, rd.date) AS d FROM events e
+                     LEFT JOIN row_dates rd ON rd.sheet = e.sheet AND rd.row = e.row
+                    WHERE e.ts >= ? AND e.kind IN ('set','credit','credit_ref','text')
+                      AND e.sheet IN ('0分','0n','hcbi')
+                      AND COALESCE(e.date, rd.date) >= ? AND COALESCE(e.date, rd.date) < ?
+                    ORDER BY d DESC""", (since, lo, hi)).fetchall()
+        finally:
+            c.close()
+        return [datetime.date.fromisoformat(r[0]) for r in rows if r[0]][:MAX_EXTRA_DATES]
+    except Exception as e:  # noqa: BLE001
+        print(f"backfilled_dates: {type(e).__name__}: {e}", file=sys.stderr)
+        return []
+
+
 RANGES = {"0分": span("D", "Z"), "0n": span("D", "BK"), "hcbi": span("E", "BE")}
 WEEK_ROW5 = span("C", "AL")   # 1n+ row 5: expected points the 0分 credits reference
 
@@ -64,7 +100,7 @@ def main() -> int:
     today = datetime.date.today()
     rc = 0
     jobs = []
-    for d in (today - datetime.timedelta(days=1), today):
+    for d in backfilled_dates(today) + [today - datetime.timedelta(days=1), today]:
         for sheet, cols in RANGES.items():
             jobs.append({"sheet": sheet, "date": f"{d.month}/{d.day}", "cols": cols, "snapshot": True})
     # 0n row 2 = the habit weights the rule engine applies; a changed weight is
