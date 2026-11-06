@@ -343,6 +343,7 @@ def _ritual_pts_label(emojis: str) -> str:
 PROJECT_CODE = {}
 try:
     from mcp.toggl_server.config import PROJECT_MAP  # type: ignore
+    from mcp.toggl_server.config import SUBPROJECTS, split_subproject  # type: ignore
     PROJECT_CODE = {v: k for k, v in PROJECT_MAP.items()}
 except Exception:
     pass
@@ -5345,7 +5346,9 @@ _ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
 
 # ── Project-code typo guard (2026-10-17) ───────────────────────────────────
 def _known_project_codes() -> set:
-    return set(globals().get("PROJECT_MAP") or {})
+    # Sub-projects (@xk20/22/26, 2026-11-05) are real codes, not typos: the
+    # near-miss fixer used to "correct" @xk20 to @xk87/@xk88.
+    return set(globals().get("PROJECT_MAP") or {}) | set(globals().get("SUBPROJECTS") or {})
 
 
 def _fix_project_codes(part: str, known: set | None = None) -> tuple[str, list, list]:
@@ -6791,6 +6794,11 @@ def _run_current_timer_done(app) -> None:
         _run_done_command(app, cmd)
         return
     path = _done_points_path(raw_desc)
+    kid, _ = janus_done.kid_route(code, cur.get("tags"))
+    if kid and kid != code:  # xk87 + kid tag → "@xk20" (2026-11-05)
+        code = kid
+        if path in ("ask", "credited"):
+            path = "time"
     if path == "ask":
         # Not a task with [N] and not a time-based habit/category: janus is
         # the interactive points-conversion interface (user request
@@ -7062,7 +7070,13 @@ def _on_enter(event):
                 new_total = points
             points = None
         desc, code, time_range, tags = _parse_edit_text(text)
-        pid = PROJECT_MAP.get(code) if code else None
+        if code and code.lower() in (globals().get("SUBPROJECTS") or {}):
+            # @xk20 → Toggl xk87 + tag xk20; code stays xk20 for the 分 route.
+            code = code.lower()
+            tags = list(tags or []) + ([code] if code not in (tags or []) else [])
+            pid = PROJECT_MAP.get(SUBPROJECTS[code])
+        else:
+            pid = PROJECT_MAP.get(code) if code else None
         # Every rejection below has already cleared STATE.edit_target and
         # wiped input_buffer (lines above) — a stale edit armed by an
         # earlier, possibly-forgotten row selection (Tab/click elsewhere)
@@ -7693,8 +7707,14 @@ def _(event):
     # the entry's own single-word tags ride as #tag tokens or they are lost
     # (2026-11-01; same as mobile.py's _tag_tokens).
     cmd += "".join(f" #{_t}" for _t in entry_tags if re.match(r"^-?\w+$", str(_t)))
+    # xk87 + kid tag → "@xk20": minutes to the kid's 0n column, no points
+    # prompt, and the tag is not logged again as a habit (2026-11-05).
+    kid, sec_tags = janus_done.kid_route(code, entry_tags)
+    if kid and kid != code:
+        cmd = cmd.replace(f" @{code}", f" @{kid}", 1) if code else cmd + f" @{kid}"
+        code = kid
     suffix = date_sfx
-    for _t in _habit_tags(entry_tags):
+    for _t in _habit_tags(sec_tags):
         suffix += f", {_t} {item['dur_min']}{date_sfx}"
     cmd += suffix
     # Idempotency is keyed on the exact command (desc + time range), not the
@@ -7724,6 +7744,8 @@ def _(event):
     # task already crossed off adds nothing; anything else asks instead of
     # silently crediting the minutes at 1x.
     path = "task" if speedy else _done_points_path(desc)
+    if kid and path in ("ask", "credited"):
+        path = "time"
     if path == "credited":
         _mark_cmd_done_today(cmd)
         flash(f'"{desc}" already crossed off today — no extra 分 for the entry', 6.0)

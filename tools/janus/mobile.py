@@ -69,7 +69,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/tg"))
 from flask import Flask, jsonify, render_template_string, request  # noqa: E402
 
 from mcp.toggl_server import toggl_api  # noqa: E402
-from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
+from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES, split_subproject, with_subproject_tag  # noqa: E402
 from neon.rates import meeting_points, speedy_meeting_points  # noqa: E402
 import janus_done  # noqa: E402  /done points paths, shared with desktop janus
 
@@ -191,6 +191,7 @@ def _resolve_project(code: str) -> tuple[int | None, str]:
     code = (code or "").strip().lstrip("@").strip()
     if not code:
         return None, ""
+    code = split_subproject(code)[0]  # @xk20 → xk87; callers add the tag
     if code in PROJECT_MAP:
         return PROJECT_MAP[code], code
     low = code.lower()
@@ -1153,11 +1154,12 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str,
     code = project or (m.group(1) if m else "")
     desc_clean = _AT.sub("", desc).strip()
     pid = None
+    raw_code = code
     if code:
         pid, code = _resolve_project(code)
         if pid is None:
             return {"ok": False, "error": f"unknown project @{project or m.group(1)}"}
-    tags = _parse_tags(tags or [])
+    tags = with_subproject_tag(raw_code, _parse_tags(tags or [])) or []
     today = day or _dt.datetime.now(_tz()).date()
 
     # No end time -> start a live, still-running Toggl timer instead of a
@@ -1295,6 +1297,9 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
     # set — the dialog field is prefilled with the current tags.
     if tags is not None:
         fields["tags"] = _parse_tags(tags)
+    if split_subproject(project_code.lstrip("@") if project_code else "")[1]:
+        fields["tags"] = with_subproject_tag(
+            project_code.lstrip("@"), fields.get("tags", e.get("tags") or [])) or []
 
     # Normalize colon-less numpad input to canonical HH:MM up front (see
     # _hhmm_parts): the inputmode=numeric fields can't retype a deleted colon,
@@ -1628,6 +1633,11 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # a crossed-off task adds nothing; an unknown entry asks for a total or
     # a rate instead of crediting the minutes at 1x. `points` is the answer.
     path = _done_path(desc, pts, None if day is not None else today)
+    # xk87 + kid tag → "@xk20": minutes to the kid's 0n column (2026-11-05).
+    kid, _ = janus_done.kid_route(project, list(tags or []) + list(entry_tags or []))
+    if kid and kid != project:
+        project = kid
+        path = janus_done.TASK if pts is not None else janus_done.TIME
     if path == janus_done.CREDITED:
         _ledger_add(today, entry_id, f"{desc} already crossed off — no extra 分")
         return {"ok": True, "already": True, "credited": True}
@@ -1650,7 +1660,7 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # processes each independently (其他人 61 → 其他人 0n column, etc.).
     # These are always minutes (0n habit columns track time, not the
     # matched task's points), regardless of the main item's resolution.
-    extra = habit_tags(tags or [])
+    extra = habit_tags(janus_done.kid_route(project, tags)[1])
     for t in extra:
         text += f", {t} {minutes}"
     flags: tuple[str, ...] = ()
@@ -1807,6 +1817,10 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
         if pts is None:  # 25m meeting → [30] (2026-10-22)
             pts = _speedy_meeting_pts(desc, _hhmm_span_min(start, now), day=now.date())
         path = _done_path(desc, pts, now.date())
+        kid, _ = janus_done.kid_route(project, e.get("tags"))
+        if kid and kid != project:  # xk87 + kid tag → "@xk20" (2026-11-05)
+            project = kid
+            path = janus_done.TASK if pts is not None else janus_done.TIME
         if path == janus_done.CREDITED:
             # Crossed off in dtd first: just stop the timer, no extra 分.
             try:

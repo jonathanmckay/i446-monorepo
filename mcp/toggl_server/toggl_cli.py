@@ -47,7 +47,7 @@ os.environ.setdefault("TOGGL_WORKSPACE_ID", "2092616")
 # Add parent dir so `from toggl_server.x import ...` works
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
+from toggl_server.config import PROJECT_MAP, PROJECT_NAMES, split_subproject, with_subproject_tag  # noqa: E402
 from toggl_server import toggl_api  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
@@ -72,6 +72,7 @@ def _resolve_project(code):
     if not code:
         return None
     c = code.lower().strip()
+    c = split_subproject(c)[0]
     if c in PROJECT_MAP:
         return PROJECT_MAP[c]
     try:
@@ -119,7 +120,7 @@ def cmd_start(args):
             args = args[:at_idx] + args[at_idx + 2:]
     desc = args[0]
     project = args[1] if len(args) > 1 else ""
-    tags = args[2:] or None
+    tags = with_subproject_tag(project, args[2:])
     project_id = _resolve_project(project)
     entry = toggl_api.start_timer(desc, project_id, tags, start_time=start_time)
     proj_name = PROJECT_NAMES.get(project_id, project) if project_id else ""
@@ -284,7 +285,7 @@ def cmd_create(args):
     midnight = datetime.datetime(start_dt.year, start_dt.month, start_dt.day, 23, 59, tzinfo=_tz())
     next_min = midnight + datetime.timedelta(minutes=1)
     project_id = _resolve_project(project)
-    tag_list = tags or None
+    tag_list = with_subproject_tag(project, tags)
 
     if start_dt.date() != end_dt.date():
         dur1 = int((midnight - start_dt).total_seconds())

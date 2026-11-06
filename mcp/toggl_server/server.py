@@ -7,7 +7,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from . import toggl_api
-from .config import PROJECT_MAP, PROJECT_NAMES
+from .config import PROJECT_MAP, PROJECT_NAMES, split_subproject, with_subproject_tag
 
 # Self-locating: guarantees `daytime` resolves regardless of the caller's own
 # sys.path — see lib/daytime.py, the shared "now"/"today" resolution every
@@ -65,6 +65,7 @@ def _resolve_project(code: str) -> Optional[int]:
     if not code:
         return None
     code_lower = code.lower().strip()
+    code_lower = split_subproject(code_lower)[0]
     if code_lower in PROJECT_MAP:
         return PROJECT_MAP[code_lower]
     # Try as numeric ID
@@ -234,7 +235,8 @@ def toggl_create_entry(
         if project and not project_id:
             return f"Error: unknown project code '{project}'. Valid codes: {', '.join(sorted(PROJECT_MAP.keys()))}"
 
-        results = _create_single_entry(description, start_dt, end_dt, project_id, tags)
+        results = _create_single_entry(description, start_dt, end_dt, project_id,
+                                       with_subproject_tag(project, tags))
         return "\n".join(results)
 
     except Exception as e:
@@ -308,7 +310,8 @@ def toggl_batch(entries: str, date: str = "") -> str:
                 fail += 1
                 continue
 
-            results = _create_single_entry(desc, start_dt, end_dt, project_id)
+            results = _create_single_entry(desc, start_dt, end_dt, project_id,
+                                           with_subproject_tag(proj_code, None))
             all_results.extend(results)
             success += 1
         except Exception as e:
@@ -338,7 +341,7 @@ def toggl_start(
         if project and not project_id:
             return f"Error: unknown project code '{project}'. Valid codes: {', '.join(sorted(PROJECT_MAP.keys()))}"
 
-        entry = toggl_api.start_timer(description, project_id, tags)
+        entry = toggl_api.start_timer(description, project_id, with_subproject_tag(project, tags))
         proj_name = PROJECT_NAMES.get(project_id, project) if project_id else ""
         proj_str = f" @{proj_name}" if proj_name else ""
         return f"Started: {description}{proj_str} [id:{entry['id']}]"

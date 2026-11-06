@@ -40,6 +40,30 @@ SPLIT_MIN_POINTS = 100
 MAX_INFERRED_POINTS = 500
 
 
+def kid_route(code: str | None, tags) -> tuple[str | None, list]:
+    """(code for did-fast's @, habit tags still to log as secondaries).
+
+    JM 2026-11-05: xk20 / xk22 / xk26 are sub-projects of xk87
+    (mcp/toggl_server/config.SUBPROJECTS): the Toggl entry is xk87 + a kid
+    tag, but the 分 belong in the kid's own 0n column. An xk87 (or
+    project-less) entry tagged with a kid code logs as "@xk20", and that tag
+    is dropped from the secondary habit items — logging it twice would
+    double-count, since 0n!AZ (the kid columns) already feeds 0分!X."""
+    tags = [str(t) for t in (tags or [])]
+    try:
+        from mcp.toggl_server.config import SUBPROJECTS
+    except Exception:
+        SUBPROJECTS = {"xk20": "xk87", "xk22": "xk87", "xk26": "xk87"}
+    if (code or "").lower() in SUBPROJECTS:
+        kid = code.lower()
+    else:
+        kid = next((t.lower() for t in tags if t.lower() in SUBPROJECTS
+                    and (not code or SUBPROJECTS[t.lower()] == code)), None)
+    if not kid:
+        return code, tags
+    return kid, [t for t in tags if t.lower() != kid]
+
+
 # did-fast's own watchdog (default 120s, sized for dtd's worker) exits it mid-run,
 # whatever the caller's timeout says. Janus runs it off the UI, so a slow Excel
 # may take longer: killing a run after the 分 land leaves the rest undone

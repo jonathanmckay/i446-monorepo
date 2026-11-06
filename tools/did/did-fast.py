@@ -393,7 +393,8 @@ LABEL_TO_0FEN = {
     # (that would double count; see synth_kid_time_writes for how [N] is
     # used as a minutes fallback instead). The "0n:" prefix marks the route;
     # main() gates the 0分 append off for it, same as the "hcbi:" route.
-    "xk20": "0n:xk20", "xk22": "0n:xk22",
+    # xk26 (Rori) joined 2026-11-05 with janus @xk20/22/26 (config.SUBPROJECTS).
+    "xk20": "0n:xk20", "xk22": "0n:xk22", "xk26": "0n:xk26",
     "s897": "Y",
 }
 
@@ -498,6 +499,12 @@ def _task_credit(item, task: dict) -> tuple[int, str, list]:
     own content, which may itself be a "[N] @code [N] @code" split."""
     default_code = _first_fen_label(task.get("labels", []))
     content = task.get("content", "")
+    # An explicit kid route (@xk20/@xk22/@xk26) beats the card's own label
+    # (JM 2026-11-05): "playground with theo @xk20" fuzzy-matching an xk87
+    # card still puts its minutes in Theo's 0n column, not 0分!X.
+    if _0n_domain_header(LABEL_TO_0FEN.get(item.project_override or "")):
+        return (item.points_override or sum(n for n, _ in fen_split.parse_points(content)),
+                LABEL_TO_0FEN[item.project_override], [])
     if item.points_split:
         col, pts, extra = _split_credit(item.points_split, item.project_override or default_code)
         return pts, col, extra
