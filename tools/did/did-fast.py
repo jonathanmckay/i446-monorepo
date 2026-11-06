@@ -136,6 +136,12 @@ CUMULATIVE_0N = {"问学", "xk20", "xk22", "xk26"}
 # "大孩子文学时间" = the daily big-kids literature card (2026-09-27, replaced
 # the separate xk20 / xk22 daily cards).
 SPLIT_HABITS = {"bigs": ("xk20", "xk22"), "大孩子文学时间": ("xk20", "xk22")}
+# A backlog instance split off by dtd keeps its day in the name ("大孩子文学时间
+# 10.26"). It is still the split habit: its minutes halve into xk20/xk22 and the
+# card's [50] stays display-only (g245/CLAUDE.md). Without this the suffixed
+# name missed SPLIT_HABITS, matched the backlog card as a plain task and
+# appended +50 to 0分 X, 10 times 10-05..11-01 (Dream v180).
+SPLIT_DATE_SUFFIX = re.compile(r"\s+\d{1,2}[./]\d{1,2}$")
 CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
@@ -1577,7 +1583,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
     expanded: list[ParsedItem] = []
     split_parents: dict[int, str] = {}   # id(xk20 item) → original habit name
     for item in items:
-        key = item.name.strip().lower()
+        key = SPLIT_DATE_SUFFIX.sub("", item.name.strip().lower())
         if key in SPLIT_HABITS:
             first, second = SPLIT_HABITS[key]
             if item.time_range:
