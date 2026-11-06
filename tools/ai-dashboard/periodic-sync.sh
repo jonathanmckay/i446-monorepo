@@ -38,6 +38,16 @@ if [[ "$HOST" == straylight* ]]; then
   python3 "$SCRIPT_DIR/build-stats-cache.py" >>"$SCRIPT_DIR/.build-stats-cache.log" 2>&1 || true
 fi
 
+# Ix ingest (2026-11-06): the 5555 server's `GET /` runs the incremental
+# ingest_claude_sessions(), so hitting it here every 15 min keeps
+# llm-sessions.db current on every host that runs the AI dashboard, whatever
+# its ingest thread is doing (on Ix the DB sat stale 3 nights running, Dream
+# v178-v180). ~25 s warm; capped at 150 s. Connection refused (no dashboard
+# on this host) returns at once. The direct-ingest backstop below then finds
+# the DB fresh and skips.
+curl -s -o /dev/null --max-time 150 http://localhost:5555/ \
+  || echo "[$(date '+%F %T')] 5555 ingest request failed (curl exit=$?)" >>"$SCRIPT_DIR/.periodic-sync.log"
+
 # Session ingest (2026-11-05): llm-sessions.db is kept fresh by the 5555
 # server's own 15-min ingest thread. If that thread or the server dies, the DB
 # goes stale silently (it sat 8 days stale before 2026-10-26). Backstop: when
