@@ -90,3 +90,9 @@ def test_n_color_needs_both():
 def test_n_color_unknown_time_uses_the_fallback():
     assert ac.n_color_time(done("0t"), done("0l", t(8)), unknown=t(10)) == t(10)
     assert ac.n_color_time(done("0t"), done("0l", t(8))) == t(23, 59)
+
+
+def test_late_all_colors_does_not_lower_the_handicap():
+    assert ac.next_handicap(6, "3000.0") == 7
+    assert ac.next_handicap(6, "2130.0") == 5
+    assert ac.next_handicap(6, "") == 7

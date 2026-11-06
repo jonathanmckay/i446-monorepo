@@ -15,7 +15,8 @@ and 0n!AF (N color, HHMM both 0t and 0l were done).
   --dry-run                print, write nothing
 
 A closed day whose 0t and 0l were not both on-time gets AF=3000 (done after
-the day). A manual AG (/allcolors) is never overwritten. AH is only written
+the day). A closed day that reaches all colors only by counting after-the-day
+writes gets AG=3000, which does not lower the next day's AH. A manual AG (/allcolors) is never overwritten. AH is only written
 when blank, and AF only when blank, so reruns are idempotent. Rule:
 lib/neon/allcolors.py.
 """
@@ -40,6 +41,7 @@ import daytime  # noqa: E402
 SHEET = "0n"
 FIRST_COL, LAST_COL = "D", "AS"
 FIRST_DAY_ROW = 5   # rows 2-4 are summary rows, not days
+ALL_COLORS_SINCE = dt.date(2026, 11, 3)   # automation start; older AGs were by hand
 LOCK = Path.home() / ".cache/jm/allcolors.lock"
 SRC = "allcolors auto"
 
@@ -107,12 +109,13 @@ def _done_at(conn: sqlite3.Connection, sheet: str, col: str, row: int):
     return ledger.parse_ts(ts) if ts else None
 
 
-def _timed(name: str, raw, at: dt.datetime | None, day: dt.date) -> ac.Cell:
+def _timed(name: str, raw, at: dt.datetime | None, day: dt.date,
+           late_ok: bool = False) -> ac.Cell:
     """Cell as of `day`: a done cell first written after `day` ended is a
-    miss (JM: a miss is a miss); one written before `day` (1n+ cards done
-    earlier in the week) counts from 00:00."""
+    miss (JM: a miss is a miss), unless `late_ok`; one written before `day`
+    (1n+ cards done earlier in the week) counts from 00:00."""
     status = ac.classify_value(raw)
-    if status != ac.DONE or at is None:
+    if status != ac.DONE or at is None or late_ok:
         return ac.Cell(name, status)
     if at.date() > day:
         return ac.Cell(name, ac.BLANK)
@@ -121,7 +124,7 @@ def _timed(name: str, raw, at: dt.datetime | None, day: dt.date) -> ac.Cell:
     return ac.Cell(name, ac.DONE, at)
 
 
-def gather(d: dt.date, headers: list[str], conn):
+def gather(d: dt.date, headers: list[str], conn, late_ok: bool = False):
     """(Day, core cells, habit cells incl. virtual 1n) for date `d`."""
     day = Day(d, headers)
     core, habits = [], []
@@ -129,13 +132,13 @@ def gather(d: dt.date, headers: list[str], conn):
     for letter, (h, v) in day.cells.items():
         if not ac.is_habit_header(h):
             continue
-        cell = _timed(h.strip(), v, _done_at(conn, SHEET, letter, day.row), d)
+        cell = _timed(h.strip(), v, _done_at(conn, SHEET, letter, day.row), d, late_ok)
         (core if ac.norm(h) in core_names else habits).append(cell)
-    habits.append(onen_for(d, conn))
+    habits.append(onen_for(d, conn, late_ok))
     return day, core, habits
 
 
-def onen_for(d: dt.date, conn) -> ac.Cell:
+def onen_for(d: dt.date, conn, late_ok: bool = False) -> ac.Cell:
     """The virtual '1n' habit: all 1n+ cards due on d's weekday."""
     head = _rows("1n+", "C1:AL3")
     names, dows = head[0], head[2]
@@ -162,7 +165,7 @@ def onen_for(d: dt.date, conn) -> ac.Cell:
         vals = week_vals[row]
         idx = col_index(letter) - base
         raw = vals[idx] if idx < len(vals) else ""
-        cell = _timed(name.strip(), raw, _done_at(conn, "1n+", letter, row), d)
+        cell = _timed(name.strip(), raw, _done_at(conn, "1n+", letter, row), d, late_ok)
         if cell.status == ac.BLANK:
             prev_row = label_row.get(weeks.prev_habit_week_label(name, d))
             if prev_row:
@@ -230,21 +233,49 @@ def settle_n_color(d: dt.date, headers: list[str], conn, dry: bool,
         write(d, "AF", ac.hhmm(_local(hit)), "N color: 0t and 0l done", dry)
 
 
-def settle_closed_n_color(today: dt.date, headers: list[str], conn, dry: bool,
-                          lookback: int = 14) -> None:
-    """Settle AF on recent closed days with 0t and 0l filled and AF blank.
-    Rows run one per date, so the window is a single read."""
+def _closed_rows(today: dt.date, headers: list[str], lookback: int = 14):
+    """(date, {normalized header: raw}) for recent closed days. Rows run one
+    per date, so the window is a single read."""
     top = excel.lookup_row(SHEET, md(today))
     if not top:
         raise RuntimeError(f"no 0n row for {md(today)}")
     first = max(FIRST_DAY_ROW, top - lookback)
-    idx = {ac.norm(h): i for i, h in enumerate(headers)}
+    names = [ac.norm(h) for h in headers]
     for i, vals in enumerate(_rows(SHEET, f"{FIRST_COL}{first}:{LAST_COL}{top - 1}")):
-        status = [ac.classify_value(vals[idx[n]]) if idx[n] < len(vals) else ac.BLANK
-                  for n in ("0t", "0l", ac.norm("N color"))]
+        yield today - dt.timedelta(days=top - first - i), dict(zip(names, vals))
+
+
+def settle_closed_n_color(today: dt.date, headers: list[str], conn, dry: bool,
+                          lookback: int = 14) -> None:
+    """Settle AF on recent closed days with 0t and 0l filled and AF blank."""
+    for d, row in _closed_rows(today, headers, lookback):
+        status = [ac.classify_value(row.get(n)) for n in ("0t", "0l", ac.norm("N color"))]
         if status == [ac.DONE, ac.DONE, ac.BLANK]:
-            d = today - dt.timedelta(days=top - first - i)
             settle_n_color(d, headers, conn, dry, closed=True)
+
+
+def settle_late_all_colors(today: dt.date, headers: list[str], conn, dry: bool,
+                           lookback: int = 14) -> None:
+    """Stamp LATE_ALL_COLORS on closed days that reach all colors only once
+    after-the-day writes count. An on-time stamp always goes first. The raw
+    blank count keeps --live from gathering days that can't qualify."""
+    core = {ac.norm(c) for c in ac.CORE}
+    for d, row in _closed_rows(today, headers, lookback):
+        ag, ah = row.get(ac.norm("⎣∀clr")), row.get("#")
+        if (d < ALL_COLORS_SINCE or ac.classify_value(ag) != ac.BLANK
+                or ac.classify_value(ah) == ac.BLANK
+                or any(ac.classify_value(row.get(c)) != ac.DONE for c in core)):
+            continue
+        blanks = sum(1 for n, v in row.items() if ac.is_habit_header(n) and n not in core
+                     and ac.classify_value(v) == ac.BLANK)
+        if blanks > _int(ah):
+            continue
+        ag, _ = settle(d, headers, conn, dry)
+        if ac.classify_value(ag) != ac.BLANK:
+            continue
+        _, late_core, late_habits = gather(d, headers, conn, late_ok=True)
+        if ac.evaluate(d, late_core, late_habits, _int(ah)):
+            write(d, "AG", ac.LATE_ALL_COLORS, "all colors: done after the day", dry)
 
 
 def _local(t: dt.datetime) -> dt.datetime:
@@ -314,6 +345,7 @@ def main() -> int:
                 settle(today, headers, conn, a.dry_run,
                        unknown=daytime.local_now(), ah_override=carried)
             settle_closed_n_color(today, headers, conn, a.dry_run)
+            settle_late_all_colors(today, headers, conn, a.dry_run)
         finally:
             conn.close()
     return 0

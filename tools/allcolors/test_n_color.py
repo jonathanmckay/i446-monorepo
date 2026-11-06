@@ -105,6 +105,55 @@ def test_sweep_stops_at_the_first_day_row(monkeypatch):
     assert reads == ["D5:AS6"]
 
 
+class LateDay:
+    """One closed day for settle_late_all_colors, with cell timing faked."""
+
+    def __init__(self, monkeypatch, row, strict_ag="", late_hit=True, day=dt.date(2026, 11, 4)):
+        self.writes, self.gathered = [], []
+        monkeypatch.setattr(ac_tool, "_closed_rows", lambda t, h, n: [(day, row)])
+        monkeypatch.setattr(ac_tool, "settle", lambda d, h, c, dry: (strict_ag, row.get("#")))
+        monkeypatch.setattr(ac_tool, "gather",
+                            lambda d, h, c, late_ok: self.gathered.append(late_ok) or (None, [], []))
+        monkeypatch.setattr(ac_tool.ac, "evaluate", lambda *a, **k: at(23, 59) if late_hit else None)
+        monkeypatch.setattr(ac_tool, "write",
+                            lambda d, col, v, why, dry: self.writes.append((d, col, v)))
+
+
+ROW = {"0t": "1", "0l": "5", "0g": "1", "⎣∀clr": "", "#": "6", "n color": "630", "o314": ""}
+
+
+def _late(lock):
+    ac_tool.settle_late_all_colors(D, [], None, False)
+    return lock.writes
+
+
+def test_late_writes_that_reach_all_colors_stamp_3000(monkeypatch):
+    lock = LateDay(monkeypatch, dict(ROW))
+    assert _late(lock) == [(dt.date(2026, 11, 4), "AG", 3000)]
+    assert lock.gathered == [True]
+
+
+def test_an_on_time_stamp_beats_3000(monkeypatch):
+    assert _late(LateDay(monkeypatch, dict(ROW), strict_ag=955)) == []
+
+
+def test_no_3000_when_late_writes_still_fall_short(monkeypatch):
+    assert _late(LateDay(monkeypatch, dict(ROW), late_hit=False)) == []
+
+
+def test_a_manual_ag_is_left_alone(monkeypatch):
+    assert _late(LateDay(monkeypatch, {**ROW, "⎣∀clr": "2130"})) == []
+
+
+def test_days_before_the_automation_are_left_alone(monkeypatch):
+    assert _late(LateDay(monkeypatch, dict(ROW), day=dt.date(2026, 10, 28))) == []
+
+
+def test_too_many_raw_blanks_skip_the_gather(monkeypatch):
+    lock = LateDay(monkeypatch, {**ROW, "#": "0"})
+    assert _late(lock) == [] and lock.gathered == []
+
+
 def test_did_fast_no_longer_stamps_af():
     src = (HERE.parent / "did" / "did-fast.py").read_text()
     assert "build_0l_time_script" not in src

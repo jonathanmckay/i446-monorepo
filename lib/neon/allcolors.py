@@ -22,6 +22,7 @@ DONE, NA, BLANK = "done", "na", "blank"
 
 CORE = ("0t", "0l", "0g")
 LATE_N_COLOR = 3000   # 0n!AF: 0t and 0l were done, but not both on the day
+LATE_ALL_COLORS = 3000   # 0n!AG: reached only with after-the-day writes
 # 0n columns that are not habits (bookkeeping) or are excluded by JM
 # ("词汇": retired, blank every day since 2026-10).
 NON_HABIT = {"n color", "⎣∀clr", "#", "词汇"}
@@ -123,8 +124,16 @@ def next_handicap(prev_ah, prev_ag) -> int:
         ah = int(float(str(prev_ah).strip()))
     except (TypeError, ValueError):
         ah = 0
-    got = classify_value(prev_ag) == DONE
+    got = classify_value(prev_ag) == DONE and not _is_late(prev_ag)
     return max(0, ah - 1) if got else ah + 1
+
+
+def _is_late(ag) -> bool:
+    """AG=3000 records a late finish; it doesn't lower the handicap (JM 2026-11-06)."""
+    try:
+        return float(str(ag).strip()) == LATE_ALL_COLORS
+    except ValueError:
+        return False
 
 
 def hhmm(t: dt.datetime) -> int:
