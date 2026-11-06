@@ -71,6 +71,7 @@ def _todoist_token() -> str:
 TODOIST_TOKEN = _todoist_token()
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS_MAX_AGE_HOURS = 24
+HEADERS_EMPTY_RETRY_SECS = 300  # a cache with no habits retries this often, not per call
 
 
 def _due_datetime(task: dict) -> str:
@@ -103,8 +104,10 @@ ix_run = _ix_mod.run
 # and other sheets (0n/1n+/hcbi) still use ix_run.
 from neon import excel as neon_excel  # noqa: E402 (path inserted above)
 from neon import cols as neon_cols  # noqa: E402
+from neon.rates import VARIABLE_1N_BASES, VARIABLE_SESSION_BONUS  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code": one task, several domains
 from neon import weeks as neon_weeks  # noqa: E402
+from neon import week_fill as neon_week_fill  # noqa: E402
 from blocks import BLOCK_START, is_future_block  # noqa: E402 (path inserted above)
 
 # Import mark-completed
@@ -168,7 +171,6 @@ VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
 # Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
 # Keys are header_normalize()d (lowercase).
 VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
-VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
 # Habits whose 1n+ week cell records the BASE points per occurrence, not the
 # minutes (2026-10-24, JM: "if I do /did on 一起饭 I want 15分 to go to the 1n
 # ... and then the number of minutes goes direct on the day in the xk87
@@ -269,12 +271,9 @@ VARIABLE_DOMAIN: dict[str, tuple[str, str]] = {
     "english": ("xk87", "X"),
     "中文": ("xk87", "X"),
 }
-# Teaching sessions with the kids (fen.md xk87, 2026-10-29): 1分/min plus a
-# fixed bonus per session, added on top of the minutes. "math" used to alias
-# to the retired 问学 0n habit. These skip the by-name Todoist match: "math"
-# would otherwise fully overlap "goodnight math & lights out [15]" and close
-# that card instead of pricing the session.
-VARIABLE_SESSION_BONUS: dict[str, int] = {"math": 5, "english": 5, "中文": 5}
+# Teaching sessions (VARIABLE_SESSION_BONUS, lib/neon/rates.py) skip the by-name
+# Todoist match: "math" would otherwise fully overlap "goodnight math & lights
+# out [15]" and close that card instead of pricing the session.
 
 # Habits that also write to the hcbi sheet (append +N to formula).
 # key = habit name (lowercase), value = hcbi column letter
@@ -287,6 +286,7 @@ ONENEON_ALIASES: dict[str, str] = {
     "家": "family",
     "relax": "relax {60}",
     "一起吃": "一起饭",
+    "一起发": "一起饭",   # IME slip: janus asked for points, Haiku filed it under 家
     "long o314": "长o314",
     # Card is "1 groceries" but the 1n+ header is bare "groceries" — without
     # this the completion closed the card and silently skipped the column
@@ -420,7 +420,8 @@ LABEL_TO_0FEN = {
     # (that would double count; see synth_kid_time_writes for how [N] is
     # used as a minutes fallback instead). The "0n:" prefix marks the route;
     # main() gates the 0分 append off for it, same as the "hcbi:" route.
-    "xk20": "0n:xk20", "xk22": "0n:xk22",
+    # xk26 (Rori) joined 2026-11-05 with janus @xk20/22/26 (config.SUBPROJECTS).
+    "xk20": "0n:xk20", "xk22": "0n:xk22", "xk26": "0n:xk26",
     "s897": "Y",
 }
 
@@ -525,6 +526,12 @@ def _task_credit(item, task: dict) -> tuple[int, str, list]:
     own content, which may itself be a "[N] @code [N] @code" split."""
     default_code = _first_fen_label(task.get("labels", []))
     content = task.get("content", "")
+    # An explicit kid route (@xk20/@xk22/@xk26) beats the card's own label
+    # (JM 2026-11-05): "playground with theo @xk20" fuzzy-matching an xk87
+    # card still puts its minutes in Theo's 0n column, not 0分!X.
+    if _0n_domain_header(LABEL_TO_0FEN.get(item.project_override or "")):
+        return (item.points_override or sum(n for n, _ in fen_split.parse_points(content)),
+                LABEL_TO_0FEN[item.project_override], [])
     if item.points_split:
         col, pts, extra = _split_credit(item.points_split, item.project_override or default_code)
         return pts, col, extra
@@ -997,13 +1004,16 @@ def parse_input(raw: str) -> list[ParsedItem]:
 
 def load_headers() -> dict:
     """Load headers.json, auto-refresh if stale or missing."""
+    import time as _time
     if HEADERS_PATH.exists():
         data = json.loads(HEADERS_PATH.read_text())
         refreshed = data.get("refreshed", "")
         if refreshed:
             try:
                 age = _daytime.local_now() - datetime.fromisoformat(refreshed)
-                if age.total_seconds() < HEADERS_MAX_AGE_HOURS * 3600:
+                if age.total_seconds() < HEADERS_MAX_AGE_HOURS * 3600 and (
+                        (data.get("0n") and data.get("1n"))
+                        or _time.time() - HEADERS_PATH.stat().st_mtime < HEADERS_EMPTY_RETRY_SECS):
                     return data
             except (ValueError, TypeError):
                 # TypeError: an existing headers.json on disk may still carry
@@ -1071,6 +1081,17 @@ end tell'''
             headers_0n[name.lower()] = int(key)
         elif section == "1n":
             headers_1n[name.lower()] = key  # column letter
+
+    # Exit 0 with nothing read must not replace good headers: for 24 h every
+    # habit would look unknown (bug 2026-11-05: janus asked for points on 一起饭).
+    if not (headers_0n and headers_1n):
+        print("ERROR: refresh_headers read no headers; keeping the last good set",
+              file=sys.stderr)
+        try:
+            prev = json.loads(HEADERS_PATH.read_text())
+        except (OSError, ValueError):
+            prev = {}
+        headers_0n, headers_1n = prev.get("0n") or {}, prev.get("1n") or {}
 
     data = {
         "refreshed": _daytime.local_now().isoformat(),
@@ -1500,6 +1521,7 @@ class RouteResult:
     fen_extra: list = field(default_factory=list)
     fen_cell_ref: Optional[str] = None  # 1n+ cell ref like "'1n+'!D20"
     is_cumulative_1n: bool = False
+    session_minutes: Optional[int] = None  # this run's minutes when write_value is a day total
     cumulative_increment: int = 0
     is_variable_1n: bool = False
     variable_value: Optional[int] = None
@@ -2204,6 +2226,12 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
     except Exception as e:  # noqa: BLE001
         print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
+    if resp and resp.get("timeout"):
+        # The daemon may still apply it (2026-11-04): the raw-script retry
+        # would double an add/append. Fail the write; no fallback.
+        print(f"0n daemon write timed out ({resp.get('error')}); not retried", file=sys.stderr)
+        return subprocess.CompletedProcess(args=["excel-http", "/batch_write"], returncode=1,
+                                           stdout="", stderr=resp.get("error") or "timeout")
     if not resp or not resp.get("ok") or resp.get("fallback"):
         print(f"0n daemon write unavailable ({(resp or {}).get('error')}), falling back to ix-osa",
               file=sys.stderr)
@@ -2328,50 +2356,6 @@ def _pre_image_text(r: dict) -> str:
     return bv
 
 
-def write_1n_batches(one_n_writes, week_date):
-    """Step 4b: write 1n+ items grouped by the week row each belongs to.
-    Returns (result, row_of, pre_of): `result` is the first failed batch's
-    result if any failed, else the last one's; row_of/pre_of map id(r) to its
-    own batch's weekRow / PRE-line map, for successful batches only."""
-    row_of: dict = {}
-    pre_of: dict = {}
-    one_n_result = None
-    by_week: dict[str, list] = {}
-    for r in one_n_writes:
-        _hname = ONENEON_ALIASES.get(r.item.name.lower(), r.item.name)
-        by_week.setdefault(neon_weeks.habit_week_label(_hname, week_date), []).append(r)
-    _1n_failed = None
-    for week_mw, group in by_week.items():
-        # Daemon first (journaled + semantic ledger); raw ix-osa script is
-        # the daemon-down fallback only (Neon-off-Excel step 2b).
-        one_n_result = write_1n_via_daemon(group, week_mw)
-        if one_n_result is None:
-            script = build_1n_script(group, week_mw)
-            if script:
-                one_n_result = ix_run(script, timeout=30.0)
-        # Row, pre-images and success are PER BATCH (2026-10-27 review):
-        # with one shared week_row, a Sunday `/did 1 -2g, 1 i9` (two
-        # weeks) tagged every entry with the last batch's row (undo then
-        # edited the wrong week), kept only the last batch's undo
-        # pre-images, and credited 0分 for a batch whose write failed.
-        _ok_row = None
-        if one_n_result is not None and one_n_result.returncode == 0:
-            import re as _re
-            m = _re.search(r"weekRow=(\d+)", one_n_result.stdout)
-            if m:
-                _ok_row = m.group(1)
-        if _ok_row:
-            _pre = parse_pre_lines(one_n_result.stdout)
-            for r in group:
-                row_of[id(r)] = _ok_row
-                pre_of[id(r)] = _pre
-        elif _1n_failed is None:
-            _1n_failed = one_n_result
-    if _1n_failed is not None:  # report the failure, not the last success
-        one_n_result = _1n_failed
-    return one_n_result, row_of, pre_of
-
-
 def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
                         src: Optional[str] = None):
     """1n+ week-cell writes through the daemon (POST /batch_write, one
@@ -2402,6 +2386,12 @@ def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
     except Exception as e:  # noqa: BLE001
         print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
+    if resp and resp.get("timeout"):
+        # The daemon may still apply it (2026-11-04): the raw-script retry
+        # would double an add/append. Fail the write; no fallback.
+        print(f"1n+ daemon write timed out ({resp.get('error')}); not retried", file=sys.stderr)
+        return subprocess.CompletedProcess(args=["excel-http", "/batch_write"], returncode=1,
+                                           stdout="", stderr=resp.get("error") or "timeout")
     if not resp or not resp.get("ok") or resp.get("fallback"):
         print(f"1n+ daemon write unavailable ({(resp or {}).get('error')}), falling back to ix-osa",
               file=sys.stderr)
@@ -2798,6 +2788,56 @@ def _parse_stop_minutes(output: str) -> Optional[int]:
     return None
 
 
+def _range_in_toggl(name: str, tr: tuple, day: date) -> bool:
+    """An entry named `name` already overlaps the HHMM-HHMM range `tr` (run
+    toggl_minutes_for first: it fills _TOGGL_TODAY)."""
+    lo = datetime(day.year, day.month, day.day, int(tr[0][:2]), int(tr[0][2:]), tzinfo=_tz())
+    hi = datetime(day.year, day.month, day.day, int(tr[1][:2]), int(tr[1][2:]), tzinfo=_tz())
+    for e in _TOGGL_TODAY or []:
+        if header_normalize(e.get("description") or "") != header_normalize(name):
+            continue
+        start = datetime.fromisoformat(e["start"].replace("Z", "+00:00")).astimezone(_tz())
+        stop = (datetime.fromisoformat(e["stop"].replace("Z", "+00:00")).astimezone(_tz())
+                if e.get("stop") else datetime.now(_tz()))
+        if start < hi and stop > lo:
+            return True
+    return False
+
+
+def hiit_day_minutes(session, typed: Optional[int], tr, toggl_total: int, cell: float,
+                     in_toggl: bool) -> int:
+    """The day's hiit minutes for 0n. JM does several sessions a day, and the
+    cell is SET so a retry or a second log of one session can't double it:
+    the day's Toggl total, plus a range Toggl doesn't have yet, or a typed
+    value when Toggl has nothing. Never below the cell: a bare close with Toggl
+    down must not wipe it (and a hand edit there survives)."""
+    total = toggl_total
+    if tr and not in_toggl:
+        total += time_range_minutes(tr[0], tr[1])
+    elif not toggl_total and typed:
+        total = typed
+    return int(max(total, cell, 1))
+
+
+def apply_hiit_day_total(results: list, target_date: str) -> None:
+    """Runs after the timer stop, so the session just ended is in the total."""
+    for r in results:
+        if r.step != "0n" or r.item.name.lower() != "hiit":
+            continue
+        typed = r.item.time_value
+        if r.item.time_range or typed is not None:
+            r.session_minutes = r.write_value
+        toggl_total = toggl_minutes_for("hiit") or 0
+        tr = r.item.time_range
+        in_toggl = bool(tr) and _range_in_toggl("hiit", tr, _daytime.today())
+        cur = neon_excel.read("0n", neon_cols.col_letter(r.col_num), date=target_date)
+        try:
+            cell = float(cur.get("value") or 0)
+        except (TypeError, ValueError):
+            cell = 0.0
+        r.write_value = hiit_day_minutes(r.write_value, typed, tr, toggl_total, cell, in_toggl)
+
+
 def apply_timer_minutes(results: list, toggl_stop: Optional[dict]) -> None:
     """Backfill variable-task values from the stopped Toggl timer.
 
@@ -2963,7 +3003,9 @@ def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
             ["python3", str(TOGGL_CLI), "stop"],
             capture_output=True, text=True, timeout=10,
         )
+        _id = re.search(r"\[id:(\d+)\]", line)
         return {"description": desc, "stopped": stop_proc.returncode == 0,
+                "id": _id.group(1) if _id else None,
                 "output": stop_proc.stdout.strip(),
                 "minutes": _parse_stop_minutes(stop_proc.stdout)}
     except Exception:
@@ -3741,11 +3783,13 @@ def _install_watchdog():
     clearing tasks / invariant fired" incident. A SIGALRM watchdog converts any
     such hang into a fast, clean non-zero exit; the worker then logs "✗ ..." and
     moves on to the next item instead of wedging. Tune/disable with
-    DIDFAST_WATCHDOG_SECS (0 disables)."""
+    DIDFAST_WATCHDOG_SECS (0 disables). 120s (was 60, 2026-11-05): Excel at 8s
+    a write can need more than 60, and a kill after the 分 land leaves the
+    entry and its record undone."""
     try:
-        secs = int(os.environ.get("DIDFAST_WATCHDOG_SECS", "60"))
+        secs = int(os.environ.get("DIDFAST_WATCHDOG_SECS", "120"))
     except ValueError:
-        secs = 60
+        secs = 120
     if secs <= 0:
         return
 
@@ -4067,6 +4111,11 @@ def main():
     # Script runs only (see __main__): in-process callers keep sys.stdout.
     # --points-only: log points to 0分/completed-today but skip all Todoist
     # side effects (match/close/posthoc/build-order). Used by dtd's split.
+    # --no-credit: a janus row log that has its own entry but no range, so an
+    # open credit must not outlive it and take the next session's points.
+    no_credit = "--no-credit" in argv
+    if no_credit:
+        argv = [a for a in argv if a != "--no-credit"]
     points_only = "--points-only" in argv
     if points_only:
         argv = [a for a in argv if a != "--points-only"]
@@ -4223,13 +4272,15 @@ def main():
     # A timer-backfilled credit over the cap was refused in place: no write.
     refused += [r for r in fast if r.step == "refused"]
     fast = [r for r in fast if r.step != "refused"]
+    target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
+    if not past_target:
+        apply_hiit_day_total(fast, target_date)
     # 3c. xk20 / xk22 domain cards -> kid-time minutes in their 0n column
     # (joins the step-4 0n batch below; see synth_kid_time_writes).
     fast.extend(synth_kid_time_writes(fast, toggl_stop, headers))
 
     # 4. Batch 0₦ writes
     on_writes = [r for r in fast if r.step == "0n" and r.col_num]
-    target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
 
     on_result = None
     if on_writes:
@@ -4302,8 +4353,9 @@ def main():
     one_n_writes = [r for r in fast if r.step == "1n" and r.col_letter]
     one_n_result = None
     week_row = None
-    _1n_row_of: dict = {}  # id(r) -> its batch's weekRow (successful batches only)
-    _1n_pre_of: dict = {}  # id(r) -> its batch's PRE-line map
+    pre_1n: dict = {}
+    week_row_by_col: dict = {}  # a batch can span weeks: 1n+ col → its row
+    filled_prev_week: dict = {}  # col → label, when a blank last week took it
     if one_n_writes:
         # A past-day write (past_ok) belongs to THAT date's week, which may
         # not be this week.
@@ -4313,9 +4365,40 @@ def main():
         # (neon_weeks.CYCLE_START_WEEKDAY, e.g. 1 -2g / 1 -1n run Monday to
         # Sunday) belongs to its cycle's week, so a Sunday run lands in the
         # week that is ending rather than the one that Sunday opens.
-        one_n_result, _1n_row_of, _1n_pre_of = write_1n_batches(one_n_writes, _week_date)
-        if _1n_row_of:
-            week_row = next(iter(_1n_row_of.values()))
+        # A blank last week takes the completion first (lib/neon/week_fill.py).
+        by_week: dict[str, list] = {}
+        _fill_sheet = None if past_target else neon_week_fill.load()
+        for r in one_n_writes:
+            _hname = ONENEON_ALIASES.get(r.item.name.lower(), r.item.name)
+            _week = neon_weeks.habit_week_label(_hname, _week_date)
+            if _fill_sheet and not (r.is_variable_1n or r.is_cumulative_1n):
+                _target = neon_week_fill.resolve(_hname, r.col_letter, _week_date, _fill_sheet)
+                if _target:
+                    _week = _target.label
+                    if _target.shifted:
+                        filled_prev_week[r.col_letter] = _week
+            by_week.setdefault(_week, []).append(r)
+        for week_mw, group in by_week.items():
+            # Daemon first (journaled + semantic ledger); raw ix-osa script is
+            # the daemon-down fallback only (Neon-off-Excel step 2b).
+            _group_result = write_1n_via_daemon(group, week_mw)
+            if _group_result is None:
+                script = build_1n_script(group, week_mw)
+                if script:
+                    _group_result = ix_run(script, timeout=30.0)
+            if _group_result is not None:
+                # A failed group must stay visible past later successes.
+                if one_n_result is None or one_n_result.returncode == 0:
+                    one_n_result = _group_result
+                # Parse weekRow from output for 0分 cell references
+                if _group_result.returncode == 0:
+                    pre_1n.update(parse_pre_lines(_group_result.stdout))
+                    import re as _re
+                    m = _re.search(r"weekRow=(\d+)", _group_result.stdout)
+                    if m:
+                        week_row = m.group(1)
+                        for _w in group:
+                            week_row_by_col[_w.col_letter] = week_row
 
     # 4c. Batch 1n+ → 0分 appends (via the excel-http daemon, one round-trip).
     # The week cell holds MINUTES (2026-07-27 redesign), so 0分 must NOT
@@ -4323,13 +4406,12 @@ def main():
     # points (a constant), variable habits and [N] overrides append literal
     # points via step 5's fen_appends.
     one_n_fen_result = None
-    _ok_1n = [r for r in one_n_writes if id(r) in _1n_row_of]
-    if _ok_1n:
+    if one_n_writes and week_row:
         ref_appends = []
         ref_names = []
         ref_idem = []
-        for r in _ok_1n:
-            if not r.fen_col:
+        for r in one_n_writes:
+            if not r.fen_col or r.col_letter not in week_row_by_col:
                 continue
             if r.is_variable_1n:
                 # Row 5 is a RATE string ("1/m") for these, never a number:
@@ -4889,9 +4971,10 @@ def main():
                 entry["credited"] = credited
         if r.step == "1n" and r.col_letter:
             entry["col_letter"] = r.col_letter
-            entry["week_row"] = _1n_row_of.get(id(r))
+            entry["week_row"] = week_row_by_col.get(r.col_letter, week_row)
             entry["fen_col"] = r.fen_col
-            pre_1n = _1n_pre_of.get(id(r), {})
+            if r.col_letter in filled_prev_week:
+                entry["filled_prev_week"] = filled_prev_week[r.col_letter]
             if r.col_letter in pre_1n:
                 entry["undo"] = {"prev_1n_formula": pre_1n[r.col_letter]}
         if r.item.curly_points and r.item.curly_points > 0:
@@ -4906,6 +4989,8 @@ def main():
                 and not (r.step == "1n" and not r.is_variable_1n)):
             # Points, not minutes; undo-fast strips "+pts" from hcbi!<col>.
             entry["hcbi"] = {"col": dom_col, "pts": r.fen_points}
+        if r.session_minutes is not None:
+            entry["session_value"] = r.session_minutes   # value is the day's total
         if r.is_variable_1n:
             entry["variable_1n"] = True
             entry["variable_value"] = r.variable_value
@@ -4964,6 +5049,11 @@ def main():
         if r.item.name in night_hcmc_results:
             entry["night_hcmc_toggl"] = night_hcmc_results[r.item.name]
         output["results"].append(entry)
+        _note_entry_points(output, entry, toggl_stop,
+                           target_date_iso(r.item.target_date, _daytime.today()))
+        if not (points_only or past_target or no_credit):
+            _note_open_credit(output, entry, r,
+                              target_date_iso(r.item.target_date, _daytime.today()), toggl_stop)
 
     for r in threshold_skipped:
         entry = {"name": r.item.name, "step": "skipped", "reason": r.error}
@@ -5085,6 +5175,8 @@ def main():
 
     _emit(output)
     failed = _write_failures(output)
+    if not failed:
+        _record_entry_points(output)
     if failed:
         # A completion whose Excel write did not land is a failed completion:
         # exit nonzero so dtd's worker queues the item for its idle-tick retry
@@ -5092,6 +5184,81 @@ def main():
         # that redirects did-fast's output can still see something went wrong.
         print("did-fast: " + "; ".join(failed), file=sys.stderr)
         sys.exit(2)
+
+
+def _entry_point_id(entry: dict, toggl_stop: Optional[dict]) -> Optional[str]:
+    """The Toggl entry a result's 分 belong to: the one did-fast created for
+    its range, else the timer it just stopped for this name."""
+    toggl = entry.get("toggl") or {}
+    if toggl.get("ok") and toggl.get("ids"):
+        return str(toggl["ids"][0])
+    if (toggl_stop and toggl_stop.get("stopped") and toggl_stop.get("id")
+            and _timer_key(toggl_stop.get("description", "")) == _timer_key(entry.get("name", ""))):
+        return str(toggl_stop["id"])
+    return None
+
+
+def _note_entry_points(output: dict, entry: dict, toggl_stop: Optional[dict], day_iso: str) -> None:
+    """output["entry_points"] = {day: {entry id: 分}}; undo-fast reads it back
+    from the journal. Zero stays out: a sheet-priced habit reports no points
+    here and its clients price it from the minutes."""
+    try:
+        from janus_done import did_points
+        pts, eid = did_points(entry), _entry_point_id(entry, toggl_stop)
+        if pts > 0 and eid and entry.get("step") not in ("refused", "skipped"):
+            day = output.setdefault("entry_points", {}).setdefault(day_iso, {})
+            day[eid] = day.get(eid, 0) + pts
+    except Exception:  # noqa: BLE001 -- a record must not cost the completion
+        pass
+
+
+def _card_points(content: str) -> int:
+    """A card's [N]. A fixed 1n+ card credits a sheet reference, so did-fast
+    holds no number for it; its [N] matches 1n+ row 5."""
+    m = re.search(r"\[(\d+)\]", content or "")
+    return int(m.group(1)) if m else 0
+
+
+def _credit_until(labels: list, day: date) -> date:
+    """A weekly card's credit lasts to the Saturday its fiscal week ends, a
+    daily task's to the end of the day: next cycle's session is a new one."""
+    return day + timedelta(days=(5 - day.weekday()) % 7) if "1neon" in labels else day
+
+
+def _note_open_credit(output: dict, entry: dict, r, day_iso: str,
+                      toggl_stop: Optional[dict]) -> None:
+    """A fixed-value task closed with no entry: output["unlinked"], so a
+    post-hoc entry of that name can take its 分 and undo-fast can void it."""
+    try:
+        from janus_done import did_points
+        td = entry.get("todoist") or {}
+        fixed = entry.get("step") == "todoist" or (entry.get("step") == "1n"
+                                                   and not entry.get("variable_1n"))
+        if not (fixed and td.get("closed") and td.get("id") and not r.item.time_range
+                and not _entry_point_id(entry, toggl_stop)):
+            return
+        pts = did_points(entry) or _card_points(td.get("content"))
+        if pts > 0:
+            name = r.item.name
+            output.setdefault("unlinked", []).append({
+                "id": f"{td['id']}@{day_iso}", "names": [name, td.get("content", ""),
+                                                         ONENEON_ALIASES.get(name.lower(), name)],
+                "pts": pts, "day": day_iso,
+                "until": _credit_until((r.todoist_task or {}).get("labels") or [],
+                                       date.fromisoformat(day_iso)).isoformat()})
+    except Exception:  # noqa: BLE001 -- a record must not cost the completion
+        pass
+
+
+def _record_entry_points(output: dict) -> None:
+    try:
+        import entry_points
+        for day, pts in (output.get("entry_points") or {}).items():
+            entry_points.record(day, pts, "did-fast")
+        for c in output.get("unlinked") or []:
+            entry_points.record_credit(c["id"], c["names"], c["pts"], c["day"], c["until"], "did-fast")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _write_failures(output: dict) -> list[str]:

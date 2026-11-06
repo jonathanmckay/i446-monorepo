@@ -70,6 +70,7 @@ TG_FAST = Path.home() / "i446-monorepo/tools/tg/tg-fast.py"
 # excel-http client — journaled 0分/hcbi strip writes (curls localhost on ix,
 # ssh+osascript fallback built in)
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+import entry_points
 from neon import excel
 from neon import cols as neon_cols
 import neon_blocks as nb
@@ -347,6 +348,11 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
                            errors: list[str]) -> None:
     """Reverse all side effects recorded in one did-fast output JSON."""
     results = out.get("results", [])
+    # The credit is going away, so its entries read as open again everywhere.
+    for day, pts in (out.get("entry_points") or {}).items():
+        entry_points.record(day, {eid: None for eid in pts}, "undo")
+    for c in out.get("unlinked") or []:
+        entry_points.void_credit(c["id"])
 
     # Per-script success flags: don't strip/negate a term whose original
     # append never landed (that would subtract points never added). A

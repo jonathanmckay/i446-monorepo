@@ -57,7 +57,7 @@ def test_edit_screen_runs_one_form_then_edit_fast_json_then_the_split_script():
     # pokes fzf's port to reload once the cache is patched
     assert "} </dev/null >> \"/tmp/dtd-edit.log\" 2>&1 &!" in body
     assert body.index('echo "⏳ saving…"') < body.index("trap '' HUP") < body.index('python3 "\\$EDIT_FAST"')
-    assert '--data "reload(\\$_reload)+transform-header($DTD_HDRGEN)"' in body
+    assert '--data "reload-sync(\\$_reload)+transform-header($DTD_HDRGEN)"' in body
     # cancel = rc 2 and no result file; the header says so and nothing is written
     assert 'if (( _rc == 2 )); then echo "edit cancelled" > "\\$HDR"' in body
     assert body.index('[[ ! -s "\\$_out" ]]') < body.index('python3 "\\$EDIT_FAST"')

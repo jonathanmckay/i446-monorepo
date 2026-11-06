@@ -117,7 +117,7 @@ PY
 
 Open the 1s survey — a full-screen TUI form (same pattern as `/0s`) that asks
 the manual questions of the `1分+1s` row (Title for the Week, Biggest Win,
-Biggest missed opportunity, Proud/Regret w/others, Notes). Rating and
+Biggest missed opportunity, Proud/Regret w/others). Rating and
 High/Low/Avg are NOT asked: those cells hold live formulas computed from the
 week's daily surveys (P pulls `'i9'!B{row}`; W/X/Y aggregate `0s897` ⌈/⌊/x̄)
 and must never be written. Above each question the form surfaces the week's
@@ -140,22 +140,20 @@ form runs, not `--from-json`) auto-closes its own cmux tab ~1s later via
 failure the pane is left open instead, so the error and any recovery-file
 path stay visible.
 
-It needs its own terminal. Do NOT block on it — continue with Step 1 while the
-user fills it. Pass the review-week date only if the user gave one (`MM/DD` →
-`YYYY-MM-DD`); no arg reviews the last completed Sun–Sat week.
-
-Open it with the shared launcher, which tries a cmux tab, then a new window in
-this Claude's own tmux session (only if a client is attached, e.g. the
-`cc-*` sessions on Ix), and otherwise exits 10:
+It needs its own terminal. Pass the review-week date through only if the user
+gave one (`MM/DD` → convert to `YYYY-MM-DD`); no arg reviews the last completed
+Sun–Sat week:
 
 ```bash
-~/.claude/skills/_lib/open-form.sh 1s "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
+~/i446-monorepo/scripts/open-tui.sh 1s "python3 ~/i446-monorepo/tools/1s/1s-survey.py [date]"
 ```
 
-- `OPENED cmux …` / `OPENED tmux …` → confirm: `1s survey opened (<cmux tab|tmux window>) — daily answers inline, digits pick a day, finishing the last field autosaves.`
-- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
-  himself.** Ask the form's questions here in chat (keys = `FIELDS` in `tools/1s/1s-survey.py`; show `--print-context` daily answers first), write his reply
-  to a temp file and run `python3 ~/i446-monorepo/tools/1s/1s-survey.py [date] --from-json <file>`.
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: daily answers inline, digits pick a day, finishing the last field
+autosaves. Do NOT block on the form — continue with Step 1 while the user fills
+it.
 
 Non-interactive paths (scripting/tests): `--from-json <file>` writes answers
 directly; `--print-script` prints the AppleScript without writing;

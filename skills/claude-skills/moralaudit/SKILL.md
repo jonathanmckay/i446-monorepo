@@ -51,19 +51,17 @@ checking with him; the naming is load-bearing (e.g. "Org/People" vs
 
 ## Launch
 
-The form is full-screen and needs its own terminal.
-Open it with the shared launcher, which tries a cmux tab, then a new window in
-this Claude's own tmux session (only if a client is attached, e.g. the
-`cc-*` sessions on Ix), and otherwise exits 10:
+The form is full-screen, so it needs its own terminal (optional date arg,
+default today):
 
 ```bash
-~/.claude/skills/_lib/open-form.sh moralaudit "python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD]"
+~/i446-monorepo/scripts/open-tui.sh moralaudit "python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD]"
 ```
 
-- `OPENED cmux …` / `OPENED tmux …` → confirm: `moralaudit opened (<cmux tab|tmux window>) — fill the grid, last field saves.`
-- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
-  himself.** Ask the form's questions here in chat (keys = `FIELDS` built from `ROWS` × `COLS` in `tools/moralaudit/moralaudit.py`; ask one row at a time), write his reply
-  to a temp file and run `python3 ~/i446-monorepo/tools/moralaudit/moralaudit.py [YYYY-MM-DD] --from-json <file>`. Ratings: `1`-`7`, `n/a`, or blank.
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: fill the grid, last field saves.
 
 ## Keys (inside the form)
 

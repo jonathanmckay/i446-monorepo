@@ -49,8 +49,9 @@ def test_build_0n_script_accumulates_xk22_instead_of_overwriting():
 
 def test_build_0n_script_still_overwrites_non_cumulative_habit():
     """Sanity check the fix is scoped correctly: an ordinary VARIABLE_0N
-    habit NOT in CUMULATIVE_0N (e.g. hiit — one session a day) still gets
-    the plain overwrite, not accidentally swept into accumulation."""
+    habit NOT in CUMULATIVE_0N (e.g. hiit, whose write is the day's Toggl
+    total) still gets the plain overwrite, not accidentally swept into
+    accumulation."""
     m = _load()
     w = _route_result(m, "hiit", "AE", 10)
     script = m.build_0n_script([w], "8/16")

@@ -72,6 +72,7 @@ sys.path.insert(0, str(Path("~/i446-monorepo/lib").expanduser()))
 import gcal_client  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402
 from neon.rates import speedy_meeting_points  # noqa: E402  25m→30 / 50m→60 meetings
+import entry_points  # noqa: E402  分 per entry, shared across clients and hosts
 import janus_done  # noqa: E402  /done points paths, shared with mobile.py
 import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with mobile.py
 import outlook_client  # noqa: E402
@@ -148,6 +149,7 @@ def _sync_width() -> None:
         _cols = cols
         _apply_width(cols)
 GAP_MIN = 5  # untracked minutes in a past block before the gap earns a row
+BLOCK_VIEW_GAP_MIN = 2  # same, on the ^G block view
 NO_TIMER_FLASH_DELAY = 15  # s with no running timer before the idle nag starts
 # flashing (user request 2026-08-11: switching tasks always has a beat of no
 # timer running between stop and the next start, and the whole-screen invert
@@ -341,6 +343,7 @@ def _ritual_pts_label(emojis: str) -> str:
 PROJECT_CODE = {}
 try:
     from mcp.toggl_server.config import PROJECT_MAP  # type: ignore
+    from mcp.toggl_server.config import SUBPROJECTS, split_subproject  # type: ignore
     PROJECT_CODE = {v: k for k, v in PROJECT_MAP.items()}
 except Exception:
     pass
@@ -1023,8 +1026,10 @@ def fetch_today(force=False):
                 "running": stop_raw is None,
                 "id": e.get("id"),
                 "tags": e.get("tags") or [],
+                "at": e.get("at"),
             })
         out.sort(key=lambda x: x["start_dt"])
+        entry_points.link(out)
         STATE.entries = out
         STATE.entries_day = today
         STATE.entries_known = True
@@ -4963,7 +4968,7 @@ def render_current_bottom() -> list[tuple[str, str]]:
     ]
 
 
-HINT_LINE = " type to run · Tab/↓↑ select · ↵ start/log/edit/fill · ⌥↵ did · ^O block · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit"
+HINT_LINE = " type to run · Tab/↓↑ select · ↵ edit/fill · ⌥↵ did · ^O block · ^P split · ^X del event/entry · esc cancel · ^_/^= day · ^S stop · ^R refresh · ^J/^K scroll · ^Q quit"
 
 
 def render_footer() -> list[tuple[str, str]]:
@@ -5149,9 +5154,10 @@ def render_block_view() -> list[tuple[str, str]]:
     """^G: one block, full-screen, every raw Toggl entry in it — no merging,
     no 3-row cap, no tiny-entry absorption (JM 2026-11-02: "look at all time
     entries in a block … same way I can look at the details of a task").
-    Untracked stretches between them show as gap rows. Every row registers
-    in STATE.visible_events, so ↑/↓, ↵, ⌥↵, ^P, ^X and ^G (points) act here
-    exactly as on the main timeline. Esc returns."""
+    Untracked stretches of 2+ minutes show as gap rows, and rows carry start
+    times only, the end being the next row's start (JM 2026-11-05). Every
+    row registers in STATE.visible_events, so ↑/↓, ↵, ⌥↵, ^P, ^X and ^G
+    (points) act here exactly as on the main timeline. Esc returns."""
     name, sh = STATE.block_view
     day = view_now().replace(hour=0, minute=0, second=0, microsecond=0)
     bs = day + dt.timedelta(hours=sh)
@@ -5176,12 +5182,12 @@ def render_block_view() -> list[tuple[str, str]]:
 
     def gap_row(gs, ge):
         mins = int((ge - gs).total_seconds() // 60)
-        if mins < 1:
+        if mins < BLOCK_VIEW_GAP_MIN:
             return
         item = {"kind": "empty", "start_dt": gs, "dur_min": mins}
         STATE.visible_events.append(item)
         is_sel, click, marker = _row_selection(_sel_key(item))
-        tcol = f"{gs:%H:%M}–{ge:%H:%M} "
+        tcol = f" {gs:%H:%M}  "
         out.extend(marker)
         out.append(_frag("class:selected_accent" if is_sel else "class:time", tcol, click))
         out.append(_frag("class:selected_bg" if is_sel else "class:no_entry",
@@ -5200,10 +5206,10 @@ def render_block_view() -> list[tuple[str, str]]:
                 "dur_min": dur, "running": running, "contiguous": True}
         STATE.visible_events.append(item)
         is_sel, click, marker = _row_selection(_sel_key(item))
-        # Real start/end even when the entry spills across the block edge;
+        # Real start even when the entry spills across the block edge;
         # ↳ / ↦ say which side it crosses.
-        tcol = (f"{'↳' if e['start_dt'] < bs else ' '}{e['start_dt']:%H:%M}–"
-                f"{'now  ' if running else f'{end:%H:%M}'}{'↦' if end > be else ' '} ")
+        tcol = (f"{'↳' if e['start_dt'] < bs else ' '}{e['start_dt']:%H:%M}"
+                f"{'↦' if end > be else ' '} ")
         tail = ("▶ " if running else "") + _entry_dur_display(dur, e["desc"], [e["id"]])
         tags = _visible_tags(e.get("tags"))
         avail = max(1, WIDTH_HINT - dwidth(tcol) - dwidth(tail) - _tag_chips_width(tags) - 1)
@@ -5340,7 +5346,9 @@ _ANNOT_RE = re.compile(r"\s*[\[({]-?\d+[\])}]")
 
 # ── Project-code typo guard (2026-10-17) ───────────────────────────────────
 def _known_project_codes() -> set:
-    return set(globals().get("PROJECT_MAP") or {})
+    # Sub-projects (@xk20/22/26, 2026-11-05) are real codes, not typos: the
+    # near-miss fixer used to "correct" @xk20 to @xk87/@xk88.
+    return set(globals().get("PROJECT_MAP") or {}) | set(globals().get("SUBPROJECTS") or {})
 
 
 def _fix_project_codes(part: str, known: set | None = None) -> tuple[str, list, list]:
@@ -5811,7 +5819,7 @@ def run_tg_fast(text: str) -> str:
     post-429 cooldown, with no bug in tg-fast.py itself. 15s was too tight
     and killed the subprocess mid-transaction (2026-08-07: a comma-delimited
     range create timed out and errored, same failure mode did-fast.py's own
-    45s timeout already exists to avoid — see run_did_fast)."""
+    longer timeout already exists to avoid — see run_did_fast)."""
     try:
         proc = subprocess.run(
             ["python3", TG_FAST, text],
@@ -5837,6 +5845,31 @@ def _norm_done_name(s: str) -> str:
     return " ".join(_ANNOT_RE.sub(" ", s).split()).lower()
 
 
+def _row_0n_minutes(name: str, minutes: int, entry_ids=None) -> int:
+    """A row's share of the day's 0n cell. The cell covers every same-name
+    session, so a row keeps its own minutes unless the cell is short of the
+    day's total; then earlier sessions take theirs first. No ids: the cell caps
+    the row, as before (bug 2026-11-04: an 80m hiit with 24 logged showed [160]).
+    A 22m hiit with 17 logged from the morning showed that morning's [34]."""
+    logged = _logged_0n_minutes(name)
+    if logged is None:
+        return minutes
+    if not entry_ids:
+        return min(minutes, logged)
+    key = _norm_done_name(name)
+    rows = sorted((e for e in STATE.entries if _norm_done_name(e.get("desc") or "") == key),
+                  key=lambda e: e["start_dt"])
+    mins = [int((e["end_dt"] - e["start_dt"]).total_seconds() // 60) for e in rows]
+    if logged >= sum(mins) - 2:      # Toggl's seconds round differently than the cell
+        return minutes
+    left = logged
+    for e, m in zip(rows, mins):
+        if e.get("id") in entry_ids:
+            return max(0, min(minutes, left))
+        left -= m
+    return min(minutes, logged)
+
+
 def _logged_0n_minutes(name: str) -> float | None:
     """Today's 0n cell value for habit `name` from the habit strip's read of
     the row (STATE.habits_today); None when the strip hasn't loaded it."""
@@ -5847,7 +5880,8 @@ def _logged_0n_minutes(name: str) -> float | None:
     return None
 
 
-def _points_recorded_today(desc: str, minutes: int | None = None) -> tuple[bool, int]:
+def _points_recorded_today(desc: str, minutes: int | None = None,
+                           entry_ids=None) -> tuple[bool, int]:
     """(recorded, 分) for a desc completed TODAY, from completed-today.json —
     did-fast's own idempotency record. Only meaningful for today's view:
     past days keep no completion record, so callers must treat (False, 0)
@@ -5889,10 +5923,7 @@ def _points_recorded_today(desc: str, minutes: int | None = None) -> tuple[bool,
                         # Priced at what the 0n cell holds when that is less
                         # than the entry (bug 2026-11-04: an 80m hiit entry
                         # with 24 logged showed [160]; Neon credited 48).
-                        logged = _logged_0n_minutes(n)
-                        if logged is not None:
-                            minutes = min(minutes, logged)
-                        rp = zero_n_points(n, minutes)
+                        rp = zero_n_points(n, _row_0n_minutes(n, minutes, entry_ids))
                         if rp is not None:
                             return True, rp
                     hp = zero_n_done_points(n)
@@ -6001,8 +6032,10 @@ def _entry_pts_add(day: dt.date, pts_by_id: dict, add: bool = False) -> None:
     if not pts_by_id:
         return
     data = _entry_pts(day)
+    shown = entry_points.overlay(data, day)   # a ^G delta sums on the row's real total
     for k, v in pts_by_id.items():
-        data[str(k)] = (int(data.get(str(k), 0)) if add else 0) + int(v)
+        data[str(k)] = (int(shown.get(str(k), 0)) if add else 0) + int(v)
+    entry_points.record(day, {str(k): data[str(k)] for k in pts_by_id}, "janus")
     try:
         _ENTRY_PTS_DIR.mkdir(parents=True, exist_ok=True)
         tmp = _entry_pts_path(day).with_suffix(".tmp")
@@ -6022,6 +6055,8 @@ def _entry_pts_pin(day: dt.date, entry_ids, total: int) -> None:
     for i in entry_ids[1:]:
         data.pop(str(i), None)
     data[str(entry_ids[0])] = int(total)
+    entry_points.record(day, {str(entry_ids[0]): int(total),
+                              **{str(i): None for i in entry_ids[1:]}}, "janus pin")
     try:
         _ENTRY_PTS_DIR.mkdir(parents=True, exist_ok=True)
         tmp = _entry_pts_path(day).with_suffix(".tmp")
@@ -6033,10 +6068,33 @@ def _entry_pts_pin(day: dt.date, entry_ids, total: int) -> None:
 
 def _recorded_entry_pts(day: dt.date, entry_ids) -> int | None:
     """Σ recorded 分 over a row's entry ids on `day`, None when none of them
-    has a record."""
-    data = _entry_pts(day)
+    has a record. Any client, any host (lib/entry_points.py)."""
+    data = entry_points.overlay(_entry_pts(day), day)
     hits = [int(data[str(i)]) for i in (entry_ids or []) if str(i) in data]
     return sum(hits) if hits else None
+
+
+def _holds_done_claim(desc: str, entry_ids) -> bool:
+    """False for a row that must not repeat a completion's flat 分: one
+    completion shows on one row (janus_done.done_entry_claims). Per-minute
+    habits aren't in "points", so every session keeps its own."""
+    try:
+        data = json.loads(_COMPLETED_TODAY.read_text())
+    except Exception:
+        return True
+    key = _norm_done_name(desc)
+    flat = data.get("points") or {}
+    if not entry_ids or key not in {_norm_done_name(n) for n, v in flat.items() if v}:
+        return True
+    rows = [(e["id"], e.get("desc"), e["start_dt"].timestamp(), e["end_dt"].timestamp())
+            for e in sorted(STATE.entries, key=lambda e: e["start_dt"])]
+    same = [r[0] for r in rows if _norm_done_name(r[1] or "") == key]
+    if not same:
+        return True
+    logged = {str(i) for i in same if _recorded_entry_pts(view_now().date(), [i]) is not None}
+    at = {_norm_done_name(n): t for n, t in (data.get("done_at") or {}).items()}.get(key)
+    claim = janus_done.done_entry_claims(rows, {key: at}, logged, _norm_done_name).get(key)
+    return claim in {str(i) for i in entry_ids}
 
 
 def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[bool, int]:
@@ -6052,8 +6110,7 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
         try:
             from neon.rates import zero_n_points
             nm = _norm_done_name(raw_desc) or raw_desc
-            logged = _logged_0n_minutes(nm)
-            sheet = zero_n_points(nm, min(dur_min, logged) if logged is not None else dur_min)
+            sheet = zero_n_points(nm, _row_0n_minutes(nm, dur_min, entry_ids))
         except Exception:
             sheet = None
         if sheet:
@@ -6062,7 +6119,9 @@ def _row_points(raw_desc: str | None, dur_min: int, entry_ids=None) -> tuple[boo
         return True, rec
     if STATE.day_offset != 0:
         return False, 0
-    recorded, pts = _points_recorded_today(raw_desc, dur_min)
+    recorded, pts = _points_recorded_today(raw_desc, dur_min, entry_ids)
+    if recorded and not _holds_done_claim(raw_desc, entry_ids):
+        recorded, pts = False, 0
     adj = sum(int(v) for k, v in _points_adj_today().items()
               if k in {str(i) for i in (entry_ids or [])})
     return (recorded or bool(adj)), pts + adj
@@ -6114,16 +6173,15 @@ def _enqueue_points_adjust(app, pe: dict, delta: int) -> None:
 
 def _entry_dur_display(dur_min: int, raw_desc: str | None, entry_ids=None) -> str:
     """Duration text for a past/current (non-event, non-spill) entry row:
-    its own [N] points once today's did-fast run has recorded them — the
-    point total is the more useful number at that point, and the raw
-    minutes next to it is just noise (user request 2026-08-10) — else the
-    ordinary Nm/Nh duration. Past-day views have no per-entry points record
+    the ordinary Nm/Nh duration, then its own [N] points once today's
+    did-fast run has recorded them (JM 2026-11-05: minutes left of the 分,
+    as in dtd). Past-day views have no per-entry points record
     (_points_recorded_today is today-only), so they show points only once
     janus itself logged the row (_entry_pts, JM 2026-11-02)."""
     if raw_desc:
         recorded, pts = _row_points(raw_desc, dur_min, entry_ids)
         if recorded:
-            return f"[{pts}]"
+            return f"{fmt_dur(dur_min)} [{pts}]"
     return fmt_dur(dur_min)
 
 
@@ -6302,8 +6360,8 @@ def run_did_fast_data(text: str, flags: tuple[str, ...] | None = None) -> tuple[
         flags = _did_flags()
     try:
         proc = subprocess.run(
-            _did_argv(text, flags),
-            capture_output=True, text=True, timeout=45,
+            _did_argv(text, flags), env=janus_done.did_env(),
+            capture_output=True, text=True, timeout=janus_done.DID_TIMEOUT_SECS,
         )
         if proc.stdout and "{" in proc.stdout:
             try:
@@ -6314,7 +6372,7 @@ def run_did_fast_data(text: str, flags: tuple[str, ...] | None = None) -> tuple[
         out = (proc.stdout or proc.stderr or "").strip()
         return (out.splitlines()[-1] if out else "(no output)"), None
     except subprocess.TimeoutExpired:
-        return "err: did-fast timed out", None
+        return "err: did-fast timed out, points may have landed: check before redoing", None
     except Exception as e:
         return f"err: {e}", None
 
@@ -6740,6 +6798,11 @@ def _run_current_timer_done(app) -> None:
         _run_done_command(app, cmd)
         return
     path = _done_points_path(raw_desc)
+    kid, _ = janus_done.kid_route(code, cur.get("tags"))
+    if kid and kid != code:  # xk87 + kid tag → "@xk20" (2026-11-05)
+        code = kid
+        if path in ("ask", "credited"):
+            path = "time"
     if path == "ask":
         # Not a task with [N] and not a time-based habit/category: janus is
         # the interactive points-conversion interface (user request
@@ -6804,7 +6867,7 @@ def _convert_selected_event(ev: dict, app) -> None:
     covering entry via the MECE trim); a not-yet-ended one starts a tg-fast
     timer backdated to the event's start AND kicks off a d357 recording
     session (user request 2026-08-02), finalizing any previous one first.
-    Shared by plain Enter and ⌥↵ (user request 2026-07-29)."""
+    ⌥↵ on a calendar row; plain Enter only loads the text box (2026-11-05)."""
     now = view_now()
     is_past = ev["end_dt"] <= now
     cmd = _event_to_did_command(ev) if is_past else _event_to_tg_command(ev, now)
@@ -7011,7 +7074,13 @@ def _on_enter(event):
                 new_total = points
             points = None
         desc, code, time_range, tags = _parse_edit_text(text)
-        pid = PROJECT_MAP.get(code) if code else None
+        if code and code.lower() in (globals().get("SUBPROJECTS") or {}):
+            # @xk20 → Toggl xk87 + tag xk20; code stays xk20 for the 分 route.
+            code = code.lower()
+            tags = list(tags or []) + ([code] if code not in (tags or []) else [])
+            pid = PROJECT_MAP.get(SUBPROJECTS[code])
+        else:
+            pid = PROJECT_MAP.get(code) if code else None
         # Every rejection below has already cleared STATE.edit_target and
         # wiped input_buffer (lines above) — a stale edit armed by an
         # earlier, possibly-forgotten row selection (Tab/click elsewhere)
@@ -7289,9 +7358,15 @@ def _on_enter(event):
             input_buffer.text = _empty_gap_prefill(item)
             input_buffer.cursor_position = len(input_buffer.text)
             return
-        # Anything else is a raw gcal event dict (kind absent) — the
-        # convert-to-Toggl-entry path, shared with ⌥↵ (2026-07-29).
-        _convert_selected_event(item, event.app)
+        # Anything else is a raw gcal event dict (kind absent). Enter loads it
+        # for editing, like every other row; ⌥↵ is what runs it (JM
+        # 2026-11-05). A later Enter or ⌥↵ takes the typed path, which adds
+        # the viewed day itself.
+        STATE.event_sel = None
+        now = view_now()
+        input_buffer.text = (_event_to_did_command(item) if item["end_dt"] <= now
+                             else _event_to_tg_command(item, now))
+        input_buffer.cursor_position = len(input_buffer.text)
         return
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
@@ -7579,9 +7654,9 @@ def _(event):
         if item is None or sel_desc == rec_desc:
             return
     if isinstance(item, dict) and item.get("kind") is None and item.get("end_dt"):
-        # A raw calendar event: ⌥↵ = "did this meeting" — same conversion
-        # as plain Enter (an ended event did-fasts: Toggl entry + points in
-        # one shot; a live one starts a backdated timer). One gesture for
+        # A raw calendar event: ⌥↵ = "did this meeting" (an ended event
+        # did-fasts: Toggl entry + points in one shot; a live one starts a
+        # backdated timer and its d357 recording). One gesture for
         # "give me credit" whether the row is an entry or a meeting
         # (user request 2026-07-29).
         _convert_selected_event(item, event.app)
@@ -7636,8 +7711,14 @@ def _(event):
     # the entry's own single-word tags ride as #tag tokens or they are lost
     # (2026-11-01; same as mobile.py's _tag_tokens).
     cmd += "".join(f" #{_t}" for _t in entry_tags if re.match(r"^-?\w+$", str(_t)))
+    # xk87 + kid tag → "@xk20": minutes to the kid's 0n column, no points
+    # prompt, and the tag is not logged again as a habit (2026-11-05).
+    kid, sec_tags = janus_done.kid_route(code, entry_tags)
+    if kid and kid != code:
+        cmd = cmd.replace(f" @{code}", f" @{kid}", 1) if code else cmd + f" @{kid}"
+        code = kid
     suffix = date_sfx
-    for _t in _habit_tags(entry_tags):
+    for _t in _habit_tags(sec_tags):
         suffix += f", {_t} {item['dur_min']}{date_sfx}"
     cmd += suffix
     # Idempotency is keyed on the exact command (desc + time range), not the
@@ -7649,7 +7730,17 @@ def _(event):
     # Past-day views are guarded too (2026-09-28): the command already
     # carries the viewed M/D, so the key is distinct per day.
     if _cmd_done_today(cmd):
-        flash(f"already recorded: {cmd} — not re-running", 6.0)
+        flash(_already_recorded_msg(cmd, desc, item.get("dur_min") or 0,
+                                    item.get("entry_ids")), 6.0)
+        return
+    # _cmd_done_today is this host's own memory: the entry's record also
+    # covers a log from dtd, mobile or the other machine. A task closed with
+    # no entry yet is this row's points too, even before a fetch linked it.
+    if item.get("entry_ids"):
+        entry_points.claim(item["entry_ids"][0], desc, start.date())
+    rec = _recorded_entry_pts(start.date(), item.get("entry_ids") or [])
+    if rec is not None:
+        flash(f"already logged [{rec}]: not re-running", 6.0)
         return
     STATE.event_sel = None
     # Same three paths as the running timer's /done (JM 2026-10-28): a task
@@ -7657,6 +7748,8 @@ def _(event):
     # task already crossed off adds nothing; anything else asks instead of
     # silently crediting the minutes at 1x.
     path = "task" if speedy else _done_points_path(desc, past_day=STATE.day_offset != 0)
+    if kid and path in ("ask", "credited"):
+        path = "time"
     if path == "credited":
         _mark_cmd_done_today(cmd)
         flash(f'"{desc}" already crossed off today — no extra 分 for the entry', 6.0)
@@ -7672,6 +7765,22 @@ def _(event):
                  day=start.date())
 
 
+def _did_may_have_credited(res: str, data: dict | None) -> bool:
+    """Whether a row's retry could double-credit. A crash or refusal credited
+    nothing, so it must stay retryable (bug 2026-11-05: a did-fast crash left
+    xk88 "already recorded" with no 分); a timeout may have landed."""
+    if data is None:
+        return res.startswith("err: did-fast timed out")
+    return not janus_done.refusal(data)
+
+
+def _already_recorded_msg(cmd: str, desc: str, dur_min: int, entry_ids) -> str:
+    recorded, pts = _row_points(desc, dur_min, entry_ids)
+    if recorded:
+        return f"already recorded [{pts}]: {cmd}, not re-running"
+    return f"already ran, no 分 on record: {cmd}, not re-running"
+
+
 def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
                  entry_ids=None, day: dt.date | None = None) -> None:
     """did-fast a FINISHED entry row (no timer to stop) and refresh. `key`
@@ -7684,7 +7793,8 @@ def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
         flash(f"$ did {cmd}")
         app.invalidate()
         res, data = await asyncio.to_thread(run_did_fast_data, cmd, flags)
-        _mark_cmd_done_today(key)
+        if _did_may_have_credited(res, data):
+            _mark_cmd_done_today(key)
         if day is not None and data and not res.startswith("err") \
                 and not janus_done.refusal(data):
             _entry_pts_add(day, janus_done.entry_points_by_id(data, entry_ids or []))

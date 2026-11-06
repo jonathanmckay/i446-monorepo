@@ -17,7 +17,7 @@ credits a second session's minutes.
 from __future__ import annotations
 
 import math
-
+import os
 import re
 from typing import Callable
 
@@ -38,6 +38,44 @@ SPLIT_MIN_POINTS = 100
 # surface the refusal instead of logging. 2026-10-22: a year in task text
 # ("... readjustment 2028") was credited as +2028 分.
 MAX_INFERRED_POINTS = 500
+
+
+def kid_route(code: str | None, tags) -> tuple[str | None, list]:
+    """(code for did-fast's @, habit tags still to log as secondaries).
+
+    JM 2026-11-05: xk20 / xk22 / xk26 are sub-projects of xk87
+    (mcp/toggl_server/config.SUBPROJECTS): the Toggl entry is xk87 + a kid
+    tag, but the 分 belong in the kid's own 0n column. An xk87 (or
+    project-less) entry tagged with a kid code logs as "@xk20", and that tag
+    is dropped from the secondary habit items — logging it twice would
+    double-count, since 0n!AZ (the kid columns) already feeds 0分!X."""
+    tags = [str(t) for t in (tags or [])]
+    try:
+        from mcp.toggl_server.config import SUBPROJECTS
+    except Exception:
+        SUBPROJECTS = {"xk20": "xk87", "xk22": "xk87", "xk26": "xk87"}
+    if (code or "").lower() in SUBPROJECTS:
+        kid = code.lower()
+    else:
+        kid = next((t.lower() for t in tags if t.lower() in SUBPROJECTS
+                    and (not code or SUBPROJECTS[t.lower()] == code)), None)
+    if not kid:
+        return code, tags
+    return kid, [t for t in tags if t.lower() != kid]
+
+
+# did-fast's own watchdog (default 120s, sized for dtd's worker) exits it mid-run,
+# whatever the caller's timeout says. Janus runs it off the UI, so a slow Excel
+# may take longer: killing a run after the 分 land leaves the rest undone
+# (2026-11-05: 19分 credited, row blank, entry duplicated). The caller's timeout
+# stays just above the watchdog so did-fast is the one that gives up.
+DID_WATCHDOG_SECS = 300
+DID_TIMEOUT_SECS = DID_WATCHDOG_SECS + 10
+
+
+def did_env() -> dict:
+    """Environment for a did-fast run from a janus client."""
+    return {**os.environ, "DIDFAST_WATCHDOG_SECS": str(DID_WATCHDOG_SECS)}
 
 
 def refusal(did_fast_output: dict | None) -> str | None:
@@ -71,6 +109,29 @@ def crossed_off(completed: dict, desc: str, norm: Callable[[str], str]) -> bool:
         return False
     ids = {norm(k) for k, v in (completed.get("ids") or {}).items() if v}
     return target in ids and any(norm(n) == target for n in completed.get("names") or [])
+
+
+def done_entry_claims(rows, done_at: dict, logged_ids, norm: Callable[[str], str]) -> dict[str, str]:
+    """{name key: entry id} for tasks closed outside janus: one completion
+    marks one row, the entry it happened in (JM 2026-11-05: "it should be when
+    I did it"), else the latest one started before it, else the first (typed
+    in afterwards). No recorded time: the latest. Other same-name sessions stay
+    open, and a name janus already logged today claims nothing. `rows` is
+    (id, desc, start epoch, end epoch) in start order; `done_at` is {name key:
+    completion epoch or None}."""
+    out: dict[str, str] = {}
+    for key, at in done_at.items():
+        same = [r for r in rows if norm(r[1] or "") == key]
+        if not same or any(str(r[0]) in logged_ids for r in same):
+            continue
+        if at is None:
+            pick = same[-1]
+        else:
+            during = [r for r in same if r[2] <= at <= r[3]]
+            before = [r for r in same if r[2] <= at]
+            pick = (during or before or same[:1])[-1]
+        out[key] = str(pick[0])
+    return out
 
 
 def is_time_based(name: str, *, is_habit: Callable[[str], bool], df) -> bool:
@@ -167,8 +228,11 @@ def did_points(result: dict) -> int:
         # what the cell actually gained as `credited` (bug 2026-11-04: a
         # second 30m session was priced at the day's 70).
         from neon.rates import zero_n_points
-        minutes = result["credited"] if "credited" in result else result.get("value")
-        pts += zero_n_points(result.get("name") or "", minutes or 0) or 0
+        # A hiit session reports its own minutes as `session_value` (the cell
+        # holds the day total, 2026-11-05).
+        minutes = (result["credited"] if "credited" in result
+                   else result.get("session_value", result.get("value"))) or 0
+        pts += zero_n_points(result.get("name") or "", minutes) or 0
     if not pts and result.get("variable_1n"):
         pts = result.get("variable_value") or 0
     return int(math.floor(pts + 0.5))   # half points (0.5/m bonuses) round up

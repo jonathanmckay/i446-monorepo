@@ -87,8 +87,28 @@ def test_candidates_hyphenated_skill_name_matches_spaced_weekly_card():
     assert [t["id"] for t in ac.candidates("1-i446 #14", tasks, df)] == ["R14"]
 
 
+def _fake_ps(home):
+    """A process table where the hook runs under `claude` (pid 100), plus the
+    rows in <home>/shells. pytest itself may run under a real session's shell,
+    which the hook would otherwise see. The hook's pid is ps's parent or
+    grandparent (command substitution forks)."""
+    bin_dir = Path(home) / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    ps = bin_dir / "ps"
+    ps.write_text(f"""#!/bin/sh
+gp=$(/bin/ps -o ppid= -p $PPID | tr -d ' ')
+echo "  $PPID   100 00:01 /bin/sh -c hook"
+echo "  $gp   100 00:01 /bin/sh -c hook"
+echo "  100     1 02:00 claude --session-id S1"
+[ -f {home}/shells ] && cat {home}/shells
+exit 0
+""")
+    ps.chmod(0o755)
+    return f"{bin_dir}:{os.environ['PATH']}"
+
+
 def _hook(home, state, sid):
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), PATH=_fake_ps(home))
     env.pop("CLAUDE_CODE_SESSION_ID", None)
     return subprocess.run([str(HOOK), state], input=json.dumps({"session_id": sid}),
                           text=True, env=env, capture_output=True, timeout=10)
@@ -497,7 +517,7 @@ def test_zsh_hook_prefilter_routes_bare_d_to_python():
 
 # --- background subagents keep the claim working (2026-10-19) ---------------
 def _hook_json(home, state, payload):
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), PATH=_fake_ps(home))
     env.pop("CLAUDE_CODE_SESSION_ID", None)
     return subprocess.run([str(HOOK), state], input=json.dumps(payload),
                           text=True, env=env, capture_output=True, timeout=10)
@@ -545,12 +565,78 @@ def test_stale_subagent_entry_cannot_pin_the_card(tmp_path):
     assert _state(root) == "idle"
 
 
+# --- background shells keep the claim working too (2026-11-05) ---------------
+SNAPSHOT_SHELL = "/bin/zsh -c source /Users/x/.claude/shell-snapshots/snapshot-zsh-1.sh && eval 'pytest'"
+
+
+def test_stop_keeps_working_while_background_shell_runs(tmp_path):
+    """Bug 2026-11-05: a run_in_background Bash fires no Subagent event, so Stop
+    wrote idle with the shell still going and dtd showed "waiting on JM"."""
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    ac.claim(TASK, "S1", root=root, now=1000)
+    shells = tmp_path / "shells"
+    shells.write_text(f"  200   100 03:33 {SNAPSHOT_SHELL}\n")
+    _hook(tmp_path, "idle", "S1")
+    assert _state(root) == "working"
+    shells.unlink()                                    # shell exits, session resumes
+    _hook(tmp_path, "idle", "S1")                      # ...and its own Stop goes idle
+    assert _state(root) == "idle"
+
+
+@pytest.mark.parametrize("etime", ["01:00:00", "2-03:00:00"])
+def test_hour_old_background_shell_cannot_pin_the_card(tmp_path, etime):
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    ac.claim(TASK, "S1", root=root, now=1000)
+    (tmp_path / "shells").write_text(f"  200   100 {etime} {SNAPSHOT_SHELL}\n")
+    _hook(tmp_path, "idle", "S1")
+    assert _state(root) == "idle"
+
+
+def test_another_sessions_background_shell_does_not_count(tmp_path):
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    ac.claim(TASK, "S1", root=root, now=1000)
+    (tmp_path / "shells").write_text(f"  200   999 03:33 {SNAPSHOT_SHELL}\n")
+    _hook(tmp_path, "idle", "S1")
+    assert _state(root) == "idle"
+
+
+def test_mcp_child_of_claude_is_not_a_background_shell(tmp_path):
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    ac.claim(TASK, "S1", root=root, now=1000)
+    (tmp_path / "shells").write_text("  200   100 03:33 node /opt/homebrew/bin/google-calendar-mcp\n")
+    _hook(tmp_path, "idle", "S1")
+    assert _state(root) == "idle"
+
+
+def test_busy_ignores_background_shells(tmp_path):
+    # Nothing re-checks after Stop, so a dev server would hold the tab black.
+    (tmp_path / "shells").write_text(f"  200   100 03:33 {SNAPSHOT_SHELL}\n")
+    assert _hook_json(tmp_path, "busy", {"session_id": "S1"}).returncode == 1
+
+
 def test_release_drops_the_agents_file(tmp_path):
     root = tmp_path / "vault/z_ibx/agent-claims"
     ac.claim(TASK, "S1", root=root, now=1000)
     _hook_json(tmp_path, "subagent-start", {"session_id": "S1", "agent_id": "a1"})
     _hook(tmp_path, "release", "S1")
     assert not (root / "by-session/S1.agents").exists()
+
+
+def test_busy_mode_tells_stop_a_background_agent_is_running(tmp_path):
+    # 2026-11-05: blue means waiting on JM, so the Stop colour hook skips it
+    # while the session's background agents still run.
+    assert _hook_json(tmp_path, "busy", {"session_id": "S1"}).returncode == 1
+    _hook_json(tmp_path, "subagent-start", {"session_id": "S1", "agent_id": "a1"})
+    assert _hook_json(tmp_path, "busy", {"session_id": "S1"}).returncode == 0
+    _hook_json(tmp_path, "subagent-stop", {"session_id": "S1", "agent_id": "a1"})
+    assert _hook_json(tmp_path, "busy", {"session_id": "S1"}).returncode == 1
+
+
+def test_stop_colour_hook_is_gated_on_busy():
+    cfg = json.loads((Path.home() / ".claude/settings.json").read_text())
+    cmds = [h.get("command", "") for g in cfg["hooks"]["Stop"] for h in g["hooks"]]
+    blue = next(c for c in cmds if "term-color.sh blue" in c)
+    assert "agent-claim-hook.sh busy ||" in blue
 
 
 def test_subagent_hooks_are_registered_in_claude_settings():

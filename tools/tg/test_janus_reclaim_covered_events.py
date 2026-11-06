@@ -126,15 +126,15 @@ if __name__ == "__main__":
 
 def test_alt_enter_on_calendar_event_runs_shared_conversion():
     """User request 2026-07-29 follow-up: ⌥↵ on a calendar event must run
-    the SAME convert-and-credit path as Enter (did-fast for ended events =
-    Toggl entry + points), not flash "select a tracked entry first"."""
+    the convert-and-credit path (did-fast for ended events = Toggl entry +
+    points), not flash "select a tracked entry first"."""
     src = (HERE / "janus.py").read_text()
     i = src.index('kb.add("escape", "enter")')
     body = src[i:src.index('def _run_did_and_refresh', i)]
     assert "_convert_selected_event" in body, "⌥↵ must route raw events to the shared conversion"
     assert body.index("_convert_selected_event") < body.index("select a tracked entry first")
-    # And Enter's event branch uses the same helper — one conversion path.
-    assert src.count("_convert_selected_event(item, event.app)") == 2
+    # Plain Enter only loads the text box since 2026-11-05: ⌥↵ is the one runner.
+    assert src.count("_convert_selected_event(item, event.app)") == 1
 
 
 def test_same_day_duplicate_entry_reclaims_covered_meeting():

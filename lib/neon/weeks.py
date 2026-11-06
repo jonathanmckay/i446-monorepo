@@ -74,6 +74,11 @@ def habit_week_label(name: str, d: date) -> str:
     return fiscal_week_label(cycle_start(name, d))
 
 
+def prev_habit_week_label(name: str, d: date) -> str:
+    """habit_week_label of the cycle before the one holding `d`."""
+    return fiscal_week_label(cycle_start(name, d) - timedelta(days=7))
+
+
 def fiscal_week_label(d: date) -> str:
     """'M.W' label of the 1n+ row for the week containing `d`."""
     sunday = week_sunday(d)

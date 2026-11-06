@@ -479,55 +479,56 @@ def test_enter_with_no_selection_and_empty_input_is_still_a_noop():
     assert mod.STATE.event_sel is None
 
 
-def test_enter_with_armed_selection_clears_it_and_flashes():
-    mod = _load_tui()
+def _enter_on_event(mod, now_hm, key="enter"):
     today = _midnight()
     ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
     mod.STATE.visible_events = [ev]
     mod.STATE.event_sel = mod._event_key(ev)
     mod.input_buffer.text = ""
-    mod.view_now = lambda: today.replace(hour=9, minute=5)
-    async def _amain():
-        _binding(mod, "enter").handler(_FakeEvent())
-    asyncio.run(_amain())
-    assert mod.STATE.event_sel is None, "selection must clear once converted"
-    assert "standup" in mod.STATE.flash
+    mod.view_now = lambda: today.replace(hour=now_hm[0], minute=now_hm[1])
+    return ev
 
 
-def test_enter_on_in_progress_event_still_uses_tg_path():
-    """An event that hasn't ENDED yet (mid-meeting) keeps the existing
-    tg-fast backdated-start behavior — no points grant, since it isn't a
-    completed range yet."""
+def test_enter_on_ended_event_loads_it_into_the_text_box_and_runs_nothing():
+    """JM 2026-11-05: Enter brings a calendar row to the text box, ⌥↵ runs it."""
     mod = _load_tui()
-    today = _midnight()
-    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
-    mod.STATE.visible_events = [ev]
-    mod.STATE.event_sel = mod._event_key(ev)
-    mod.input_buffer.text = ""
-    mod.view_now = lambda: today.replace(hour=9, minute=5)  # mid-meeting
-    async def _amain():
-        _binding(mod, "enter").handler(_FakeEvent())
-    asyncio.run(_amain())
-    assert mod.STATE.flash.startswith("$ tg "), f"in-progress event must use tg-fast: {mod.STATE.flash!r}"
-
-
-def test_enter_on_ended_event_uses_did_fast_path():
-    """Regression (user request 2026-07-17): an ALREADY-ENDED event must
-    convert via did-fast (time-range command) so it both logs the Toggl
-    entry AND grants points — not tg-fast's plain running-timer start."""
-    mod = _load_tui()
-    today = _midnight()
-    ev = _gcal_event("standup", today.replace(hour=9), today.replace(hour=9, minute=15))
-    mod.STATE.visible_events = [ev]
-    mod.STATE.event_sel = mod._event_key(ev)
-    mod.input_buffer.text = ""
-    mod.view_now = lambda: today.replace(hour=9, minute=30)  # after it ended
-    async def _amain():
-        _binding(mod, "enter").handler(_FakeEvent())
-    asyncio.run(_amain())
+    _enter_on_event(mod, (9, 30))
+    mod._convert_selected_event = lambda *a: pytest.fail("Enter must not run the event")
+    _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.event_sel is None
-    assert mod.STATE.flash.startswith("$ did "), f"ended event must convert via did-fast: {mod.STATE.flash!r}"
-    assert "0900-0915" in mod.STATE.flash
+    assert mod.input_buffer.text.startswith("standup 0900-0915")
+    assert mod.input_buffer.cursor_position == len(mod.input_buffer.text)
+
+
+def test_enter_on_in_progress_event_loads_a_backdated_start():
+    mod = _load_tui()
+    _enter_on_event(mod, (9, 5))
+    mod._convert_selected_event = lambda *a: pytest.fail("Enter must not run the event")
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.input_buffer.text.startswith("0900 standup")
+
+
+def test_alt_enter_on_ended_event_runs_did_fast_directly():
+    """An ended event must convert via did-fast (time-range command) so it
+    logs the Toggl entry AND grants points (user request 2026-07-17)."""
+    mod = _load_tui()
+    ev = _enter_on_event(mod, (9, 30))
+    seen = []
+    mod._convert_selected_event = lambda item, app: seen.append(item)
+    enter = _KEY_ALIASES.get("enter", "enter")
+    next(b for b in mod.kb.bindings if len(b.keys) == 2 and enter in b.keys).handler(_FakeEvent())
+    assert seen == [ev] and mod.input_buffer.text == ""
+
+
+def test_convert_runs_did_for_an_ended_event_and_tg_for_a_live_one():
+    for now, prefix in (((9, 30), "$ did "), ((9, 5), "$ tg ")):
+        mod = _load_tui()
+        ev = _enter_on_event(mod, now)
+        async def _amain():
+            mod._convert_selected_event(ev, _FakeEvent().app)
+        asyncio.run(_amain())
+        assert mod.STATE.event_sel is None
+        assert mod.STATE.flash.startswith(prefix), mod.STATE.flash
 
 
 def test_enter_mid_flight_enqueues_instead_of_rejecting():
@@ -548,7 +549,7 @@ def test_enter_mid_flight_enqueues_instead_of_rejecting():
     mod.view_now = lambda: today.replace(hour=9, minute=30)
 
     async def main():
-        _binding(mod, "enter").handler(_FakeEvent())
+        mod._convert_selected_event(ev, _FakeEvent().app)
 
     asyncio.run(main())
     assert mod.STATE.event_sel is None, "selection is consumed — the job is queued, not dropped"

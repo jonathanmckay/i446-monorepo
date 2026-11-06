@@ -43,7 +43,7 @@ def test_past_day_row_shows_the_points_janus_logged(tmp_path, monkeypatch):
     _view(monkeypatch, tmp_path, day, -1)
     assert janus._entry_dur_display(120, "interview prep", [4608630595]) == janus.fmt_dur(120)
     janus._entry_pts_add(day, {"4608630595": 420})
-    assert janus._entry_dur_display(120, "interview prep", [4608630595]) == "[420]"
+    assert janus._entry_dur_display(120, "interview prep", [4608630595]) == "120m [420]"
     # a same-name entry on that day that was not logged keeps its minutes
     assert janus._entry_dur_display(90, "interview prep", [4607267560]) == janus.fmt_dur(90)
 
@@ -80,12 +80,12 @@ def test_stale_zero_record_on_a_per_minute_habit_shows_its_minutes(tmp_path, mon
     day = dt.date(2026, 11, 1)
     _view(monkeypatch, tmp_path, day, -1)
     janus._entry_pts_add(day, {"4609785250": 0})
-    assert janus._entry_dur_display(69, "o314", [4609785250]) == "[69]"
+    assert janus._entry_dur_display(69, "o314", [4609785250]) == "69m [69]"
     # a real record still wins, and a 0 on an ordinary task stays 0
     janus._entry_pts_add(day, {"4609785250": 104})
-    assert janus._entry_dur_display(69, "o314", [4609785250]) == "[104]"
+    assert janus._entry_dur_display(69, "o314", [4609785250]) == "69m [104]"
     janus._entry_pts_add(day, {"5": 0})
-    assert janus._entry_dur_display(20, "read memo", [5]) == "[0]"
+    assert janus._entry_dur_display(20, "read memo", [5]) == "20m [0]"
 
 
 def test_per_minute_habit_row_is_priced_at_the_logged_minutes(tmp_path, monkeypatch):
@@ -105,3 +105,31 @@ def test_per_minute_habit_row_is_priced_at_the_logged_minutes(tmp_path, monkeypa
     # nothing logged in 0n yet (strip not loaded): fall back to the entry
     monkeypatch.setattr(janus.STATE, "habits_today", [])
     assert janus._points_recorded_today("hiit", 80) == (True, 160)
+
+
+# ── several sessions of one habit (2026-11-05: a 22m hiit showed [34]) ───────
+
+def _hiit_day(monkeypatch, logged):
+    base = dt.datetime(2026, 11, 5, tzinfo=janus._tz())
+    entries = [{"id": i, "desc": "hiit", "start_dt": base.replace(hour=h, minute=m),
+                "end_dt": base.replace(hour=h, minute=m) + dt.timedelta(minutes=n)}
+               for i, h, m, n in [(1, 7, 20, 17), (2, 8, 15, 9), (3, 18, 45, 22)]]
+    monkeypatch.setattr(janus.STATE, "entries", entries)
+    monkeypatch.setattr(janus.STATE, "habits_today", [("hiit", logged)])
+
+
+def test_each_session_keeps_its_minutes_when_the_cell_holds_the_day(monkeypatch):
+    _hiit_day(monkeypatch, 48.0)
+    assert janus._row_0n_minutes("hiit", 22, [3]) == 22
+    assert janus._row_0n_minutes("hiit", 17, [1]) == 17
+
+
+def test_a_short_cell_goes_to_the_earliest_sessions(monkeypatch):
+    _hiit_day(monkeypatch, 17.0)
+    assert janus._row_0n_minutes("hiit", 17, [1]) == 17
+    assert janus._row_0n_minutes("hiit", 22, [3]) == 0
+
+
+def test_a_rounding_minute_doesnt_shortchange_the_row(monkeypatch):
+    _hiit_day(monkeypatch, 47.0)
+    assert janus._row_0n_minutes("hiit", 22, [3]) == 22

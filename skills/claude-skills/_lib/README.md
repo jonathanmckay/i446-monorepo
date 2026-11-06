@@ -83,22 +83,6 @@ automatically queue on failure. Idempotent cell-value writes (habits,
 points, scores) are safe to queue. Row-insert operations should NOT
 use the queue.
 
-### `open-form.sh`
-
-Surfaces a full-screen form/TUI where JM can see it, so no skill ever tells
-him to run a command himself ("I'm not going to meat puppet for you", 11-03).
-
-```bash
-~/.claude/skills/_lib/open-form.sh 0s "python3 ~/i446-monorepo/tools/0s/0s.py 2026-10-30"
-```
-
-Tiers: cmux tab → new window in Claude's own tmux session (`$TMUX_PANE`;
-only if a client is attached) → exit 10 `NO_SURFACE`, where the skill
-interviews in chat and writes via the tool's `--from-json`/`--from-text`.
-The tmux window strips `CMUX_*` vars and stays open on a non-zero exit.
-Env: `OPEN_FORM_MODE=cmux|tmux|chat`, `OPEN_FORM_DRY_RUN=1`. Tests:
-`test_open_form.py`.
-
 ## Policy
 
 **No skill may invoke local `/usr/bin/osascript` to drive Microsoft

@@ -126,3 +126,42 @@ def test_defer_single_id_still_works():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── marks survive background reloads (bug 2026-11-05) ───────────────────────
+# "the shift command isn't sticking ... it starts but then disappears": fzf
+# clears marks on any reload, and the watcher reloads every ~1 s while a timer
+# runs or an agent works. --id-nth keys marks on the id field across
+# reload-sync (verified on fzf 0.74.5; plain reload still clears them).
+
+def test_fzf_keys_marks_on_the_id_field():
+    line = next(l for l in SRC.splitlines() if "--with-nth=1 " in l and "--delimiter" in l)
+    assert "$DTD_FZF_IDS" in line
+
+
+def test_background_reloads_keep_marks():
+    edit = SRC.split('cat > "$DTD_EDIT" << EDITEOF', 1)[1].split("\nEDITEOF", 1)[0]
+    bg = SRC.split('cat > "$DTD_BGREFRESH" << BGREFRESHEOF', 1)[1].split("\nBGREFRESHEOF", 1)[0]
+    for body in (edit, bg):
+        assert '--data "reload-sync(' in body and '--data "reload(' not in body
+
+
+def _probe(tmp_path, rc):
+    """Run dtd.sh's real probe against a stub fzf that exits `rc`."""
+    stub = tmp_path / "fzf"
+    stub.write_text(f"#!/bin/sh\nexit {rc}\n")
+    stub.chmod(0o755)
+    line = next(l for l in SRC.splitlines() if l.startswith("DTD_FZF_IDS="))
+    guard = next(l for l in SRC.splitlines() if "fzf --id-nth" in l and "DTD_FZF_IDS=" in l
+                 and not l.startswith("DTD_FZF_IDS="))
+    return subprocess.run(["zsh", "-c", f'path=({tmp_path} $path)\n{line}\n{guard}\n'
+                           'print -r -- "$DTD_FZF_IDS"'],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_id_nth_is_dropped_on_an_fzf_that_rejects_it(tmp_path):
+    assert _probe(tmp_path, 2) == ""     # unknown option: fzf exits 2
+
+
+def test_id_nth_is_used_on_an_fzf_that_accepts_it(tmp_path):
+    assert _probe(tmp_path, 1) == "--id-nth=2"   # no match on empty input

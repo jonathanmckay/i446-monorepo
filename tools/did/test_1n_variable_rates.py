@@ -276,3 +276,12 @@ def test_run_py_fast_path_matches():
     assert '_BASE_IN_CELL_1N = {"一起饭"}' in src
     assert "cell_add = _VARIABLE_1N_BASES[name] if name in _BASE_IN_CELL_1N else minutes" in src
     assert 'f"+{base}+{points - base}" if name in _BASE_IN_CELL_1N and points > base > 0' in src
+
+
+# ── 一起发 is an IME slip for 一起饭 (2026-11-05) ─────────────────────────────
+
+def test_yiqifa_typo_routes_as_yiqifan(df):
+    """janus asked for points on 一起发: unknown name, no 15+1/m."""
+    r = _route_one(df, "一起发 30")
+    assert r.step == "1n" and r.write_value == 15
+    assert df.ONENEON_ALIASES["一起发"] == "一起饭"

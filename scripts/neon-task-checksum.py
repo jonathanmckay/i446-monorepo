@@ -80,6 +80,7 @@ ALIASES = {
     "家": "family",
     "relax": "relax {60}",
     "一起吃": "一起饭",
+    "一起发": "一起饭",
     "long o314": "长o314",
     "1 groceries": "groceries",
 }

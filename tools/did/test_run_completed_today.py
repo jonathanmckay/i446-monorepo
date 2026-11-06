@@ -55,6 +55,21 @@ def test_append_completed_omits_ids_when_no_task_id():
     fake_append.assert_called_once_with(["some habit"], ids=None)
 
 
+def test_append_completed_records_points_when_given():
+    # 2026-11-05: "1 hcb" credited +15 but recorded no 分, so janus showed minutes.
+    with patch.object(run.mc, "append_names") as fake_append:
+        run._append_completed("1 hcb", "T1", 15)
+    fake_append.assert_called_once_with(["1 hcb"], ids={"1 hcb": "T1"}, points={"1 hcb": 15})
+
+
+def test_completed_points_only_for_a_credit_today():
+    today = run._today_md()
+    assert run._completed_points("0分 col", 15, today) == 15
+    assert run._completed_points("0分 col", 15, "1/1") is None     # backfill: not today's row
+    assert run._completed_points("", 15, today) is None            # nothing credited
+    assert run._completed_points("0分 col", 0, today) is None
+
+
 def test_find_and_close_todoist_returns_id():
     """The id is needed by callers to record completed-today's id map —
     losing it (returning bare content, the pre-fix signature) is exactly how

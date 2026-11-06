@@ -46,7 +46,9 @@ def _queued(queue: Path):
     return [json.loads(l) for l in queue.read_text().splitlines() if l.strip()]
 
 
-def test_timeout_queues_write(ix, monkeypatch):
+def test_timeout_is_not_queued(ix, monkeypatch):
+    """2026-11-05: a timed-out write has usually already landed in Excel;
+    queuing it for replay applied it twice. Only 'unreachable' is replayed."""
     mod, queue = ix
 
     def fake_run(*a, **kw):
@@ -55,10 +57,7 @@ def test_timeout_queues_write(ix, monkeypatch):
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     res = mod.run(WRITE_SCRIPT)
     assert res.returncode == 3
-    entries = _queued(queue)
-    assert len(entries) == 1
-    assert entries[0]["script"] == WRITE_SCRIPT
-    assert entries[0]["reason"] == "timeout"
+    assert _queued(queue) == []
 
 
 def test_unreachable_queues_write(ix, monkeypatch):
@@ -72,7 +71,7 @@ def test_unreachable_queues_write(ix, monkeypatch):
     assert [e["reason"] for e in _queued(queue)] == ["unreachable"]
 
 
-def test_appleevent_timeout_queues_write(ix, monkeypatch):
+def test_appleevent_timeout_is_not_queued(ix, monkeypatch):
     mod, queue = ix
     stderr = "execution error: Microsoft Excel got an error: AppleEvent timed out. (-1712)"
     monkeypatch.setattr(
@@ -81,7 +80,7 @@ def test_appleevent_timeout_queues_write(ix, monkeypatch):
     )
     res = mod.run(WRITE_SCRIPT)
     assert res.returncode == 2
-    assert [e["reason"] for e in _queued(queue)] == ["appleevent-timeout"]
+    assert _queued(queue) == []          # Excel was busy; the event usually lands
 
 
 def test_logic_error_not_queued(ix, monkeypatch):

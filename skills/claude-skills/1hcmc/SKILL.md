@@ -63,11 +63,33 @@ or a backfilled span silently earn nothing (2026-09-27: week 9.16-9.22 had
   behind them; report them, do not change them.
 - Include the table (or "media tags: all matched") in the Step 3 report.
 
-### Step 2c: Media survey (the card's manual part, 2026-10-17)
+### Step 2c: Book notes (2026-11-05)
+
+Every book finished in the week and not yet reviewed gets 3 bullets on what JM
+thought. They go to the book's review file, which jmreads shows, and never to
+Neon. `/bookreview` can use them later.
+
+```bash
+python3 ~/i446-monorepo/tools/hcmc/hcmc-survey.py --books
+```
+
+prints `id, title, author` per book, nothing if there are none. Ask for each
+one in chat, with the media question below if you like, then save:
+
+```bash
+python3 ~/i446-monorepo/tools/hcmc/hcmc-survey.py --book-note <id> --from-text "<3 lines>"
+```
+
+A book JM skips stays unreviewed; write nothing for it. Run without flags, the
+script asks these itself before the media question.
+
+### Step 2d: Media survey (the card's manual part, 2026-10-17)
 
 The weekly media note lives in Neon `1分+1s` column **AO** (the "Notes" cell
 beside the 新闻/词汇/-1/-2/-3/书 counts) on the row of the **current
 Sunday-anchored fiscal week**, the same row `/book finished` bumps for books.
+If last week's note is blank the script targets last week instead, and `--show`
+prints that row.
 
 ```bash
 python3 ~/i446-monorepo/tools/hcmc/hcmc-survey.py --show
@@ -113,6 +135,6 @@ printing an empty list. If both are 0: `No books started or finished W
   time, and never changes — it's the started date. `finished:` is set by
   `/book finished`. A book can show in both buckets the same week if it was
   read start-to-finish within it.
-- Apart from the Step 2c survey cell (`1分+1s!AO`) and the media-tag fix, this skill doesn't write to Neon. The weekly books-read
+- Apart from the Step 2d survey cell (`1分+1s!AO`) and the media-tag fix, this skill doesn't write to Neon. The weekly books-read
   counter (`1分+1s!AM`) is already incremented live by `/book finished`
   itself; nothing here needs to reconcile it.

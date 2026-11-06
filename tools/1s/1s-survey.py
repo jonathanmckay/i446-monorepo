@@ -56,7 +56,6 @@ FIELDS = [
     ("missed",        "Biggest missed opportunity", "T",  "textml", "learnings"),
     ("proud_others",  "Proud of w/others",          "U",  "textml", "proud"),
     ("regret_others", "Regret w/others",            "V",  "textml", "learn_others"),
-    ("notes",         "Notes",                      "AO", "textml", "learnings"),
 ]
 
 # 0s897 columns backing each context list (see tools/0s/0s.py FIELDS).

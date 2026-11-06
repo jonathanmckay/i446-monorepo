@@ -201,3 +201,23 @@ def test_janus_optimistic_guess_uses_cached_history_only(monkeypatch):
     assert janus._guess_project_code("spin class") == "hcbp"
     assert seen["rebuild"] is False
     assert janus._guess_project_code("spin class @i9") == "i9"
+
+
+# 一起发 is an IME slip for 一起饭: no history of its own, so Haiku guessed 家
+# (2026-11-05). A registered habit alias borrows the habit's history.
+def test_from_history_resolves_a_habit_alias_on_a_miss():
+    hmap = {"exact": {"一起饭": ["xk87", 94, 97]}}
+    assert pi.from_history("一起发", hmap) == "xk87"
+
+
+def test_from_history_prefers_an_alias_own_history():
+    hmap = {"exact": {"一起发": ["hcmc", 5, 5], "一起饭": ["xk87", 94, 97]}}
+    assert pi.from_history("一起发", hmap) == "hcmc"
+
+
+def test_code_hints_keep_home_life_in_xk87_and_relatives_in_jia():
+    """xk87/CLAUDE.md: 家 is strictly extended family."""
+    hints = pi._code_hints()
+    assert "extended family" in hints["家"]
+    assert "kids" not in hints["家"] and "chores" not in hints["家"]
+    assert "kids" in hints["xk87"] and "chores" in hints["xk87"]

@@ -111,7 +111,9 @@ def run(script: str, *, timeout: float = 30.0) -> IxResult:
             cmd, input=script, text=True, capture_output=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        _queue_failed_write(script, "timeout")
+        # Not queued (2026-11-05): a timed-out AppleEvent has usually already
+        # landed, so a later replay applies it twice. Only "unreachable"
+        # (ssh never connected) is safe to replay.
         return IxResult(3, "", UNREACHABLE_MSG + " (timeout)")
     except FileNotFoundError:
         return IxResult(3, "", "ix-osa: ssh not found on PATH")
@@ -120,11 +122,9 @@ def run(script: str, *, timeout: float = 30.0) -> IxResult:
         _queue_failed_write(script, "unreachable")
         return IxResult(3, proc.stdout, UNREACHABLE_MSG)
     if proc.returncode != 0:
-        # Queue only the transient Excel-busy failure (-1712 AppleEvent
-        # timeout), not logic errors (bad sheet, date not found) — those
-        # would fail identically on replay.
-        if "-1712" in (proc.stderr or "") or "AppleEvent timed out" in (proc.stderr or ""):
-            _queue_failed_write(script, "appleevent-timeout")
+        # Not queued (2026-11-05): a -1712 AppleEvent timeout means Excel was
+        # busy, not that the event was dropped. It usually lands, and a
+        # replay would double it.
         return IxResult(2, proc.stdout, proc.stderr or "ix-osa: osascript failed")
 
     first = next((ln for ln in proc.stdout.splitlines() if ln.strip()), "")

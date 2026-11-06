@@ -69,7 +69,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/tg"))
 from flask import Flask, jsonify, render_template_string, request  # noqa: E402
 
 from mcp.toggl_server import toggl_api  # noqa: E402
-from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES  # noqa: E402
+from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES, split_subproject, with_subproject_tag  # noqa: E402
 from neon.rates import meeting_points, speedy_meeting_points  # noqa: E402
 import janus_done  # noqa: E402  /done points paths, shared with desktop janus
 
@@ -191,6 +191,7 @@ def _resolve_project(code: str) -> tuple[int | None, str]:
     code = (code or "").strip().lstrip("@").strip()
     if not code:
         return None, ""
+    code = split_subproject(code)[0]  # @xk20 → xk87; callers add the tag
     if code in PROJECT_MAP:
         return PROJECT_MAP[code], code
     low = code.lower()
@@ -209,6 +210,7 @@ def _resolve_project(code: str) -> tuple[int | None, str]:
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import state_paths  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with janus.py
+import entry_points  # noqa: E402  分 per entry, shared across clients and hosts
 TASK_QUEUE = state_paths.TASK_QUEUE
 _POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
 
@@ -260,6 +262,17 @@ def _dtd_done_points(today: _dt.date) -> dict[str, int]:
         if v:
             out[_norm_key(n)] = int(v)
     return out
+
+
+def _dtd_done_times(today: _dt.date) -> dict[str, float]:
+    """{normalized name: completion epoch} from completed-today.json."""
+    try:
+        data = json.loads((COMPLETED_TODAY or STATE_DIR / "completed-today.json").read_text())
+    except Exception:
+        return {}
+    if data.get("date") != today.isoformat():
+        return {}
+    return {_norm_key(n): t for n, t in (data.get("done_at") or {}).items()}
 
 
 def _resolvable_points(desc: str, registered: set[str] | None = None) -> int | None:
@@ -376,10 +389,30 @@ def _logged_points(day: _dt.date) -> dict:
         return {}
 
 
+def _logged_view(day: _dt.date) -> tuple[dict, dict]:
+    """(ledger, points) with lib/entry_points.py on top: an entry logged in
+    dtd, the terminal or on the other machine reads as logged here, and an
+    undone one reads as open. For display and the double-credit guard; the
+    edit checks stay on this host's own ledger (_ledger_near: the day and both
+    neighbours, for entries that cross midnight)."""
+    ledger, pts = dict(_ledger_near(day)), dict(_logged_points(day))
+    for eid, v in entry_points.for_day(day).items():
+        if v is None:
+            ledger.pop(eid, None)
+            pts.pop(eid, None)
+        else:
+            ledger.setdefault(eid, "logged elsewhere")
+            pts[eid] = {"points": v, "credits": (pts.get(eid) or {}).get("credits") or []}
+    return ledger, pts
+
+
 def _logged_points_add(day: _dt.date, entry_id: str, points: int | None,
                        credits: list[dict]) -> None:
     d = _logged_points(day)
     d[str(entry_id)] = {"points": points, "credits": credits}
+    # did-fast's own record wins: this total can be a minutes fallback.
+    if points is not None and str(entry_id) not in entry_points.for_day(day):
+        entry_points.record(day, {str(entry_id): points}, "mobile")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = _points_path(day).with_suffix(".tmp")
     tmp.write_text(json.dumps(d, ensure_ascii=False))
@@ -501,9 +534,11 @@ def _fetch_today(day: _dt.date | None = None) -> list[dict]:
             "project": code,
             "color": COLORS.get(code, DEFAULT_COLOR),
             "tags": e.get("tags") or [],
+            "at": e.get("at"),
             "start": st_c, "end": en_c, "running": running,
         })
     out.sort(key=lambda r: r["start"])
+    entry_points.link(out)
     return out
 
 
@@ -961,21 +996,16 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
         events = []
     else:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
-    logged = _ledger_near(today)
-    logged_pts = _logged_points(today)
-    # A task closed in dtd marks the LAST timer entry with its name as
-    # logged (one completion = one entry; an earlier same-name session can
-    # still be swiped).
+    logged, logged_pts = _logged_view(today)
+    # A task closed in dtd marks the timer entry it was closed in as logged
+    # (one completion = one entry; another same-name session can still be
+    # swiped). The rule is janus_done.done_entry_claims.
     dtd_done = _dtd_done_points(today) if is_today else {}
-    dtd_entry: dict[str, str] = {}
-    janus_logged_keys = {_norm_key(e.get("desc") or "") for e in entries
-                         if e["id"] in logged or str(e["id"]) in logged}
-    for e in sorted(entries, key=lambda e: e["start"]):
-        k = _norm_key(e.get("desc") or "")
-        # A completion that janus itself logged is already shown; only a
-        # name closed in dtd (no janus log of that name today) claims a row.
-        if k in dtd_done and k not in janus_logged_keys:
-            dtd_entry[k] = str(e["id"])
+    dtd_times = _dtd_done_times(today) if dtd_done else {}
+    dtd_entry = janus_done.done_entry_claims(
+        [(e["id"], e.get("desc"), e["start"].timestamp(), e["end"].timestamp())
+         for e in sorted(entries, key=lambda e: e["start"])],
+        {k: dtd_times.get(k) for k in dtd_done}, {str(i) for i in logged}, _norm_key)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     # The timeline's "live edge": gaps and dividers run to now on today, but a
@@ -1062,7 +1092,11 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
             if not r["logged"] and dtd_entry.get(_k) == str(e["id"]) and not e["running"]:
                 r["logged"] = True
                 r["done_in"] = "dtd"
-                logged_pts.setdefault(str(e["id"]), {"points": dtd_done[_k]})
+                # A per-minute habit's row is worth its own minutes, not the
+                # flat row-2 weight (a 22m hiit showed 7).
+                logged_pts.setdefault(str(e["id"]), {"points": r["rate_points"]
+                                                     if r["rate_points"] is not None
+                                                     else dtd_done[_k]})
             would = next(v for v in (r["points"], r["rate_points"],
                                      _speedy_meeting_pts(e["desc"], mins, day=today), mins)
                          if v is not None)
@@ -1177,11 +1211,12 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str,
     code = project or (m.group(1) if m else "")
     desc_clean = _AT.sub("", desc).strip()
     pid = None
+    raw_code = code
     if code:
         pid, code = _resolve_project(code)
         if pid is None:
             return {"ok": False, "error": f"unknown project @{project or m.group(1)}"}
-    tags = _parse_tags(tags or [])
+    tags = with_subproject_tag(raw_code, _parse_tags(tags or [])) or []
     today = day or _dt.datetime.now(_tz()).date()
 
     # No end time -> start a live, still-running Toggl timer instead of a
@@ -1319,6 +1354,9 @@ def edit_entry(entry_id: str, desc: str, start_hhmm: str, end_hhmm: str,
     # set — the dialog field is prefilled with the current tags.
     if tags is not None:
         fields["tags"] = _parse_tags(tags)
+    if split_subproject(project_code.lstrip("@") if project_code else "")[1]:
+        fields["tags"] = with_subproject_tag(
+            project_code.lstrip("@"), fields.get("tags", e.get("tags") or [])) or []
 
     # Normalize colon-less numpad input to canonical HH:MM up front (see
     # _hhmm_parts): the inputmode=numeric fields can't retype a deleted colon,
@@ -1504,15 +1542,19 @@ def registered_habit_names() -> set[str]:
 
 def _habit_rate_points(desc: str, minutes: int) -> int | None:
     """分 Neon will credit for a multiplied 0n habit entry (hiit: 2×min via
-    hcbi!Y), resolving did-fast's ALIASES first so "hit" counts too. Display
-    only — the swipe still sends minutes to 0n and the sheet multiplies."""
-    from neon.rates import zero_n_points
+    hcbi!Y) or a base + 1分/min session (中文, 一起饭), resolving did-fast's
+    aliases first so "hit" counts too. Display only — the swipe still sends
+    minutes and the sheet or did-fast prices them."""
+    from neon.rates import session_points, zero_n_points
     key = _norm_key(desc)
     try:
-        key = _load_df_mod().ALIASES.get(key, key)
+        df = _load_df_mod()
+        key = df.ALIASES.get(key, key)
+        key = df.ONENEON_ALIASES.get(key, key)
     except Exception:
         pass
-    return zero_n_points(key, minutes)
+    pts = zero_n_points(key, minutes)
+    return pts if pts is not None else session_points(key, minutes)
 
 
 def habit_tags(tags: list[str]) -> list[str]:
@@ -1541,7 +1583,8 @@ def _run_did_fast(text: str, flags: tuple[str, ...] = ()) -> dict:
     "credits" (2026-10-26) is where the 分 went, for the phone's toast."""
     try:
         proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), *flags, text],
-                              capture_output=True, text=True, timeout=90)
+                              capture_output=True, text=True, env=janus_done.did_env(),
+                              timeout=janus_done.DID_TIMEOUT_SECS)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "did-fast timeout"}
     out = proc.stdout.strip()
@@ -1617,7 +1660,8 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     with the viewed M/D appended and --past-ok, so the 分 land on THAT day
     (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
     today = day or _dt.datetime.now(_tz()).date()
-    if str(entry_id) in _ledger_near(today):
+    entry_points.claim(entry_id, desc, today)   # a task closed before this entry existed
+    if str(entry_id) in _logged_view(today)[0]:
         return {"ok": True, "already": True}
     # The ledger is written only after did-fast returns (seconds), so a
     # double-tap or an iOS retry of a slow request passed the check above
@@ -1662,6 +1706,11 @@ def _log_entry_locked(entry_id, desc, minutes, project, tags, day, today,
     # a crossed-off task adds nothing; an unknown entry asks for a total or
     # a rate instead of crediting the minutes at 1x. `points` is the answer.
     path = _done_path(desc, pts, None if day is not None else today)
+    # xk87 + kid tag → "@xk20": minutes to the kid's 0n column (2026-11-05).
+    kid, _ = janus_done.kid_route(project, list(tags or []) + list(entry_tags or []))
+    if kid and kid != project:
+        project = kid
+        path = janus_done.TASK if pts is not None else janus_done.TIME
     if path == janus_done.CREDITED:
         _ledger_add(today, entry_id, f"{desc} already crossed off — no extra 分")
         return {"ok": True, "already": True, "credited": True}
@@ -1684,7 +1733,7 @@ def _log_entry_locked(entry_id, desc, minutes, project, tags, day, today,
     # processes each independently (其他人 61 → 其他人 0n column, etc.).
     # These are always minutes (0n habit columns track time, not the
     # matched task's points), regardless of the main item's resolution.
-    extra = habit_tags(tags or [])
+    extra = habit_tags(janus_done.kid_route(project, tags)[1])
     for t in extra:
         text += f", {t} {minutes}"
     flags: tuple[str, ...] = ()
@@ -1693,6 +1742,7 @@ def _log_entry_locked(entry_id, desc, minutes, project, tags, day, today,
         flags = ("--past-ok",)
     if rate_answer:
         flags += ("--rate",)  # a rate-priced total is still per-minute: split-eligible
+    flags += ("--no-credit",)  # this row is the task's entry: no credit to leave open
     r = _run_did_fast(text, flags)
     if r["ok"]:
         note = f"{desc} {pts if pts is not None else minutes} → {r['step']}"
@@ -1885,6 +1935,10 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
         if pts is None:  # 25m meeting → [30] (2026-10-22)
             pts = _speedy_meeting_pts(desc, _hhmm_span_min(start, now), day=now.date())
         path = _done_path(desc, pts, now.date())
+        kid, _ = janus_done.kid_route(project, e.get("tags"))
+        if kid and kid != project:  # xk87 + kid tag → "@xk20" (2026-11-05)
+            project = kid
+            path = janus_done.TASK if pts is not None else janus_done.TIME
         if path == janus_done.CREDITED:
             # Crossed off in dtd first: just stop the timer, no extra 分.
             try:
@@ -1938,7 +1992,8 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
     try:
         if not project:
             return {"ok": False, "error": "entry has no project code — edit it first"}
-        cur = (_logged_points(today).get(str(entry_id)) or {}).get("points")
+        cur = (_logged_view(today)[1].get(str(entry_id)) or {}).get("points")
+        closed_in_dtd = cur is None
         if cur is None:
             cur = _dtd_done_points(today).get(_norm_key(desc)) if day is None else None
         if cur is None:
@@ -1948,6 +2003,9 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
             return {"ok": False, "error": "entry not found or still running"}
         start, end = _parse_iso(e["start"]), _parse_iso(e["stop"])
         minutes = int((end - start).total_seconds() // 60)
+        if closed_in_dtd:       # what the row shows, not a flat row-2 weight
+            rate = _habit_rate_points(desc, minutes)
+            cur = rate if rate is not None else cur
         new = janus_done.points_from_answer(answer, minutes)
         if new is None:
             return {"ok": False, "error": f"not a number or rate: {answer!r}"}
@@ -1958,6 +2016,7 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
         r = _run_did_fast(cmd, ("--past-ok",) if day is not None else ())
         if r["ok"]:
             _logged_points_add(today, entry_id, new, r.get("credits") or [])
+            entry_points.record(today, {str(entry_id): new}, "mobile adjust")
             _ledger_add(today, entry_id, f"{desc} points {cur} → {new} ({delta:+d})")
             r.update(points=new, delta=delta)
         return r
@@ -2066,7 +2125,8 @@ def _run_did_cmd(text: str) -> dict:
     write over ssh + Todoist), hence the longer timeout (see _run_did_fast)."""
     try:
         proc = subprocess.run(["/usr/bin/python3", str(DID_FAST), text],
-                              capture_output=True, text=True, timeout=90)
+                              capture_output=True, text=True, env=janus_done.did_env(),
+                              timeout=janus_done.DID_TIMEOUT_SECS)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "did-fast timed out"}
     if proc.stdout and "{" in proc.stdout:

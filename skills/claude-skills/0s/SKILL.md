@@ -38,19 +38,17 @@ column — it's an action toggle: enter `1` and on save the form runs `did-fast 
 
 ## Launch
 
-The form is a full-screen prompt_toolkit TUI, so it needs its own terminal.
-Open it with the shared launcher, which tries a cmux tab, then a new window in
-this Claude's own tmux session (only if a client is attached, e.g. the
-`cc-*` sessions on Ix), and otherwise exits 10:
+The form is a full-screen prompt_toolkit TUI, so it needs its own terminal
+(pass the optional date arg through if the user gave one):
 
 ```bash
-~/.claude/skills/_lib/open-form.sh 0s "python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD]"
+~/i446-monorepo/scripts/open-tui.sh 0s "python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD]"
 ```
 
-- `OPENED cmux …` / `OPENED tmux …` → confirm: `0s opened (<cmux tab|tmux window>) — fill the form, ^S to save to 0s897.`
-- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
-  himself.** Ask the form's questions here in chat (keys = `FIELDS` in `tools/0s/0s.py`; jog his memory with that day's Toggl), write his reply
-  to a temp file and run `python3 ~/i446-monorepo/tools/0s/0s.py [YYYY-MM-DD] --from-json <file>`. Blanks never overwrite. One day per round.
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: fill the form, ^S to save to 0s897.
 
 ## Keys (inside the form)
 

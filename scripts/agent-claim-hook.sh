@@ -1,5 +1,5 @@
 #!/bin/zsh
-# agent-claim-hook.sh <working|idle|release|subagent-start|subagent-stop>
+# agent-claim-hook.sh <working|idle|release|subagent-start|subagent-stop|busy>
 # Claude Code hook for /claim. UserPromptSubmit → working, Stop → idle,
 # SessionEnd → release, SubagentStart/SubagentStop → track in-flight
 # subagents. See tools/did/agent_claims.py for the store. 2026-10-05.
@@ -13,6 +13,16 @@
 # still running, and SubagentStop writes working because the parent resumes
 # to process the result (its own Stop then decides). Entries older than
 # AGENT_STALE_S are ignored so a killed subagent can't pin the card forever.
+#
+# Background shells (2026-11-05): a run_in_background Bash ends the turn the
+# same way but fires no Subagent event, so Stop wrote idle mid-work ("fix
+# yiqifan bugs" waiting on JM with a test run still going). When the shell
+# exits the session resumes and its own Stop decides, like an agent. Stop
+# looks for live ones among the claude process's children; there is no id to
+# track because nothing fires on exit. An hour-old shell doesn't count: that's
+# a dev server, and the card goes stale at the same age (agent_claims.STALE_SECS).
+# busy stays agents-only: nothing re-checks after Stop, so a server started on
+# the turn's last call would hold the tab black for good.
 #
 # Runs on EVERY prompt and turn end in every session, so the common case (this
 # session holds no claim) must cost nothing: builtins only, no python, no jq.
@@ -56,6 +66,29 @@ _live_agents() {   # prints the still-fresh entries, minus $1 if given
   done
   (( ${#out} )) && print -rl -- "${out[@]}"
 }
+_live_shells() {   # prints this session's background Bash shells, under an hour old
+  local l p e; local -a f; local -A parent argv0
+  local -a rows=("${(@f)$(ps -axo pid=,ppid=,etime=,command= 2>/dev/null)}")
+  for l in "${rows[@]}"; do
+    f=(${=l}); (( ${#f} >= 4 )) || continue
+    parent[$f[1]]=$f[2]; argv0[$f[1]]=${f[4]:t}
+  done
+  p=$$
+  while [[ -n "$p" && "${argv0[$p]}" != (claude|claude.exe) ]]; do p=${parent[$p]}; done
+  [[ -n "$p" ]] || return 0
+  for l in "${rows[@]}"; do
+    f=(${=l}); (( ${#f} >= 4 )) || continue
+    [[ "$f[2]" == "$p" && "$l" == *"/.claude/shell-snapshots/snapshot-"* ]] || continue
+    e=$f[3]   # [[dd-]hh:]mm:ss
+    [[ "$e" == *-* || "$e" == *:*:* ]] || print -r -- "$f[1]"
+  done
+}
+# busy (2026-11-05): exit 0 while this session's background agents run, so the
+# Stop colour hook leaves the tab black. Blue means waiting on JM, same as 🕐.
+if [[ "$1" == busy ]]; then
+  [[ -n "$sid" && -n "$(_live_agents)" ]]
+  exit $?
+fi
 if [[ -n "$sid" ]]; then
   case "$1" in
     subagent-start)
@@ -83,7 +116,7 @@ tids=(${tids:#})
 state=""
 case "$1" in
   working|subagent-start|subagent-stop) state=working ;;
-  idle) [[ -n "$(_live_agents)" ]] && state=working || state=idle ;;
+  idle) [[ -n "$(_live_agents)" || -n "$(_live_shells)" ]] && state=working || state=idle ;;
   release) state=released ;;
 esac
 case "$1" in

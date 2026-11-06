@@ -705,8 +705,9 @@ def complete(content: str, task_id: str | None = None) -> dict:
     if task_id:
         args += ["--task-id", str(task_id)]
     try:
+        # Above did-fast's 120s watchdog, so did-fast is the one that gives up.
         proc = subprocess.run(args + [strip_ann(content)],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=130)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "did-fast timeout"}
     out = proc.stdout.strip()

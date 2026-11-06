@@ -241,3 +241,24 @@ def test_credits_sums_literal_and_reference_credits(db):
 ])
 def test_resolve_date_with_explicit_year(raw, expected):
     assert ledger.resolve_date(raw, T) == expected
+
+
+def _write_jsonl(path, entries):
+    path.write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries), encoding="utf-8")
+
+
+def test_catch_up_imports_fallback_once(db, tmp_path):
+    today = dt.date.today()
+    fb = _e(ts=f"{today.isoformat()}T11:00:00", date=f"{today.month}/{today.day}", fallback=True)
+    _write_jsonl(tmp_path / f"{today:%Y-%m}.jsonl", [fb])
+    assert ledger.catch_up(db, tmp_path)["inserted"] == 1
+    assert ledger.catch_up(db, tmp_path)["inserted"] == 0
+
+
+def test_state_late_import_does_not_outrank_a_later_repair(db):
+    """11/4: a 20:23 fallback imported on 11/5 must not undo the 05:43 repair."""
+    ledger.record(_e(ts="2026-10-20T05:43:00", kind="write", sheet="hcbi", col="BD", row=310, date="10/20",
+                     value="=550", after="=550", after_value="550.0"), db)
+    ledger.record(_e(ts="2026-10-19T20:23:00", sheet="hcbi", col="BD", row=310, date="10/20",
+                     value="+550", after="=550+550", after_value="1100.0", fallback=True), db)
+    assert ledger.state("2026-10-20", "hcbi", db)["BD"]["value"] == 550.0

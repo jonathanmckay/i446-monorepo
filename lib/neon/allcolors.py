@@ -53,6 +53,17 @@ def is_habit_header(name: str) -> bool:
     return bool(n) and n not in NON_HABIT
 
 
+def caught_up(cell: Cell, prev_raw, prev_at: Optional[dt.datetime],
+              cycle_first: dt.date, day: dt.date) -> Cell:
+    """A blank card whose last-week cell was written in this cycle by `day`
+    filled last week instead of this one (neon/week_fill.py): the card was
+    done this cycle, so it is not a miss."""
+    if (classify_value(prev_raw) == DONE and prev_at is not None
+            and cycle_first <= prev_at.date() <= day):
+        return Cell(cell.name, DONE, prev_at)
+    return cell
+
+
 def onen_cell(cards: Iterable[Cell]) -> Cell:
     """Collapse the day's 1n+ cards into the single virtual '1n' habit: done
     when every applicable card is done (at = the last one), N/A when all are

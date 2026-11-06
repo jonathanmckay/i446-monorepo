@@ -97,3 +97,32 @@ def test_overdue_card_still_closes():
     assert _run(td, ex, "9/21") == 0
     assert td.closes == 1
     assert len(ex.appends) == 1
+
+
+def _run_fill(td, ex, fill) -> int:
+    with patch.object(run, "excel", ex), patch.object(run, "todoist", td), \
+         patch.object(run, "_calc_mw", return_value=(9.3, 42)), \
+         patch.object(run, "_today_md", return_value="9/21"), \
+         patch.object(run.week_fill, "resolve", return_value=fill), \
+         patch.object(run, "_target_date_obj",
+                      side_effect=lambda s: date(2026, *map(int, s.split("/")))), \
+         patch.object(run, "_auto_detect_minutes", return_value=0), \
+         patch.object(run, "_drop_from_queue"), \
+         patch.object(run, "_append_completed"), \
+         patch.object(run, "_fire_refresh"):
+        return run.run_1n(dict(_D), "9/21")
+
+
+def test_card_that_caught_up_last_week_still_credits_this_week():
+    # First completion filled last week and rolled the card past this week;
+    # this week's cell is blank, so the second completion is real.
+    td, ex = _FakeTodoist(due=date(2026, 9, 28)), _FakeExcel()
+    assert _run_fill(td, ex, run.week_fill.Target("9.3", 42, True, False)) == 0
+    assert td.closes == 0, "the rolled card stays put"
+    assert len(ex.writes) == 1 and len(ex.appends) == 1
+
+
+def test_rolled_card_with_a_filled_cell_is_still_already_done():
+    td, ex = _FakeTodoist(due=date(2026, 9, 28)), _FakeExcel()
+    assert _run_fill(td, ex, run.week_fill.Target("9.3", 42, False, False)) == 0
+    assert not ex.writes and not ex.appends

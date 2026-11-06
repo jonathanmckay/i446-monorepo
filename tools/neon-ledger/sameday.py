@@ -150,7 +150,8 @@ def main() -> int:
     day = dt.date.fromisoformat(a.date) if a.date else dt.date.today()
     if not a.date:
         snapshot()
-    ledger.repair_dates()            # same as neon.py strict: date the row-addressed writes
+    ledger.catch_up()                # same as neon.py strict: fallback writes, then
+    ledger.repair_dates()            # date the row-addressed writes
     res = rules.strict_check(day.isoformat())
     if res["pass"]:
         print(f"{day}: clean")

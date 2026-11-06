@@ -86,20 +86,18 @@ sheet is a week ahead/behind another.
 
 ## Launch
 
-The form is a full-screen prompt_toolkit TUI and needs its own terminal. Pass the
-optional week arg through (`M.W` like `7.4`, or any ISO date in the week).
-Open it with the shared launcher, which tries a cmux tab, then a new window in
-this Claude's own tmux session (only if a client is attached, e.g. the
-`cc-*` sessions on Ix), and otherwise exits 10:
+The form is a full-screen prompt_toolkit TUI, so it needs its own terminal
+(pass the optional week arg through if given: an `M.W` label like `7.4` or any
+ISO date in the week):
 
 ```bash
-~/.claude/skills/_lib/open-form.sh xk887 "python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [M.W|YYYY-MM-DD]"
+~/i446-monorepo/scripts/open-tui.sh xk887 "python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [M.W|YYYY-MM-DD]"
 ```
 
-- `OPENED cmux …` / `OPENED tmux …` → confirm: `xk887 opened (<cmux tab|tmux window>) — fill the form, ^S to save.`
-- Exit 10 (`NO_SURFACE`: no cmux, no attached tmux) → **never tell JM to run it
-  himself.** Ask the form's questions here in chat (keys = `field_key(sheet, key)` over `SHEETS` in `tools/xk887/xk887-survey.py`; one person per round), write his reply
-  to a temp file and run `python3 ~/i446-monorepo/tools/xk887/xk887-survey.py [week] --from-json <file>`. Blanks never clobber.
+It opens a cmux tab, a tmux window on Ix, or a Terminal.app tab, whichever this
+session has. Relay its output line. Exit 3 prints the line for the user to run.
+
+Then confirm: fill the form, ^S to save.
 
 ## Keys (inside the form)
 

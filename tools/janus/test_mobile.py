@@ -924,6 +924,13 @@ def test_hiit_and_hit_rows_show_2x_points(jm, monkeypatch):
     assert jm._habit_rate_points("hiit", 27) == 54
     assert jm._habit_rate_points("HIT", 27) == 54
     assert jm._habit_rate_points("work", 27) is None
+    # session habits preview what did-fast credits (2026-11-05): 18m of 中文
+    # showed 18, credits 23.
+    assert jm._habit_rate_points("中文", 18) == 23
+    assert jm._habit_rate_points("math", 40) == 45
+    assert jm._habit_rate_points("english", 23) == 28
+    assert jm._habit_rate_points("一起饭", 20) == 35
+    assert jm._habit_rate_points("一起发", 20) == 35
 
 
 def test_logged_rows_are_not_dimmed(jm):
@@ -1130,3 +1137,52 @@ def test_adjust_points_refuses_an_unlogged_entry(jm, monkeypatch):
     seen = _capture_did(jm, monkeypatch)
     r = jm.adjust_points("77", "never logged", "i9", "10")
     assert not r["ok"] and "not logged" in r["error"] and "text" not in seen
+
+
+# ── lib/entry_points.py on mobile (2026-11-05) ───────────────────────────────
+
+def test_logged_view_reads_another_clients_record_and_an_undo(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record(day, {"7": 19})
+    ledger, pts = jm._logged_view(day)
+    assert "7" in ledger and pts["7"]["points"] == 19
+    jm.entry_points.record(day, {"7": None})
+    ledger, pts = jm._logged_view(day)
+    assert "7" not in ledger and "7" not in pts
+
+
+def test_log_entry_wont_recredit_a_row_logged_elsewhere(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record(day, {"7": 19})
+    assert jm.log_entry("7", "一起发", 4, "xk87", day=day) == {"ok": True, "already": True}
+
+
+def test_did_fast_record_outranks_a_mobile_minutes_fallback(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    monkeypatch.setattr(jm, "STATE_DIR", tmp_path)
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record(day, {"7": 19})
+    jm._logged_points_add(day, "7", 4, [])
+    assert jm.entry_points.for_day(day)["7"] == 19
+
+
+def test_every_did_fast_run_lifts_the_watchdog():
+    """did-fast's 60s watchdog would end the run whatever the timeout says."""
+    src = (Path(__file__).parent / "mobile.py").read_text()
+    runs = [ln for ln in src.splitlines() if "str(DID_FAST)" in ln and "subprocess.run" in ln]
+    assert runs and src.count("env=janus_done.did_env()") == len(runs)
+
+
+def test_log_entry_claims_a_task_closed_before_the_entry(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    day = dt.date(2026, 11, 5)
+    jm.entry_points.record_credit("t", ["1 i447 10.31"], 25, day, "2026-11-07")
+    assert jm.log_entry("7", "1 i447", 15, "i447", day=day) == {"ok": True, "already": True}
+    assert jm._logged_view(day)[1]["7"]["points"] == 25
+
+
+def test_a_per_minute_habit_closed_in_dtd_logs_its_rate_not_row_2_weight():
+    src = (Path(__file__).parent / "mobile.py").read_text()
+    assert 'r["rate_points"]\n' in src and 'closed_in_dtd' in src

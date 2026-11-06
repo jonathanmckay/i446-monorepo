@@ -18,9 +18,10 @@ the week's food logs so the goals answer is informed by data.
 The date picks the hcb week containing it (default: this week).
 
 **From dtd:** Enter on the `1 hcb` card opens the survey form directly
-(`tools/1hcb/1hcb.py`): the weekly report, then the three questions, the
-write, and the habit close. No suggestions. That path is for when JM just
-wants to record the week.
+(`tools/1hcb/1hcb.py`): the weekly report and a 1-4 sentence read on the week
+with suggestions for this one, then the three questions, the write, and the
+habit close. Not the 6 suggestions below. That path is for when JM just wants
+to record the week.
 
 ## The weekly report (printed above the survey)
 
@@ -32,15 +33,20 @@ the previous Thursday through Wednesday, read in one `excel.read_range` call
   s+hcbp (social, `1n+!F`) vs 60 for each fiscal week the hcb week touches.
   Last week's goals (BJ) print just above it for the specific-goal check.
 - **cal**: average over logged days vs 1800, days over 1800, protein vs 100g.
-- **food**: food 分/day vs 86, Daily Dozen servings vs 21/day, groups short
-  of target (worst first) and groups hit.
+- **food**: food 分/day vs 86, Daily Dozen servings vs 21/day, then one aligned
+  row per group against its goal, worst first. Grains have no goal, so no row.
 - **ledger**: the year hcb ledger (hcbi `X384`) at the start and end of the
   week. Rebuilt from the sheet's own formula: per day, food 分 − 86 unless
   the day is unlogged (−50), plus hcbp − 45 unless hcbp is 0, with Excel's
   COUNTIF semantics (text and blanks count).
 
+- **read**: 1-4 sentences from Claude on what drove the week and what to change
+  this week, written from the report and last week's goals. Skipped silently
+  if the call fails or takes over 30s.
+
 The report never blocks the survey: a failed read prints
-`(report unavailable: …)` and the questions follow.
+`(report unavailable: …)` and the questions follow. Answers use
+`lib/survey_input.py`, so opt+arrow moves by word.
 
 ## The survey and where it lands
 
@@ -87,7 +93,7 @@ hcb week's 7 day rows (Thu-Wed). Column map (row 1 headers, verified
 
 - **A**: week label (周), **B**: date
 - **D**: ∑ (food points)
-- **E-N**: food group servings, Daily Dozen (bn beans 3, br berries 1, fr fruit 3, cr cruciferous 1, gr grains 3, vg vegetables 2, fx flax 1, g greens 2, nt nuts 1, sp spices 1; with water 3 they sum to the score's 21)
+- **E-N**: food group servings, Daily Dozen (bn beans 3, br berries 1, fr fruit 3, cr cruciferous 1, gr greens 2, vg vegetables 2, fx flax 1, g grains (no goal), nt nuts 1, sp spices 1; with water 3 they sum to the score's 21)
 - **O**: water, **P**: protein (g), **Q**: caffeine (mg), **R**: alcohol (g)
 - **U**: calories
 - **AK-BE**: meals by 地支 block, three columns each (卯 AK, 辰 AN, 巳 AQ, 午 AT, 未 AW, 申 AZ, 戌 BC): food, calories, protein

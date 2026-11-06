@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from neon import excel  # noqa: E402
 from neon import weeks  # noqa: E402
 from neon import rates  # noqa: E402
+from neon import week_fill  # noqa: E402
 import registry  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code": one task, several domains
 import todoist  # noqa: E402
@@ -291,10 +292,20 @@ def _auto_detect_minutes(toggl_desc: str, project_code: str, default: int = 1) -
         return default
 
 
-def _append_completed(name: str, task_id: str | None = None) -> None:
+def _append_completed(name: str, task_id: str | None = None,
+                      points: int | None = None) -> None:
     """Record a completion via the shared, locked, atomic mark-completed.py
-    writer (see the mc import above) — not a local reimplementation."""
-    mc.append_names([name], ids={name: task_id} if task_id else None)
+    writer (see the mc import above) — not a local reimplementation. `points`
+    is what links the name to its time entries: without it janus shows
+    minutes (2026-11-05: "1 hcb" earned 15 分)."""
+    kw = {"points": {name: points}} if points else {}
+    mc.append_names([name], ids={name: task_id} if task_id else None, **kw)
+
+
+def _completed_points(fen_col: str | None, points: int, target_date: str) -> int | None:
+    """分 today's record may claim: a backfill's credit went to another day,
+    so it must not show on today's row."""
+    return points if fen_col and points and target_date == _today_md() else None
 
 
 def _drop_from_queue(task_id: str) -> None:
@@ -652,6 +663,13 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         print(f"  ✗ M.W lookup failed: {e}", file=sys.stderr)
         return 1
 
+    # A blank last week takes the completion first (lib/neon/week_fill.py).
+    fill = None
+    if target_date == _today_md() and not d.get("cumulative_increment"):
+        fill = week_fill.resolve(name, col, _target_date_obj(target_date))
+        if fill:
+            week_row = fill.row
+
     # Close BEFORE crediting: a card already rolled past this Sun-Sat week
     # means the habit is done for the week, so nothing may be written.
     # Closing early within the week (Thursday's card on Monday) stays allowed.
@@ -663,8 +681,12 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
             d.get("todoist_label") or "1neon", name, d.get("aliases", []),
             not_due_after=week_sat)
     except AlreadyDoneThisPeriod as e:
-        print(f"  = {name} already done this week: {e}; no credit, card left alone")
-        return 0
+        # A card that caught up last week rolled past this week with this
+        # week's cell still blank: the second completion is real.
+        if not (fill and fill.open):
+            print(f"  = {name} already done this week: {e}; no credit, card left alone")
+            return 0
+        closed, closed_id = None, None
 
     toggl = d.get("toggl") or {}
     # Compute minutes — explicit > time range > Toggl auto-detect > 1 (same
@@ -739,11 +761,12 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         except Exception:
             pass
 
-    _append_completed(name, closed_id)
+    _append_completed(name, closed_id, _completed_points(fen_col, points, target_date))
     _fire_refresh()
     cell_note = (f"+{_VARIABLE_1N_BASES[name]} ({minutes}m to the day)" if inc and name in _BASE_IN_CELL_1N
                  else f"{minutes}m")
     print(f"  ✓ {name} → 1n+!{col}{week_row} = {cell_note}, 0分!{fen_col} +{points}"
+          + (f" (filled {fill.label})" if fill and fill.shifted else "")
           + (" + todoist closed" if closed else ""))
     return 0
 
@@ -828,6 +851,7 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
     # takes the task's label; an unknown @code falls back to it too.
     td_pairs = fen_split.parse_points(content)
     splits = user_split or (td_pairs if (user_sq is None and bo_sq is None and len(td_pairs) >= 2) else None)
+    split_pts = 0
     if splits:
         merged: dict[str, int] = {}
         for n, code in splits:
@@ -842,6 +866,7 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         for col, n in merged.items():
             if n > 0:
                 excel.append("0分", col, date=target_date, value=f"+{n}", src=f"did {content[:60]}")
+        split_pts = sum(merged.values())
         points_sq = 0
     if points_sq:
         if not domain:
@@ -871,7 +896,8 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         from neon.blocks import flip_checkbox
         flipped = flip_checkbox(content)
 
-    _append_completed(content[:50], best["id"])
+    _append_completed(content[:50], best["id"],
+                      _completed_points("0分", split_pts + points_sq + points_cu, target_date))
     _fire_refresh()
     msg = f"  ✓ {content!r} (overlap={best_score:.2f})"
     if fen_writes:
@@ -949,7 +975,8 @@ def run_defer(query: str, defer_date: str, claimed_points: int) -> int:
 # a day total and its 30m 长o314 bonus is computed from AQ's before/after
 # change there (lib/neon/long_bonus.py). run.py's own run_0n/apply_long_bonus
 # would write the cell and miss or double the bonus, so hand the item over.
-VIA_DID_FAST = {"o314", "hcmr", "long-o314", "长o314"}
+# hiit's AE is a day total too: run_0n would add to it.
+VIA_DID_FAST = {"o314", "hcmr", "long-o314", "长o314", "hiit"}
 DID_FAST = Path(__file__).resolve().parent / "did-fast.py"
 
 
