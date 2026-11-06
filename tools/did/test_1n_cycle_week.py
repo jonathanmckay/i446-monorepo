@@ -51,5 +51,5 @@ def test_run_py_uses_the_cycle_for_row_and_close_window():
 
 def test_did_fast_groups_1n_writes_by_cycle_week():
     s = _src("did-fast.py")
-    assert "neon_weeks.habit_week_label(_hname, week_date)" in s
+    assert "neon_weeks.habit_week_label(_hname, _week_date)" in s
     ast.parse(s)
