@@ -120,6 +120,13 @@ def test_override_key_survives_a_timezone_change():
     assert a == b
 
 
+def test_old_day_warns_that_a_fill_will_not_show_on_recheck():
+    r = check(full_day((t(9), t(9, 30))))
+    assert "don't fill twice" not in tc.render(r)
+    r["from_store"] = True
+    assert "don't fill twice" in tc.render(r)
+
+
 def test_render_never_offers_fill_when_nothing_was_checked():
     assert "fill" not in tc.render("FAILED: boom")
     assert "fill" not in tc.render({"date": "2026-11-03", "status": "no data", "ok": None})

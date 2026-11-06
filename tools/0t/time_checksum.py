@@ -187,6 +187,10 @@ def render(report: dict | str) -> str:
     if long_:
         L.append(f"  /0t ok {day}    keep all {len(long_)} as they are (yours to say, not Claude's)")
     L.append(f"  /0t --check {day}    recheck when done")
+    if report.get("from_store") and gaps:
+        L += ["", "This day is past Toggl's live reach, so it reads the nightly store, which only",
+              "refreshes this far back monthly. A fill won't show here until then: don't fill twice.",
+              "To see it now: tools/toggl-db/toggl_db.py sync --days 400 --export"]
     return "\n".join(L)
 
 
@@ -224,6 +228,8 @@ def run(day: dt.date, tz, *, interactive: bool, ok_long: bool = False) -> dict:
     report, audit = check(day, entries, cov, use_calendar=interactive, overrides=overrides)
     if unreadable:
         report["unreadable_overrides"] = unreadable
+    if not live:
+        report["from_store"] = True
     if ok_long:
         _apply_override(day, report)
     if interactive and audit is not None:
