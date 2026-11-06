@@ -864,7 +864,14 @@ def _google_calendar():
 # Source 8: syncthing_status
 # ---------------------------------------------------------------------------
 
-@source("syncthing_status", "Syncthing sync status and conflict files")
+def _live_conflicts(paths, vault_path):
+    """Drop conflict files under vault/z_old/ (archived; v180 counted 132
+    conflicts, all there, which drowned any live one)."""
+    old = Path(vault_path) / "z_old"
+    return [p for p in paths if Path(p) != old and old not in Path(p).parents]
+
+
+@source("syncthing_status", "Syncthing sync status and conflict files (excluding z_old/)")
 def _syncthing_status():
     # Extract API key from config.xml
     config_path = _CREDS.get("syncthing_config_path")
@@ -894,7 +901,10 @@ def _syncthing_status():
 
     # Check for sync conflict files in vault
     vault_path = Path.home() / "vault"
-    conflicts = glob_mod.glob(str(vault_path / "**" / "*.sync-conflict-*"), recursive=True)
+    conflicts = _live_conflicts(
+        glob_mod.glob(str(vault_path / "**" / "*.sync-conflict-*"), recursive=True),
+        vault_path,
+    )
 
     conn_info = connections.get("connections", {})
     connected_devices = sum(1 for d in conn_info.values() if d.get("connected"))
@@ -1226,9 +1236,8 @@ def _outlook_inbox():
     }
 
 
-@source("outlook_calendar", "Outlook calendar events, yesterday..tomorrow (Straylight cache)")
-def _outlook_calendar():
-    today = _local_today()
+def _janus_outlook_calendar(today=None):
+    today = today or _local_today()
     events, files, ages = [], [], []
     for off in (-1, 0, 1):
         day = today + datetime.timedelta(days=off)
@@ -1258,6 +1267,68 @@ def _outlook_calendar():
     return {"_status": "stale" if stale else "ok", "cache_files": files,
             "cache_age_hours": max(ages), "events": events, "count": len(events),
             "note": "Graph times; tz field is the Windows zone name (UTC if blank)"}
+
+
+# v180 (2026-11-06): when Straylight sleeps the janus cache is missing or
+# stale (11-06 03:00: today's file was 7 h old), and Dream had no work
+# calendar. The Google import calendar "MSFT (Slow Sync)" on the m5c7 account
+# mirrors the Outlook calendar (titles + times only) and is reachable from
+# cron with the existing calendar token. Fresh cache wins; otherwise the
+# import calendar; if that fails too, the stale/missing cache result stands.
+MSFT_IMPORT_CAL = "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com"
+
+
+def _gcal_import_events(today, service=None):
+    if service is None:
+        creds = _build_google_creds(
+            _CREDS["gcal_tokens_path"], _CREDS["gcal_secrets_path"],
+            scopes=["https://www.googleapis.com/auth/calendar.readonly"],
+            account_key="m5c7",
+        )
+        service = _google_service("calendar", "v3", creds)
+    tz = datetime.datetime.now().astimezone().tzinfo
+    first = today - datetime.timedelta(days=1)
+    t_min = datetime.datetime.combine(first, datetime.time(), tz)
+    t_max = datetime.datetime.combine(today + datetime.timedelta(days=2), datetime.time(), tz)
+    resp = service.events().list(
+        calendarId=MSFT_IMPORT_CAL, timeMin=t_min.isoformat(), timeMax=t_max.isoformat(),
+        singleEvents=True, orderBy="startTime", maxResults=100,
+    ).execute()
+    events = []
+    for ev in resp.get("items", []):
+        if ev.get("status") == "cancelled":
+            continue
+        st, en = ev.get("start", {}), ev.get("end", {})
+        start = st.get("dateTime", st.get("date", ""))
+        events.append({
+            "day": start[:10],
+            "subject": ev.get("summary", "(no title)"),
+            "start": start,
+            "end": en.get("dateTime", en.get("date", "")),
+            "tz": st.get("timeZone", ""),
+            "all_day": "date" in st,
+        })
+    return events
+
+
+@source("outlook_calendar", "Outlook calendar, yesterday..tomorrow (Straylight cache, else MSFT Slow Sync import calendar)")
+def _outlook_calendar(today=None, cache=None, gcal=None):
+    today = today or _local_today()
+    cache = cache or _janus_outlook_calendar
+    gcal = gcal or _gcal_import_events
+    res = cache(today)
+    if res.get("_status") == "ok":
+        return {**res, "via": "janus_cache"}
+    try:
+        events = gcal(today)
+    except Exception as e:
+        return {**res, "via": "janus_cache", "gcal_import_error": f"{type(e).__name__}: {e}"}
+    if not events:
+        return {**res, "via": "janus_cache", "gcal_import_error": "no events"}
+    return {"_status": "ok", "via": "gcal_import", "calendar_id": MSFT_IMPORT_CAL,
+            "events": events, "count": len(events),
+            "cache_status": res.get("_status"), "cache_error": res.get("error"),
+            "note": "MSFT (Slow Sync) import calendar: titles and times only, ISO times with offset"}
 
 
 @source("slack", "Slack status (stub)")
