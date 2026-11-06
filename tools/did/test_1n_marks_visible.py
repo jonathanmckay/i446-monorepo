@@ -56,11 +56,8 @@ def invisible_marks(ws) -> list:
 
 
 def uncolored_marks(ws, first_row: int) -> list:
-    """Fixed-point cards (numeric row 5) whose 1 wins no fill, honouring rule
-    order and stop-if-true the way Excel does, not "some rule fires"."""
-    rules = sorted(
-        ((r, cf.sqref) for cf in ws.conditional_formatting for r in cf.rules),
-        key=lambda x: x[0].priority)
+    """Fixed-point cards (numeric row 5) where no rule with a fill fires on 1."""
+    rules = [(r, cf.sqref) for cf in ws.conditional_formatting for r in cf.rules]
     bad = []
     for col in range(FIRST_COL, LAST_COL + 1):
         if not isinstance(ws.cell(5, col).value, (int, float)):
