@@ -5136,12 +5136,12 @@ def _note_open_credit(output: dict, entry: dict, r, day_iso: str,
         pts = did_points(entry) or _card_points(td.get("content"))
         if pts > 0:
             name = r.item.name
+            labels = (r.todoist_task or {}).get("labels") or []
             output.setdefault("unlinked", []).append({
                 "id": f"{td['id']}@{day_iso}", "names": [name, td.get("content", ""),
                                                          ONENEON_ALIASES.get(name.lower(), name)],
-                "pts": pts, "day": day_iso,
-                "until": _credit_until((r.todoist_task or {}).get("labels") or [],
-                                       date.fromisoformat(day_iso)).isoformat()})
+                "pts": pts, "day": day_iso, "weekly": "1neon" in labels,
+                "until": _credit_until(labels, date.fromisoformat(day_iso)).isoformat()})
     except Exception:  # noqa: BLE001 -- a record must not cost the completion
         pass
 
@@ -5152,7 +5152,8 @@ def _record_entry_points(output: dict) -> None:
         for day, pts in (output.get("entry_points") or {}).items():
             entry_points.record(day, pts, "did-fast")
         for c in output.get("unlinked") or []:
-            entry_points.record_credit(c["id"], c["names"], c["pts"], c["day"], c["until"], "did-fast")
+            entry_points.record_credit(c["id"], c["names"], c["pts"], c["day"], c["until"], "did-fast",
+                                       weekly=c.get("weekly"))
     except Exception:  # noqa: BLE001
         pass
 

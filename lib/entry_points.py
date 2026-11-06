@@ -17,6 +17,12 @@ until its card's cycle ends. The next entry of that name made after the close
 takes the points, once: link() when a client fetches entries, claim() when done
 is pressed on a row. Only fixed-value tasks get credits; a per-minute habit's
 entry has minutes of its own to log.
+
+The entry must have started on or before the close day (Dream v180, rule (a)):
+a daily credit takes only an entry of its own day, a weekly one an entry from
+its week's Sunday through the close day. A later entry of the same name in the
+week is new work, e.g. week_fill's catch-up of last week, and logs on its own.
+link() and claim() apply the same test (_fits).
 """
 from __future__ import annotations
 
@@ -127,12 +133,16 @@ def _append_credit(d: Path, line: dict) -> None:
         pass
 
 
-def record_credit(cid: str, names: list, pts: int, day, until, src: str = "") -> None:
+def record_credit(cid: str, names: list, pts: int, day, until, src: str = "",
+                  weekly: bool | None = None) -> None:
     d = _dir()
     if d is not None:
-        _append_credit(d, {"kind": "credit", "credit": cid, "src": src, "pts": int(pts),
-                           "keys": sorted({normalize(n) for n in names if normalize(n)}),
-                           "day": _iso(day), "until": _iso(until)})
+        line = {"kind": "credit", "credit": cid, "src": src, "pts": int(pts),
+                "keys": sorted({normalize(n) for n in names if normalize(n)}),
+                "day": _iso(day), "until": _iso(until)}
+        if weekly is not None:
+            line["weekly"] = bool(weekly)
+        _append_credit(d, line)
 
 
 def _credits(d: Path) -> dict:
@@ -189,10 +199,35 @@ def _epoch(at) -> float | None:
         return None
 
 
+def _first_day(c: dict) -> str:
+    """Earliest day an entry may start on to take credit `c`: the week's
+    Sunday for a weekly card (until is its Saturday), else the close day.
+    Lines written before the flag existed infer weekly from until > day."""
+    weekly = c.get("weekly")
+    if weekly is None:
+        weekly = c.get("until", "") > c.get("day", "")
+    if not weekly:
+        return c.get("day", "")
+    try:
+        return (dt.date.fromisoformat(c["until"]) - dt.timedelta(days=6)).isoformat()
+    except (KeyError, ValueError):
+        return c.get("day", "")
+
+
+def _fits(c: dict, day: str, at: float | None) -> bool:
+    """The entry started on `day` (and, when known, was made at epoch `at`)
+    may take credit `c`: made after the close, started on or before the close
+    day. A later entry of the name is new work, not this card's time."""
+    if at is not None and at < c["epoch"]:
+        return False
+    return _first_day(c) <= day <= c.get("day", "")
+
+
 def link(entries: list, today=None) -> dict:
-    """Give open credits to matching entries made after the close. `entries`
-    are client rows: id, desc, at, running, and start or start_dt. Earliest
-    start wins, so every host picks the same one. -> {entry id: 分}."""
+    """Give open credits to matching entries made after the close and started
+    on or before the close day (_fits). `entries` are client rows: id, desc,
+    at, running, and start or start_dt. Earliest start wins, so every host
+    picks the same one. -> {entry id: 分}."""
     d = _dir()
     if d is None:
         return {}
@@ -205,12 +240,12 @@ def link(entries: list, today=None) -> dict:
         for e in entries:
             start = e.get("start_dt") or e.get("start")
             at = _epoch(e.get("at"))
-            if e.get("running") or not start or at is None or at < c["epoch"]:
+            if e.get("running") or not start or at is None:
                 continue
             if normalize(e.get("desc", "")) not in c["keys"] or str(e.get("id")) in linked:
                 continue
             day = start.date().isoformat()
-            if c["day"] <= day <= c["until"] and str(e.get("id")) not in for_day(day):
+            if _fits(c, day, at) and str(e.get("id")) not in for_day(day):
                 pool.append((start, str(e.get("id")), day))
         if pool:
             start, eid, day = min(pool)
@@ -218,16 +253,19 @@ def link(entries: list, today=None) -> dict:
     return linked
 
 
-def claim(entry_id, desc: str, day) -> int | None:
-    """Done pressed on a row: an open credit of its name is this row's, so the
-    press must not credit again. -> 分 taken, or None."""
+def claim(entry_id, desc: str, day, at=None) -> int | None:
+    """Done pressed on a row that started on `day`: an open credit of its name
+    is this row's when link() would have given it (_fits), so the press must
+    not credit again. `at` is the entry's Toggl "at" when the client has it;
+    without it only the day is checked. -> 分 taken, or None."""
     d = _dir()
     if d is None:
         return None
-    key = normalize(desc)
-    for c in _open_credits(d, _iso(day)):
-        if key in c["keys"]:
-            return _take(d, c, _iso(day), entry_id)
+    key, day_iso = normalize(desc), _iso(day)
+    made = _epoch(at) if at else None
+    for c in _open_credits(d, day_iso):
+        if key in c["keys"] and _fits(c, day_iso, made):
+            return _take(d, c, day_iso, entry_id)
     return None
 
 
