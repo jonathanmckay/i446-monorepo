@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "1600": {
-      "todoist_id": "6hwH4hpXQWxQMJxR",
-      "minutes": 40
-    },
-    "update the org chart doc": {
-      "todoist_id": "6hwH4hjgr54jfjp2",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-11-05T20:00:08.067320-08:00"
+  "tasks": {},
+  "last_sync": "2026-11-05T22:00:09.361096-08:00"
 }
