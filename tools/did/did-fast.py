@@ -55,6 +55,7 @@ def _tz() -> ZoneInfo:
 TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS_MAX_AGE_HOURS = 24
+HEADERS_EMPTY_RETRY_SECS = 300  # a cache with no habits retries this often, not per call
 
 
 def _due_datetime(task: dict) -> str:
@@ -969,13 +970,16 @@ def parse_input(raw: str) -> list[ParsedItem]:
 
 def load_headers() -> dict:
     """Load headers.json, auto-refresh if stale or missing."""
+    import time as _time
     if HEADERS_PATH.exists():
         data = json.loads(HEADERS_PATH.read_text())
         refreshed = data.get("refreshed", "")
         if refreshed:
             try:
                 age = _daytime.local_now() - datetime.fromisoformat(refreshed)
-                if age.total_seconds() < HEADERS_MAX_AGE_HOURS * 3600:
+                if age.total_seconds() < HEADERS_MAX_AGE_HOURS * 3600 and (
+                        (data.get("0n") and data.get("1n"))
+                        or _time.time() - HEADERS_PATH.stat().st_mtime < HEADERS_EMPTY_RETRY_SECS):
                     return data
             except (ValueError, TypeError):
                 # TypeError: an existing headers.json on disk may still carry
@@ -1043,6 +1047,17 @@ end tell'''
             headers_0n[name.lower()] = int(key)
         elif section == "1n":
             headers_1n[name.lower()] = key  # column letter
+
+    # Exit 0 with nothing read must not replace good headers: for 24 h every
+    # habit would look unknown (bug 2026-11-05: janus asked for points on 一起饭).
+    if not (headers_0n and headers_1n):
+        print("ERROR: refresh_headers read no headers; keeping the last good set",
+              file=sys.stderr)
+        try:
+            prev = json.loads(HEADERS_PATH.read_text())
+        except (OSError, ValueError):
+            prev = {}
+        headers_0n, headers_1n = prev.get("0n") or {}, prev.get("1n") or {}
 
     data = {
         "refreshed": _daytime.local_now().isoformat(),
