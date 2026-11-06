@@ -499,7 +499,8 @@ def _main_with(monkeypatch, capsys, argv, local_today=date(2026, 11, 6)):
     monkeypatch.setattr(sys, "argv", ["0t-fast.py", *argv])
     monkeypatch.setattr(zerot_fast.daytime, "today", lambda: local_today)
     calls = []
-    monkeypatch.setattr(zerot_fast, "time_checksum", lambda d, interactive: calls.append((d, interactive)) or {"ok": True})
+    monkeypatch.setattr(zerot_fast, "time_checksum",
+                        lambda d, interactive, ok_long=False: calls.append((d, interactive)) or {"ok": True})
     monkeypatch.setattr(zerot_fast, "release_claim", lambda: None)
     for name in ("compute_sleep", "write_sleep", "mark_done", "compute_sleep_dock"):
         monkeypatch.setattr(zerot_fast, name, lambda *a, **k: (_ for _ in ()).throw(AssertionError(name + " must not run")))
@@ -534,7 +535,7 @@ def test_miss_in_check_mode_exits_3_with_blocks_on_stderr(monkeypatch, capsys):
             "long_entries": []}
     monkeypatch.setattr(sys, "argv", ["0t-fast.py", "--check", "2026-11-05"])
     monkeypatch.setattr(zerot_fast.daytime, "today", lambda: date(2026, 11, 6))
-    monkeypatch.setattr(zerot_fast, "time_checksum", lambda d, interactive: miss)
+    monkeypatch.setattr(zerot_fast, "time_checksum", lambda d, interactive, ok_long=False: miss)
     monkeypatch.setattr(zerot_fast, "release_claim", lambda: None)
     with pytest.raises(SystemExit) as e:
         zerot_fast.main()
@@ -543,8 +544,45 @@ def test_miss_in_check_mode_exits_3_with_blocks_on_stderr(monkeypatch, capsys):
 
 
 def test_checksum_that_could_not_run_is_not_a_miss():
-    assert not zerot_fast.checksum_missed("FAILED: boom")
-    assert not zerot_fast.checksum_missed({"status": "no data", "ok": None})
+    assert zerot_fast.checksum_exit("FAILED: boom") == 0
+    assert zerot_fast.checksum_exit({"status": "no data", "ok": None}) == 0
+
+
+def test_a_hole_outranks_a_warning():
+    assert zerot_fast.checksum_exit({"ok": False, "needs_override": True}) == 3
+    assert zerot_fast.checksum_exit({"ok": True, "needs_override": True}) == 4
+    assert zerot_fast.checksum_exit({"ok": True, "needs_override": False}) == 0
+
+
+def test_ok_long_never_falls_into_the_full_run():
+    assert zerot_fast.parse_args(["--ok-long", "2026-11-05"], date(2026, 11, 6)) == (
+        date(2026, 11, 5), True, False, False)
+
+
+def test_ok_long_needs_a_date(monkeypatch, capsys):
+    import pytest
+    with pytest.raises(SystemExit) as e:
+        _main_with(monkeypatch, capsys, ["--ok-long"])
+    assert e.value.code == zerot_fast.USAGE_EXIT
+
+
+def test_bad_date_exits_2_not_the_fallback(monkeypatch, capsys):
+    import pytest
+    with pytest.raises(SystemExit) as e:
+        _main_with(monkeypatch, capsys, ["--ok-long", "11/5"])
+    assert e.value.code == zerot_fast.USAGE_EXIT
+    assert "isn't a date" in capsys.readouterr().err
+
+
+def test_override_that_could_not_save_exits_2(monkeypatch, capsys):
+    import pytest
+    monkeypatch.setattr(sys, "argv", ["0t-fast.py", "--ok-long", "2026-11-05"])
+    monkeypatch.setattr(zerot_fast.daytime, "today", lambda: date(2026, 11, 6))
+    monkeypatch.setattr(zerot_fast, "time_checksum", lambda d, interactive, ok_long=False: "FAILED: disk")
+    monkeypatch.setattr(zerot_fast, "release_claim", lambda: None)
+    with pytest.raises(SystemExit) as e:
+        zerot_fast.main()
+    assert e.value.code == zerot_fast.USAGE_EXIT
 
 
 def test_render_crash_is_contained(monkeypatch, capsys):
@@ -555,5 +593,7 @@ def test_render_crash_is_contained(monkeypatch, capsys):
 
 def test_unfinished_day_is_refused(monkeypatch, capsys):
     import pytest
-    with pytest.raises(SystemExit, match="isn't over"):
+    with pytest.raises(SystemExit) as e:
         _main_with(monkeypatch, capsys, ["2026-11-06"])
+    assert e.value.code == zerot_fast.USAGE_EXIT
+    assert "isn't over" in capsys.readouterr().err

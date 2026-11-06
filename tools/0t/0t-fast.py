@@ -540,7 +540,10 @@ def ledger_streak(day: date) -> dict:
     return out
 
 
-CHECKSUM_MISS_EXIT = 3     # distinct from 1: everything else finished, don't run the Fallback
+# Distinct from 1 (real failure, Fallback): for these the skill never runs the Fallback.
+USAGE_EXIT = 2             # bad date or failed override: nothing was done
+CHECKSUM_MISS_EXIT = 3     # a hole over 5m; everything else finished
+CHECKSUM_WARN_EXIT = 4     # a task over 2h waiting for JM's override; everything else finished
 
 
 def _checksum_mod():
@@ -551,11 +554,12 @@ def _checksum_mod():
     return mod
 
 
-def time_checksum(day: date, interactive: bool) -> dict | str:
+def time_checksum(day: date, interactive: bool, ok_long: bool = False) -> dict | str:
     """Toggl checksum for `day`. A checksum that can't run is reported and never
-    fails the run, like the media audit; only a real miss raises exit 3."""
+    fails the run, like the media audit; only a hole or open warning raises an
+    exit code."""
     try:
-        return _checksum_mod().run(day, _local_tz(), interactive=interactive)
+        return _checksum_mod().run(day, _local_tz(), interactive=interactive, ok_long=ok_long)
     except Exception as e:  # noqa: BLE001
         return f"FAILED: {e}"
 
@@ -571,22 +575,35 @@ def print_checksum(report: dict | str) -> None:
     print(text, file=sys.stderr)
 
 
-def checksum_missed(report: dict | str) -> bool:
-    return isinstance(report, dict) and report.get("ok") is False
+def checksum_exit(report: dict | str) -> int:
+    if not isinstance(report, dict):
+        return 0
+    if report.get("ok") is False:
+        return CHECKSUM_MISS_EXIT
+    return CHECKSUM_WARN_EXIT if report.get("needs_override") else 0
+
+
+def usage_exit(message: str) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(USAGE_EXIT)
 
 
 def parse_args(argv: list[str], local_today: date) -> tuple[date | None, bool, bool, bool]:
     """(day or None for yesterday, check_only, session, past). --session is
     passed only by the /0t skill: dtd, cron and run_0t.sh stay exit 0, where a
     nonzero exit escalates to `claude -p` with 0t already done."""
-    check_only, session = "--check" in argv, "--session" in argv
-    args = [a for a in argv if a not in ("--check", "--session")]
+    # --ok-long implies check-only: it must never fall into the full run.
+    check_only, session = "--check" in argv or "--ok-long" in argv, "--session" in argv
+    args = [a for a in argv if a not in ("--check", "--session", "--ok-long")]
     if not args:
         return None, check_only, session, False
-    day = date.fromisoformat(args[0])
+    try:
+        day = date.fromisoformat(args[0])
+    except ValueError:
+        usage_exit(f"{args[0]!r} isn't a date; use YYYY-MM-DD")
     # daytime, not date.today(): the same clock mark_done's guard uses
     if day >= local_today:
-        sys.exit(f"ERROR: {day} isn't over yet; /0t closes out a finished day")
+        usage_exit(f"{day} isn't over yet; /0t closes out a finished day")
     return day, check_only, session, day < local_today - timedelta(days=1)
 
 
@@ -602,7 +619,7 @@ def release_claim() -> str | None:
         return f"ERROR: {e}"
 
 
-def run_check_only(day: date, past: bool) -> None:
+def run_check_only(day: date, past: bool, ok_long: bool = False) -> None:
     """Checksum and nothing else: safe to rerun after filling gaps. An explicit
     older date lands here because the full run is only right for last night:
     it would mark TODAY's 0t, and the sleep dock would hit a night that was
@@ -611,14 +628,17 @@ def run_check_only(day: date, past: bool) -> None:
     if past:
         output["note"] = (f"read-only: sleep, dock and 0t untouched; /0n 0t {day.isoformat()} "
                           "credits that day")
-    report = output["time_checksum"] = time_checksum(day, interactive=True)
+    report = output["time_checksum"] = time_checksum(day, interactive=True, ok_long=ok_long)
     claim = release_claim()
     if claim:
         output["claim"] = claim
     print(json.dumps(output, ensure_ascii=False, indent=2))
     print_checksum(report)
-    if checksum_missed(report):
-        sys.exit(CHECKSUM_MISS_EXIT)
+    if ok_long and isinstance(report, str):
+        sys.exit(USAGE_EXIT)
+    code = checksum_exit(report)
+    if code:
+        sys.exit(code)
 
 
 def main():
@@ -626,9 +646,12 @@ def main():
 
     # Optional date arg; --check = checksum only; --session = the /0t skill
     day, check_only, session, past = parse_args(sys.argv[1:], daytime.today())
+    ok_long = "--ok-long" in sys.argv[1:]
+    if ok_long and day is None:
+        usage_exit("--ok-long needs the date it overrides, so it can't land on the wrong day")
     yesterday = day or today - timedelta(days=1)
     if check_only or past:
-        run_check_only(yesterday, past)
+        run_check_only(yesterday, past, ok_long)
         return
 
     # "sleep_date" = the day the sleep is recorded under (morning after yesterday)
@@ -739,8 +762,9 @@ def main():
         print_checksum(output["time_checksum"])
     if failed:
         sys.exit(1)
-    if session and checksum_missed(output["time_checksum"]):
-        sys.exit(CHECKSUM_MISS_EXIT)
+    code = checksum_exit(output["time_checksum"])
+    if session and code:
+        sys.exit(code)
 
 
 if __name__ == "__main__":

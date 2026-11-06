@@ -1,6 +1,6 @@
 ---
 name: "0t"
-description: "Close out a day's time: log sleep, refresh dashboard, mark 0t done, checksum Toggl (no hole over 5m, no task over 2h). /0t <date> and /0t --check are read-only. Computes last night's sleep from Toggl, writes to 0₦, refreshes the personal dashboard points cache, and marks 0t complete."
+description: "Close out a day's time: log sleep, refresh dashboard, mark 0t done, checksum Toggl (a hole over 5m is an error; a task over 2h is a warning JM must override). /0t <date> and /0t --check are read-only. Computes last night's sleep from Toggl, writes to 0₦, refreshes the personal dashboard points cache, and marks 0t complete."
 user-invocable: true
 ---
 
@@ -19,10 +19,15 @@ python3 ~/i446-monorepo/tools/0t/0t-fast.py --session [YYYY-MM-DD]
 Always pass `--session`: it is what makes a checksum miss come back as an error
 here. dtd and the Ix cron run without it and stay exit 0.
 
-**Exit codes:** 0 = done, clean. **3 = the time checksum missed and everything
-else finished: never use the Fallback.** Show JM the stderr block as it stands
-(missing blocks, suggested fills, commands) and offer the fills. 1 = a real
-failure: Fallback.
+**Exit codes.** Only 1 means the Fallback.
+
+| Exit | Meaning | Do |
+|---|---|---|
+| 0 | Done, clean | Report |
+| 1 | Real failure | Fallback |
+| 2 | Bad date, or an override that didn't save; nothing was done | Show the message, fix the command |
+| 3 | A hole over 5m; everything else finished | Show the stderr block as it stands and offer the fills |
+| 4 | A task over 2h awaits JM's override; everything else finished | Show the warning and wait for JM: split it, relabel it, or `/0t ok <date>` |
 
 Optional date arg = the day to close out. Default: actual yesterday.
 
@@ -34,11 +39,21 @@ Optional date arg = the day to close out. Default: actual yesterday.
 | `/0t --check [YYYY-MM-DD]` | Checksum only, nothing written. Rerun it after filling |
 | `/0t YYYY-MM-DD` (older than yesterday) | Same as `--check`: a past date is read-only. Credit that day with `/0n 0t <date>` |
 | `/0t fill 1,3,5` | Create the suggested entries for numbered gaps, then rerun the check |
+| `/0t ok YYYY-MM-DD` | Override that day's over-2h warnings. The date is required |
 
 `/0t fill` runs (same spec syntax as `/2n fill`: `2=family time @xk87`, `4=@睡觉`):
 
 ```bash
 python3 ~/i446-monorepo/tools/2n/2n-coverage.py --state ~/.local/state/jm/0t-gaps.json --fill "<spec>"
+```
+
+`/0t ok <date>` runs the line below, **only when JM's own message asks for it.
+Claude never overrides on its own initiative, not even to clear a warning at
+the end of a task.** It overrides every open warning for the day, so repeat what
+it recorded. A task that later grows warns again.
+
+```bash
+python3 ~/i446-monorepo/tools/0t/0t-fast.py --ok-long <YYYY-MM-DD>
 ```
 
 The script handles everything:
@@ -80,12 +95,13 @@ The script handles everything:
    `i447/i446/neon-off-excel-plan.md`).
 7. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
 8. **Time checksum** (`time_checksum`, JM 2026-11-06, `tools/0t/time_checksum.py`):
-   fails on any hole over 5m or any non-sleep task over 2h (back-to-back
-   entries of the same task count as one). Holes of 5m or less never count,
-   however many. Reads live Toggl. Never written to Neon, never stops 0t being
-   marked done; a miss is exit 3, with the blocks and fixes on stderr. A long
-   entry is not filled; JM splits or relabels it. `no data` (Toggl returned
-   nothing) and `FAILED:` are unchecked days, not misses: exit 0, say so.
+   a hole over 5m is an error (exit 3). A non-sleep task over 2h is a warning
+   (exit 4) that repeats until JM overrides it (back-to-back entries of the same
+   task count as one). Holes of 5m or less never count, however many. Reads live
+   Toggl. Never written to Neon, never stops 0t being marked done. dtd and cron
+   run without `--session`, so a warning only appears through /0t or `--check`.
+   `no data` (Toggl returned nothing) and `FAILED:` are unchecked days, not
+   misses: exit 0, say so. Overrides live in `g245/0t-overrides-<host>.json`.
 9. Saves Excel on Ix, refreshes dashboard points cache
 
 Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `ledger_streak`, `did`, `time_checksum`, `dashboard`.
