@@ -2170,9 +2170,14 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
         body.append({"col": neon_cols.col_letter(w.col_num), "value": w.write_value,
                      "mode": "add" if _adds_0n(w) else "set"})
     try:
+        # fallback=False: the caller's raw script IS the daemon-down path. The
+        # client's per-cell ssh fallback would land the set/append cells first,
+        # and the raw script would then write them again (an append doubles;
+        # a set's PRE line captures the new value, so ctrl-z can't undo it).
         resp = neon_excel.batch_write(
             "0n", body, date=target_date,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
@@ -2293,9 +2298,12 @@ def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
         else:
             body.append({"col": w.col_letter, "value": w.write_value or 1, "mode": "set"})
     try:
+        # fallback=False: see write_0n_via_daemon (a variable 1n+ append
+        # would otherwise land twice when the daemon is down).
         resp = neon_excel.batch_write(
             "1n+", body, date=week_mw,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
@@ -2732,7 +2740,8 @@ def hiit_day_minutes(session, typed: Optional[int], tr, toggl_total: int, cell: 
     return int(max(total, cell, 1))
 
 
-def apply_hiit_day_total(results: list, target_date: str) -> None:
+def apply_hiit_day_total(results: list, target_date: str,
+                         toggl_stop: Optional[dict] = None) -> None:
     """Runs after the timer stop, so the session just ended is in the total."""
     for r in results:
         if r.step != "0n" or r.item.name.lower() != "hiit":
@@ -2740,6 +2749,12 @@ def apply_hiit_day_total(results: list, target_date: str) -> None:
         typed = r.item.time_value
         if r.item.time_range or typed is not None:
             r.session_minutes = r.write_value
+        elif (toggl_stop and toggl_stop.get("stopped") and toggl_stop.get("minutes")
+              and _timer_key(toggl_stop.get("description", "")) == _timer_key(r.item.name)):
+            # A bare /done on a running hiit timer: routing already summed the
+            # day (toggl_minutes_for), so write_value is not this session and
+            # apply_timer_minutes left it alone. The stopped timer is.
+            r.session_minutes = int(toggl_stop["minutes"])
         toggl_total = toggl_minutes_for("hiit") or 0
         tr = r.item.time_range
         in_toggl = bool(tr) and _range_in_toggl("hiit", tr, _daytime.today())
@@ -4173,7 +4188,7 @@ def main():
     apply_timer_minutes(fast, toggl_stop)
     target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
     if not past_target:
-        apply_hiit_day_total(fast, target_date)
+        apply_hiit_day_total(fast, target_date, toggl_stop)
     # 3c. xk20 / xk22 domain cards -> kid-time minutes in their 0n column
     # (joins the step-4 0n batch below; see synth_kid_time_writes).
     fast.extend(synth_kid_time_writes(fast, toggl_stop, headers))
