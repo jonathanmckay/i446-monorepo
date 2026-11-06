@@ -34,3 +34,9 @@ def test_already_recorded_message_shows_the_points(monkeypatch):
         "already recorded [7]: xk88 1915-1922, not re-running"
     monkeypatch.setattr(m, "_row_points", lambda d, mins, ids: (False, 0))
     assert "no 分 on record" in m._already_recorded_msg("xk88 1915-1922", "xk88", 7, [1])
+
+
+def test_xk88_row_shows_the_minutes_neon_credited_not_its_row2_weight():
+    # 0n!AZ is SUM(AJ:AO): 7m earned 7 分, while the row showed the weight, 30.
+    from neon.rates import zero_n_points
+    assert zero_n_points("xk88", 7) == 7
