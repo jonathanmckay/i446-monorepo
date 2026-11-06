@@ -1,6 +1,6 @@
 ---
 name: "0t"
-description: "Close out a day's time: log sleep, refresh dashboard, mark 0t done, checksum Toggl (gaps over 5m, 15m missing, tasks over 2h). /0t <date> and /0t --check are read-only. Computes last night's sleep from Toggl, writes to 0₦, refreshes the personal dashboard points cache, and marks 0t complete."
+description: "Close out a day's time: log sleep, refresh dashboard, mark 0t done, checksum Toggl (no hole over 5m, no task over 2h). /0t <date> and /0t --check are read-only. Computes last night's sleep from Toggl, writes to 0₦, refreshes the personal dashboard points cache, and marks 0t complete."
 user-invocable: true
 ---
 
@@ -13,8 +13,16 @@ Compute sleep, refresh dashboard data, mark 0t done. No donut chart; the persona
 Run the script directly:
 
 ```bash
-python3 ~/i446-monorepo/tools/0t/0t-fast.py [YYYY-MM-DD]
+python3 ~/i446-monorepo/tools/0t/0t-fast.py --session [YYYY-MM-DD]
 ```
+
+Always pass `--session`: it is what makes a checksum miss come back as an error
+here. dtd and the Ix cron run without it and stay exit 0.
+
+**Exit codes:** 0 = done, clean. **3 = the time checksum missed and everything
+else finished: never use the Fallback.** Show JM the stderr block as it stands
+(missing blocks, suggested fills, commands) and offer the fills. 1 = a real
+failure: Fallback.
 
 Optional date arg = the day to close out. Default: actual yesterday.
 
@@ -72,16 +80,12 @@ The script handles everything:
    `i447/i446/neon-off-excel-plan.md`).
 7. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
 8. **Time checksum** (`time_checksum`, JM 2026-11-06, `tools/0t/time_checksum.py`):
-   gaps over 5m, more than 15m missing from the day, any non-sleep task over
-   2h (back-to-back entries of the same task count as one). Reads live Toggl.
-   Informational: never written to Neon, never stops 0t being marked done.
-   Always report one line: `Time: ✅/❌ <missing>m missing · N gaps · N seams · N over 2h`.
-   `seams` = holes of 5m or less: they count toward the 15m but aren't
-   numbered, so a day can miss with no gap to fill; say so plainly.
-   On a miss, show the numbered gaps with `fill` + `@code` and the fix
-   (`/0t fill 1,3`, then `/0t --check <date>`), and each long entry with its
-   times. A long entry is not filled; JM splits or relabels it. `no data`
-   means Toggl returned nothing for the day, not a clean or a failed day.
+   fails on any hole over 5m or any non-sleep task over 2h (back-to-back
+   entries of the same task count as one). Holes of 5m or less never count,
+   however many. Reads live Toggl. Never written to Neon, never stops 0t being
+   marked done; a miss is exit 3, with the blocks and fixes on stderr. A long
+   entry is not filled; JM splits or relabels it. `no data` (Toggl returned
+   nothing) and `FAILED:` are unchecked days, not misses: exit 0, say so.
 9. Saves Excel on Ix, refreshes dashboard points cache
 
 Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `ledger_streak`, `did`, `time_checksum`, `dashboard`.

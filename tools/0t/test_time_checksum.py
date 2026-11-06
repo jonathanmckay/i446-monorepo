@@ -1,4 +1,4 @@
-"""/0t's Toggl checksum: gaps over 5m, ~15m missing, no non-sleep task over 2h."""
+"""/0t's Toggl checksum: no hole over 5m, no non-sleep task over 2h."""
 import datetime as dt
 import importlib.util
 import json
@@ -59,16 +59,34 @@ def test_six_minute_gap_is_flagged_with_a_number():
     assert [(g["id"], g["start"], g["minutes"]) for g in r["gaps"]] == [(1, "09:00", 6)]
 
 
-def test_small_seams_over_fifteen_total_fail_without_a_listed_gap():
-    holes = [(t(h), t(h, 4)) for h in range(1, 6)]
+def test_small_holes_never_fail_however_many():
+    holes = [(t(h), t(h, 4)) for h in range(1, 11)]
     r = check(full_day(*holes))
-    assert r["missing_min"] == 20 and r["gaps"] == [] and r["coverage_ok"] is False
-    assert r["seams"] == 5
+    assert r["missing_min"] == 40 and r["gaps"] == [] and r["ok"] is True
 
 
-def test_fifteen_total_passes():
-    holes = [(t(h), t(h, 5)) for h in range(1, 4)]
-    assert check(full_day(*holes))["coverage_ok"] is True
+def test_render_shows_blocks_suggestions_and_commands():
+    r = check(full_day((t(9), t(9, 30))))
+    r["gaps"][0].update(fill="task 8", code="i9", confidence="med")
+    r["long_entries"] = [{"desc": "prep", "code": "g245", "minutes": 300, "start": "08:00", "end": "13:00"}]
+    r["ok"] = False
+    text = tc.render(r)
+    assert "#1 09:00–09:30 30m → task 8 @i9 (med)" in text
+    assert "08:00–13:00 300m prep @g245" in text
+    assert "/0t fill 1 " in text and f"/0t --check {DAY}" in text
+
+
+def test_render_gap_with_no_suggestion_asks_for_one():
+    r = check(full_day((t(9), t(9, 30))))
+    r["gaps"][0]["fill"] = "? no idea"
+    r["ok"] = False
+    text = tc.render(r)
+    assert "no suggestion" in text and "/0t fill 1=<what it was> @<code>" in text
+
+
+def test_render_never_offers_fill_when_nothing_was_checked():
+    assert "fill" not in tc.render("FAILED: boom")
+    assert "fill" not in tc.render({"date": "2026-11-03", "status": "no data", "ok": None})
 
 
 def test_two_hour_entry_is_allowed_one_minute_over_is_not():

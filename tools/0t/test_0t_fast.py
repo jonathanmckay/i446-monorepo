@@ -517,6 +517,42 @@ def test_past_date_is_read_only_and_names_the_credit_path(monkeypatch, capsys):
     assert calls == [(date(2026, 11, 3), True)] and "/0n 0t 2026-11-03" in out
 
 
+def test_session_flag_alone_is_a_full_run():
+    assert zerot_fast.parse_args(["--session"], date(2026, 11, 6)) == (None, False, True, False)
+
+
+def test_session_flag_with_yesterday_is_still_full():
+    assert zerot_fast.parse_args(["--session", "2026-11-05"], date(2026, 11, 6)) == (
+        date(2026, 11, 5), False, True, False)
+
+
+def test_miss_in_check_mode_exits_3_with_blocks_on_stderr(monkeypatch, capsys):
+    import pytest
+    miss = {"date": "2026-11-05", "status": "checked", "ok": False, "missing_min": 8,
+            "gaps": [{"id": 1, "start": "09:00", "end": "09:08", "minutes": 8, "fill": "x",
+                      "code": "i9", "confidence": "low", "after": "", "before": ""}],
+            "long_entries": []}
+    monkeypatch.setattr(sys, "argv", ["0t-fast.py", "--check", "2026-11-05"])
+    monkeypatch.setattr(zerot_fast.daytime, "today", lambda: date(2026, 11, 6))
+    monkeypatch.setattr(zerot_fast, "time_checksum", lambda d, interactive: miss)
+    monkeypatch.setattr(zerot_fast, "release_claim", lambda: None)
+    with pytest.raises(SystemExit) as e:
+        zerot_fast.main()
+    assert e.value.code == zerot_fast.CHECKSUM_MISS_EXIT
+    assert "#1 09:00–09:08 8m" in capsys.readouterr().err
+
+
+def test_checksum_that_could_not_run_is_not_a_miss():
+    assert not zerot_fast.checksum_missed("FAILED: boom")
+    assert not zerot_fast.checksum_missed({"status": "no data", "ok": None})
+
+
+def test_render_crash_is_contained(monkeypatch, capsys):
+    monkeypatch.setattr(zerot_fast, "_checksum_mod", lambda: (_ for _ in ()).throw(OSError("x")))
+    zerot_fast.print_checksum({"ok": False})
+    assert "couldn't render" in capsys.readouterr().err
+
+
 def test_unfinished_day_is_refused(monkeypatch, capsys):
     import pytest
     with pytest.raises(SystemExit, match="isn't over"):

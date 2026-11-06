@@ -540,17 +540,54 @@ def ledger_streak(day: date) -> dict:
     return out
 
 
+CHECKSUM_MISS_EXIT = 3     # distinct from 1: everything else finished, don't run the Fallback
+
+
+def _checksum_mod():
+    spec = importlib.util.spec_from_file_location(
+        "time_checksum", Path(__file__).resolve().parent / "time_checksum.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def time_checksum(day: date, interactive: bool) -> dict | str:
-    """Toggl checksum for `day`. Informational, like the media audit: a failure
-    is reported and never fails the run."""
+    """Toggl checksum for `day`. A checksum that can't run is reported and never
+    fails the run, like the media audit; only a real miss raises exit 3."""
     try:
-        spec = importlib.util.spec_from_file_location(
-            "time_checksum", Path(__file__).resolve().parent / "time_checksum.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod.run(day, _local_tz(), interactive=interactive)
+        return _checksum_mod().run(day, _local_tz(), interactive=interactive)
     except Exception as e:  # noqa: BLE001
         return f"FAILED: {e}"
+
+
+def print_checksum(report: dict | str) -> None:
+    """The readable block, on stderr after the JSON. A render bug must not turn
+    a finished run into exit 1 and send the skill to the manual Fallback."""
+    try:
+        text = _checksum_mod().render(report)
+    except Exception as e:  # noqa: BLE001
+        text = f"Time checksum couldn't render ({e}); see time_checksum in the JSON"
+    sys.stdout.flush()
+    print(text, file=sys.stderr)
+
+
+def checksum_missed(report: dict | str) -> bool:
+    return isinstance(report, dict) and report.get("ok") is False
+
+
+def parse_args(argv: list[str], local_today: date) -> tuple[date | None, bool, bool, bool]:
+    """(day or None for yesterday, check_only, session, past). --session is
+    passed only by the /0t skill: dtd, cron and run_0t.sh stay exit 0, where a
+    nonzero exit escalates to `claude -p` with 0t already done."""
+    check_only, session = "--check" in argv, "--session" in argv
+    args = [a for a in argv if a not in ("--check", "--session")]
+    if not args:
+        return None, check_only, session, False
+    day = date.fromisoformat(args[0])
+    # daytime, not date.today(): the same clock mark_done's guard uses
+    if day >= local_today:
+        sys.exit(f"ERROR: {day} isn't over yet; /0t closes out a finished day")
+    return day, check_only, session, day < local_today - timedelta(days=1)
 
 
 def release_claim() -> str | None:
@@ -574,29 +611,22 @@ def run_check_only(day: date, past: bool) -> None:
     if past:
         output["note"] = (f"read-only: sleep, dock and 0t untouched; /0n 0t {day.isoformat()} "
                           "credits that day")
-    output["time_checksum"] = time_checksum(day, interactive=True)
+    report = output["time_checksum"] = time_checksum(day, interactive=True)
     claim = release_claim()
     if claim:
         output["claim"] = claim
     print(json.dumps(output, ensure_ascii=False, indent=2))
+    print_checksum(report)
+    if checksum_missed(report):
+        sys.exit(CHECKSUM_MISS_EXIT)
 
 
 def main():
     today = date.today()
 
-    # Parse optional date arg; --check = checksum only
-    args = [a for a in sys.argv[1:] if a != "--check"]
-    check_only = len(args) != len(sys.argv) - 1
-    if args:
-        yesterday = date.fromisoformat(args[0])
-        # daytime, not date.today(): the same clock mark_done's guard uses
-        local_today = daytime.today()
-        if yesterday >= local_today:
-            sys.exit(f"ERROR: {yesterday} isn't over yet; /0t closes out a finished day")
-        past = yesterday < local_today - timedelta(days=1)
-    else:
-        yesterday = today - timedelta(days=1)
-        past = False
+    # Optional date arg; --check = checksum only; --session = the /0t skill
+    day, check_only, session, past = parse_args(sys.argv[1:], daytime.today())
+    yesterday = day or today - timedelta(days=1)
     if check_only or past:
         run_check_only(yesterday, past)
         return
@@ -695,8 +725,7 @@ def main():
 
     # 5d. Toggl checksum. After mark_done on purpose: the calendar and Toggl
     # reads have no hard timeout, and a hang here must not leave 0t unmarked.
-    output["time_checksum"] = time_checksum(
-        yesterday, interactive=bool(os.environ.get("CLAUDE_CODE_SESSION_ID")))
+    output["time_checksum"] = time_checksum(yesterday, interactive=session)
 
     # 6. Refresh dashboard points cache
     try:
@@ -706,8 +735,12 @@ def main():
         output["dashboard"] = f"ERROR: {e}"
 
     print(json.dumps(output, ensure_ascii=False, indent=2))
+    if session:
+        print_checksum(output["time_checksum"])
     if failed:
         sys.exit(1)
+    if session and checksum_missed(output["time_checksum"]):
+        sys.exit(CHECKSUM_MISS_EXIT)
 
 
 if __name__ == "__main__":

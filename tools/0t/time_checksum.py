@@ -1,9 +1,10 @@
 """time_checksum.py — /0t's check that a day's Toggl adds up (JM 2026-11-06).
 
-Flags gaps over 5m, more than ~15m missing from the day, and any non-sleep task
-running over 2h without a review. Report only: it never writes to Neon and
-never stops 0t being marked done. Gap finding and fills are /2n's
-(tools/2n/2n-coverage.py); this owns only the thresholds and the long-entry check.
+Flags any hole over 5m and any non-sleep task running over 2h without a review.
+Holes of 5m or less are fine, however many there are (JM 2026-11-06). It never
+writes to Neon and never stops 0t being marked done; a miss surfaces as exit 3
+in a Claude session (0t-fast.py --session). Gap finding and fills are /2n's
+(tools/2n/2n-coverage.py); this owns the threshold, the long-entry check and render().
 """
 from __future__ import annotations
 
@@ -13,7 +14,6 @@ import os
 from pathlib import Path
 
 MIN_GAP_MIN = 6            # "over 5m"; /2n's minutes are rounded and its filter is >=
-MAX_MISSING_MIN = 15
 MAX_ENTRY_MIN = 120
 SEAM_MIN = 1               # same task with a seam this small is one sitting
 LIVE_REACH_DAYS = 85       # v9 stops at ~90 days; older days stay on the nightly store
@@ -78,13 +78,54 @@ def check(day: dt.date, entries: list[dict], cov, *, use_calendar: bool) -> tupl
     missing = cov.DAY_MIN - d["coverage_min"]
     gaps = [{"id": g["id"], "start": g["start"].strftime("%H:%M"), "end": g["end"].strftime("%H:%M"),
              "minutes": g["minutes"], "fill": g["suggest"]["fill"], "code": g["suggest"]["code"],
-             "confidence": g["suggest"]["confidence"]} for g in d["gaps"]]
+             "confidence": g["suggest"]["confidence"],
+             "after": (g.get("prev") or {}).get("desc", ""),
+             "before": (g.get("next") or {}).get("desc", "")} for g in d["gaps"]]
     long_ = long_entries(day, entries, cov)
-    coverage_ok = missing <= MAX_MISSING_MIN and not gaps
-    return {"date": day.isoformat(), "status": "checked", "ok": coverage_ok and not long_,
-            "coverage_ok": coverage_ok, "long_ok": not long_, "missing_min": missing,
-            "max_missing_min": MAX_MISSING_MIN, "gaps": gaps, "seams": d["n_seams"],
-            "long_entries": long_}, a
+    return {"date": day.isoformat(), "status": "checked", "ok": not gaps and not long_,
+            "coverage_ok": not gaps, "long_ok": not long_, "missing_min": missing,
+            "gaps": gaps, "long_entries": long_}, a
+
+
+def _usable(g: dict) -> bool:
+    return not g["fill"].startswith(("?", "multiple:"))
+
+
+def render(report: dict | str) -> str:
+    """What JM reads: the holes, the long tasks, and the exact commands."""
+    if isinstance(report, str):
+        return f"Time checksum did not run: {report}"
+    day = report["date"]
+    if report.get("status") == "no data":
+        return f"Time checksum {day}: Toggl returned nothing, so the day is unchecked"
+    if report["ok"]:
+        return f"Time checksum {day}: ✅ no hole over 5m, no task over 2h"
+    gaps, long_ = report["gaps"], report["long_entries"]
+    L = [f"Time checksum {day}: ❌ {len(gaps)} hole{'s'[:len(gaps) != 1]} over 5m, "
+         f"{len(long_)} task{'s'[:len(long_) != 1]} over 2h"]
+    if gaps:
+        L += ["", "Missing blocks:"]
+        for g in gaps:
+            side = " · ".join(x for x in (g["after"] and f"after {g['after']}",
+                                          g["before"] and f"before {g['before']}") if x)
+            what = f'{g["fill"]} @{g["code"]} ({g["confidence"]})' if _usable(g) else "no suggestion"
+            L.append(f"  #{g['id']} {g['start']}–{g['end']} {g['minutes']}m → {what}" + (f"  [{side}]" if side else ""))
+    if long_:
+        L += ["", "Over 2h with no review:"]
+        for x in long_:
+            L.append(f"  {x['start']}–{x['end']} {x['minutes']}m {x['desc']} @{x['code']} → "
+                     "split it where you stopped or switched, or relabel what it was")
+    L += ["", "Fix:"]
+    ready = [str(g["id"]) for g in gaps if _usable(g)]
+    if ready:
+        L.append(f"  /0t fill {','.join(ready)}    create the suggested entries")
+    for g in gaps:
+        if not _usable(g):
+            L.append(f"  /0t fill {g['id']}=<what it was> @<code>")
+    if ready:
+        L.append("  /0t fill N=<what it was> @<code>    override any suggestion")
+    L.append(f"  /0t --check {day}    recheck when done")
+    return "\n".join(L)
 
 
 def run(day: dt.date, tz, *, interactive: bool) -> dict:
