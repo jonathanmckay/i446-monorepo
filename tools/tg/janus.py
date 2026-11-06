@@ -7706,7 +7706,8 @@ def _(event):
     # Past-day views are guarded too (2026-09-28): the command already
     # carries the viewed M/D, so the key is distinct per day.
     if _cmd_done_today(cmd):
-        flash(f"already recorded: {cmd} — not re-running", 6.0)
+        flash(_already_recorded_msg(cmd, desc, item.get("dur_min") or 0,
+                                    item.get("entry_ids")), 6.0)
         return
     # _cmd_done_today is this host's own memory: the entry's record also
     # covers a log from dtd, mobile or the other machine. A task closed with
@@ -7738,6 +7739,22 @@ def _(event):
                  day=start.date())
 
 
+def _did_may_have_credited(res: str, data: dict | None) -> bool:
+    """Whether a row's retry could double-credit. A crash or refusal credited
+    nothing, so it must stay retryable (bug 2026-11-05: a did-fast crash left
+    xk88 "already recorded" with no 分); a timeout may have landed."""
+    if data is None:
+        return res.startswith("err: did-fast timed out")
+    return not janus_done.refusal(data)
+
+
+def _already_recorded_msg(cmd: str, desc: str, dur_min: int, entry_ids) -> str:
+    recorded, pts = _row_points(desc, dur_min, entry_ids)
+    if recorded:
+        return f"already recorded [{pts}]: {cmd}, not re-running"
+    return f"already ran, no 分 on record: {cmd}, not re-running"
+
+
 def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
                  entry_ids=None, day: dt.date | None = None) -> None:
     """did-fast a FINISHED entry row (no timer to stop) and refresh. `key`
@@ -7750,7 +7767,8 @@ def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
         flash(f"$ did {cmd}")
         app.invalidate()
         res, data = await asyncio.to_thread(run_did_fast_data, cmd, flags)
-        _mark_cmd_done_today(key)
+        if _did_may_have_credited(res, data):
+            _mark_cmd_done_today(key)
         if day is not None and data and not res.startswith("err") \
                 and not janus_done.refusal(data):
             _entry_pts_add(day, janus_done.entry_points_by_id(data, entry_ids or []))
