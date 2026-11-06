@@ -42,18 +42,11 @@ to the write item; the daemon adds onto the existing number (a blank/0 cell
 is just set). `add` needs the daemon; on `fallback: True` with an
 `add_mode_needs_daemon` error, stop and report rather than overwriting.
 
-## 0l completion time (Step 2b)
+## N color time (Step 2b)
 
-Only for habit `0l`, only for today's row, only when 0t is already done:
-
-```python
-from datetime import datetime
-ot = excel.read("0n", cols.col("0n", "0t"), date="TARGET_DATE")
-if ot.get("ok") and ot.get("value") not in ("", "0", "0.0"):
-    now = datetime.now()
-    excel.batch_write("0n", [{"col": cols.col("0n", "N color"), "value": now.hour * 100 + now.minute}],
-                      date="TARGET_DATE", src="did 0l time")
-```
+Not written from here. `tools/allcolors/allcolors.py` stamps `0n!AF` the first
+time 0t and 0l are both done that day, and never moves an existing stamp. A
+fallback that bypasses did-fast should run `allcolors.py --live` afterwards.
 
 ## Append to 0分 (Step 5)
 

@@ -156,7 +156,7 @@ PY2
 Execute the `/did` skill for habit `0t`. Follow the full `/did` flow exactly as if the user had typed `/did 0t`:
 - Write `1` to the `0t` column in today's 0₦ row
 - Close any active Todoist task labeled `0neon` whose content matches `0t`
-- Run Step 2b from the did skill (check if `0l` is also done, write completion time to AF if so)
+- N color (AF) stamps itself: did-fast spawns `allcolors --live` once 0t and 0l are both done
 
 Then refresh the task cache **foreground** so an open dtd drops the 0t card
 immediately (the fast path's script does this itself; the fallback must too —

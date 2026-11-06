@@ -70,3 +70,23 @@ def test_habit_headers():
     assert not ac.is_habit_header("⎣∀clr")
     assert not ac.is_habit_header("N color")
     assert ac.is_habit_header("NVC\xa0+ e")
+
+
+# ── N color (0n!AF): JM 2026-11-06, the first moment 0t and 0l were both done ──
+
+def test_n_color_is_whichever_of_0t_0l_finished_last():
+    assert ac.n_color_time(done("0t", t(6, 57)), done("0l", t(6, 12))) == t(6, 57)
+    assert ac.n_color_time(done("0t", t(9, 8)), done("0l", t(9, 45))) == t(9, 45)
+
+
+def test_n_color_needs_both():
+    blank = ac.Cell("0t", ac.BLANK)
+    na = ac.Cell("0t", ac.NA)
+    assert ac.n_color_time(blank, done("0l", t(8))) is None
+    assert ac.n_color_time(na, done("0l", t(8))) is None
+    assert ac.n_color_time(done("0l", t(8)), ac.Cell("0l", ac.BLANK)) is None
+
+
+def test_n_color_unknown_time_uses_the_fallback():
+    assert ac.n_color_time(done("0t"), done("0l", t(8)), unknown=t(10)) == t(10)
+    assert ac.n_color_time(done("0t"), done("0l", t(8))) == t(23, 59)

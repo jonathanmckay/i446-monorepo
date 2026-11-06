@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-06T06:00:05.971252-08:00"
+  "tasks": {
+    "1500分": {
+      "todoist_id": "6hwXGMvh5rPXqr7R",
+      "minutes": 50
+    },
+    "good interview": {
+      "todoist_id": "6hwXGMvgj7mV27q2",
+      "minutes": 50
+    },
+    "finish weights workout": {
+      "todoist_id": "6hwXGMwMPRxcxxqR",
+      "minutes": 30
+    },
+    "neon caught up": {
+      "todoist_id": "6hwXGP3G5xgvJrj2",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-11-06T10:00:05.664719-08:00"
 }

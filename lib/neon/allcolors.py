@@ -101,6 +101,21 @@ def evaluate(day: dt.date, core: list[Cell], habits: list[Cell], handicap: int,
     return max(times)
 
 
+def n_color_time(zero_t: Cell, zero_l: Cell,
+                 unknown: Optional[dt.datetime] = None) -> Optional[dt.datetime]:
+    """When 0n!AF (N color) was earned: the first moment 0t and 0l were both
+    done, or None. An unknown time counts as `unknown` (default 23:59 of the
+    other cell's day, as in evaluate). JM 2026-11-06."""
+    if zero_t.status != DONE or zero_l.status != DONE:
+        return None
+    known = [c.at for c in (zero_t, zero_l) if c.at]
+    if len(known) == 2:
+        return max(known)
+    if unknown:
+        return unknown
+    return dt.datetime.combine(known[0].date(), dt.time(23, 59)) if known else None
+
+
 def next_handicap(prev_ah, prev_ag) -> int:
     """AH for the day after a day with handicap `prev_ah` and AG `prev_ag`."""
     try:

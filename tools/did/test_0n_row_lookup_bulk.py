@@ -1,7 +1,7 @@
 """0n row lookup must be ONE bulk range read, not a per-cell scan.
 
 Bug 2026-10-12 ("the 0s python script takes a long time to mark 0l done"):
-build_0n_script and build_0l_time_script each found today's 0n row by asking
+build_0n_script found today's 0n row by asking
 Excel for `value of cell 3 of row r` for r = 3..500, one Apple Event per row.
 On Ix that took ~50s by October (row ~286), and marking 0l pays it twice.
 The bulk read of C3:C500 returns the same row in under a second.
@@ -33,7 +33,7 @@ class _W:
 
 def _scripts():
     m = _load()
-    return [m.build_0n_script([_W()], "10/12"), m.build_0l_time_script("10/12")]
+    return [m.build_0n_script([_W()], "10/12")]
 
 
 def test_0n_and_0l_scripts_read_the_date_column_in_one_bulk_read():

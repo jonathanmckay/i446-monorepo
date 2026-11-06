@@ -2515,33 +2515,6 @@ def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
     return subprocess.CompletedProcess("excel-http", 1, stdout="", stderr=err)
 
 
-def build_0l_time_script(target_date: str) -> str:
-    """0l special case: stamp the completion time (HHMM) into 0n's
-    "N Color" column (cell 32) for the target date's row. Since 2026-10-19
-    this is the daemon-down FALLBACK only; the primary path is the daemon
-    /batch_write call in step 4a-ii (journaled, numeric HHMM).
-
-    The stamped time value is computed HERE (via _daytime.local_now(),
-    the traveler's actual current time), not inside the AppleScript via
-    `current date` — that read Ix's own system clock (Ix is the always-on
-    home server and never travels, so it stays on Pacific time), stamping
-    the wrong completion time whenever this script executes on Ix (e.g.
-    janus-mobile invoking did-fast.py locally there) or under an active
-    /travel override that diverges from Ix's clock. Found live 2026-08-26
-    alongside the parse_input date bug — same root cause, same fix.
-    """
-    now = _daytime.local_now()
-    time_str = now.hour * 100 + now.minute
-    return f'''{_0n_row_lookup(target_date.split("/")[0], target_date.split("/")[1])}
-if todayRow = 0 then return "SKIP: date not found"
-tell application "Microsoft Excel"
-    set theSheet to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set timeStr to {time_str}
-    set value of cell 32 of row todayRow of theSheet to timeStr
-    return "OK: N Color=" & timeStr & " row=" & todayRow
-end tell'''
-
-
 def append_hcbi_via_daemon(appends: list[dict], target_date: str, src: str):
     """hcbi "+N" appends through the daemon (POST /batch, one round-trip).
     appends = [{"col", "value": "+N", "idem"?}]. Returns a CompletedProcess-
@@ -4229,25 +4202,6 @@ def main():
             except Exception as e:  # noqa: BLE001 — best-effort, never fail the habit
                 night_hcmc_results[r.item.name] = {"ok": False, "reason": str(e)}
 
-    # 4a-ii. 0l special case: write completion time to "N Color" column (AF)
-    # (never on a past day: that stamps NOW's HHMM into the old row's AF and
-    # drags the all-colors bonus -- the same hazard /0n documents)
-    if not past_target and any(r.item.name.lower() == "0l" for r in on_writes):
-        _ol_now = _daytime.local_now()
-        # batch_write, not write(): the HHMM must land as a NUMBER (0分!E and
-        # the sub-1000 checks compare it numerically); /write quotes strings.
-        _ol_resp = neon_excel.batch_write(
-            "0n", [{"col": neon_cols.col_letter(32), "value": _ol_now.hour * 100 + _ol_now.minute}],
-            date=target_date, src="did 0l completion time")
-        if _ol_resp.get("ok") and not _ol_resp.get("fallback"):
-            _ol_r = (_ol_resp.get("results") or [{}])[0]
-            print(f"0l completion: N Color={_ol_r.get('value')} row={_ol_resp.get('row')}",
-                  file=sys.stderr)
-        else:
-            ol_time_result = ix_run(build_0l_time_script(target_date), timeout=15.0)
-            if ol_time_result.returncode == 0:
-                print(f"0l completion: {ol_time_result.stdout.strip()}", file=sys.stderr)
-
     # 4b. Batch 1n+ writes
     one_n_writes = [r for r in fast if r.step == "1n" and r.col_letter]
     one_n_result = None
@@ -5054,7 +5008,8 @@ def main():
             pass
 
     # Fire-and-forget: stamp 0n!AG (all colors) the moment a same-day habit
-    # write crosses the handicap threshold (tools/allcolors, JM 2026-11-03).
+    # write crosses the handicap threshold (tools/allcolors, JM 2026-11-03),
+    # and 0n!AF (N color) once 0t and 0l are both done (JM 2026-11-06).
     if not past_target and any(
         r is not None and r.returncode == 0 for r in (on_result, one_n_result)
     ):

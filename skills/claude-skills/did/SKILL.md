@@ -171,7 +171,7 @@ The `--create-excel-col` flag adds the column to the 0n/1n+ sheet via the daemon
 
 **2. Write to 0₦:** Use the "Write to 0₦" recipe from `applescript-ref.md` (excel-http daemon via `neon.excel`; never raw AppleScript or local `osascript`).
 
-**2b. 0l special case:** If habit is `0l`, run "0l completion time" template.
+**2b. N color (0n!AF):** Nothing to do here. `tools/allcolors/allcolors.py --live`, spawned by did-fast after a same-day 0n write, stamps AF the first time 0t and 0l are both done, in either order.
 
 **2c. Verify:** Check `verify=` in AppleScript return. Flag `⚠ checksum mismatch` if wrong.
 

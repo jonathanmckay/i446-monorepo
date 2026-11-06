@@ -154,6 +154,33 @@ def restore_0n_cells(restores: list[tuple[int, str]], target_md: str,
                       "; ".join(f"{x.get('col')}: {x.get('error')}" for x in bad) or "?"))
 
 
+def clear_stale_n_color(restores: list[tuple[int, str]], target_md: str,
+                        errors: list[str], src: str) -> None:
+    """0n!AF means 0t and 0l are both done. Clear it only when this undo left
+    one of them undone: undoing a 0l re-log keeps S filled, and the first
+    stamp stands. A failed read leaves AF alone."""
+    q, s = neon_cols.col("0n", "0t"), neon_cols.col("0n", "0l")
+    if not {q, s} & {neon_cols.col_letter(c) for c, _ in restores}:
+        return
+    q_r, s_r = (excel.read("0n", c, date=target_md) for c in (q, s))
+    if not (q_r.get("ok") and s_r.get("ok")):
+        errors.append("N color: could not read 0t/0l, left as is")
+        return
+    if all(_is_done(r.get("value")) for r in (q_r, s_r)):
+        return
+    r = excel.batch_write("0n", [{"col": neon_cols.col("0n", "N color"), "value": ""}],
+                          date=target_md, src=src)
+    if not r.get("ok"):
+        errors.append(f"N color clear: {r.get('error') or r}")
+
+
+def _is_done(raw) -> bool:
+    try:
+        return float(str(raw).strip()) != 0
+    except ValueError:
+        return bool(str(raw or "").strip())
+
+
 def restore_1n_cells(restores: list[tuple[str, str, str]], errors: list[str], src: str) -> None:
     """Restore 1n+ week cells from their pre-image via the daemon, grouped by
     row. restores = [(row, col_letter, prev)] where prev is a formula ("=…"),
@@ -425,6 +452,7 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
     undo_src = "undo " + (", ".join(undo_names) if undo_names else "?")
     if on_restores:
         restore_0n_cells(on_restores, target_md, errors, undo_src)
+        clear_stale_n_color(on_restores, target_md, errors, undo_src)
     if fen_strips:
         strip_fen_terms(fen_strips, target_md, "0分", errors, undo_src)
     if hcbi_strips:

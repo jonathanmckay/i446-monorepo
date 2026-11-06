@@ -78,14 +78,6 @@ def test_step4_calls_daemon_before_raw_script():
     assert "if on_result is None:" in src[i_daemon:i_raw]
 
 
-def test_0l_time_stamp_goes_through_batch_write_as_number():
-    src = (HERE / "did-fast.py").read_text()
-    seg = src[src.index("# 4a-ii. 0l special case"):src.index("# 4b. Batch 1n+ writes")]
-    assert "neon_excel.batch_write(" in seg
-    assert '"value": _ol_now.hour * 100 + _ol_now.minute}' in seg, "HHMM must be a number, not str()"
-    assert "build_0l_time_script(target_date)" in seg, "raw script stays as the fallback"
-
-
 # ---------------------------------------------------------------------------
 # Step 2b: 1n+ via /batch_write, hcbi via /batch
 # ---------------------------------------------------------------------------

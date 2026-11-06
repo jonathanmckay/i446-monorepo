@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Fill Neon 0n!AG (⎣∀clr, HHMM all colors was reached) and 0n!AH (#, handicap).
+"""Fill Neon 0n!AG (⎣∀clr, HHMM all colors was reached), 0n!AH (#, handicap)
+and 0n!AF (N color, HHMM both 0t and 0l were done).
 
   allcolors.py --nightly   launchd on ix, 00:15: settle every closed day since
                            the last filled AH (stamp AG from ledger timestamps;
                            writes after the day ended do not count) and fill
-                           AH forward to today.
+                           AH forward to today; stamp yesterday's AF if a live
+                           run missed it.
   allcolors.py --live      spawned by did-fast after a same-day 0n/1n+ write:
                            same roll, then stamp today's AG with the ledger
-                           time the threshold was crossed, if it has been.
+                           time the threshold was crossed, if it has been, and
+                           today's AF once 0t and 0l are both done.
   --date YYYY-MM-DD        act as if today were this date (backfill/testing)
   --dry-run                print, write nothing
 
 A manual AG (/allcolors) is never overwritten. AH is only written when blank,
-so reruns are idempotent. Rule: lib/neon/allcolors.py.
+and AF only when blank, so reruns are idempotent. Rule: lib/neon/allcolors.py.
 """
 from __future__ import annotations
 
@@ -203,6 +206,26 @@ def settle(d: dt.date, headers: list[str], conn, dry: bool,
     return ag, ah
 
 
+def settle_n_color(d: dt.date, headers: list[str], conn, dry: bool,
+                   unknown: dt.datetime | None = None) -> None:
+    """Stamp d's AF if blank and both 0t and 0l were done on d. Never moves an
+    existing stamp, so re-logging 0l can't drag it later."""
+    day = Day(d, headers)
+    if ac.classify_value(day.raw("N color")) != ac.BLANK:
+        return
+    found = {ac.norm(h): (letter, v) for letter, (h, v) in day.cells.items()}
+    t, l = (_timed(n, found[n][1], _done_at(conn, SHEET, found[n][0], day.row), d)
+            for n in ("0t", "0l"))
+    hit = ac.n_color_time(t, l, unknown=unknown)
+    if hit:
+        # Ledger times are Ix's clock; AF is the traveler's (/travel override).
+        write(d, "AF", ac.hhmm(_local(hit)), "N color: 0t and 0l done", dry)
+
+
+def _local(t: dt.datetime) -> dt.datetime:
+    return t.astimezone(daytime.local_now().tzinfo)
+
+
 def roll(today: dt.date, headers: list[str], conn, dry: bool, lookback: int = 14) -> None:
     """Settle every closed day since the last filled AH (at least yesterday)
     and fill AH forward to today, so a missed nightly run self-heals."""
@@ -259,6 +282,10 @@ def main() -> int:
         headers = _rows(SHEET, f"{FIRST_COL}1:{LAST_COL}1")[0]
         conn = ledger.connect()
         try:
+            if a.live:
+                settle_n_color(today, headers, conn, a.dry_run, unknown=dt.datetime.now())
+            elif a.nightly:
+                settle_n_color(today - dt.timedelta(days=1), headers, conn, a.dry_run)
             carried = roll(today, headers, conn, a.dry_run)
             if a.live and not a.date:
                 settle(today, headers, conn, a.dry_run,
