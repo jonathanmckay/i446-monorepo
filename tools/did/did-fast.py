@@ -222,13 +222,23 @@ def variable_1n_points(resolved_1n: str, minutes: int) -> int:
     rate = VARIABLE_1N_RATES.get(resolved_1n, 1.0)
     return base + int(round(rate * minutes))
 
+# Household meals and teaching the kids: JM 2026-11-05, 家 = extended family
+# only (parents, siblings, in-laws). These used to say 家. One table, so the
+# choice is one edit. Option (b), Dream v180: 早餐 → hcb to match janus
+# (tools/tg/janus.py HABIT_COLOR_DOMAIN), the rest → xk87 (immediate family).
+# Feeds the Toggl project, the posthoc Todoist label and the 0分 column for
+# [N] / +N on the 0₦ habits (hcb → W, xk87 → X).
+HOUSEHOLD_DOMAIN: dict[str, str] = {
+    "早餐": "hcb", "问学": "xk87", "lunch": "xk87", "dinner": "xk87",
+}
+
 # 0₦ habit → Toggl project code (for time_range Toggl entries)
 HABIT_PROJECT: dict[str, str] = {
     "wake up": "hcb", "hiit": "hcb", "bio": "hcb",
     "新闻": "hcmc", "hcmc": "hcmc", "night hcmc": "hcmc",
     "词汇": "hcmc",
     "冥想": "hcm", "o314": "hcm", "hcmr": "hcm", "其他人": "hcm",
-    "早餐": "家", "问学": "家",
+    "早餐": HOUSEHOLD_DOMAIN["早餐"], "问学": HOUSEHOLD_DOMAIN["问学"],
     "xk88": "xk88", "xk20": "xk88", "xk22": "xk88", "xk26": "xk88",
     "睡觉": "睡觉",
     "startup": "g245", "0g": "g245", "tmrw": "g245",
@@ -243,8 +253,8 @@ VARIABLE_DOMAIN: dict[str, tuple[str, str]] = {
     "walk": ("hcb", "W"),
     "run": ("hcb", "W"),
     "nap": ("hcb", "W"),
-    "lunch": ("家", "X"),
-    "dinner": ("家", "X"),
+    "lunch": (HOUSEHOLD_DOMAIN["lunch"], "X"),
+    "dinner": (HOUSEHOLD_DOMAIN["dinner"], "X"),
     "bball": ("hcbp", "W"),
     "math": ("xk87", "X"),
     "english": ("xk87", "X"),
