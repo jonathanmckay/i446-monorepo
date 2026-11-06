@@ -56,6 +56,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import date, datetime, timedelta
@@ -146,6 +147,18 @@ def order_args(a: str, b: str) -> tuple[str, str]:
     if looks_like_date(a) and not looks_like_date(b):
         return b, a
     return a, b
+
+
+def split_args(a: str, b: str, value: str | None) -> tuple[str, str, str]:
+    """(habit, date, value). '/0n nvc 15' has no date: a bare whole number can't
+    be one (dates carry . / or -), so it is the value, for today (2026-11-06:
+    it landed in the date slot and crashed, so nothing was written)."""
+    if value is None:
+        for habit, raw in ((a, b), (b, a)):
+            if re.fullmatch(r"[+=]?\d+", raw):
+                return habit, "today", raw
+    habit, day = order_args(a, b)
+    return habit, day, "1" if value is None else value
 
 
 def parse_value(raw: str, cumulative: bool) -> tuple[str, float]:
@@ -464,14 +477,17 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("habit")
     ap.add_argument("date")
-    ap.add_argument("value", nargs="?", default="1")
+    ap.add_argument("value", nargs="?")
     ap.add_argument("--move-only", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
-    a.habit, a.date = order_args(a.habit, a.date)
+    a.habit, a.date, a.value = split_args(a.habit, a.date, a.value)
     today = daytime.today()
-    target = parse_target_date(a.date, today)
+    try:
+        target = parse_target_date(a.date, today)
+    except ValueError:
+        raise SystemExit(f"ERROR: {a.date!r} isn't a date; use 9/18, 2026-09-18, today or yesterday")
     tomorrow = today + timedelta(days=1)
     if target > tomorrow:
         raise SystemExit(f"ERROR: {target} is more than one day ahead; "

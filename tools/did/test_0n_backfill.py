@@ -44,6 +44,27 @@ def test_parse_target_date(zb, raw, expect):
     assert zb.parse_target_date(raw, TODAY) == expect
 
 
+@pytest.mark.parametrize("args,expect", [
+    (("nvc", "15", None), ("nvc", "today", "15")),       # the 2026-11-06 crash
+    (("15", "nvc", None), ("nvc", "today", "15")),
+    (("hiit", "+15", None), ("hiit", "today", "+15")),
+    (("hiit", "=15", None), ("hiit", "today", "=15")),
+    (("0t", "10/18", None), ("0t", "10/18", "1")),       # dates stay dates
+    (("0t", "9.18", None), ("0t", "9.18", "1")),
+    (("11.02", "hiit", "+15"), ("hiit", "11.02", "+15")),
+    (("hiit", "11.02", "+15"), ("hiit", "11.02", "+15")),
+    (("nvc", "today", "15"), ("nvc", "today", "15")),
+])
+def test_bare_number_with_no_date_is_todays_value(zb, args, expect):
+    assert zb.split_args(*args) == expect
+
+
+def test_unparseable_date_is_an_error_not_a_traceback(zb, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["0n-backfill.py", "nvc", "15", "3"])
+    with pytest.raises(SystemExit, match="isn't a date"):
+        zb.main()
+
+
 def test_parse_target_date_tomorrow_across_year(zb):
     nye = date(2026, 12, 31)
     assert zb.parse_target_date("1/1", nye) == date(2027, 1, 1)

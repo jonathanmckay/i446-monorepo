@@ -18,7 +18,8 @@ python3 ~/i446-monorepo/tools/did/0n-backfill.py "<habit>" <date> [value] [--mov
 ```
 
 Pass the user's arguments through as typed: habit and date may come in either
-order (`/0n 11.02 hiit +15` works), and `+15` / `=15` go through untouched.
+order (`/0n 11.02 hiit +15` works), and `+15` / `=15` go through untouched. A
+bare whole number with no date is the value for today (`/0n nvc 15`).
 
 - `<habit>`: a 0n row-1 header (`0l`, `0t`, `notes`, `ibx i9`, `早餐`, ...). Case/dash-insensitive.
 - `<date>`: `09.18`, `9/18`, `9.18`, `2026-09-18`, `today`, `yesterday`, or `tomorrow`. Usually past. Today's row works too (credited in place, nothing moves). Tomorrow's row is allowed only during 戌/亥 (18:00–22:00) — for a habit done tonight whose row carries tomorrow's date (e.g. 0l on the wake-date row). Points always land on today.
