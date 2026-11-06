@@ -68,3 +68,24 @@ def test_big_kids_literature_closes_its_own_card():
     by_col = {r.col_num: r for r in results}
     assert by_col[36].write_value == 16 and by_col[37].write_value == 15
     assert by_col[36].todoist_task and by_col[36].todoist_task["id"] == "T1"
+
+
+def test_a_backlog_instance_splits_too_and_its_card_value_stays_display_only():
+    """dtd's backlog instance "大孩子文学时间 10.26" kept its day in the name, missed
+    SPLIT_HABITS and appended the card's [50] to 0分 X (ledger 11-01 19:55).
+    It is the same habit: minutes halve, no 分 append, its own card closes."""
+    items = df.parse_input("大孩子文学时间 11.4 30")
+    tq = {"0neon": [{"id": "B", "content": "大孩子文学时间 11.4 (30) [50]", "labels": ["0neon", "xk87"]}],
+          "夜neon": [], "1neon": []}
+    results = df.route_items(items, HEADERS, tq, skip_todoist=False)
+    by_col = {r.col_num: r for r in results}
+    assert all(r.step == "0n" for r in results)
+    assert by_col[36].write_value == 15 and by_col[37].write_value == 15
+    assert not any(r.fen_points for r in results)
+    assert by_col[36].todoist_task and by_col[36].todoist_task["id"] == "B"
+
+
+def test_a_suffix_only_strips_a_trailing_day():
+    assert df.SPLIT_DATE_SUFFIX.sub("", "大孩子文学时间 10.26") == "大孩子文学时间"
+    assert df.SPLIT_DATE_SUFFIX.sub("", "bigs 11/4") == "bigs"
+    assert df.SPLIT_DATE_SUFFIX.sub("", "大孩子文学时间") == "大孩子文学时间"
