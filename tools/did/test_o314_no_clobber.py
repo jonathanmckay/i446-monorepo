@@ -60,7 +60,7 @@ def test_typed_session_still_adds_and_other_habits_still_set(df, monkeypatch):
 def test_daemon_body_carries_max(df, monkeypatch):
     seen = {}
 
-    def fake(sheet, writes, *, date=None, row=None, src=None):
+    def fake(sheet, writes, *, date=None, row=None, src=None, fallback=True):
         seen["writes"] = writes
         return {"ok": True, "row": 308, "results": [
             {"ok": True, "col": "AQ", "value": "70", "before_value": "70", "mode": "max"}]}
