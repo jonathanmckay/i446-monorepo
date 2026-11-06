@@ -4164,6 +4164,7 @@ def main():
     toggl_stop = (stop_matching_toggl(all_names)
                   if all_names and not points_log_run and not past_target else None)
     apply_timer_minutes(fast, toggl_stop)
+    target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
     if not past_target:
         apply_hiit_day_total(fast, target_date)
     # 3c. xk20 / xk22 domain cards -> kid-time minutes in their 0n column
@@ -4172,7 +4173,6 @@ def main():
 
     # 4. Batch 0₦ writes
     on_writes = [r for r in fast if r.step == "0n" and r.col_num]
-    target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
 
     on_result = None
     if on_writes:

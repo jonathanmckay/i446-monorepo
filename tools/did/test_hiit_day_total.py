@@ -74,3 +74,12 @@ def test_the_total_is_taken_after_the_timer_stops():
 
 def test_run_py_hands_hiit_to_did_fast():
     assert '"hiit"}' in (HERE / "run.py").read_text().split("VIA_DID_FAST = ")[1].splitlines()[0]
+
+
+def test_main_sets_target_date_before_the_hiit_step():
+    # 2026-11-05: the call sat seven lines above the assignment, so every
+    # did-fast run died with UnboundLocalError and nothing could be completed.
+    src = (Path(__file__).parent / "did-fast.py").read_text()
+    main = src[src.index("\ndef main():"):]
+    assert main.index("    target_date = items[0].target_date") < main.index("apply_hiit_day_total(fast, target_date)")
+
