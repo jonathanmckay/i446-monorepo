@@ -8818,5 +8818,15 @@
     "unit": "1",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-06",
+    "effective": "2026-11-05",
+    "kind": "moveout",
+    "unit_id": "458",
+    "prop": "c302",
+    "unit": "4",
+    "tenant": null,
+    "baseline": false
   }
 ]

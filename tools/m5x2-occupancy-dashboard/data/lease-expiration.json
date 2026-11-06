@@ -624,18 +624,6 @@
     "rent": "1015.00"
   },
   {
-    "unit_id": 838,
-    "property_name": "kn47 K1",
-    "unit": "B104",
-    "tenant_name": "Miller, Craig",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2017-10-04",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-05-04",
-    "rent": "1304.00"
-  },
-  {
     "unit_id": 843,
     "property_name": "kn47 K1",
     "unit": "C101",
@@ -1354,18 +1342,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-06-03",
     "rent": "1345.00"
-  },
-  {
-    "unit_id": 807,
-    "property_name": "tc34",
-    "unit": "A102",
-    "tenant_name": "Simmons, Marlie R.",
-    "status": "Pending",
-    "lease_sign_date": "2026-02-03",
-    "move_in": "2026-02-07",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1245.00"
   },
   {
     "unit_id": 816,
@@ -4294,6 +4270,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-06-01",
     "rent": "2054.00"
+  },
+  {
+    "unit_id": 838,
+    "property_name": "kn47 K1",
+    "unit": "B104",
+    "tenant_name": "Miller, Craig",
+    "status": "Renewed",
+    "lease_sign_date": null,
+    "move_in": "2017-10-04",
+    "renewal_start_date": "2026-12-01",
+    "last_lease_renewal": "2026-12-01",
+    "rent": "1304.00"
   },
   {
     "unit_id": 862,
