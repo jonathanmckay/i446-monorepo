@@ -55,7 +55,33 @@ def invisible_marks(ws) -> list:
     return bad
 
 
+def uncolored_marks(ws, first_row: int) -> list:
+    """Fixed-point cards (numeric row 5) whose 1 wins no fill, honouring rule
+    order and stop-if-true the way Excel does, not "some rule fires"."""
+    rules = sorted(
+        ((r, cf.sqref) for cf in ws.conditional_formatting for r in cf.rules),
+        key=lambda x: x[0].priority)
+    bad = []
+    for col in range(FIRST_COL, LAST_COL + 1):
+        if not isinstance(ws.cell(5, col).value, (int, float)):
+            continue
+        for row in range(first_row, LAST_WEEK_ROW + 1):
+            fired = [r for r, sq in rules
+                     if any((row, col) in rng.cells for rng in sq.ranges) and _fires_on_one(r)]
+            if not fired:
+                bad.append(f"{get_column_letter(col)}{row}")
+    return bad
+
+
 @pytest.mark.skipif(not NEON.exists(), reason="Neon workbook not on this machine")
 def test_a_mark_of_one_is_never_white_on_white():
     ws = openpyxl.load_workbook(NEON)["1n+"]
     assert invisible_marks(ws) == []
+
+
+@pytest.mark.skipif(not NEON.exists(), reason="Neon workbook not on this machine")
+def test_a_mark_of_one_gets_its_column_color_from_week_11_1_on():
+    # 2026-11-06: rules were tuned for minutes (> 1, > 4, > 20), so every
+    # mark-done card stayed uncolored. Older rows keep their history.
+    ws = openpyxl.load_workbook(NEON)["1n+"]
+    assert uncolored_marks(ws, first_row=49) == []
