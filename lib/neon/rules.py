@@ -726,6 +726,16 @@ def _ref_diffs(c, date_iso: str, col: str, excel_formula: str) -> list:
     from collections import Counter
     _, _, loose = _ref_flow(c, date_iso, col, excel_formula, strict=False)
     _, _, strict = _ref_flow(c, date_iso, col, _seed_formula(c, date_iso, "0分", col), strict=True)
+    # A cell Excel reached but strict never did (its parent is blank in the
+    # ledger, e.g. hcbi!P310's SUM typed by hand on 11-04 hides AM/AY/BE): ask
+    # the strict book for it directly, or its journaled credits read as
+    # "never journaled" and bury the one real cause.
+    for key in list(loose.touched):
+        if key not in strict.touched:
+            try:
+                strict.get(*key)
+            except fx.FormulaError:
+                pass
     why = []
     for key in sorted(set(loose.touched) | set(strict.touched), key=lambda k: (k[0], fx.col_index(k[1]), k[2])):
         sheet, k, row = key

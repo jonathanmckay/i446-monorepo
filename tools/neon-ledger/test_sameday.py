@@ -56,3 +56,22 @@ def test_adopt_sets_same_value_and_acks(monkeypatch):
 
 def test_untraced_miss_still_reported():
     assert "no traced cause" in sd.fixes([{"col": "U", "field": "媒", "delta": 1.19, "why": []}])[0]
+
+
+def test_formula_cell_adopt_line_is_unbackticked_quoted_and_dated():
+    # 11/4's real miss: the old line passed `=SUM(...)` WITH backticks to adopt
+    # (literal text into Excel), unquoted for the shell, onto today's row.
+    import datetime as dt
+    import shlex
+    f = "=SUM(AM310,AP310,AS310,AY310,BB310,BE310,AV310)"
+    (line,) = sd.fixes([_m("W", f"hcbi!P310(protein): Excel `{f}`, ledger `blank`")],
+                       dt.date(2026, 11, 4))
+    cmd = line.split("→ `", 1)[1].rstrip("`")
+    assert shlex.split(cmd) == ["sameday.py", "adopt", "hcbi!P", f, "--date", "2026-11-04"]
+    assert line.startswith("hcbi!P (protein) formula =SUM(")
+
+
+def test_adopt_line_has_no_date_for_today():
+    import datetime as dt
+    (line,) = sd.fixes([_m("X", "0n!AO(NVC + e): Excel 1, ledger — (typed into 0n?)")], dt.date.today())
+    assert line.endswith("`sameday.py adopt 0n!AO 1`")
