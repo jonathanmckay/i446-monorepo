@@ -1,6 +1,7 @@
 """Tests for 1s-survey.py (feature 2026-07-21: /1s asks the 1分+1s manual
 questions as a full-screen form, surfacing the week's daily 0s897 answers so
 answering is selecting rather than composing de novo)."""
+import pytest
 import datetime as dt
 import importlib.util
 import sys
@@ -177,6 +178,94 @@ def test_drain_happens_before_cmux_close_in_source():
     drain_idx = src.index("_writer.drain()")
     close_idx = src.index('"cmux", "close-surface"')
     assert drain_idx < close_idx, "drain() must run before cmux close-surface"
+
+
+def _daemon(m, monkeypatch, replies):
+    calls = []
+    def fake(sheet, items, **kw):
+        calls.append((sheet, items, kw))
+        return replies.pop(0) if len(replies) > 1 else replies[0]
+    monkeypatch.setattr(m.neon_excel, "batch_write", fake)
+    def no_raw(*a, **k):
+        raise AssertionError("raw ix-osa must not run")
+    monkeypatch.setattr(m, "run_bounded", no_raw)
+    return calls
+
+
+def test_daemon_write_chunks_and_skips_blanks(monkeypatch):
+    m = _load()
+    calls = _daemon(m, monkeypatch, [{"ok": True, "row": 40, "results": [1, 1, 1, 1]},
+                                     {"ok": True, "row": 40, "results": [1]}])
+    answers = {f[0]: "a" for f in m.FIELDS}
+    out = m.write_answers(answers, dt.date(2026, 7, 12))
+    assert [len(c[1]) for c in calls] == [4, 1]
+    assert all(i["mode"] == "text" for c in calls for i in c[1])
+    assert calls[0][2]["date"] == "7.2" and calls[0][2]["fallback"] is False
+    assert out == "OK: weekRow=40 wrote=5"
+
+
+def test_no_answers_skips_the_daemon(monkeypatch):
+    m = _load()
+    calls = _daemon(m, monkeypatch, [{"ok": True}])
+    assert m.write_answers({"title": "  "}, dt.date(2026, 7, 12)) == "OK: nothing to write"
+    assert calls == []
+
+
+def test_daemon_refusal_raises_and_skips_raw(monkeypatch):
+    m = _load()
+    _daemon(m, monkeypatch, [{"ok": False, "error": "label_not_found"}])
+    with pytest.raises(RuntimeError, match="label_not_found"):
+        m.write_answers({"title": "T"}, dt.date(2026, 7, 12))
+
+
+def test_stalled_excel_retries_once(monkeypatch):
+    m = _load()
+    calls = _daemon(m, monkeypatch, [{"ok": False, "error": "osascript_timeout"},
+                                     {"ok": True, "row": 40, "results": [1]}])
+    assert m.write_answers({"title": "T"}, dt.date(2026, 7, 12)).startswith("OK")
+    assert len(calls) == 2
+
+
+def test_daemon_down_uses_raw(monkeypatch):
+    m = _load()
+    _daemon(m, monkeypatch, [{"ok": False, "error": "daemon_unreachable", "fallback": True}])
+    seen = {}
+    class P:
+        stdout, stderr, returncode = "OK: weekRow=40 wrote=1", "", 0
+    def raw(cmd, input=None, timeout=None):
+        seen["script"] = input
+        return P
+    monkeypatch.setattr(m, "run_bounded", raw)
+    assert m.write_answers({"title": "T"}, dt.date(2026, 7, 12)) == "OK: weekRow=40 wrote=1"
+    assert "save wb" in seen["script"]
+
+
+def test_test_guard_error_never_reaches_raw(monkeypatch):
+    m = _load()
+    def guard(*a, **k):
+        raise RuntimeError("neon client called from a test")
+    monkeypatch.setattr(m.neon_excel, "batch_write", guard)
+    def no_raw(*a, **k):
+        raise AssertionError("raw ix-osa must not run")
+    monkeypatch.setattr(m, "run_bounded", no_raw)
+    with pytest.raises(RuntimeError, match="from a test"):
+        m.write_answers({"title": "T"}, dt.date(2026, 7, 12))
+
+
+def test_failed_write_does_not_mark_1s_done(monkeypatch, tmp_path):
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    monkeypatch.setattr(m, "fetch_context", lambda dates: {k: [] for k in m.DAILY_COLS})
+    def _boom(answers, sunday):
+        raise RuntimeError("no")
+    monkeypatch.setattr(m, "write_answers", _boom)
+    ran = []
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: ran.append(a))
+    f = tmp_path / "answers.json"
+    f.write_text('{"title": "typed"}')
+    monkeypatch.setattr("sys.argv", ["1s-survey.py", "--from-json", str(f)])
+    assert m.main() == 1
+    assert ran == []
 
 
 def test_write_failure_dumps_recovery_and_returns_nonzero(monkeypatch, tmp_path):

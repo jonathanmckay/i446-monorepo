@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
@@ -402,7 +403,72 @@ def build_applescript(answers: dict, sunday: _dt.date) -> str:
     return "\n".join(L)
 
 
+def daemon_writes(answers: dict) -> list:
+    """/batch_write items for the filled answers: same blanks-skipped rule as
+    build_applescript; prose goes as mode "text" so it never becomes a formula."""
+    items = []
+    for key, _label, col, kind, _ckey in FIELDS:
+        val = (answers.get(key) or "").strip()
+        if not val:
+            continue
+        if kind == "num":
+            if _is_num(val):
+                items.append({"col": col, "value": float(val)})
+        else:
+            items.append({"col": col, "value": val, "mode": "text"})
+    return items
+
+
+# Same size as 0s.py: four prose cells is what one osascript call fits in the
+# daemon's 15 s cap on a slow Excel.
+WRITE_CHUNK = 4
+
+
+def _batch_write_retry(items: list, label: str, src: str) -> dict:
+    r = neon_excel.batch_write(SHEET, items, date=label, src=src, fallback=False)
+    if not r.get("ok") and any(k in str(r.get("error", "")) for k in ("timeout", "excel_error")):
+        r = neon_excel.batch_write(SHEET, items, date=label, src=src, fallback=False)
+    return r
+
+
+def _neon_write_ok(tag: str) -> bool:
+    """Did the queued write with this tag succeed? The mark runs after it on
+    the same serial writer, so the result is already in."""
+    with _writer._results_lock:
+        return any(t == tag and ok for t, ok, *_ in _writer._results)
+
+
+def write_answers_daemon(answers: dict, sunday: _dt.date) -> str | None:
+    """Through the excel-http daemon (Neon-off-Excel step 2, 2026-11-06). The
+    week label resolves through the daemon's 1分+1s col-A lookup. None → caller
+    falls back to the raw ix-osa script. Plain sets, so a retry or a raw rerun
+    after a partial failure is harmless."""
+    items = daemon_writes(answers)
+    if not items:
+        return "OK: nothing to write"
+    label = week_row_label(sunday)
+    src = "1s survey %s" % label
+    wrote, row = 0, None
+    for i in range(0, len(items), WRITE_CHUNK):
+        r = _batch_write_retry(items[i:i + WRITE_CHUNK], label, src)
+        if not r.get("ok"):
+            if r.get("fallback"):
+                return None
+            raise RuntimeError("%s write failed: %s" % (SHEET, r.get("error") or r))
+        wrote += len(r.get("results") or []); row = r.get("row")
+    return "OK: weekRow=%s wrote=%d" % (row, wrote)
+
+
 def write_answers(answers: dict, sunday: _dt.date) -> str:
+    try:
+        out = write_answers_daemon(answers, sunday)
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001 — transport trouble → raw fallback
+        print("1s daemon path failed (%s); using ix-osa" % e, file=sys.stderr)
+        out = None
+    if out is not None:
+        return out
     script = build_applescript(answers, sunday)
     proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
     out = (proc.stdout or "").strip()
@@ -509,6 +575,8 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
                           recovery_payload=answers)
             if not no_mark:
                 def _mark_1s_done():
+                    if not _neon_write_ok(SHEET):
+                        return "1s not marked: Neon write failed"
                     subprocess.run(["/usr/bin/python3",
                                     str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
                                    capture_output=True, text=True, timeout=120)
@@ -656,6 +724,8 @@ def main() -> int:
         # for why).
         if not args.no_mark:
             def _mark_1s_done():
+                if not _neon_write_ok(SHEET):
+                    return "1s not marked: Neon write failed"
                 subprocess.run(["/usr/bin/python3",
                                 str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
                                capture_output=True, text=True, timeout=120)

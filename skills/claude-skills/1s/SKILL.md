@@ -471,7 +471,8 @@ the user submits it (rerun `1s-survey.py` directly if needed).
 
 ## Notes
 
-- All Excel writes/reads in this skill go through
+- The survey's writes go through the excel-http daemon (journaled), with
+  ix-osa as the daemon-down fallback. Reads in this skill go through
   `~/.claude/skills/_lib/ix-osa.sh` (pipe AppleScript on stdin). The
   helper executes on Ix and hard-fails if Ix is unreachable. NEVER
   call local `osascript` — local writes cause OneDrive merge

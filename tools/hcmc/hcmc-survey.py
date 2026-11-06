@@ -9,7 +9,8 @@ to the book's review file as a draft jmreads shows, not to Neon (2026-11-05).
 The answer lives in Neon `1分+1s` column AO (the media "Notes" column, next to the
 新闻/词汇/-1/-2/-3/书 counts) on the row of the current Sunday-anchored fiscal week,
 the same row `/book finished` bumps for books (col AM), unless last week's note is
-blank: then it fills last week first. Writes go through ix-osa.sh.
+blank: then it fills last week first. The write goes through the excel-http
+daemon (journaled); ix-osa.sh does the reads and is the daemon-down fallback.
 
 Usage:
   hcmc-survey.py --show                 print last week's and this week's AO notes + the target row
@@ -31,6 +32,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib"))
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 from survey_input import read_line  # noqa: E402
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location("book_finish", os.path.join(os.path.dirname(os.path.abspath(__file__)), "book-finish.py"))
@@ -143,6 +145,27 @@ def write_script(row: int, text: str) -> str:
     ])
 
 
+def write_answer(label: str, row: int, text: str) -> str:
+    """Daemon first (Neon-off-Excel step 2, 2026-11-06): row is the one --show
+    displayed, label journals the week. A stalled Excel gets one retry; raw
+    ix-osa only when the daemon is unreachable. On failure the answer is
+    printed, because nothing else keeps it."""
+    items = [{"col": COL, "value": text, "mode": "text"}]
+    try:
+        r = neon_excel.batch_write(SHEET, items, row=row, date=label, src="1hcmc", fallback=False)
+        if not r.get("ok") and any(k in str(r.get("error", "")) for k in ("timeout", "excel_error")):
+            r = neon_excel.batch_write(SHEET, items, row=row, date=label, src="1hcmc", fallback=False)
+        if r.get("ok"):
+            return f"OK: {SHEET}!{COL}{row}"
+        if not r.get("fallback"):
+            raise SystemExit(f"{SHEET}!{COL}{row} write failed: {r.get('error') or r}\nnot saved:\n{text}")
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001 — transport trouble → raw fallback
+        print(f"1hcmc daemon path failed ({e}); using ix-osa", file=sys.stderr)
+    return osa(write_script(row, text))
+
+
 def parse_show(raw: str) -> dict:
     out, cur = {}, None
     for line in raw.splitlines():
@@ -219,7 +242,7 @@ def main() -> None:
     script = write_script(row, text)
     if a.print_script:
         print(script); return
-    print(osa(script))
+    print(write_answer(label, row, text))
     if a.mark or a.from_text is None:
         r = subprocess.run([sys.executable, DID_FAST, HABIT], capture_output=True, text=True)
         print((r.stdout or r.stderr).strip().splitlines()[-1] if (r.stdout or r.stderr).strip() else "did-fast: no output")
