@@ -159,3 +159,14 @@ def test_undo_voids_the_credit(store):
     except Exception:  # noqa: BLE001 -- only the record is under test
         pass
     assert ep.for_day(DAY) == {"9": None}
+
+
+
+def test_the_open_credit_says_whether_it_is_weekly(df, store):
+    """A Saturday close has until == day; the 1neon flag rides to the credit
+    line so entry_points still treats it as weekly (Dream v180)."""
+    out = {}
+    df._note_open_credit(out, _closed(), _R(), "2026-11-07", None)
+    assert out["unlinked"][0]["weekly"] is True
+    df._record_entry_points(out)
+    assert ep.claim("9", "1 i447 10.31", dt.date(2026, 11, 3)) == 25

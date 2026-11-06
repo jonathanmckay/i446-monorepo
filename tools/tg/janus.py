@@ -7709,9 +7709,11 @@ def _(event):
     # request 2026-07-27: a run tagged 其他人 credits hcbp points AND 其他人
     # minutes). Meta tags that aren't habit names are filtered out.
     entry_tags: list = []
+    entry_at = None   # Toggl "at": entry_points.claim's made-after-close check
     for _e in STATE.entries:
         if _e.get("id") in (item.get("entry_ids") or []):
             entry_tags = _e.get("tags") or []
+            entry_at = _e.get("at")
             break
     # did-fast recreates the entry from this command (its range trim), so
     # the entry's own single-word tags ride as #tag tokens or they are lost
@@ -7743,7 +7745,7 @@ def _(event):
     # covers a log from dtd, mobile or the other machine. A task closed with
     # no entry yet is this row's points too, even before a fetch linked it.
     if item.get("entry_ids"):
-        entry_points.claim(item["entry_ids"][0], desc, start.date())
+        entry_points.claim(item["entry_ids"][0], desc, start.date(), at=entry_at)
     rec = _recorded_entry_pts(start.date(), item.get("entry_ids") or [])
     if rec is not None:
         flash(f"already logged [{rec}]: not re-running", 6.0)
