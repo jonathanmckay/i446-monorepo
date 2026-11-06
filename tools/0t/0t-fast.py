@@ -540,14 +540,66 @@ def ledger_streak(day: date) -> dict:
     return out
 
 
+def time_checksum(day: date, interactive: bool) -> dict | str:
+    """Toggl checksum for `day`. Informational, like the media audit: a failure
+    is reported and never fails the run."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "time_checksum", Path(__file__).resolve().parent / "time_checksum.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.run(day, _local_tz(), interactive=interactive)
+    except Exception as e:  # noqa: BLE001
+        return f"FAILED: {e}"
+
+
+def release_claim() -> str | None:
+    """Stop the dtd claim the /0t prompt took. No session (Ix cron) = no claim."""
+    if not os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        return None
+    try:
+        r = subprocess.run(["python3", str(DID_FAST.parent / "agent_claims.py"), "release"],
+                           capture_output=True, text=True, timeout=15)
+        return (r.stdout or r.stderr).strip() or "released"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+def run_check_only(day: date, past: bool) -> None:
+    """Checksum and nothing else: safe to rerun after filling gaps. An explicit
+    older date lands here because the full run is only right for last night:
+    it would mark TODAY's 0t, and the sleep dock would hit a night that was
+    never docked."""
+    output: dict = {"yesterday": day.isoformat(), "mode": "check"}
+    if past:
+        output["note"] = (f"read-only: sleep, dock and 0t untouched; /0n 0t {day.isoformat()} "
+                          "credits that day")
+    output["time_checksum"] = time_checksum(day, interactive=True)
+    claim = release_claim()
+    if claim:
+        output["claim"] = claim
+    print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
 def main():
     today = date.today()
 
-    # Parse optional date arg
-    if len(sys.argv) > 1:
-        yesterday = date.fromisoformat(sys.argv[1])
+    # Parse optional date arg; --check = checksum only
+    args = [a for a in sys.argv[1:] if a != "--check"]
+    check_only = len(args) != len(sys.argv) - 1
+    if args:
+        yesterday = date.fromisoformat(args[0])
+        # daytime, not date.today(): the same clock mark_done's guard uses
+        local_today = daytime.today()
+        if yesterday >= local_today:
+            sys.exit(f"ERROR: {yesterday} isn't over yet; /0t closes out a finished day")
+        past = yesterday < local_today - timedelta(days=1)
     else:
         yesterday = today - timedelta(days=1)
+        past = False
+    if check_only or past:
+        run_check_only(yesterday, past)
+        return
 
     # "sleep_date" = the day the sleep is recorded under (morning after yesterday)
     sleep_date = yesterday + timedelta(days=1)
@@ -636,13 +688,15 @@ def main():
     # SKILL_CLAIMS): the card is closed, so the 😈 spinner should stop now,
     # not at session end. Only when 0t actually got marked done; no session
     # (Ix cron) = no claim to release.
-    if "error" not in did_result and os.environ.get("CLAUDE_CODE_SESSION_ID"):
-        try:
-            r = subprocess.run(["python3", str(DID_FAST.parent / "agent_claims.py"), "release"],
-                               capture_output=True, text=True, timeout=15)
-            output["claim"] = (r.stdout or r.stderr).strip() or "released"
-        except Exception as e:
-            output["claim"] = f"ERROR: {e}"
+    if "error" not in did_result:
+        claim = release_claim()
+        if claim:
+            output["claim"] = claim
+
+    # 5d. Toggl checksum. After mark_done on purpose: the calendar and Toggl
+    # reads have no hard timeout, and a hang here must not leave 0t unmarked.
+    output["time_checksum"] = time_checksum(
+        yesterday, interactive=bool(os.environ.get("CLAUDE_CODE_SESSION_ID")))
 
     # 6. Refresh dashboard points cache
     try:

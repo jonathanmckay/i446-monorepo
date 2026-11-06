@@ -513,7 +513,12 @@ def main() -> int:
     ap.add_argument("--fill", metavar="SPEC",
                     help="create Toggl entries for numbered gaps of the LAST audit, e.g. "
                          "'1,3,5' or '2=family time @xk87' (no fetch/report)")
+    ap.add_argument("--state", metavar="PATH",
+                    help="numbered-gaps file for --fill (/0t keeps its own)")
     args = ap.parse_args()
+    if args.state:
+        global STATE_PATH
+        STATE_PATH = Path(args.state).expanduser()
 
     if args.fill:
         return fill_gaps(args.fill)

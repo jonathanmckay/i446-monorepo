@@ -493,3 +493,31 @@ def test_write_sleep_daemon_first_then_raw_fallback():
          patch.object(zerot_fast, "ix_run", return_value=_Res()) as ix_run:
         assert zerot_fast.write_sleep(493, date(2026, 10, 19)) == "OK: sleep=493 row=293"
     assert ix_run.call_count == 1, "unattended Ix cron path keeps the raw script as fallback"
+
+
+def _main_with(monkeypatch, capsys, argv, local_today=date(2026, 11, 6)):
+    monkeypatch.setattr(sys, "argv", ["0t-fast.py", *argv])
+    monkeypatch.setattr(zerot_fast.daytime, "today", lambda: local_today)
+    calls = []
+    monkeypatch.setattr(zerot_fast, "time_checksum", lambda d, interactive: calls.append((d, interactive)) or {"ok": True})
+    monkeypatch.setattr(zerot_fast, "release_claim", lambda: None)
+    for name in ("compute_sleep", "write_sleep", "mark_done", "compute_sleep_dock"):
+        monkeypatch.setattr(zerot_fast, name, lambda *a, **k: (_ for _ in ()).throw(AssertionError(name + " must not run")))
+    zerot_fast.main()
+    return calls, capsys.readouterr().out
+
+
+def test_check_writes_nothing(monkeypatch, capsys):
+    calls, out = _main_with(monkeypatch, capsys, ["--check", "2026-11-05"])
+    assert calls == [(date(2026, 11, 5), True)] and '"mode": "check"' in out
+
+
+def test_past_date_is_read_only_and_names_the_credit_path(monkeypatch, capsys):
+    calls, out = _main_with(monkeypatch, capsys, ["2026-11-03"])
+    assert calls == [(date(2026, 11, 3), True)] and "/0n 0t 2026-11-03" in out
+
+
+def test_unfinished_day_is_refused(monkeypatch, capsys):
+    import pytest
+    with pytest.raises(SystemExit, match="isn't over"):
+        _main_with(monkeypatch, capsys, ["2026-11-06"])

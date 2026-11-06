@@ -3,6 +3,7 @@
 import datetime as dt
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -208,3 +209,12 @@ def test_fill_replaces_placeholders_once_after_creating(monkeypatch, tmp_path):
                         types.SimpleNamespace(PROJECT_MAP={"xk87": 163129781}))
     assert cov.fill_gaps("1,2") == 0
     assert calls == [("create", "walk"), ("delete", 9), ("create", "walk")]
+
+
+def test_fill_reads_the_state_file_it_is_given(tmp_path, monkeypatch, capsys):
+    own = tmp_path / "0t-gaps.json"
+    monkeypatch.setattr(cov, "STATE_PATH", tmp_path / "2n-last.json")   # restores main()'s global
+    monkeypatch.setattr(sys, "argv", ["2n-coverage.py", "--state", str(own), "--fill", "1"])
+    assert cov.main() == 1
+    assert cov.STATE_PATH == own
+    assert "no saved audit" in capsys.readouterr().err

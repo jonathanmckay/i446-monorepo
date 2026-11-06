@@ -1,6 +1,6 @@
 ---
 name: "0t"
-description: "Log sleep, refresh dashboard, mark 0t done. Computes last night's sleep from Toggl, writes to 0₦, refreshes the personal dashboard points cache, and marks 0t complete."
+description: "Close out a day's time: log sleep, refresh dashboard, mark 0t done, checksum Toggl (gaps over 5m, 15m missing, tasks over 2h). /0t <date> and /0t --check are read-only. Computes last night's sleep from Toggl, writes to 0₦, refreshes the personal dashboard points cache, and marks 0t complete."
 user-invocable: true
 ---
 
@@ -16,7 +16,22 @@ Run the script directly:
 python3 ~/i446-monorepo/tools/0t/0t-fast.py [YYYY-MM-DD]
 ```
 
-Optional date arg = "yesterday" override. Default: actual yesterday.
+Optional date arg = the day to close out. Default: actual yesterday.
+
+`/0t` is the entry point for finishing a day's time, on any day:
+
+| Command | What it does |
+|---|---|
+| `/0t` | Full run for yesterday, then the time checksum |
+| `/0t --check [YYYY-MM-DD]` | Checksum only, nothing written. Rerun it after filling |
+| `/0t YYYY-MM-DD` (older than yesterday) | Same as `--check`: a past date is read-only. Credit that day with `/0n 0t <date>` |
+| `/0t fill 1,3,5` | Create the suggested entries for numbered gaps, then rerun the check |
+
+`/0t fill` runs (same spec syntax as `/2n fill`: `2=family time @xk87`, `4=@睡觉`):
+
+```bash
+python3 ~/i446-monorepo/tools/2n/2n-coverage.py --state ~/.local/state/jm/0t-gaps.json --fill "<spec>"
+```
 
 The script handles everything:
 1. Fetches Toggl entries for yesterday + today
@@ -56,9 +71,20 @@ The script handles everything:
    streak first reaches 5, say the cutover gate is met (plan step 4 in
    `i447/i446/neon-off-excel-plan.md`).
 7. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
-8. Saves Excel on Ix, refreshes dashboard points cache
+8. **Time checksum** (`time_checksum`, JM 2026-11-06, `tools/0t/time_checksum.py`):
+   gaps over 5m, more than 15m missing from the day, any non-sleep task over
+   2h (back-to-back entries of the same task count as one). Reads live Toggl.
+   Informational: never written to Neon, never stops 0t being marked done.
+   Always report one line: `Time: ✅/❌ <missing>m missing · N gaps · N seams · N over 2h`.
+   `seams` = holes of 5m or less: they count toward the 15m but aren't
+   numbered, so a day can miss with no gap to fill; say so plainly.
+   On a miss, show the numbered gaps with `fill` + `@code` and the fix
+   (`/0t fill 1,3`, then `/0t --check <date>`), and each long entry with its
+   times. A long entry is not filled; JM splits or relabels it. `no data`
+   means Toggl returned nothing for the day, not a clean or a failed day.
+9. Saves Excel on Ix, refreshes dashboard points cache
 
-Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `ledger_streak`, `did`, `dashboard`.
+Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `ledger_streak`, `did`, `time_checksum`, `dashboard`.
 
 Note: the dashboard points cache only keeps positive day-values, so on the rare
 night where the dock pushes hcb net-negative the dashboard shows a blank for
