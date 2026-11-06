@@ -5,17 +5,19 @@ and 0n!AF (N color, HHMM both 0t and 0l were done).
   allcolors.py --nightly   launchd on ix, 00:15: settle every closed day since
                            the last filled AH (stamp AG from ledger timestamps;
                            writes after the day ended do not count) and fill
-                           AH forward to today; stamp yesterday's AF if a live
-                           run missed it.
+                           AH forward to today, then settle AF on closed days.
   allcolors.py --live      spawned by did-fast after a same-day 0n/1n+ write:
                            same roll, then stamp today's AG with the ledger
-                           time the threshold was crossed, if it has been, and
-                           today's AF once 0t and 0l are both done.
+                           time the threshold was crossed, if it has been,
+                           today's AF once 0t and 0l are both done, and AF on
+                           closed days (a late /0n mark lands on the next run).
   --date YYYY-MM-DD        act as if today were this date (backfill/testing)
   --dry-run                print, write nothing
 
-A manual AG (/allcolors) is never overwritten. AH is only written when blank,
-and AF only when blank, so reruns are idempotent. Rule: lib/neon/allcolors.py.
+A closed day whose 0t and 0l were not both on-time gets AF=3000 (done after
+the day). A manual AG (/allcolors) is never overwritten. AH is only written
+when blank, and AF only when blank, so reruns are idempotent. Rule:
+lib/neon/allcolors.py.
 """
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ import daytime  # noqa: E402
 
 SHEET = "0n"
 FIRST_COL, LAST_COL = "D", "AS"
+FIRST_DAY_ROW = 5   # rows 2-4 are summary rows, not days
 LOCK = Path.home() / ".cache/jm/allcolors.lock"
 SRC = "allcolors auto"
 
@@ -207,19 +210,41 @@ def settle(d: dt.date, headers: list[str], conn, dry: bool,
 
 
 def settle_n_color(d: dt.date, headers: list[str], conn, dry: bool,
-                   unknown: dt.datetime | None = None) -> None:
+                   unknown: dt.datetime | None = None, closed: bool = False) -> None:
     """Stamp d's AF if blank and both 0t and 0l were done on d. Never moves an
-    existing stamp, so re-logging 0l can't drag it later."""
+    existing stamp, so re-logging 0l can't drag it later. On a `closed` day,
+    0t and 0l done without two on-day times stamp LATE_N_COLOR."""
     day = Day(d, headers)
     if ac.classify_value(day.raw("N color")) != ac.BLANK:
         return
     found = {ac.norm(h): (letter, v) for letter, (h, v) in day.cells.items()}
     t, l = (_timed(n, found[n][1], _done_at(conn, SHEET, found[n][0], day.row), d)
             for n in ("0t", "0l"))
+    if closed and not (t.at and l.at):
+        if all(ac.classify_value(found[n][1]) == ac.DONE for n in ("0t", "0l")):
+            write(d, "AF", ac.LATE_N_COLOR, "N color: 0t and 0l done after the day", dry)
+        return
     hit = ac.n_color_time(t, l, unknown=unknown)
     if hit:
         # Ledger times are Ix's clock; AF is the traveler's (/travel override).
         write(d, "AF", ac.hhmm(_local(hit)), "N color: 0t and 0l done", dry)
+
+
+def settle_closed_n_color(today: dt.date, headers: list[str], conn, dry: bool,
+                          lookback: int = 14) -> None:
+    """Settle AF on recent closed days with 0t and 0l filled and AF blank.
+    Rows run one per date, so the window is a single read."""
+    top = excel.lookup_row(SHEET, md(today))
+    if not top:
+        raise RuntimeError(f"no 0n row for {md(today)}")
+    first = max(FIRST_DAY_ROW, top - lookback)
+    idx = {ac.norm(h): i for i, h in enumerate(headers)}
+    for i, vals in enumerate(_rows(SHEET, f"{FIRST_COL}{first}:{LAST_COL}{top - 1}")):
+        status = [ac.classify_value(vals[idx[n]]) if idx[n] < len(vals) else ac.BLANK
+                  for n in ("0t", "0l", ac.norm("N color"))]
+        if status == [ac.DONE, ac.DONE, ac.BLANK]:
+            d = today - dt.timedelta(days=top - first - i)
+            settle_n_color(d, headers, conn, dry, closed=True)
 
 
 def _local(t: dt.datetime) -> dt.datetime:
@@ -284,12 +309,11 @@ def main() -> int:
         try:
             if a.live:
                 settle_n_color(today, headers, conn, a.dry_run, unknown=dt.datetime.now())
-            elif a.nightly:
-                settle_n_color(today - dt.timedelta(days=1), headers, conn, a.dry_run)
             carried = roll(today, headers, conn, a.dry_run)
             if a.live and not a.date:
                 settle(today, headers, conn, a.dry_run,
                        unknown=daytime.local_now(), ah_override=carried)
+            settle_closed_n_color(today, headers, conn, a.dry_run)
         finally:
             conn.close()
     return 0

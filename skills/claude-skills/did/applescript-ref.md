@@ -45,7 +45,8 @@ is just set). `add` needs the daemon; on `fallback: True` with an
 ## N color time (Step 2b)
 
 Not written from here. `tools/allcolors/allcolors.py` stamps `0n!AF` the first
-time 0t and 0l are both done that day, and never moves an existing stamp. A
+time 0t and 0l are both done that day, stamps 3000 on closed days finished
+late, and never moves an existing stamp. A
 fallback that bypasses did-fast should run `allcolors.py --live` afterwards.
 
 ## Append to 0分 (Step 5)

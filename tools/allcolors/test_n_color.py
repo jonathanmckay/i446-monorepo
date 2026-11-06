@@ -32,13 +32,13 @@ class FakeDay:
 
 @pytest.fixture
 def run(monkeypatch):
-    def _run(cells, times, unknown=None, day=D):
+    def _run(cells, times, unknown=None, day=D, closed=False):
         writes = []
         monkeypatch.setattr(ac_tool, "Day", lambda d, h: FakeDay(d, h, cells))
         monkeypatch.setattr(ac_tool, "_done_at", lambda c, s, col, r: times.get(col))
         monkeypatch.setattr(ac_tool, "write",
                             lambda d, col, v, why, dry: writes.append((d, col, v)))
-        ac_tool.settle_n_color(day, HEADERS, None, False, unknown=unknown)
+        ac_tool.settle_n_color(day, HEADERS, None, False, unknown=unknown, closed=closed)
         return writes
     return _run
 
@@ -62,6 +62,47 @@ def test_an_existing_stamp_is_never_moved(run):
 def test_a_habit_finished_after_the_day_ended_does_not_count(run):
     late = dt.datetime(2026, 11, 7, 7, 0)
     assert run(("1", "5", ""), {"Q": at(8), "S": late}) == []
+
+
+def test_closed_day_on_time_keeps_the_real_time(run):
+    assert run(("1", "5", ""), {"Q": at(8), "S": at(9)}, closed=True) == [(D, "AF", 900)]
+
+
+def test_closed_day_finished_late_gets_3000(run):
+    late = dt.datetime(2026, 11, 7, 7, 0)
+    assert run(("1", "5", ""), {"Q": at(8), "S": late}, closed=True) == [(D, "AF", 3000)]
+
+
+def test_closed_day_with_an_untraced_cell_gets_3000_not_2359(run):
+    assert run(("1", "5", ""), {"Q": at(8)}, closed=True) == [(D, "AF", 3000)]
+
+
+def test_closed_day_missing_0t_stamps_nothing(run):
+    assert run(("", "5", ""), {"S": at(8)}, closed=True) == []
+
+
+def test_closed_day_never_overwrites(run):
+    assert run(("1", "5", "711"), {}, closed=True) == []
+
+
+def test_sweep_only_settles_filled_blank_days(monkeypatch):
+    headers = ["0t", "0l", "N color"]
+    rows = [["1", "5", "800"], ["1", "", ""], ["1", "5", ""]]
+    seen = []
+    monkeypatch.setattr(ac_tool.excel, "lookup_row", lambda s, d: 311)
+    monkeypatch.setattr(ac_tool, "_rows", lambda s, r: rows if r == "D308:AS310" else [])
+    monkeypatch.setattr(ac_tool, "settle_n_color",
+                        lambda d, h, c, dry, closed: seen.append((d, closed)))
+    ac_tool.settle_closed_n_color(D, headers, None, False, lookback=3)
+    assert seen == [(dt.date(2026, 11, 5), True)]
+
+
+def test_sweep_stops_at_the_first_day_row(monkeypatch):
+    reads = []
+    monkeypatch.setattr(ac_tool.excel, "lookup_row", lambda s, d: 7)
+    monkeypatch.setattr(ac_tool, "_rows", lambda s, r: reads.append(r) or [])
+    ac_tool.settle_closed_n_color(D, ["0t", "0l", "N color"], None, False)
+    assert reads == ["D5:AS6"]
 
 
 def test_did_fast_no_longer_stamps_af():

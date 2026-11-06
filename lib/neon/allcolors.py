@@ -21,6 +21,7 @@ from typing import Iterable, Optional
 DONE, NA, BLANK = "done", "na", "blank"
 
 CORE = ("0t", "0l", "0g")
+LATE_N_COLOR = 3000   # 0n!AF: 0t and 0l were done, but not both on the day
 # 0n columns that are not habits (bookkeeping) or are excluded by JM
 # ("词汇": retired, blank every day since 2026-10).
 NON_HABIT = {"n color", "⎣∀clr", "#", "词汇"}
