@@ -142,9 +142,16 @@ def open_doc_in_obsidian() -> None:
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+CLAUDE_TRACKED = Path.home() / "vault/i447/i446/claude-tracked"
+# A fresh cmux surface has only cmux's shims on PATH, where `cc` is the C
+# compiler (forms-fallback 48b1e593, kept when that branch was dropped
+# 2026-11-06): run claude-tracked by full path in an interactive zsh.
+STOPLIGHT_CMD = f"zsh -ic \"{CLAUDE_TRACKED} '/1f693 stoplight'\""
+
+
 def launch_stoplight_tab() -> str:
-    """New cmux tab running `cc "/1f693 stoplight"` so the Claude half is
-    waiting when the screenshot has been pasted."""
+    """New cmux tab running claude-tracked `/1f693 stoplight` so the Claude
+    half is waiting when the screenshot has been pasted."""
     try:
         out = subprocess.run(["cmux", "new-surface", "--type", "terminal"], capture_output=True,
                              text=True, timeout=10).stdout
@@ -152,7 +159,7 @@ def launch_stoplight_tab() -> str:
         if not m:
             return "cmux: no surface id"
         subprocess.run(["cmux", "respawn-pane", "--surface", f"surface:{m.group(1)}",
-                        "--command", 'cc "/1f693 stoplight"'], capture_output=True, timeout=10)
+                        "--command", STOPLIGHT_CMD], capture_output=True, timeout=10)
         return "cc tab opened: /1f693 stoplight"
     except Exception as e:  # noqa: BLE001
         return f"cmux unavailable ({e}); run: cc \"/1f693 stoplight\""
