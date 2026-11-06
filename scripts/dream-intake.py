@@ -464,11 +464,18 @@ def _appfolio_work_orders():
 
 
 # ---------------------------------------------------------------------------
-# Source 6: gmail_inbox
+# Source 6: gmail_jbm
 # ---------------------------------------------------------------------------
+# This reads ~/.config/eml/tokens-gmail.json, which is the
+# jonathan.b.mckay@gmail.com (jbm) token, NOT mckay@m5c7.com. Until v180 the
+# source was called "gmail_inbox" and Dream dispatchers repeatedly read its
+# unread count as the m5c7 inbox (v180 Pass-1 correction). m5c7 unread comes
+# from workspace-mcp (user_google_email=mckay@m5c7.com), not from intake.
+GMAIL_JBM_ACCOUNT = "jonathan.b.mckay@gmail.com"
 
-@source("gmail_inbox", "Unread Gmail messages with age flags")
-def _gmail_inbox():
+
+@source("gmail_jbm", f"Unread Gmail in {GMAIL_JBM_ACCOUNT} (jbm; NOT m5c7) with age flags")
+def _gmail_jbm():
     creds = _build_google_creds(
         _CREDS["gmail_tokens_path"],
         _CREDS["gmail_secrets_path"],
@@ -482,7 +489,7 @@ def _gmail_inbox():
 
     messages = resp.get("messages", [])
     if not messages:
-        return {"unread_count": 0, "messages": []}
+        return {"account": GMAIL_JBM_ACCOUNT, "unread_count": 0, "messages": []}
 
     now = time.time()
     results = []
@@ -509,6 +516,7 @@ def _gmail_inbox():
     stale_count = sum(1 for r in results if r["stale"])
 
     return {
+        "account": GMAIL_JBM_ACCOUNT,
         "unread_count": len(results),
         "stale_count": stale_count,
         "messages": results,
@@ -593,7 +601,14 @@ def _google_calendar():
 # Source 8: syncthing_status
 # ---------------------------------------------------------------------------
 
-@source("syncthing_status", "Syncthing sync status and conflict files")
+def _live_conflicts(paths, vault_path):
+    """Drop conflict files under vault/z_old/ (archived; v180 counted 132
+    conflicts, mostly there, which drowned the live ones)."""
+    old = Path(vault_path) / "z_old"
+    return [p for p in paths if Path(p) != old and old not in Path(p).parents]
+
+
+@source("syncthing_status", "Syncthing sync status and conflict files (excluding z_old/)")
 def _syncthing_status():
     # Extract API key from config.xml
     config_path = _CREDS.get("syncthing_config_path")
@@ -623,7 +638,10 @@ def _syncthing_status():
 
     # Check for sync conflict files in vault
     vault_path = Path.home() / "vault"
-    conflicts = glob_mod.glob(str(vault_path / "**" / "*.sync-conflict-*"), recursive=True)
+    conflicts = _live_conflicts(
+        glob_mod.glob(str(vault_path / "**" / "*.sync-conflict-*"), recursive=True),
+        vault_path,
+    )
 
     conn_info = connections.get("connections", {})
     connected_devices = sum(1 for d in conn_info.values() if d.get("connected"))
@@ -896,18 +914,23 @@ def _outlook_inbox():
             "sent": sent, "sent_count": len(sent)}
 
 
-@source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
-def _outlook_calendar():
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
-    import agency_mcp as mcp
-    from datetime import timezone
-    yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
-    day_after = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
-    raw = mcp.call_tool("calendar", "ListEvents", {
-        "startDateTime": yesterday,
-        "endDateTime": day_after,
-        "top": "50",
-    }, timeout=5)
+# The Agency calendar MCP has timed out most nights (v179/v180: the whole
+# source hit the 30s cap, so Dream had no work calendar at all). Its call runs
+# in a daemon thread with a hard deadline; on timeout, error or no events the
+# source falls back to (1) the Google import calendar "MSFT (Slow Sync)" read
+# with the m5c7 calendar token, then (2) Straylight's
+# ~/.cache/janus/outlook-YYYY-MM-DD.json snapshots. "via" says which one won.
+MSFT_IMPORT_CAL = "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com"
+JANUS_CACHE_DIR = Path.home() / ".cache" / "janus"
+AGENCY_CAL_DEADLINE_S = 8
+
+
+def _outlook_days(now=None):
+    now = now or datetime.datetime.now()
+    return [(now + datetime.timedelta(days=d)).date() for d in (-1, 0, 1)]
+
+
+def _parse_agency_events(raw):
     events = []
     if raw and raw.get("content"):
         for item in raw["content"]:
@@ -927,9 +950,138 @@ def _outlook_calendar():
                         "organizer": ev.get("organizer", {}).get("emailAddress", {}).get("name", ""),
                         "is_online": bool(ev.get("onlineMeeting")),
                     })
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
-    return {"events": events, "count": len(events)}
+    return events
+
+
+_AGENCY_CAL_CHILD = r"""
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import agency_mcp as mcp
+raw = mcp.call_tool("calendar", "ListEvents",
+                    {"startDateTime": sys.argv[2], "endDateTime": sys.argv[3], "top": "50"},
+                    timeout=5)
+sys.stdout.write(json.dumps(raw))
+"""
+
+
+def _agency_calendar_events(days, deadline=AGENCY_CAL_DEADLINE_S):
+    """Agency ListEvents in a child process killed at `deadline` seconds.
+
+    Not a thread: agency_mcp registers an atexit stop_all() that takes the
+    module lock, and its login-pending probe, server start and restart-retry
+    can together run far past the 5s socket timeout. An abandoned thread could
+    hold that lock forever (intake never exits) or respawn the shared server
+    after intake gave up. Killing a process frees all of it."""
+    import subprocess
+    ibx = str(Path.home() / "i446-monorepo/tools/ibx")
+    start = f"{days[0].isoformat()}T00:00:00"
+    end = f"{(days[-1] + datetime.timedelta(days=1)).isoformat()}T00:00:00"
+    try:
+        r = subprocess.run([sys.executable, "-c", _AGENCY_CAL_CHILD, ibx, start, end],
+                           capture_output=True, text=True, timeout=deadline)
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"Agency calendar exceeded {deadline}s")
+    if r.returncode != 0:
+        tail = (r.stderr.strip().splitlines() or ["?"])[-1]
+        raise RuntimeError(f"Agency calendar rc={r.returncode}: {tail[:300]}")
+    return _parse_agency_events(json.loads(r.stdout or "null"))
+
+
+def _gcal_import_events(days, service=None):
+    """Work calendar via the Google import calendar (titles + times only)."""
+    if service is None:
+        creds = _build_google_creds(
+            _CREDS["gcal_tokens_path"], _CREDS["gcal_secrets_path"],
+            scopes=["https://www.googleapis.com/auth/calendar.readonly"],
+            account_key="m5c7",
+        )
+        service = _google_service("calendar", "v3", creds)
+    tz = datetime.datetime.now().astimezone().tzinfo
+    t_min = datetime.datetime.combine(days[0], datetime.time(), tz)
+    t_max = datetime.datetime.combine(days[-1] + datetime.timedelta(days=1), datetime.time(), tz)
+    resp = service.events().list(
+        calendarId=MSFT_IMPORT_CAL, timeMin=t_min.isoformat(), timeMax=t_max.isoformat(),
+        singleEvents=True, orderBy="startTime", maxResults=100,
+    ).execute()
+    events = []
+    for ev in resp.get("items", []):
+        if ev.get("status") == "cancelled":
+            continue
+        st, en = ev.get("start", {}), ev.get("end", {})
+        events.append({
+            "subject": ev.get("summary", "(no title)"),
+            "start": st.get("dateTime", st.get("date", "")),
+            "end": en.get("dateTime", en.get("date", "")),
+            "organizer": (ev.get("organizer") or {}).get("displayName", ""),
+            "is_online": False,
+            "is_all_day": "date" in st,
+        })
+    return events
+
+
+def _janus_cache_events(days, cache_dir=None):
+    """Straylight's outlook-cache-daemon snapshots, rsynced to ix."""
+    cache_dir = Path(cache_dir or JANUS_CACHE_DIR)
+    events, files = [], []
+    for d in days:
+        f = cache_dir / f"outlook-{d.isoformat()}.json"
+        if not f.exists():
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        files.append(f.name)
+        for ev in data if isinstance(data, list) else data.get("events", []):
+            if not isinstance(ev, dict):
+                continue
+            events.append({
+                "subject": ev.get("subject", ""),
+                "start": ev.get("start", ""),
+                "end": ev.get("end", ""),
+                "organizer": ev.get("organizer", ""),
+                "is_online": bool(ev.get("is_online", False)),
+                "is_all_day": bool(ev.get("is_all_day", False)),
+            })
+    # Multi-day all-day events appear in every day's snapshot.
+    seen, unique = set(), []
+    for ev in events:
+        k = (ev["subject"], ev["start"], ev["end"])
+        if k not in seen:
+            seen.add(k)
+            unique.append(ev)
+    return unique, files
+
+
+@source("outlook_calendar", "Outlook calendar (yesterday..tomorrow): Agency, else MSFT Slow Sync import calendar, else janus cache")
+def _outlook_calendar(days=None, agency=None, gcal=None, janus=None):
+    days = days or _outlook_days()
+    agency = agency or _agency_calendar_events
+    gcal = gcal or _gcal_import_events
+    janus = janus or (lambda ds: _janus_cache_events(ds))
+    errors = {}
+    try:
+        events = agency(days)
+        if events:
+            return {"events": events, "count": len(events), "via": "agency"}
+        errors["agency"] = "no events"
+    except Exception as e:
+        errors["agency"] = f"{type(e).__name__}: {e}"
+    try:
+        events = gcal(days)
+        if events:
+            return {"events": events, "count": len(events), "via": "gcal_import",
+                    "calendar_id": MSFT_IMPORT_CAL, "fallback_errors": errors}
+        errors["gcal_import"] = "no events"
+    except Exception as e:
+        errors["gcal_import"] = f"{type(e).__name__}: {e}"
+    events, files = janus(days)
+    if events:
+        return {"events": events, "count": len(events), "via": "janus_cache",
+                "files": files, "fallback_errors": errors}
+    raise RuntimeError(f"no work calendar from any source: {errors}")
 
 
 @source("slack", "Slack status (stub)")
