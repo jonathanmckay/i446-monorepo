@@ -69,7 +69,7 @@ def test_hiit_stays_a_set_not_an_add(df):
 
 def test_the_total_is_taken_after_the_timer_stops():
     src = (HERE / "did-fast.py").read_text()
-    assert src.index("apply_timer_minutes(fast, toggl_stop)") < src.index("apply_hiit_day_total(fast, target_date)")
+    assert src.index("apply_timer_minutes(fast, toggl_stop)") < src.index("apply_hiit_day_total(fast, target_date")
 
 
 def test_run_py_hands_hiit_to_did_fast():
@@ -81,5 +81,33 @@ def test_main_sets_target_date_before_the_hiit_step():
     # did-fast run died with UnboundLocalError and nothing could be completed.
     src = (Path(__file__).parent / "did-fast.py").read_text()
     main = src[src.index("\ndef main():"):]
-    assert main.index("    target_date = items[0].target_date") < main.index("apply_hiit_day_total(fast, target_date)")
+    assert main.index("    target_date = items[0].target_date") < main.index("apply_hiit_day_total(fast, target_date")
 
+
+
+def test_a_stopped_timer_is_the_sessions_minutes(df, monkeypatch):
+    """2026-11-06 (Dream v180 code-review): a bare /done on a running 9m hiit
+    after a 17m morning session. Routing sums the day (26) and
+    apply_timer_minutes leaves it, so without the stopped timer the entry's
+    record priced the day total: [52] on a 9m row instead of [18]."""
+    from types import SimpleNamespace
+    item = SimpleNamespace(name="hiit", time_value=None, time_range=None)
+    r = df.RouteResult(item=item, step="0n", col_num=31, write_value=26)
+    monkeypatch.setattr(df, "toggl_minutes_for", lambda name: 26)
+    monkeypatch.setattr(df.neon_excel, "read", lambda *a, **k: {"value": 17})
+    stop = {"description": "hiit", "stopped": True, "minutes": 9, "id": "1"}
+    df.apply_hiit_day_total([r], "11/5", stop)
+    assert r.write_value == 26          # the cell still gets the day total
+    assert r.session_minutes == 9
+    assert jd.did_points({"name": "hiit", "step": "0n", "value": r.write_value,
+                          "session_value": r.session_minutes}) == 18
+
+
+def test_another_timer_stopping_is_not_the_session(df, monkeypatch):
+    from types import SimpleNamespace
+    item = SimpleNamespace(name="hiit", time_value=None, time_range=None)
+    r = df.RouteResult(item=item, step="0n", col_num=31, write_value=26)
+    monkeypatch.setattr(df, "toggl_minutes_for", lambda name: 26)
+    monkeypatch.setattr(df.neon_excel, "read", lambda *a, **k: {"value": 26})
+    df.apply_hiit_day_total([r], "11/5", {"description": "o314", "stopped": True, "minutes": 40})
+    assert r.session_minutes is None

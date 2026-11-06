@@ -2819,7 +2819,8 @@ def hiit_day_minutes(session, typed: Optional[int], tr, toggl_total: int, cell: 
     return int(max(total, cell, 1))
 
 
-def apply_hiit_day_total(results: list, target_date: str) -> None:
+def apply_hiit_day_total(results: list, target_date: str,
+                         toggl_stop: Optional[dict] = None) -> None:
     """Runs after the timer stop, so the session just ended is in the total."""
     for r in results:
         if r.step != "0n" or r.item.name.lower() != "hiit":
@@ -2827,6 +2828,12 @@ def apply_hiit_day_total(results: list, target_date: str) -> None:
         typed = r.item.time_value
         if r.item.time_range or typed is not None:
             r.session_minutes = r.write_value
+        elif (toggl_stop and toggl_stop.get("stopped") and toggl_stop.get("minutes")
+              and _timer_key(toggl_stop.get("description", "")) == _timer_key(r.item.name)):
+            # A bare /done on a running hiit timer: routing already summed the
+            # day (toggl_minutes_for), so write_value is not this session and
+            # apply_timer_minutes left it alone. The stopped timer is.
+            r.session_minutes = int(toggl_stop["minutes"])
         toggl_total = toggl_minutes_for("hiit") or 0
         tr = r.item.time_range
         in_toggl = bool(tr) and _range_in_toggl("hiit", tr, _daytime.today())
@@ -4274,7 +4281,7 @@ def main():
     fast = [r for r in fast if r.step != "refused"]
     target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
     if not past_target:
-        apply_hiit_day_total(fast, target_date)
+        apply_hiit_day_total(fast, target_date, toggl_stop)
     # 3c. xk20 / xk22 domain cards -> kid-time minutes in their 0n column
     # (joins the step-4 0n batch below; see synth_kid_time_writes).
     fast.extend(synth_kid_time_writes(fast, toggl_stop, headers))

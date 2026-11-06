@@ -190,3 +190,22 @@ def test_timed_out_daemon_write_is_failed_not_retried_by_raw_script(df, monkeypa
     w1 = df.RouteResult(item=item, step="1n", col_letter="P", write_value=1)
     r1 = df.write_1n_via_daemon([w1], "11.1")
     assert r1 is not None and r1.returncode == 1
+
+
+@pytest.mark.parametrize("which", ["0n", "1n"])
+def test_daemon_down_does_not_write_twice(df, monkeypatch, which):
+    """2026-11-06 (Dream v180 code-review): daemon refused but ssh up. The
+    client's per-cell ssh fallback landed the append, returned fallback=True,
+    and did-fast then ran its raw script, which appended again (+45 twice on
+    a variable 1n+ card). The raw script must be the only daemon-down write."""
+    landed = []
+    monkeypatch.setattr(df.neon_excel, "_curl_ex", lambda *a, **k: (None, False))
+    monkeypatch.setattr(df.neon_excel, "_ssh_fallback",
+                        lambda op, sheet, col, *a, **k: landed.append((sheet, col)) or
+                        {"ok": True, "row": 20, "col": col, "value": "1", "fallback": True})
+    if which == "1n":
+        res = df.write_1n_via_daemon([_w1n(df, "family", "D", value=45, variable=True)], "10.3")
+    else:
+        res = df.write_0n_via_daemon([_w(df, "hiit", 31, 20)], "10/19")
+    assert res is None            # main() runs the raw script next
+    assert landed == []           # so nothing may have been written already
