@@ -530,3 +530,54 @@ def test_backfill_boundary_is_seven_days():
     today = dt.date(2026, 11, 1)
     assert not mod.is_backfill("2026.10.25", today)  # exactly 7 days: credit own date
     assert mod.is_backfill("2026.10.24", today)
+
+
+# ---- v181 (2026-11-07): one generic shared token must not hide a sibling ----
+
+def test_same_day_m5x2_block_filing_one_does_not_hide_the_others(tmp_path):
+    """2026-10-25 Sunday block: strat / analytics / people all carry `m5x2`.
+    The any-shared->=3-char-token rule let one filed note suppress the rest."""
+    mod = _load_mod()
+    _setup_dirs(mod, tmp_path)
+    (mod.D357_DIR / "10.4").mkdir()
+    (mod.D357_DIR / "10.4" / "2026.10.25-m5x2-analytics-and-accounting.md").write_text("x")
+    filed = _old_txt(mod, "2026.10.25-1135-m5x2-analytics-and-accounting.txt")
+    strat = _old_txt(mod, "2026.10.25-1101-m5x2-strat-(1|1|1).txt")
+    people = _old_txt(mod, "2026.10.25-1301-m5x2-people.txt")
+    out = mod.find_unfiled()
+    assert filed not in out
+    assert set(out) == {strat, people}
+
+
+def test_two_people_weekly_1_1s_same_day_are_distinct(tmp_path):
+    """2026-09-28: es:jm-1:1-weekly and bl:jm-1:1-weekly share only `weekly`."""
+    mod = _load_mod()
+    _setup_dirs(mod, tmp_path)
+    (mod.D357_DIR / "2026.09.28-es-jm-1-1-weekly.md").write_text("x")
+    _old_txt(mod, "2026.09.28-1505-es:jm-1:1-weekly.txt")
+    bl = _old_txt(mod, "2026.09.28-1535-bl:jm-1:1-weekly.txt")
+    assert mod.find_unfiled() == [bl]
+
+
+def test_split_recording_pieces_all_covered_by_one_filed_note(tmp_path):
+    """2026-08-10 Komal: three pieces of one meeting, one hand-filed note
+    with a different slug shape (`komal-jm-1-1`). Ties match."""
+    mod = _load_mod()
+    _setup_dirs(mod, tmp_path)
+    (mod.D357_DIR / "2026.08.10-komal-jm-1-1.md").write_text("x")
+    _old_txt(mod, "2026.08.10-1400-1:1-komal-&-jonathan.txt")
+    _old_txt(mod, "2026.08.10-1430-1:1-komal-&-jonathan-merged.txt")
+    _old_txt(mod, "2026.08.10-1500-1:1-komal-&-jonathan-(pt-2).txt")
+    assert mod.find_unfiled() == []
+
+
+def test_hand_filed_drifted_slug_still_matches_when_unambiguous(tmp_path):
+    """Hand-filed `m5x2-strat-111` for `m5x2-strat-remote` (only meeting that
+    day sharing `strat`) still counts as filed; an unrelated same-day doc does not."""
+    mod = _load_mod()
+    _setup_dirs(mod, tmp_path)
+    (mod.D357_DIR / "2026.08.02-m5x2-strat-111.md").write_text("x")
+    (mod.D357_DIR / "2026.08.02-m5x2-people.md").write_text("x")
+    _old_txt(mod, "2026.08.02-1044-m5x2-strat-remote.txt")
+    acct = _old_txt(mod, "2026.08.02-1135-m5x2-accounting.txt")
+    assert mod.find_unfiled() == [acct]

@@ -121,37 +121,59 @@ def safe_slug(slug: str) -> str:
     return re.sub(r'[\W_]+', '-', slug.lower()).strip('-') or "meeting"
 
 
-def _tokens(slug: str) -> set[str]:
-    """build-order-daemon.py/janus.py _slug_tokens semantics (meaningful
-    >=3 char, non-numeric tokens, lowercased), but split on ANY punctuation,
-    not just -/_: `ja:` must tokenise as `ja`, not as a 3-char token `ja:`."""
-    return {t for t in safe_slug(slug).split('-') if len(t) >= 3 and not t.isdigit()}
-
-
 def _squash(slug: str) -> str:
     return re.sub(r'[\W_]+', '', slug.lower())
 
 
-def _is_filed(date_str: str, slug: str) -> bool:
+# Words too common across one day's meetings to say WHICH meeting a doc is
+# (the Sunday m5x2 block is m5x2-strat / m5x2-analytics-... / m5x2-people;
+# 1:1s are all "<xx>:jm-1:1-weekly"). Never used as match evidence.
+GENERIC_WORDS = frozenset({
+    "m5x2", "i9", "jm", "weekly", "meeting", "meetings", "sync", "and", "the",
+    "with", "remote", "merged", "pt", "part", "update", "call", "notes",
+})
+
+
+def _words(slug: str) -> set[str]:
+    """Distinguishing words of a slug: safe_slug parts, >=2 chars (so `es`,
+    `bl`, `ja` count; they are the only thing separating two people's 1:1s),
+    non-numeric, minus GENERIC_WORDS."""
+    return {t for t in safe_slug(slug).split('-')
+            if len(t) >= 2 and not t.isdigit() and t not in GENERIC_WORDS}
+
+
+def _is_filed(date_str: str, slug: str, siblings: list[str] | tuple = ()) -> bool:
     """True if some vault/d357/**/{date_str}-*.md doc matches this recording:
-    shares a meaningful slug token, OR is the same slug once punctuation is
-    ignored (`ja:-jm-1:1` vs `ja-jm-1-1`, `m5x2-strat-(1|1|1)` vs
-    `m5x2-strat-111` — short 1:1 slugs have no >=3-char tokens at all).
+    the same slug once punctuation is ignored (`ja:-jm-1:1` vs `ja-jm-1-1`,
+    `m5x2-strat-(1|1|1)` vs `m5x2-strat-111`), a >=MIN_PREFIX_LEN squashed
+    prefix (meet.py truncates titles), or shared distinguishing words, where
+    this recording overlaps the doc at least as much as any other recording
+    from the same date (`siblings`, the day's recording slugs). Without that
+    last rule one generic shared token (`m5x2`, `weekly`) let filing ONE of a
+    day's meetings hide all the others forever (2026-10-25: strat /
+    analytics-and-accounting / people; 2026-09-28: es vs bl 1:1-weekly).
+    Ties match, so several pieces of one split recording (`1:1-komal-&-
+    jonathan`, `...-(pt-2)`) are all covered by one filed `komal-jm-1-1`.
     Recursive glob: real files live in week subfolders."""
     if not D357_DIR.exists():
         return False
-    tokens, squashed = _tokens(slug), _squash(slug)
+    squashed, words = _squash(slug), _words(slug)
+    others = [s for s in siblings if s != slug]
     for path in D357_DIR.glob(f"**/{date_str}-*.md"):
         m = DOC_STEM_RE.match(path.stem)
         if not m:
             continue
         doc_slug = m.group(2)
-        if _squash(doc_slug) == squashed or (_tokens(doc_slug) & tokens):
+        if _squash(doc_slug) == squashed:
             return True
         # Prefix: meet.py truncates titles at ~30 chars; filed docs sometimes
         # drop a trailing fragment. Below MIN_PREFIX_LEN a prefix is ambiguous.
         short, long_ = sorted((squashed, _squash(doc_slug)), key=len)
         if len(short) >= MIN_PREFIX_LEN and long_.startswith(short):
+            return True
+        doc_words = _words(doc_slug)
+        shared = len(doc_words & words)
+        if shared and all(len(doc_words & _words(o)) <= shared for o in others):
             return True
     return False
 
@@ -278,6 +300,11 @@ def find_unfiled(now: float | None = None, state: dict | None = None) -> list[Pa
         return []
     now = time.time() if now is None else now
     out = []
+    by_date: dict[str, list[str]] = {}
+    for txt in RECORDINGS_DIR.glob("*.txt"):
+        m = REC_STEM_RE.match(txt.stem)
+        if m:
+            by_date.setdefault(m.group(1), []).append(m.group(2))
     for txt in sorted(RECORDINGS_DIR.glob("*.txt"), reverse=True):
         m = REC_STEM_RE.match(txt.stem)
         if not m:
@@ -298,7 +325,7 @@ def find_unfiled(now: float | None = None, state: dict | None = None) -> list[Pa
             continue
         if is_retired(state, txt.name):
             continue
-        if _is_filed(date_str, slug):
+        if _is_filed(date_str, slug, by_date.get(date_str, ())):
             continue
         out.append(txt)
     return out
