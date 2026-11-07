@@ -82,3 +82,92 @@ def test_empty_fetch_does_not_clobber_nonempty_cache(tmp_path, monkeypatch):
     assert [e["title"] for e in out] == ["Standup"], \
         "the prior non-empty cache must survive an empty fetch"
     assert json.loads(cache.read_text()), "cache file must not be clobbered"
+
+
+# ── unread-inbox snapshot (2026-11-02) ──────────────────────────────────────
+
+def _graph_msg(i, read=False):
+    return {"id": f"m{i}", "subject": f"s{i}", "receivedDateTime": "2026-11-02T01:00:00Z",
+            "from": {"emailAddress": {"name": "Ben Lee", "address": "Ben@Microsoft.com"}},
+            "bodyPreview": "word " * 200, "importance": "high", "isRead": read,
+            "conversationId": f"c{i}"}
+
+
+class _MailMcp:
+    payload = None
+    calls = []
+
+    @classmethod
+    def call_tool(cls, server, tool, args, timeout=None):
+        cls.calls.append((server, tool, args))
+        if isinstance(cls.payload, Exception):
+            raise cls.payload
+        return cls.payload
+
+
+def _inbox_env(tmp_path, monkeypatch, payload):
+    mod = outlook_client
+    monkeypatch.setattr(mod, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(mod, "cache_only", lambda: False)
+    _MailMcp.payload, _MailMcp.calls = payload, []
+    monkeypatch.setattr(mod, "mcp", _MailMcp)
+    return mod
+
+
+NOW = dt.datetime(2026, 11, 2, 11, 0, tzinfo=dt.timezone.utc)
+
+
+def test_fetch_unread_inbox_writes_snapshot_double_encoded(tmp_path, monkeypatch):
+    raw = {"content": [{"type": "text", "text": json.dumps(
+        {"rawResponse": json.dumps({"value": [_graph_msg(1), _graph_msg(2)]})})}]}
+    mod = _inbox_env(tmp_path, monkeypatch, raw)
+    snap = mod.fetch_unread_inbox(now=NOW)
+    day = NOW.astimezone(mod.TZ).date()
+    on_disk = json.loads((tmp_path / f"outlook-inbox-{day}.json").read_text())
+    assert on_disk == snap and snap["count"] == 2 and snap["window_hours"] == 48
+    m = snap["messages"][0]
+    assert set(m) >= {"sender", "subject", "received", "preview", "importance",
+                      "isRead", "conversationId"}
+    assert m["sender_email"] == "ben@microsoft.com"
+    assert len(m["preview"]) <= 300
+    q = _MailMcp.calls[0][2]["queryParameters"]
+    assert "isRead eq false" in q and "2026-10-31T11:00:00Z" in q  # 48h window
+
+
+def test_fetch_unread_inbox_plain_payload_with_status_line(tmp_path, monkeypatch):
+    raw = {"content": [{"text": "Messages retrieved.\n" + json.dumps({"value": [_graph_msg(1)]})}]}
+    mod = _inbox_env(tmp_path, monkeypatch, raw)
+    assert mod.fetch_unread_inbox(now=NOW)["count"] == 1
+
+
+def test_fetch_unread_inbox_failure_keeps_prior_snapshot(tmp_path, monkeypatch):
+    mod = _inbox_env(tmp_path, monkeypatch, {"content": [{"text": "error: timeout"}]})
+    day = NOW.astimezone(mod.TZ).date()
+    good = tmp_path / f"outlook-inbox-{day}.json"
+    good.write_text('{"count": 3}')
+    import pytest
+    with pytest.raises(RuntimeError):
+        mod.fetch_unread_inbox(now=NOW)
+    assert json.loads(good.read_text()) == {"count": 3}
+    _MailMcp.payload = TimeoutError("agency")
+    with pytest.raises(TimeoutError):
+        mod.fetch_unread_inbox(now=NOW)
+    assert json.loads(good.read_text()) == {"count": 3}
+
+
+def test_fetch_unread_inbox_refuses_on_cache_only_host(tmp_path, monkeypatch):
+    mod = _inbox_env(tmp_path, monkeypatch, None)
+    monkeypatch.setattr(mod, "cache_only", lambda: True)
+    import pytest
+    with pytest.raises(RuntimeError):
+        mod.fetch_unread_inbox(now=NOW)
+    assert _MailMcp.calls == []
+
+
+def test_inbox_snapshot_rides_the_existing_rsync_glob():
+    """The daemon pushes CACHE_DIR.glob('outlook-*.json'); the snapshot name
+    must match it, and the temp file must not."""
+    import fnmatch
+    p = outlook_client.inbox_cache_path(dt.date(2026, 11, 2))
+    assert fnmatch.fnmatch(p.name, "outlook-*.json")
+    assert not fnmatch.fnmatch(p.with_suffix(".json.tmp").name, "outlook-*.json")
