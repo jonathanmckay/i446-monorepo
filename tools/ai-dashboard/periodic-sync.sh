@@ -38,6 +38,12 @@ if [[ "$HOST" == straylight* ]]; then
   python3 "$SCRIPT_DIR/build-stats-cache.py" >>"$SCRIPT_DIR/.build-stats-cache.log" 2>&1 || true
 fi
 
+# Ingest new Claude JSONLs into llm-sessions.db on every host (2026-11-07).
+# ingest_claude_sessions() runs only from the ai-dashboard "/" route; on ix
+# nothing hit "/" overnight, so the DB went stale for days at a time. Outside
+# the IS_AUTHORITATIVE guard on purpose. No-op if the dashboard is down.
+curl -s --max-time 120 -o /dev/null "http://localhost:5555/" 2>/dev/null || true
+
 [ -f "$STATS_FILE" ] || exit 0
 [ -d "$REPO_DIR/.git" ] || exit 0
 
