@@ -344,6 +344,7 @@ do {
 // refuses every request (no connection), then accepts and records them.
 final class StubNet: URLProtocol {
     static var online = false
+    static var timeoutPaths: Set<String> = []   // reached server, then timed out
     static var seen: [(path: String, body: [String: Any])] = []
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -360,9 +361,15 @@ final class StubNet: URLProtocol {
         }
         let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         StubNet.seen.append((request.url?.path ?? "", body))
+        if StubNet.timeoutPaths.contains(request.url?.path ?? "") {
+            client?.urlProtocol(self, didFailWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
+            return
+        }
         let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
-        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"# : #"{"ok":true}"#
+        let reply = request.url?.path == "/api/add" ? #"{"ok":true,"id":"NEW9"}"#
+            : (body["desc"] as? String) == "ask-me" ? #"{"ok":true,"needs_points":true,"desc":"ask-me","minutes":30}"#
+            : #"{"ok":true}"#
         client?.urlProtocol(self, didLoad: reply.data(using: .utf8)!)
         client?.urlProtocolDidFinishLoading(self)
     }
@@ -407,6 +414,26 @@ do {
     ob.clear()
 }
 
+// A replayed log the server answers needs_points (lib/janus_done.py "ask")
+// credited nothing: it must be reported, not counted as sent (v172 review).
+do {
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.protocolClasses = [StubNet.self]
+    let api = Api(configuration: cfg)
+    let ob = Outbox("corecheck-needs-points"); ob.clear()
+    StubNet.seen = []
+    ob.enqueue(url: "http://ix/api/log", body: ["id": "E1", "desc": "ask-me", "minutes": 30], label: "log ask-me")
+    ob.enqueue(url: "http://ix/api/log", body: ["id": "E2", "desc": "gym", "minutes": 40], label: "log gym")
+    let sema = DispatchSemaphore(value: 0)
+    var run: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    Task { StubNet.online = true; run = await ob.flush(api); sema.signal() }
+    sema.wait()
+    eq(run.sent, 1, "needs_points reply is not counted as sent")
+    eq(run.rejected, ["log ask-me: needs points — swipe it again"], "needs_points reply is reported")
+    eq(ob.count, 0, "queue still drains past it")
+    ob.clear()
+}
+
 // janus logged rows show 分 credited; log toast lists where it went (2026-10-26)
 do {
     let tl = Parsers.timeline(JSON.parse(#"{"date":"2026-10-26","rows":[{"type":"entry","id":"1","start":"09:00","end":"09:40","minutes":40,"desc":"gym","logged":true,"points":null,"logged_points":17},{"type":"entry","id":"2","start":"09:40","end":"10:00","minutes":20,"desc":"x","logged":true,"points":null},{"type":"entry","id":"3","start":"10:00","end":"10:30","minutes":30,"desc":"y","logged":false,"points":25}]}"#)!)
@@ -418,6 +445,31 @@ do {
        "+12 hcb · +5 0g", "credits toast text")
     check(Parsers.creditsSummary(JSON.parse(#"{"ok":true,"credits":[]}"#)!) == nil, "no credits → nil")
     check(Parsers.creditsSummary(JSON.parse(#"{"ok":true}"#)!) == nil, "old server → nil")
+}
+
+// A replay that times out may already have landed on Ix: it must NOT stay
+// queued (the next flush would double a /api/fill Toggl entry or a /api/log
+// 分 credit). Dropped and reported; later items still go out.
+do {
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.protocolClasses = [StubNet.self]
+    let api = Api(configuration: cfg)
+    let ob = Outbox("corecheck-timeout"); ob.clear()
+    StubNet.seen = []; StubNet.online = true; StubNet.timeoutPaths = ["/api/fill"]
+    ob.enqueue(url: "http://ix/api/fill", body: ["desc": "standup"], label: "fill standup")
+    ob.enqueue(url: "http://ix/api/done", body: ["id": "T2"], label: "done T2")
+    let sema = DispatchSemaphore(value: 0)
+    var first: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    var second: (sent: Int, rejected: [String], refs: [String]) = (0, [], [])
+    Task { first = await ob.flush(api); second = await ob.flush(api); sema.signal() }
+    sema.wait()
+    StubNet.timeoutPaths = []
+    eq(first.sent, 1, "timeout: the later item still lands")
+    eq(first.rejected.count, 1, "timeout reported, not silent")
+    eq(ob.count, 0, "timed-out write not kept for replay")
+    eq(second.sent, 0, "second flush re-sends nothing")
+    eq(StubNet.seen.filter { $0.path == "/api/fill" }.count, 1, "fill reached Ix exactly once")
+    ob.clear()
 }
 
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }

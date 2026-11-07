@@ -39,3 +39,10 @@ last month's). `[month]` is the month the window ENDS in: `10`, `oct`,
 After the report it marks the `2 hci` card done via `tools/did/run.py "2 hci"`
 (1n+ credit + Todoist close) and refreshes the dtd cache. `--no-mark` skips
 that.
+
+Then release the dtd claim the `/2hci` prompt took, so its 😈 spinner stops
+(no-op if nothing is claimed; skip it with `--no-mark`, since the card stays open):
+
+```bash
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
+```

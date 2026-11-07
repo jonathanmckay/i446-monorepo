@@ -4,11 +4,11 @@
 # build-order-enrich: populate build order with meetings, time entries (every 2h)
 0 6,8,10,12,14,16,18,20,22 * * * python3 $HOME/i446-monorepo/scripts/build-order-enrich.py >> /tmp/build-order-enrich.log 2>&1
 # 0g-sync: bidirectional sync between build order and Todoist (every 2h)
-0 */2 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
+0 */2 * * * TODOIST_API_KEY="$(cat $HOME/.config/todoist/token)" python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
 # 0g-sync pre-archive: catch completions between 02:00 and the 03:59 archive
-55 3 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
+55 3 * * * TODOIST_API_KEY="$(cat $HOME/.config/todoist/token)" python3 $HOME/i446-monorepo/scripts/0g-sync.py sync --verbose >> $HOME/i446-monorepo/scripts/.0g-sync-stdout.log 2>&1
 # 0g-cleanup: move unchecked 0g items to yihou at 5:30am
-30 5 * * * TODOIST_API_KEY=7eb82f47aba8b334769351368e4e3e3284f980e5 python3 $HOME/i446-monorepo/scripts/0g-sync.py cleanup --verbose >> $HOME/i446-monorepo/scripts/.0g-cleanup-stdout.log 2>&1
+30 5 * * * TODOIST_API_KEY="$(cat $HOME/.config/todoist/token)" python3 $HOME/i446-monorepo/scripts/0g-sync.py cleanup --verbose >> $HOME/i446-monorepo/scripts/.0g-cleanup-stdout.log 2>&1
 # copilot-ingest: ingest copilot transcripts
 */30 * * * * python3 $HOME/i446-monorepo/scripts/copilot-ingest.py >> $HOME/i446-monorepo/scripts/.copilot-ingest.log 2>&1
 # decision-capture: scan AI logs for decisions daily at 10pm
@@ -27,8 +27,11 @@
 # /0r nightly time-record archive — Toggl + m5c7 calendars -> vault + gcal (jbm past-time view)
 0 2 * * * /Users/mckay/bin/run_0r_archive.sh
 
-# Auto-backup ~/.claude/skills every 10 min (no remote push, local-only)
-*/10 * * * * cd $HOME/.claude/skills && git add -A && git diff --cached --quiet || git commit -q -m "auto: $(date +\%Y-\%m-\%d\ \%H:\%M)" >> /tmp/claude-skills-autocommit.log 2>&1
+# Auto-backup ~/.claude/skills every 10 min (no remote push, local-only).
+# Offset to :05/:15/... so it never races git-autopush.sh (*/10) for the
+# monorepo's index.lock: ~/.claude/skills IS i446-monorepo/skills/claude-skills
+# (2026-10-31: 75-95 failed commits/day since 10-25, 1-i446 check 7).
+5-59/10 * * * * cd $HOME/.claude/skills && git add -A && git diff --cached --quiet || git commit -q -m "auto: $(date +\%Y-\%m-\%d\ \%H:\%M)" >> /tmp/claude-skills-autocommit.log 2>&1
 # Prune Claude snapshot backups older than 30 days, nightly
 5 3 * * * bash $HOME/i446-monorepo/scripts/claude-backup-cleanup.sh >> /tmp/claude-backup-cleanup.log 2>&1
 # git-autopush-healthcheck: catch stuck rebases / detached HEAD that silently halt sync
@@ -59,8 +62,8 @@
 55 23 * * * python3 $HOME/i446-monorepo/scripts/neon-reconcile.py >> $HOME/i446-monorepo/scripts/.neon-reconcile.log 2>&1
 # neon rules parallel run (Neon off Excel step 3): derive yesterday's 0分 from the ledger, diff vs Excel snapshots
 5 4 * * * $HOME/bin/run_neon_rules_diff.sh
-# same-day ledger drift card (Neon off Excel): strict check on TODAY after a fresh snapshot, one dtd card with fixes
-30 22 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/sameday.py >> $HOME/.cache/neon-rules/sameday.log 2>&1
+# same-day ledger drift card (Neon off Excel, tools/neon-ledger/sameday.py, 22:30): owned by launchd since 2026-11-06,
+# config/launchd/com.mckay.neon-sameday.plist (one scheduler per job; the classifier blocked the cron install twice)
 # OneDrive (personal) cloud→disk copy onto the Ix Backup SSD; Time Machine only sees what is downloaded
 30 1 * * * bash $HOME/i446-monorepo/bin/onedrive-backup.sh >/dev/null 2>&1
 

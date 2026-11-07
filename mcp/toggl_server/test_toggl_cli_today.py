@@ -48,8 +48,12 @@ def test_today_includes_cross_midnight_entry_clipped(monkeypatch):
     out = _run_today(monkeypatch, [_entry(1, "睡觉", start, stop)])
     # Visible, clipped to the day barrier
     assert "00:00-07:38 睡觉" in out, out
-    # Duration clipped to today's portion (7h38m = 458 min), not the full 9h51m
-    assert "(458min)" in out, out
+    # Duration clipped to today's portion, in real (UTC) minutes: 458 on a
+    # normal day, 518 on a DST fall-back day like 2026-11-01. Never 9h51m.
+    midnight = datetime.datetime.combine(today, datetime.time(0, 0), tzinfo=TZ)
+    utc = datetime.timezone.utc
+    want = int((stop.astimezone(utc) - midnight.astimezone(utc)).total_seconds()) // 60
+    assert f"({want}min)" in out, out
 
 
 def test_today_excludes_entry_fully_yesterday(monkeypatch):

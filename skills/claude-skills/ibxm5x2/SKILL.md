@@ -36,6 +36,19 @@ python3 agent_triage.py m5x2 --all
    `~/.config/ibx/agent_filtered.jsonl` (undo = re-add INBOX). A run that's
    already in progress (the ibx m5x2 timer hook) makes this a no-op.
 
+## Mark done + release the claim
+
+When both scripts exit cleanly (and this is not a `--dry-run`), the card is
+done: what remains in the inbox is JM's to answer. Close it via the fast /did
+path, then release the dtd claim the `/ibxm5x2` prompt took:
+
+```bash
+python3 ~/i446-monorepo/tools/did/run.py "ibx m5x2"
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
+```
+
+If either script failed, say so and leave the card open.
+
 ## Report
 
 Two lines:

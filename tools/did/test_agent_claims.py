@@ -233,6 +233,9 @@ def hooked(tmp_path, monkeypatch):
     real_claim, real_release = ac.claim, ac.release
     monkeypatch.setattr(ac, "claim", lambda t, s, root=None, now=None: real_claim(t, s, root=tmp_path, now=now))
     monkeypatch.setattr(ac, "release", lambda s, root=None: real_release(s, root=tmp_path))
+    real_done = ac.mark_done
+    monkeypatch.setattr(ac, "mark_done",
+                        lambda s, ids=None, root=None, now=None: real_done(s, ids, root=tmp_path, now=now))
     return tmp_path
 
 
@@ -432,6 +435,14 @@ def test_release_mode_and_odd_names(hooked, monkeypatch):
     # 2026-10-19: /1-2g applies its own edits and closes the card, so it releases.
     assert "😈 claimed: 1 -2g" in _fast("/1-2g", session="S2") and "releases the claim" in _fast("/1-2g", session="S2")
     assert "😈 claimed: 4g checkin" in _fast("/2026-4g-checkin 2026-Q3", session="S3")
+
+
+def test_ibxm5x2_releases_its_card(hooked, monkeypatch):
+    """2026-11-03: /ibxm5x2 closes 'ibx m5x2' itself (SKILL.md Step 3), so it
+    must be in SKILL_RELEASES; it sat claimed and spinning since 10-29."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "M5", "content": "ibx m5x2 (10) [10]"}]))
+    out = _fast("/ibxm5x2", session="S9")
+    assert "😈 claimed: ibx m5x2" in out and "releases the claim" in out
 
 
 def test_no_skill_is_both_linked_and_declined():
@@ -788,3 +799,11 @@ def test_stop_hook_launches_note_only_for_claimed_sessions():
     src = HOOK.read_text()
     assert 'agent_claims.py" note' in src and "DTD_NOTE_CHILD" in src
     assert src.index('agent_claims.py" note') < src.index('[[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0')
+
+
+def test_hook_d_done_marks_done_not_released(hooked):
+    """v169 review: `/d done` must mark the held task done (checkmark), not release it."""
+    _fast("/d source logging")
+    out = _fast("/d done")
+    assert "agent-finished" in out and "released" not in out
+    assert ac.load(hooked)["T1"]["state"] == "done"

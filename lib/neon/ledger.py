@@ -16,6 +16,8 @@ what the caller MEANT rather than by what the cell's value did:
   text        any non-numeric append/write (hcbi food, review prose)
   observe     reconcile / baseline / excel-edit        → an observed cell value
                                                          with no request behind it
+  (adopt)     hand edit adopted from an observation    → set / text, source
+              (lib/neon/adopt.py, nightly)                 "hand"; no points
 
 Why not "points = after_value - before_value" (the obvious primitive): most 0分
 domain cells are `='0n'!BF<row> + literals` — their value moves whenever a 0n
@@ -203,7 +205,10 @@ def classify(entry: dict) -> Optional[dict]:
                       if after_v is not None and before_v is not None else None)
         else:
             kind, points = "text", None
-    elif jk == "write":
+    elif jk in ("write", "adopt"):
+        # adopt = a hand-typed Excel edit taken into the ledger by
+        # lib/neon/adopt.py (source "hand"): it carries Excel's content and is
+        # a write for every strict-mode purpose, never a points credit.
         if src.startswith(_LOCK_SRC):
             kind, points = "lock", None
         elif sval.startswith("=") or _LITERAL_RE.match(sval) or after_v is not None:
@@ -418,7 +423,14 @@ def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None,
     invisible here by design."""
     own = conn is None
     c = conn or connect()
-    obs = ("AND (e2.kind != 'observe' OR e2.jsonl_kind = 'baseline')" if writes_only else "")
+    # Hand-edit adoptions (lib/neon/adopt.py) are writes in the ledger-as-source
+    # view, but add nothing to the Excel view (the observation they copy is
+    # already there). Both views pick the newest event by (ts, id): adoptions
+    # and catch_up's late fallback imports carry their real ts, not a new id.
+    if writes_only:
+        obs = "AND (e2.kind != 'observe' OR e2.jsonl_kind = 'baseline')"
+    else:
+        obs = "AND e2.jsonl_kind != 'adopt'"
     try:
         rows = c.execute(
             f"""SELECT e.col, e.field, e.kind, e.ts, e.after_value, e.value, e.after_formula

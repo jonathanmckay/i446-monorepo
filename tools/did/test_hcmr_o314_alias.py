@@ -75,7 +75,7 @@ def test_hcmr_and_o314_share_one_day_total(df):
     ]
     r = _route_one(df, "hcmr")
     assert r.write_value == 115
-    assert not df._adds_0n(r)   # set, not add: it IS the day total
+    assert df._0n_mode(r) == "max"   # the day total, never below the cell
 
 
 def test_threshold_1n_toggl_key_includes_both_names(df):

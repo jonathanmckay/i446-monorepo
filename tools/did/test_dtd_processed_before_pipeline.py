@@ -35,7 +35,9 @@ confirmation log line goes missing. Also keeps an explicit non-zero-exit/
 empty-output branch so a genuine did-fast failure is a visible
 "✗ ... (did-fast exit N, no output)" log line instead of silently nothing.
 """
+import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -44,6 +46,26 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = (HERE / "dtd.sh").read_text()
 LINES = SRC.splitlines()
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGTERM then SIGKILL the whole session started for a harness."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            continue
+        if sig == signal.SIGTERM:
+            # parent gone; sweep any stragglers left in the group
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        return
 
 
 def _worker_body() -> str:
@@ -242,7 +264,10 @@ printf 'realTaskId123\\ti447\\n' >&3
     script_path = tmp_path / "harness.sh"
     script_path.write_text(script)
     script_path.chmod(0o755)
-    proc = subprocess.Popen(["zsh", str(script_path)])
+    # Own process group: the worker is a backgrounded subshell blocked on the
+    # FIFO, and terminate() on the parent alone orphaned it to launchd, one
+    # leaked zsh per run (53 alive on Ix 2026-11-05, oldest 13 days).
+    proc = subprocess.Popen(["zsh", str(script_path)], start_new_session=True)
     try:
         time.sleep(0.8)  # did-fast stub is mid-sleep(2) right now
         assert "realTaskId123" in (processed_ids.read_text() if processed_ids.exists() else ""), (
@@ -250,11 +275,10 @@ printf 'realTaskId123\\ti447\\n' >&3
             "still running, proving the write happens before the call, not "
             "merely 'eventually' once it returns")
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _kill_group(proc)
+    time.sleep(0.3)
+    left = subprocess.run(["pgrep", "-f", str(script_path)], capture_output=True, text=True).stdout.split()
+    assert not left, f"harness processes outlived the test: {left}"
 
 
 def test_normal_success_path_still_logs_ok_and_records_processed(tmp_path):

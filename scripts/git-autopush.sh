@@ -40,10 +40,20 @@ if git diff --cached --quiet; then
 else
     CHANGED=$(git diff --cached --stat | tail -1)
     if ! git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q; then
-        echo "[$TS] ERROR: commit failed (pre-commit hook rejected it?) — changes remain staged"
-        exit 1
+        # A concurrent writer (second cron entry, a synced peer, an agent) often
+        # commits the same staged changes in the same minute; our commit then
+        # finds nothing to do and exits 1. That is not a failure: fall through
+        # to the sync step so the push still happens. 2026-11-01: 92 of 188
+        # runs on 10-31 exited here, leaving origin hours behind local wip.
+        if git diff --cached --quiet; then
+            echo "[$TS] commit raced (already committed by another writer) -- syncing"
+        else
+            echo "[$TS] ERROR: commit failed (pre-commit hook rejected it?) — changes remain staged"
+            exit 1
+        fi
+    else
+        echo "[$TS] committed: $CHANGED"
     fi
-    echo "[$TS] committed: $CHANGED"
 fi
 
 # Push the CURRENT branch, not a hardcoded main. This lets a clone sit on a

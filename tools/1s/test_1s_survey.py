@@ -38,7 +38,10 @@ def test_week_row_label_is_sunday_anchored_month_week():
     m = _load()
     assert m.week_row_label(dt.date(2026, 7, 12)) == "7.2"
     assert m.week_row_label(dt.date(2026, 1, 4)) == "1.1"
-    assert m.week_row_label(dt.date(2026, 6, 28)) == "6.4"
+    # 4-4-5 quarters: fiscal June is 5 weeks (6.1 = 5/31), so 6/28 is 6.5, the
+    # same label the 1n+ sheet's col B and lib/neon/weeks give it.
+    assert m.week_row_label(dt.date(2026, 6, 28)) == "6.5"
+    assert m.week_row_label(dt.date(2026, 6, 21)) == "6.4"
 
 
 def test_expand_selections_picks_day_answers():

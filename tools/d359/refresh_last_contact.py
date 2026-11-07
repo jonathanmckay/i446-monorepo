@@ -40,7 +40,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]  # i446-monorepo
@@ -373,7 +373,11 @@ def _build_initials_map(slugs: set[str]) -> dict[str, str]:
     # User's authoritative initials-style shorthands win over mechanical ones,
     # e.g. 'lr' means Leeroy Phillips even though Lee Redden's initials are also
     # 'lr'. Overlaying both sets the right target and clears the collision.
-    aliases = {"lx": "louisa-xu", "lr": "leeroy-phillips", "hz": "hanzhao"}
+    # 'EL:JM' is Eldon Lei's 1:1 and 'ES:JM' is Elliot Silvers'. Mechanical
+    # initials already agree; pinned so a future 'el'/'es' contact can't drop
+    # them as ambiguous (v177 briefly mis-mapped EL to Elliot).
+    aliases = {"lx": "louisa-xu", "lr": "leeroy-phillips", "hz": "hanzhao",
+               "el": "eldon-lei", "es": "elliot-silvers"}
     for alias, target in aliases.items():
         if target in slugs:
             resolved[alias] = target
@@ -463,6 +467,50 @@ def _gcal_service():
         return None
 
 
+def _parse_gcal_time(t: dict) -> tuple[datetime | None, date | None]:
+    """Return (aware datetime, None) for a timed field or (None, date) for an
+    all-day field. (None, None) when unparseable."""
+    raw = (t or {}).get("dateTime")
+    if raw:
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.astimezone()
+            return dt, None
+        except ValueError:
+            pass
+    raw = (t or {}).get("date") or raw
+    if raw:
+        try:
+            return None, datetime.strptime(raw[:10], "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    return None, None
+
+
+def _event_contact_date(ev: dict, now: datetime) -> date | None:
+    """Local start date of an event that has already ENDED by `now`, else None.
+
+    A meeting later today has not happened yet and must not stamp
+    last_contact (2026-11-02: the 02:36 run stamped four people for that
+    afternoon's 1:1s). All-day events count once their exclusive end date
+    has arrived."""
+    s_dt, s_d = _parse_gcal_time(ev.get("start", {}))
+    if s_dt is None and s_d is None:
+        return None
+    start_date = s_dt.astimezone(now.tzinfo).date() if s_dt else s_d
+    e_dt, e_d = _parse_gcal_time(ev.get("end", {}))
+    if e_dt is not None:
+        ended = e_dt < now
+    elif e_d is not None:
+        ended = e_d <= now.date()
+    elif s_dt is not None:
+        ended = s_dt < now
+    else:
+        ended = s_d < now.date()
+    return start_date if ended else None
+
+
 def _fetch_calendar_signal(days: int, slugs: set[str],
                            files: list[Path]) -> dict[str, date]:
     """Return {slug: latest_date} from Google Calendar. See module docstring for
@@ -480,23 +528,13 @@ def _fetch_calendar_signal(days: int, slugs: set[str],
     today = date.today()
     cutoff = today - timedelta(days=days)
     time_min = datetime(cutoff.year, cutoff.month, cutoff.day).isoformat() + "Z"
-    time_max = (datetime(today.year, today.month, today.day)
-                + timedelta(days=1)).isoformat() + "Z"
+    # Cap at *now*, not end of day: a meeting later today has not happened yet
+    # (v176/v177: 11-02 and 11-03 1:1s were stamped at ~02:30 before they met).
+    now_utc = datetime.now(timezone.utc)
+    time_max = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     latest: dict[str, date] = {}
-
-    def _event_date(ev) -> date | None:
-        s = ev.get("start", {})
-        raw = s.get("dateTime") or s.get("date")
-        if not raw:
-            return None
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
-        except ValueError:
-            try:
-                return datetime.strptime(raw[:10], "%Y-%m-%d").date()
-            except ValueError:
-                return None
+    now = datetime.now().astimezone()
 
     for cal_id in GCAL_CAL_IDS:
         page_token = None
@@ -510,9 +548,16 @@ def _fetch_calendar_signal(days: int, slugs: set[str],
                 print(f"warn: gcal list {cal_id} failed: {exc}", file=sys.stderr)
                 break
             for ev in resp.get("items", []):
-                d = _event_date(ev)
+                d = _event_contact_date(ev, now)
                 if not d or d > today or d < cutoff:
                     continue
+                st = (ev.get("start") or {}).get("dateTime")
+                if st:
+                    try:
+                        if datetime.fromisoformat(st.replace("Z", "+00:00")) > now_utc:
+                            continue
+                    except ValueError:
+                        pass
                 emails = [a.get("email") for a in ev.get("attendees", []) or []]
                 for slug in _match_event(ev.get("summary", ""), emails,
                                          initials_map, email_map):

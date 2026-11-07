@@ -25,7 +25,17 @@ case "$EVENT" in
     fi
     # Desk/mobile attribution: log the prompt to the synced source-log with
     # net / ssh_from (lib/jmsource.py). Backgrounded: never slow the prompt.
-    JMS_SID=$SESSION_ID nohup python3 -c 'import os,sys; sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib")); import jmsource; jmsource.record("prompt", os.environ["JMS_SID"], source="cli", via="claude", tty=True)' >/dev/null 2>&1 &
+    # tty = whether this claude has a controlling terminal (this hook, or an
+    # ancestor up to claude, on a tty). Was hardcoded True, so cron's hourly
+    # `claude -p` (export-claude-transcripts, :17) and Dream at 03:30 logged
+    # as typed prompts and /1-1n painted 🖥️ desk into every block (2026-11-03).
+    JMS_TTY=0; _p=$$
+    for _i in 1 2 3 4; do
+      case "$(ps -o tty= -p "$_p" 2>/dev/null | tr -d ' ')" in ""|"?"|"??") ;; *) JMS_TTY=1; break;; esac
+      _p=$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' ')
+      [ -n "$_p" ] && [ "$_p" -gt 1 ] 2>/dev/null || break
+    done
+    JMS_TTY=$JMS_TTY JMS_SID=$SESSION_ID nohup python3 -c 'import os,sys; sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib")); import jmsource; jmsource.record("prompt", os.environ["JMS_SID"], source="cli", via="claude", tty=os.environ.get("JMS_TTY") == "1")' >/dev/null 2>&1 &
     # Finalize previous turn: flush LAST_FILE to JSONL
     if [ -f "$LAST_FILE" ]; then
       cat "$LAST_FILE" >> "$LOG_FILE"

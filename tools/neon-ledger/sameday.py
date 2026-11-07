@@ -15,7 +15,8 @@ puts one dtd card up with the fix for each miss, while there is still time.
                           through the daemon (the ledger now has it, Excel is
                           unchanged) and ack the chain break it causes
 
-Cron on Ix: 30 22 * * * (config/ix.crontab).
+Ix, 22:30 daily: launchd config/launchd/com.mckay.neon-sameday.plist
+(was config/ix.crontab until 2026-11-06).
 """
 from __future__ import annotations
 

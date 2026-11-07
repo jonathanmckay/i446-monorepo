@@ -9,6 +9,9 @@ unchanged formula is journaled as `snapshot`: that is how the rule-engine
 parallel run (lib/neon/rules.py, tools/neon-ledger/neon.py diff) gets Excel's
 truth for the formula cells (0分 D, G:O, P..Z) and for every 0n / hcbi
 constant it must derive from. Cron on ix: 03:50 and 23:55 (config/ix.crontab).
+Then adopts the day's hand-typed hcbi edits into the ledger as source=hand
+(lib/neon/adopt.py; ledger-only, never writes Excel) so the 04:05 strict
+diff sees them.
 
 Sheets / ranges:
   0分  D..Z   (Σ, E/F, blocks, points)       for yesterday + today
@@ -75,7 +78,30 @@ def main() -> int:
         print(f"{stamp} {body['sheet']} {body.get('date') or 'r' + str(body.get('row'))} "
               f"changes={n}", flush=True)
         rc |= 0 if out.get("ok") else 1
+    rc |= adopt_hand_edits([(today - datetime.timedelta(days=1)).isoformat(), today.isoformat()])
     return rc
+
+
+def adopt_hand_edits(dates: list) -> int:
+    """After the reconcile has journaled Excel's edits, adopt the hand-typed
+    hcbi ones into the ledger as source=hand (lib/neon/adopt.py). Ledger-only:
+    never writes Excel. NEON_ADOPT=0 disables. A failure here must not hide
+    the reconcile's own result, so it is logged and reported as rc 1."""
+    import os
+    if os.environ.get("NEON_ADOPT", "1") == "0":
+        return 0
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+        from neon import adopt
+        out = adopt.run(dates)
+    except Exception as e:  # noqa: BLE001
+        print(f"hand-adopt FAILED: {type(e).__name__}: {e}", flush=True)
+        return 1
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    print(f"{stamp} hand-adopt {','.join(dates)} adopted={len(out)}", flush=True)
+    for e in out:
+        print(f"  {e['sheet']}!{e['col']}{e['row']}: {e['ledger_before']!r} -> {e['after']!r}", flush=True)
+    return 0
 
 
 if __name__ == "__main__":

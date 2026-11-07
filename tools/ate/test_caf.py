@@ -31,6 +31,11 @@ SUN = dt.date(2026, 11, 1)   # a Sunday
     ("2026-10-28 -35", -35.0, dt.date(2026, 10, 28)),
     ("caf 50 pts on thursday", 50.0, dt.date(2026, 10, 29)),
     ("-60 12.25", -60.0, dt.date(2025, 12, 25)),    # not happened yet this year → last year
+    # date-first (2026-11-02: "10.30 -60" read 10.30 as the points)
+    ("10.30 -60", -60.0, dt.date(2026, 10, 30)),
+    ("10/30 -60", -60.0, dt.date(2026, 10, 30)),
+    ("10.30 120", 120.0, dt.date(2026, 10, 30)),
+    ("10.30 +50", 50.0, dt.date(2026, 10, 30)),
 ])
 def test_parse_points_and_date(text, points, date):
     assert caf.parse(text, SUN) == {"points": points, "date": date}

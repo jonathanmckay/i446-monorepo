@@ -19,7 +19,9 @@ from pathlib import Path
 
 DTD = (Path(__file__).resolve().parent / "dtd.sh").read_text()
 
-STTY_SANE = "stty sane < /dev/tty"
+# `stty sane` may carry extra settings (e.g. `susp undef`, the ^Z guard)
+# as long as it targets /dev/tty.
+STTY_SANE = re.compile(r"stty sane\b[^\n<]*< /dev/tty")
 CLEAR_HOME = r"\033[2J\033[H"
 
 # Every heredoc that opens an interactive `read ... < /dev/tty` prompt while
@@ -48,7 +50,7 @@ def test_prompt_scripts_force_sane_tty_before_reading():
         body = _heredoc(eof)
         read_pos = body.index("read ")
         pre = body[:read_pos]
-        assert STTY_SANE in pre, (
+        assert STTY_SANE.search(pre), (
             f"{eof} must `stty sane < /dev/tty` before its read prompt, or "
             "a raw mode inherited from fzf can leave Enter not terminating "
             "the read")
