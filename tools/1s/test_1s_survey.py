@@ -38,7 +38,7 @@ def test_week_row_label_is_sunday_anchored_month_week():
     m = _load()
     assert m.week_row_label(dt.date(2026, 7, 12)) == "7.2"
     assert m.week_row_label(dt.date(2026, 1, 4)) == "1.1"
-    assert m.week_row_label(dt.date(2026, 6, 28)) == "6.4"
+    assert m.week_row_label(dt.date(2026, 6, 28)) == "6.5"   # 1分+1s!A27 is 6.5
 
 
 def test_expand_selections_picks_day_answers():

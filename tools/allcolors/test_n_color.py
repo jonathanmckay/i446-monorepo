@@ -175,3 +175,16 @@ def test_a_traveler_gets_local_time_not_ix_time(run, monkeypatch):
     monkeypatch.setattr(ac_tool.daytime, "local_now",
                         lambda: dt.datetime(2026, 11, 7, 6, 0, tzinfo=ZoneInfo("Asia/Tokyo")))
     assert run(("1", "5", ""), {"Q": at(9), "S": at(12, 47)}) == [(D, "AF", 547)]
+
+
+def test_a_late_na_is_a_miss_on_a_closed_day():
+    """11-05 closes one habit short; on 11-06 JM marks that habit 0 (N/A). The
+    strict re-settle must still see a miss, or it stamps an on-time AG behind
+    an AH that already went up. The late pass (late_ok) counts the 0."""
+    d = dt.date(2026, 11, 5)
+    next_day = dt.datetime(2026, 11, 6, 8, 0)
+    assert ac_tool._timed("o314", "0", next_day, d).status == ac_tool.ac.BLANK
+    assert ac_tool._timed("o314", "0", next_day, d, late_ok=True).status == ac_tool.ac.NA
+    on_day = dt.datetime(2026, 11, 5, 21, 0)
+    assert ac_tool._timed("o314", "0", on_day, d).status == ac_tool.ac.NA
+    assert ac_tool._timed("o314", "0", None, d).status == ac_tool.ac.NA
