@@ -62,8 +62,8 @@
 55 23 * * * python3 $HOME/i446-monorepo/scripts/neon-reconcile.py >> $HOME/i446-monorepo/scripts/.neon-reconcile.log 2>&1
 # neon rules parallel run (Neon off Excel step 3): derive yesterday's 0分 from the ledger, diff vs Excel snapshots
 5 4 * * * $HOME/bin/run_neon_rules_diff.sh
-# same-day ledger drift card (Neon off Excel, tools/neon-ledger/sameday.py, 22:30): owned by launchd since 2026-11-06,
-# config/launchd/com.mckay.neon-sameday.plist (one scheduler per job; the classifier blocked the cron install twice)
+# same-day ledger drift card (Neon off Excel): strict check on TODAY after a fresh snapshot, one dtd card with fixes
+30 22 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/sameday.py >> $HOME/.cache/neon-rules/sameday.log 2>&1
 # OneDrive (personal) cloud→disk copy onto the Ix Backup SSD; Time Machine only sees what is downloaded
 30 1 * * * bash $HOME/i446-monorepo/bin/onedrive-backup.sh >/dev/null 2>&1
 
