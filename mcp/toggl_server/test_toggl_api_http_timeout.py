@@ -3,8 +3,11 @@ carried no timeout, so a connection left half-open across a laptop sleep
 could block its caller forever. Both call sites must pass HTTP_TIMEOUT."""
 import io
 import json
+import sys
+from pathlib import Path
 
-from mcp.toggl_server import toggl_api
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # .../mcp
+from toggl_server import toggl_api  # noqa: E402
 
 
 class _Resp(io.BytesIO):
