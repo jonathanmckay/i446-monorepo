@@ -113,12 +113,17 @@ def _timed(name: str, raw, at: dt.datetime | None, day: dt.date,
            late_ok: bool = False) -> ac.Cell:
     """Cell as of `day`: a done cell first written after `day` ended is a
     miss (JM: a miss is a miss), unless `late_ok`; one written before `day`
-    (1n+ cards done earlier in the week) counts from 00:00."""
+    (1n+ cards done earlier in the week) counts from 00:00. An N/A (0) first
+    written after `day` is a miss too: settle_late_all_colors re-settles closed
+    days, and a late 0 would otherwise shrink the applicable set and stamp an
+    on-time HHMM AG after the next day's AH was already raised."""
     status = ac.classify_value(raw)
-    if status != ac.DONE or at is None or late_ok:
+    if status == ac.BLANK or at is None or late_ok:
         return ac.Cell(name, status)
     if at.date() > day:
         return ac.Cell(name, ac.BLANK)
+    if status == ac.NA:
+        return ac.Cell(name, ac.NA)
     if at.date() < day:
         return ac.Cell(name, ac.DONE, dt.datetime.combine(day, dt.time(0, 0)))
     return ac.Cell(name, ac.DONE, at)
