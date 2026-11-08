@@ -24,7 +24,13 @@ if [ -n "$EXPECT" ] && [ "$BRANCH" != "$EXPECT" ]; then
     exit 2
 fi
 
-# Stage all changes
+# Stage all changes. Another git process (a manual commit from a session)
+# may hold .git/index.lock; give it a moment instead of losing the tick.
+LOCK=$(git rev-parse --git-path index.lock)
+wait_for_index_lock() {
+    for _ in $(seq 1 "${AUTOPUSH_LOCK_WAIT:-30}"); do [ -e "$LOCK" ] || return 0; sleep 1; done
+}
+wait_for_index_lock
 git add -A
 # If nothing to commit, log and exit -- UNLESS earlier commits never reached
 # origin. A failed pull/push leaves the branch ahead of origin; this early
@@ -39,15 +45,30 @@ if git diff --cached --quiet; then
     echo "[$TS] no changes, but $UNPUSHED unpushed commit(s) -- syncing"
 else
     CHANGED=$(git diff --cached --stat | tail -1)
-    if git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q; then
+    # Neither repo has a commit hook; every "pre-commit hook rejected it?"
+    # since 10-17 was a concurrent committer (the ~/.claude/skills backup cron,
+    # in this repo via the 10-17 symlink) holding .git/index.lock mid-commit.
+    # While it holds the lock the on-disk index still differs from HEAD, so the
+    # raced check below misfired as an ERROR (2026-11-08 10:00, 11:00). Capture
+    # git's own message, and on a lock wait for the other commit to land, then
+    # re-check: its commit took our changes (raced) or a retry commits them.
+    OUT=$(git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q 2>&1); RC=$?
+    if [ $RC -ne 0 ] && [[ "$OUT" == *index.lock* ]]; then
+        wait_for_index_lock
+        git add -A 2>/dev/null
+        if git diff --cached --quiet; then
+            OUT=""; RC=raced
+        else
+            OUT=$(git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q 2>&1); RC=$?
+        fi
+    fi
+    if [ "$RC" = 0 ]; then
         echo "[$TS] committed: $CHANGED"
-    elif git diff --cached --quiet; then
-        # Another committer took the staged changes first (2026-11-08: the old
-        # ~/.claude/skills backup cron, which became part of this repo through a
-        # symlink on 10-17, raced this one every tick). Nothing is lost; sync.
+    elif [ "$RC" = raced ] || git diff --cached --quiet; then
         echo "[$TS] commit raced: another process committed first -- syncing"
     else
-        echo "[$TS] ERROR: commit failed (pre-commit hook rejected it?) — changes remain staged"
+        REASON=$(printf '%s' "$OUT" | grep -v '^[[:space:]]*$' | head -3 | tr '\n' ' ')
+        echo "[$TS] ERROR: commit failed (exit $RC): ${REASON:-no output} — changes remain staged"
         exit 1
     fi
 fi
