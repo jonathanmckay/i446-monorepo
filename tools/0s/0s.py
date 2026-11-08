@@ -383,7 +383,8 @@ def detach(answers: dict, target: _dt.date) -> None:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), target.isoformat(),
                           "--from-json", name, "--unlink-json", "--report-hdr"],
                          stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
-    _hdr("0s saving in the background …")
+    _hdr("0s saving in the background%s …"
+         % (" (0l first)" if (answers.get("points_checked") or "").strip() == "1" else ""))
 
 
 def main() -> int:
@@ -432,18 +433,11 @@ def main() -> int:
     print("0s → writing %d fields to Neon %s (%s) …" % (filled, SHEET, target),
           flush=True)
 
-    def _write_neon():
-        return write_answers(answers, target)
-
-    # Re-reads RECOVERY_DIR each call (rather than trusting whatever _writer
-    # was constructed with) so tests that monkeypatch it after module load
-    # still take effect — same reasoning as xk887-survey.py's queue_write.
-    _writer.recovery_dir = RECOVERY_DIR
-    _writer.queue(_write_neon, tag=SHEET, recovery_payload=answers)
-
     # "Points checked" is not a neon column: 1 marks 0l done via did-fast;
-    # 0/blank leaves it alone. Queued onto the SAME background writer as the
-    # Neon write above (serialized, not concurrent, per JM 2026-08-11 — both
+    # 0/blank leaves it alone. Queued BEFORE the 0s897 write (JM 2026-11-08:
+    # the 0l card sat in dtd ~10s behind the 17-cell batch, so it looked
+    # like 0l still needed doing). Same background writer as the Neon write
+    # below (serialized, not concurrent, per JM 2026-08-11 — both
     # ultimately touch the same open workbook, just via different paths
     # (raw AppleScript here vs. did-fast's daemon-routed writes), so true
     # parallelism between them isn't proven race-safe).
@@ -475,10 +469,21 @@ def main() -> int:
             except (json.JSONDecodeError, AttributeError):
                 fail_reason = (proc.stderr or proc.stdout or "unknown").strip()[:200]
             if wrote_ok:
+                if args.report_hdr:
+                    _hdr("0s → 0l ✓ · saving answers …")
                 return "0l marked done"
             raise RuntimeError(fail_reason)
 
         _writer.queue(_mark_0l, tag="0l")
+
+    def _write_neon():
+        return write_answers(answers, target)
+
+    # Re-reads RECOVERY_DIR each call (rather than trusting whatever _writer
+    # was constructed with) so tests that monkeypatch it after module load
+    # still take effect — same reasoning as xk887-survey.py's queue_write.
+    _writer.recovery_dir = RECOVERY_DIR
+    _writer.queue(_write_neon, tag=SHEET, recovery_payload=answers)
 
     all_ok = _writer.drain()
     if args.report_hdr:
