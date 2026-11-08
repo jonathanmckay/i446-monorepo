@@ -420,4 +420,22 @@ do {
     check(Parsers.creditsSummary(JSON.parse(#"{"ok":true}"#)!) == nil, "old server → nil")
 }
 
+// dtd ctrl-t views on the phone (2026-11-08): project groups by domain,
+// time is shortest first, active rows pinned, ties keep server order.
+do {
+    func t(_ id: String, _ dom: String, _ est: Int?, running: Bool = false) -> DtdTask {
+        DtdTask(id: id, raw: id, title: id, est: est, points: nil, color: "#fff", domain: dom,
+                recurring: false, variablePrompt: false, running: running)
+    }
+    let list = [t("a", "xk87", 30), t("b", "", 5), t("c", "i9", nil), t("d", "i9", 10),
+                t("e", "hcb", 10), t("f", "xk87", 2, running: true)]
+    let ids = { (s: DtdSort) in DtdTask.ordered(list, by: s).map(\.id).joined() }
+    eq(ids(.standard), "abcdef", "standard keeps server order")
+    eq(ids(.project), "fecdab", "project: active first, then domain, untagged last, ties in server order")
+    eq(ids(.time), "fbdeac", "time: active first, then shortest (N), no estimate last")
+    eq(DtdSort.standard.next, .project, "cycle 1")
+    eq(DtdSort.project.next, .time, "cycle 2")
+    eq(DtdSort.time.next, .standard, "cycle wraps")
+}
+
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }

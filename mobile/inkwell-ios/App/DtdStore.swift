@@ -14,6 +14,9 @@ final class DtdStore: ObservableObject {
     @Published private(set) var inFlight: Set<String> = []   // ids with a POST outstanding — no double swipes
     @Published private(set) var scrollTick = 0               // bumps whenever the list should jump to the top
     @Published var filter = ""                               // fuzzy filter box text (wave 2 #1)
+    @Published private(set) var sort = DtdSort.standard      // ctrl-t view (2026-11-08); resets each launch
+    @Published private(set) var revealId: String? = nil      // just-added row to scroll to and flash
+    @Published private(set) var revealTick = 0               // bumps when revealId should be scrolled to
 
     private let api = Api()
     private let outbox = Outbox("dtd")
@@ -85,6 +88,7 @@ final class DtdStore: ObservableObject {
 
     var title: String {
         "\(summary.points)分 · dtd · \(summary.done) done · \(tasks.count) left" + (pending > 0 ? " · ⇡\(pending)" : "")
+            + (sort == .standard ? "" : " · \(sort.glyph) \(sort.label)")
     }
 
     /// The list the view renders: `tasks` narrowed by the fuzzy filter box
@@ -92,12 +96,39 @@ final class DtdStore: ObservableObject {
     /// whitespace word must match the row's title, raw content or domain as an
     /// in-order subsequence, so a bare domain ("xk87") scopes the list and a
     /// dropped letter ("biks") still hits. Empty filter → everything.
+    /// Then ordered by the ctrl-t view; `tasks` itself is never re-sorted,
+    /// because complete/restoreRow/promoteToTop index into it.
     var visibleTasks: [DtdTask] {
         let words = filter.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        guard !words.isEmpty else { return tasks }
-        return tasks.filter { t in
+        let matched = words.isEmpty ? tasks : tasks.filter { t in
             let hay = (t.title + " " + t.raw + " " + t.domain).lowercased()
             return words.allSatisfy { DtdStore.fuzzyWord($0, hay) }
+        }
+        return DtdTask.ordered(matched, by: sort)
+    }
+
+    /// ctrl-t: tap the filter-bar glyph to cycle, long-press to pick one.
+    func cycleSort() { setSort(sort.next) }
+    func setSort(_ s: DtdSort) {
+        guard s != sort else { return }
+        sort = s
+        Platform.haptic(.key)
+        scrollTick &+= 1
+    }
+
+    /// A just-added task lands in its sorted slot, possibly off screen: scroll
+    /// to it and flash it. If the filter or a later-today defer hides it,
+    /// say so instead of scrolling to nothing.
+    private func reveal(_ id: String) {
+        guard visibleTasks.contains(where: { $0.id == id }) else {
+            if !id.isEmpty, tasks.contains(where: { $0.id == id }) { toast.show("+ added · hidden by the filter") }
+            return
+        }
+        revealId = id
+        revealTick &+= 1
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            if revealId == id { revealId = nil }
         }
     }
 
@@ -154,7 +185,7 @@ final class DtdStore: ObservableObject {
         return true
     }
 
-    func load(refresh: Bool) async {
+    func load(refresh: Bool, reveal newId: String? = nil) async {
         await flushOutbox()
         loading = true
         let url = base + "/api/tasks" + (refresh ? "?refresh=1" : "")
@@ -171,7 +202,9 @@ final class DtdStore: ObservableObject {
             PayloadCache.save("dtd", j)
             // A task that went active since the last load (e.g. claimed from
             // another client) bubbles up here — scroll so it's visible.
-            noteActive(scrollIfChanged: true)
+            // A pending reveal owns the scroll, so the two can't race.
+            noteActive(scrollIfChanged: newId == nil)
+            if let newId { reveal(newId) }
         case .error(let m):
             lastError = m
         }
@@ -321,7 +354,7 @@ final class DtdStore: ObservableObject {
         guard !c.isEmpty else { return }
         Task {
             switch await send("/api/add", Bodies.add(c)) {
-            case .ok: toast.show("+ added"); await load(refresh: true)
+            case .ok(let j): toast.show("+ added"); await load(refresh: true, reveal: j.string("id"))
             case .error(let m) where Outbox.isOffline(m):
                 // Draw it now, sync it later: the row is usable at once
                 // (complete works; start/delay wait for the real id).
@@ -329,6 +362,7 @@ final class DtdStore: ObservableObject {
                 localTasks.append(l)
                 _ = queueIfOffline(m, path: "/api/add", body: Bodies.add(c), label: "add \(c)", ref: "add:" + l.id)
                 tasks.append(Self.localRow(l))
+                reveal(l.id)
             case .error(let m): toast.show("not added: \(m)")
             }
         }

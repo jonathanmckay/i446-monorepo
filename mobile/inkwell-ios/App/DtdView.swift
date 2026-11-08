@@ -72,8 +72,33 @@ struct DtdView: View {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim)
                 }.buttonStyle(.plain)
             }
+            sortButton
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
+    }
+
+    /// The terminal's ctrl-t (2026-11-08): tap cycles default → project →
+    /// time, long-press opens the named list. Rows slide to their new slots.
+    /// A hardware keyboard's ctrl-t hits the same cycle.
+    private var sortButton: some View {
+        let pick = Binding(get: { store.sort },
+                           set: { s in withAnimation(.snappy) { store.setSort(s) } })
+        return Menu {
+            Picker("sort", selection: pick) {
+                ForEach(DtdSort.allCases, id: \.self) { s in Text("\(s.glyph)  \(s.label)").tag(s) }
+            }
+        } label: {
+            Text(store.sort.glyph).font(Theme.mono)
+                .foregroundStyle(store.sort == .standard ? Theme.dim : Theme.accent)
+                .frame(minWidth: 28, minHeight: 28)
+        } primaryAction: {
+            withAnimation(.snappy) { store.cycleSort() }
+        }
+        .background {
+            Button("") { withAnimation(.snappy) { store.cycleSort() } }
+                .keyboardShortcut("t", modifiers: .control)
+                .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+        }
     }
 
     /// Web's "◐ 😈 ×N": how many cards a Claude session is working right now.
@@ -91,17 +116,18 @@ struct DtdView: View {
         // ScrollViewReader so a task becoming active (▶ start / 😈 claim) can
         // scroll the list back to the top where it was just reordered.
         ScrollViewReader { proxy in
+            let rows = store.visibleTasks
             List {
-                ForEach(store.visibleTasks) { t in
+                ForEach(rows) { t in
                     TaskRow(task: t)
                         .id(t.id)
-                        .listRowBackground(Theme.bg)
+                        .listRowBackground(store.revealId == t.id ? Theme.accent.opacity(0.25) : Theme.bg)
                         .listRowSeparatorTint(Color(white: 0.15))
                         .swipeActions(edge: .leading, allowsFullSwipe: true) { doneButton(t) }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) { trailingButtons(t) }
                         .disabled(store.inFlight.contains(t.id))
                 }
-                if store.visibleTasks.isEmpty && store.loadedOnce {
+                if rows.isEmpty && store.loadedOnce {
                     Text(store.filter.isEmpty ? "nothing due · 🎉" : "no match · ↵ to add “\(store.filter)”")
                         .font(Theme.mono).foregroundStyle(Theme.dim)
                         .frame(maxWidth: .infinity).listRowBackground(Theme.bg)
@@ -117,9 +143,14 @@ struct DtdView: View {
             #endif
             .refreshable { await store.load(refresh: true) }
             .onChange(of: store.scrollTick) {
-                guard let top = store.tasks.first?.id else { return }
+                guard let top = store.visibleTasks.first?.id else { return }
                 withAnimation { proxy.scrollTo(top, anchor: .top) }
             }
+            .onChange(of: store.revealTick) {
+                guard let id = store.revealId else { return }
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
+            }
+            .animation(.easeOut(duration: 0.4), value: store.revealId)
         }
     }
 

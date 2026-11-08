@@ -60,6 +60,50 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
         list.filter { !$0.deferredToLaterToday(now, calendar: calendar) }
     }
 
+    /// The terminal's ctrl-t views (tools/did/dtd.sh, 2026-07-14) on the phone
+    /// (2026-11-08): standard = server order; project groups by domain
+    /// (untagged last); time puts the shortest (N) first (no estimate last).
+    /// Active rows (▶/😈) stay pinned on top in every view — on a phone the
+    /// live task must never sort below the fold. Ties keep the server order,
+    /// via an explicit index rather than relying on sort stability.
+    public static func ordered(_ list: [DtdTask], by sort: DtdSort) -> [DtdTask] {
+        if sort == .standard { return list }
+        func key(_ t: DtdTask) -> (Int, String, Int) {
+            switch sort {
+            case .project: return (t.domain.isEmpty ? 1 : 0, t.domain, 0)
+            case .time: return (t.est == nil ? 1 : 0, "", t.est ?? 0)
+            case .standard: return (0, "", 0)
+            }
+        }
+        return list.enumerated().sorted { a, b in
+            if a.element.isActive != b.element.isActive { return a.element.isActive }
+            let ka = key(a.element), kb = key(b.element)
+            if ka != kb { return ka < kb }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+}
+
+/// dtd list order, cycled by the filter-bar button (tap) or ctrl-t; long-press
+/// picks one directly. Not persisted: every launch starts in standard, like
+/// the terminal's `echo default > "$DTD_VIEW"`.
+public enum DtdSort: CaseIterable, Hashable {
+    case standard, project, time
+
+    public var next: DtdSort {
+        let all = Self.allCases
+        return all[(all.firstIndex(of: self)! + 1) % all.count]
+    }
+    public var glyph: String {
+        switch self { case .standard: "≡"; case .project: "▦"; case .time: "⏱" }
+    }
+    public var label: String {
+        switch self { case .standard: "default"; case .project: "project"; case .time: "time · short first" }
+    }
+}
+
+extension DtdTask {
+
     /// Parse a server `scheduled` string into a Date, but only when it carries a
     /// time-of-day (an ISO datetime with a `T`). A bare `YYYY-MM-DD` means "due
     /// today, no specific time" → nil, so it is never treated as a later-today
