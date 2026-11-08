@@ -1336,65 +1336,140 @@ def _slack():
     return {"status": "not_configured"}
 
 
+# v182 (2026-11-08): the 03:00 PermissionError on `4g s.xlsx` is NOT Full Disk
+# Access. Every vault-excel workbook except the three Excel keeps open (Neon,
+# xk887, m5x2/) is a OneDrive Files-On-Demand placeholder (`stat -f %Sf` =
+# "compressed,dataless"); non-dataless files in the same folder read fine from
+# the cron chain, and neither cron nor a gui/ LaunchAgent may hydrate a
+# placeholder (EPERM / EDEADLK). Two fixes: (1) every successful read caches the
+# parsed goals, so a later eviction degrades to last-good data instead of the
+# narrative-only fallback; (2) `onedrive_dataless` names every evicted workbook.
+ANNUAL_4G_CACHE = Path.home() / ".cache" / "dream" / "annual-goals-4g.json"
+_PIN_FIX = ("Finder > ~/OneDrive/vault-excel > right-click > Always Keep on This Device "
+            "(the 03:00 cron run cannot download OneDrive placeholders)")
+
+
+def _parse_4g_workbook(path: Path) -> dict:
+    import openpyxl  # available in the intake env
+    yy = datetime.date.today().strftime("%y")
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
+                     wb.sheetnames[0])
+        ws = wb[sheet]
+        goals, tldr = [], None
+        for row in ws.iter_rows(values_only=True):
+            cells = list(row)
+            c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
+            c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
+            blob = (c0 + " " + c1).lower()
+            if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
+                tldr = (c1 or c0)
+                continue
+            # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
+            if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
+                pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
+                earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
+                goals.append({
+                    "domain": c0,
+                    "goal": c1,
+                    "target_fen": cells[2],
+                    "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
+                    "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
+                })
+        return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
+    finally:
+        wb.close()
+
+
+def _write_4g_cache(result: dict, path: Path, cache: Path) -> None:
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "cached_at": time.time(),
+            "xlsx_mtime": os.stat(path).st_mtime,
+            "result": result,
+        }, default=str), encoding="utf-8")
+        os.replace(tmp, cache)
+    except OSError:
+        pass  # cache is best-effort; never fail the source over it
+
+
+def _read_4g_cache(cache: Path, err: str):
+    try:
+        blob = json.loads(cache.read_text(encoding="utf-8"))
+        res = dict(blob["result"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    age_days = round((time.time() - float(blob.get("cached_at", 0))) / 86400, 1)
+    res.update({
+        "source": "last-good-cache",
+        "cache_file": str(cache),
+        "cache_age_days": age_days,
+        "xlsx_mtime": datetime.datetime.fromtimestamp(
+            float(blob.get("xlsx_mtime", 0))).isoformat(timespec="minutes"),
+        "error": f"4g xlsx unreadable ({err}); served last-good cache ({age_days} d old)",
+    })
+    return res
+
+
 @source("annual_goals_4g", "4g annual strategic goals + progress (JM's yearly bets) — the leverage frame for cards")
-def _annual_goals_4g():
+def _annual_goals_4g(path=None, cache=None):
     """Read the current-year sheet of `4g s.xlsx` (annual goals). Read-only so it
     is safe even while Excel has the file open. Each goal row is: domain | goal |
     target_fen | pct | earned_fen | q1..q4. Dream should bias cards toward
     advancing/unblocking these (especially goals behind pace) over loose-thread
-    nits — see dream-ai-context.md 'Goal-leverage orientation'."""
-    import openpyxl  # available in the intake env
-    path = Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
+    nits — see dream-ai-context.md 'Goal-leverage orientation'.
+    Unreadable workbook: last-good cache, else the vault narrative."""
+    path = path or Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
+    cache = cache or ANNUAL_4G_CACHE
+    dataless = False
     try:
         if not path.exists():
             raise FileNotFoundError(path)
         if _is_dataless(path):
             # v174 (2026-10-31): OneDrive Files-On-Demand had evicted the file to a
             # cloud placeholder. A launchd-context read cannot hydrate it
-            # (PermissionError at 03:00; BadZipFile interactively), so say why and
-            # still anchor the run on the vault narrative.
-            msg = (f"{path.name} is a OneDrive cloud-only placeholder (dataless); "
-                   "fix: Finder > right-click ~/OneDrive/vault-excel > Always Keep on This Device")
-            out = _annual_goals_4g_vault_fallback(msg)
-            out["dataless"] = True
-            return out
-        yy = datetime.date.today().strftime("%y")
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        try:
-            sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
-                         wb.sheetnames[0])
-            ws = wb[sheet]
-            goals, tldr = [], None
-            for row in ws.iter_rows(values_only=True):
-                cells = list(row)
-                c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
-                c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
-                blob = (c0 + " " + c1).lower()
-                if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
-                    tldr = (c1 or c0)
-                    continue
-                # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
-                if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
-                    pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
-                    earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
-                    goals.append({
-                        "domain": c0,
-                        "goal": c1,
-                        "target_fen": cells[2],
-                        "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
-                        "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
-                    })
-            return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
-        finally:
-            wb.close()
+            # (PermissionError at 03:00; BadZipFile interactively).
+            dataless = True
+            raise PermissionError(f"{path.name} is a OneDrive cloud-only placeholder "
+                                  f"(dataless); fix: {_PIN_FIX}")
+        result = _parse_4g_workbook(path)
+        _write_4g_cache(result, path, cache)
+        return result
     except Exception as e:
-        # OneDrive under macOS TCC routinely denies headless/cron reads
-        # ("Operation not permitted") — which left Dream with NO annual frame
-        # at all (source returned null). Degrade gracefully to the readable
-        # vault narrative so every run still anchors to the year's bets.
-        # Permanent fix: grant Full Disk Access to the intake's python on ix
-        # (one setting that also unlocks Safari history, screen-time, iMessage).
-        return _annual_goals_4g_vault_fallback(str(e))
+        err = str(e)
+        out = _read_4g_cache(cache, err) or _annual_goals_4g_vault_fallback(err)
+        if dataless:
+            out["dataless"] = True
+        return out
+
+
+@source("onedrive_dataless", "vault-excel workbooks evicted to OneDrive cloud placeholders (unreadable by cron)")
+def _onedrive_dataless(root=None):
+    """Names every top-level vault-excel file that is a dataless placeholder.
+    Dream, /2s, /3s and the 4g source read these at night; an evicted file
+    fails with a misleading 'Operation not permitted'."""
+    root = root or Path.home() / "OneDrive" / "vault-excel"
+    if not root.exists():
+        return {"_status": "missing", "error": f"{root} not found"}
+    evicted = sorted(p.name for p in root.iterdir()
+                     if p.is_file() and not p.name.startswith(".") and _is_dataless(p))
+    out = {"count": len(evicted), "dataless": evicted}
+    if evicted:
+        out["fix"] = _PIN_FIX
+    return out
+
+
+def dataless_diagnostic(results):
+    """One line for the brief when OneDrive evicted workbooks Dream reads."""
+    d = (results.get("onedrive_dataless") or {}).get("data") or {}
+    if not d.get("count"):
+        return None
+    names = d["dataless"]
+    shown = ", ".join(names[:6]) + (f" +{len(names) - 6} more" if len(names) > 6 else "")
+    return f"OneDrive: {d['count']} vault-excel workbooks are cloud-only ({shown}). {_PIN_FIX}."
 
 
 def _annual_goals_4g_vault_fallback(err):
@@ -1740,12 +1815,12 @@ def main():
     results = run_sources(selected=selected, timeout=30)
     duration_ms = round((time.time() - t0) * 1000)
 
-    diag = fda_diagnostic(results)
+    diags = [d for d in (fda_diagnostic(results), dataless_diagnostic(results)) if d]
 
     if args.test:
         print_test_table(results)
-        if diag:
-            print(diag)
+        for d in diags:
+            print(d)
         _exit_now_if_hung()
         return
 
@@ -1756,9 +1831,10 @@ def main():
         "duration_ms": duration_ms,
         "sources": results,
     }
-    if diag:
-        output["diagnostics"] = [diag]
-        print(diag, file=sys.stderr)  # lands in .dream-launch.log / agent-run.log
+    if diags:
+        output["diagnostics"] = diags
+        for d in diags:
+            print(d, file=sys.stderr)  # lands in .dream-launch.log / agent-run.log
 
     if args.output:
         out_path = Path(args.output)

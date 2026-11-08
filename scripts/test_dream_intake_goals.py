@@ -81,6 +81,7 @@ def test_dataless_guard(tmp_path, monkeypatch):
     assert intake._is_dataless(f) is False
     monkeypatch.setattr(intake, "_is_dataless", lambda p: True)
     monkeypatch.setattr(intake.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(intake, "ANNUAL_4G_CACHE", tmp_path / "no-cache.json")
     (tmp_path / "OneDrive" / "vault-excel").mkdir(parents=True)
     (tmp_path / "OneDrive" / "vault-excel" / "4g s.xlsx").write_bytes(b"")
     r = intake._annual_goals_4g()
