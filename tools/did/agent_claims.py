@@ -153,6 +153,18 @@ def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
     return existed
 
 
+RECEIPTS_DIR = Path.home() / "vault" / "z_ibx" / "agent-picks" / "receipts"
+
+
+def _receipt_ready(tid: str) -> bool:
+    """An agent pick (tools/pick) whose receipt waits on JM keeps its ✅ past
+    RELEASED_TTL: a Friday pick reviewed on Monday must still show (2026-11-08)."""
+    try:
+        return (RECEIPTS_DIR / str(tid) / "status").read_text().strip() == "ready"
+    except OSError:
+        return False
+
+
 def _forget(tid: str, root: Path) -> None:
     for p in (root / f"{tid}.json", root / f"{tid}.state"):
         try:
@@ -217,7 +229,7 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
             state, ts = s, int(t)
         except (OSError, ValueError):
             pass
-        if state in ("released", "done") and now - ts > RELEASED_TTL:
+        if state in ("released", "done") and now - ts > RELEASED_TTL and not _receipt_ready(tid):
             _forget(tid, here)   # kept its top slot for a day; JM never closed it
             continue
         if tid in out and out[tid]["state_ts"] >= ts:

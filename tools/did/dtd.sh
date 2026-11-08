@@ -3751,7 +3751,7 @@ fzf --id-nth=2 --filter=x </dev/null >/dev/null 2>&1; (( $? == 2 )) && DTD_FZF_I
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) or new task if no match + [N] | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) or new task if no match + [N] | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | alt-n: reject ✅ | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -4188,6 +4188,8 @@ while true; do
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-l:execute-silent(python3 $DTD_OPEN_LINK {2} $DTD_CACHE_FILE $DTD_HDR)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
+      $( : "alt-n rejects an agent pick (2026-11-08, tools/pick): asks a one-line note, drops the ✅ and the agent label; the task stays open. ⌥⏎ on a ✅ card is the accept." ) \
+      --bind "alt-n:execute(zsh $HOME/i446-monorepo/tools/pick/reject-tty.sh {2})+clear-screen+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       2>>"$DTD_FZF_ERR")
 
   _fzf_rc=$?
