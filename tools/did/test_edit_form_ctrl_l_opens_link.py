@@ -28,7 +28,7 @@ def test_ctrl_l_reaches_open_link_from_any_field():
         hits = []
         fake = SimpleNamespace(focus=SimpleNamespace(check=check, multiline=False), msg="x",
                                open_link=lambda: hits.append(1))
-        assert ef.EditForm.handle(fake, "\x0c") is None
+        assert ef.Form.handle(fake, "\x0c") is None
         assert hits == [1]
 
 
@@ -45,7 +45,7 @@ def test_ctrl_l_opens_a_comment_link_in_the_task_profile(monkeypatch):
     form = _form(ef, {"id": "t", "content": "Search for CoS (60) [40]", "labels": ["m5x2"]},
                  {"task": {"content": "", "description": ""},
                   "comments": [{"content": "JD: https://jd.example/cos"}]})
-    ef.EditForm.open_link(form)
+    ef.Form.open_link(form)
     assert calls == [["open", "-na", "Google Chrome", "--args", "--profile-directory=Profile 11",
                       "--new-window", "https://jd.example/cos"]]
     assert "m5c7.com" in form.msg
@@ -56,5 +56,5 @@ def test_ctrl_l_without_a_link_says_so(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran")))
     form = _form(ef, {"id": "t", "content": "plain (5)", "labels": []},
                  {"task": {}, "comments": [{"content": "draft 1a151ef6bcfc3115, see h335/f693/x.md"}]})
-    ef.EditForm.open_link(form)
+    ef.Form.open_link(form)
     assert form.msg == "no link on this task"
