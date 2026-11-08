@@ -56,3 +56,18 @@ def test_kid_codes_create_kid_tagged_toggl_entries():
     """Kid time files under xk87 + the kid tag via toggl_cli, not xk88."""
     for kid in ("xk20", "xk22", "xk26"):
         assert df.HABIT_PROJECT[kid] == kid
+
+
+def test_kid_habit_points_boost_still_reaches_0fen_x():
+    """Regression (Dream v182): HABIT_PROJECT["xk20"] became "xk20" for the
+    Toggl subproject, which LABEL_TO_0FEN maps to the "0n:xk20" minutes
+    route; main() never appends that route to 0分, so an explicit [N] or +N
+    on a kid habit was silently dropped. It must land on 0分!X as before."""
+    headers = {"0n": {"xk20": 36, "xk26": 38}, "1n": {}}
+    tq = {"0neon": [], "夜neon": [], "1neon": [], "today": []}
+    for text, pts in (("xk20 30 [50]", 50), ("xk20 30 +10", 40), ("熙熙 20 [40]", 40)):
+        (r,) = df.route_items(df.parse_input(text), headers, tq, skip_todoist=True)
+        assert r.step == "0n", text
+        assert (r.fen_col, r.fen_points) == ("X", pts), text
+    # The Toggl project for the kid habit itself is unchanged.
+    assert df.HABIT_PROJECT["xk20"] == "xk20"

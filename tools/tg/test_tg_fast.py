@@ -240,14 +240,17 @@ def test_resolve_no_project_when_label_not_in_toggl():
     """Tasks whose labels don't exist in Toggl PROJECT_MAP should return empty project."""
     fake_cache = {
         "1neon": [
-            {"id": "3", "content": "1 f694 (5) [10]", "labels": ["1neon", "f694"], "due": "2026-05-17"},
+            {"id": "3", "content": "1 q999 (5) [10]", "labels": ["1neon", "q999"], "due": "2026-05-17"},
         ],
     }
+    # Was "1 f694", which became an i9 SHORTCODE on 2026-10-05 and so never
+    # reached the task-cache path this test is about (red since then).
     mod = _import_tg_fast()
-    mod._TOGGL_PROJECTS = {"hci", "hcmc", "i9"}  # f694 not included
+    assert "1 q999" not in mod.SHORTCODES
+    mod._TOGGL_PROJECTS = {"hci", "hcmc", "i9"}  # q999 not included
 
     with patch.object(Path, "read_text", return_value=json.dumps(fake_cache)):
-        desc, project, tags = mod.resolve("1 f694")
+        desc, project, tags = mod.resolve("1 q999")
         assert project == "", f"Expected empty, got '{project}'"
 
 
