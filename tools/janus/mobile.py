@@ -382,6 +382,14 @@ def _logged_view(day: _dt.date) -> tuple[dict, dict]:
     undone one reads as open. For display and the double-credit guard; the
     edit checks stay on the plain ledger, this host's own."""
     ledger, pts = dict(_ledger(day)), dict(_logged_points(day))
+    # The terminal janus's own per-entry record (its _entry_pts, same dir):
+    # rows it logged before lib/entry_points.py existed carry points only
+    # here, and the CLI shows them (JM 2026-11-07: "the log to work like it
+    # does in cli"). The shared ledger still wins below.
+    for eid, v in _cli_entry_points(day).items():
+        if isinstance(v, (int, float)):
+            ledger.setdefault(eid, "logged in janus")
+            pts[eid] = {"points": int(v), "credits": (pts.get(eid) or {}).get("credits") or []}
     for eid, v in entry_points.for_day(day).items():
         if v is None:
             ledger.pop(eid, None)
@@ -390,6 +398,16 @@ def _logged_view(day: _dt.date) -> tuple[dict, dict]:
             ledger.setdefault(eid, "logged elsewhere")
             pts[eid] = {"points": v, "credits": (pts.get(eid) or {}).get("credits") or []}
     return ledger, pts
+
+
+def _cli_entry_points(day: _dt.date) -> dict:
+    """{Toggl id: 分} the terminal janus recorded for `day`
+    (tools/tg/janus.py _entry_pts_path: janus-entry-points-<day>.json)."""
+    try:
+        d = json.loads((STATE_DIR / f"janus-entry-points-{day.isoformat()}.json").read_text())
+    except Exception:
+        return {}
+    return {str(k): v for k, v in d.items()} if isinstance(d, dict) else {}
 
 
 def _logged_points_add(day: _dt.date, entry_id: str, points: int | None,
@@ -1053,6 +1071,18 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
                 # its 0n weight, not minutes (0g logged 07:09 showed "1").
                 if lp is None:
                     lp = dtd_done.get(_k)
+                # A recorded 0 on a per-minute 0n habit (o314: 1分/min) is the
+                # sheet's own credit, which did-fast reports as 0: price it
+                # from the minutes, as the CLI's _row_points does (bug
+                # 2026-11-03: a 69m o314 showed [0]).
+                if lp == 0:
+                    try:
+                        from neon.rates import zero_n_points
+                        sheet = zero_n_points(_norm_key(e["desc"] or "") or e["desc"], mins)
+                    except Exception:
+                        sheet = None
+                    if sheet:
+                        lp = sheet
                 r["logged_points"] = lp if lp is not None else would
         else:  # event
             ev = it["data"]

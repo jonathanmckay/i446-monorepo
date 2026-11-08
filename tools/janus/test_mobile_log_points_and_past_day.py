@@ -218,3 +218,53 @@ def test_done_claim_is_the_entry_the_completion_fell_in():
     assert claim(None) == {"1 hcb": "3"}         # no time recorded: the latest
     assert claim(150, {"3"}) == {}               # already logged by janus
 
+
+
+# ── CLI parity (JM 2026-11-07: "the log to work like it does in cli") ────
+def _cli_file(jm, day, data):
+    (jm.STATE_DIR / f"janus-entry-points-{day.isoformat()}.json").write_text(json.dumps(data))
+
+
+def test_terminal_janus_record_shows_on_its_row(jm, monkeypatch):
+    """A row the terminal logged before lib/entry_points.py existed has its
+    分 only in janus-entry-points-<day>.json; the CLI shows it, so must we."""
+    day = _past(jm)
+    _cli_file(jm, day, {"7": 210})
+    monkeypatch.setattr(jm, "_fetch_today", lambda d=None: [
+        {**_entry(jm, 8, 0, 9, 0, desc="interview prep", eid="7"),
+         "start": dt.datetime.combine(day, dt.time(8, 0), jm.TZ),
+         "end": dt.datetime.combine(day, dt.time(9, 0), jm.TZ)}])
+    row = next(r for r in jm.build_timeline(lite=True, day=day)["rows"] if r["type"] == "entry")
+    assert row["logged"] and row["logged_points"] == 210 and row["preview_points"] is None
+
+
+def test_shared_ledger_beats_and_tombstones_the_terminal_record(jm, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "shared"))
+    day = dt.date(2026, 11, 4)
+    _cli_file(jm, day, {"7": 30, "8": 18})
+    jm.entry_points.record(day, {"7": 45, "8": None})
+    ledger, pts = jm._logged_view(day)
+    assert pts["7"]["points"] == 45
+    assert "8" not in ledger and "8" not in pts
+
+
+def test_recorded_zero_on_per_minute_habit_is_priced_from_minutes(jm, monkeypatch):
+    """did-fast reports 0 for o314 (the sheet credits it); the CLI shows the
+    minutes' worth, not [0] (bug 2026-11-03)."""
+    today = dt.datetime.now(jm.TZ).date()
+    jm._ledger_add(today, "1", "logged")
+    jm._logged_points_add(today, "1", 0, [])
+    e = _entry(jm, 6, 0, 7, 9, desc="o314", code="hcm", eid="1")
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
+    row = next(r for r in jm.build_timeline(lite=True)["rows"] if r["type"] == "entry")
+    assert row["logged_points"] == 69
+
+
+def test_recorded_zero_on_flat_task_stays_zero(jm, monkeypatch):
+    today = dt.datetime.now(jm.TZ).date()
+    jm._ledger_add(today, "1", "logged")
+    jm._logged_points_add(today, "1", 0, [])
+    e = _entry(jm, 6, 0, 6, 30, desc="call mom", code="家", eid="1")
+    monkeypatch.setattr(jm, "_fetch_today", lambda: [e])
+    row = next(r for r in jm.build_timeline(lite=True)["rows"] if r["type"] == "entry")
+    assert row["logged_points"] == 0

@@ -216,15 +216,14 @@ public struct TimelineRow: Equatable, Hashable {
     /// just show start time only"); the end is the next row's start.
     public var displayMeta: String { start }
 
-    /// Right-justified column: duration, plus "N分" only when points were
-    /// recorded with a task (`points`); no "~N分" preview (2026-10-25).
-    /// A logged entry shows only the 分 it credited (2026-10-26: "once it is
-    /// logged the right should show number of points rather than the amount
-    /// of time"); duration again if the server knows no number for it.
+    /// Right-justified column, as the terminal janus renders a row
+    /// (_entry_dur_display, JM 2026-11-07 "the log to work like it does in
+    /// cli"): the duration, then " [N]" with the 分 credited once the entry
+    /// is logged. An unlogged row shows its duration only: no would-be
+    /// value, neither the resolved task [N] nor a "~N分" preview.
     public var rightMeta: String {
-        // Entry points render "[N]", the CLI's frame; "N分" is for day totals (2026-10-26).
-        if isEntry && logged && !running, let p = loggedPoints ?? points { return "[\(p)]" }
-        return (["\(minutes)m"] + [points.map { "[\($0)]" }].compactMap { $0 }).joined(separator: " · ")
+        if isEntry && logged, let p = loggedPoints { return "\(minutes)m [\(p)]" }
+        return "\(minutes)m"
     }
 }
 

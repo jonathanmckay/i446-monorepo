@@ -13,7 +13,16 @@ struct RefreshableTextEditor: UIViewRepresentable {
     var onRefresh: () async -> Void
 
     func makeUIView(context: Context) -> UITextView {
-        let tv = UITextView()
+        // TextKit 1 with contiguous layout (2026-11-07). The default TextKit 2
+        // view lays out only the viewport and ESTIMATES the rest, badly with
+        // the 1.18-1.65x heading fonts below: contentSize came up short, so a
+        // long note bounced back before its last lines, and the estimate was
+        // redone while typing, so caret auto-scroll and `replace`'s restored
+        // offset landed on another line ("can't scroll all the way to the
+        // bottom", "the window refocuses to a different line"). Contiguous
+        // layout keeps contentSize exact; notes are small enough to afford it.
+        let tv = UITextView(usingTextLayoutManager: false)
+        tv.layoutManager.allowsNonContiguousLayout = false
         tv.delegate = context.coordinator
         tv.backgroundColor = .clear
         let size = UIFont.preferredFont(forTextStyle: .body).pointSize
