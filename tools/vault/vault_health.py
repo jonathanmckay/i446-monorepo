@@ -935,17 +935,39 @@ def run_all(now: dt.datetime) -> list[Finding]:
 
 ICON = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
 
+# "What it checks" column (JM 2026-11-08: "so that I remember"). Static per
+# check; keep in step with the check functions above.
+CHECK_WHAT = {
+    "singletons": "Vault folders holding fewer than ~3 docs, which should be merged into their parent.",
+    "duplicate-notes": "Two or more live notes (outside dated folders) sharing one name, with the notes whose bare [[links]] are ambiguous.",
+    "vault-root": "Loose files at the vault root (only folders, CLAUDE.md and dotfiles belong there) and items at the top of ~ outside the home-folder layout.",
+    "style": "Live note filenames and titles: ASCII kebab-case, YYYY-MM-DD dates, no Arabic or CJK+English titles, titles ≤40 chars.",
+    "toggl-store": "i156/toggl.sqlite: last completed sync under 36h old, entries on each of the last 7 days, no short sync windows, and the dashboard export caught up.",
+    "syncthing": "Syncthing on this host: every device connected, every folder idle and fully synced with no errors. Rescans out-of-sync folders.",
+    "git-autopush": "~/vault and ~/i446-monorepo on Ix: no stuck rebase, a commit within 24h, nothing unpushed, no warnings in the autopush logs.",
+    "skills-backup": "~/.claude/skills on Ix has a git auto-commit within 24h (cron runs every 10 min).",
+    "perm-sync": "The hourly Ix↔Straylight Claude permission-allowlist sync has succeeded within 48h.",
+    "onedrive-neon": "The Neon workbook in OneDrive was modified within 3 days, and (run off Ix) the Ix and local copies are within 24h of each other.",
+    "time-machine": "A Time Machine destination is configured and the latest backup is at most 2 days old (Ix; Straylight is exempt).",
+    "ix-cron": "Ix's live crontab matches the committed config/ix.crontab.",
+    "ix-memory": "Ix over 7 days: reboots, jetsam/panic/Chrome hang reports, Chrome restarts or extra instances, Chrome over 6 GB, swap over 90%.",
+    "skill-claims": "Skills named like a recurring Todoist card but neither linked to dtd (SKILL_CLAIMS) nor declined (SKILL_NO_CLAIM).",
+    "alerts": "Tool alerts in z_ibx/alerts.jsonl over 7 days, grouped by tool and reason, minus ones dismissed in 1-i446-dismissed.json.",
+    "neon-rules": "The nightly Neon rule-engine parallel run is under 2 days old, and which 0分 columns the ledger derives differently from Excel.",
+    "duplicates": "Downloads files sharing a name with a neighbour but differing in bytes (queued by triage). Trashes pairs that have become identical.",
+}
+
 
 def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
              f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, "
              "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
-             "| # | Check | Status | Summary | Auto-fixed |", "|---|---|---|---|---|"]
+             "| # | Check | What it checks | Status | Summary | Auto-fixed |", "|---|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.
     for n, f in enumerate(findings, 1):
-        lines.append(f"| {n} | {f.check} | {ICON[f.status]} {f.status} | {f.summary} | {f.fixed or ''} |")
+        lines.append(f"| {n} | {f.check} | {CHECK_WHAT.get(f.check, '')} | {ICON[f.status]} {f.status} | {f.summary} | {f.fixed or ''} |")
     for n, f in enumerate(findings, 1):
         if f.detail:
             lines += ["", f"## {n}. {f.check}"] + [f"- {d}" for d in f.detail]
