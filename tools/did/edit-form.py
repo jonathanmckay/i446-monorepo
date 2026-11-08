@@ -321,8 +321,13 @@ _MD_LINK = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)\)")
 _URL = re.compile(r"https?://[^\s<>()\[\]]+")
 
 
-def detail_lines(bundle: dict | None, project: str | None) -> list[tuple[str, str]]:
-    """(style, text) rows for the read-only block: meta, comments, links."""
+def detail_lines(bundle: dict | None, project: str | None, width: int | None = None,
+                 cap: int | None = None) -> list[tuple[str, str]]:
+    """(style, text) rows for the read-only block: meta, comments, links.
+    With a width each comment is wrapped whole (2026-11-08: "notes in details
+    screen don't wrap ... I can't read"; agent comments open with a bare
+    **vN context** line, so their first line said nothing). With a cap the
+    newest comment rows win."""
     if not bundle or not bundle.get("task"):
         return [("dim", "loading details…")]
     t = bundle["task"]
@@ -340,11 +345,41 @@ def detail_lines(bundle: dict | None, project: str | None) -> list[tuple[str, st
     kept = [c for c in (bundle.get("comments") or []) if not (c.get("content") or "").startswith("dtd-short:")]
     # Newest three, oldest first (2026-10-25): agent 😈 turn notes pile up
     # per turn, and the first three would hide the latest.
+    crows: list[tuple[str, str]] = []
     for c in kept[-3:]:
         body = _MD_LINK.sub(lambda m: m.group(1) or m.group(2), (c.get("content") or "").strip())
-        rows.append(("dim", f"{(c.get('posted_at') or '')[:10]} {body.splitlines()[0] if body else ''}"))
+        date = (c.get("posted_at") or "")[:10]
+        if width:
+            text = " ".join(body.replace("**", "").split())
+            crows += [("dim", r) for r in wrap_words(f"{date} {text}", width, " " * (len(date) + 1))]
+        else:
+            crows.append(("dim", f"{date} {body.splitlines()[0] if body else ''}"))
     if len(kept) > 3:
         rows.append(("dim", f"… {len(kept) - 3} more comments"))
+    if cap is not None:
+        crows = crows[max(0, len(crows) - max(0, cap - len(rows))):]
+    return (rows + crows)[:cap] if cap is not None else rows + crows
+
+
+def wrap_words(text: str, width: int, indent: str = "") -> list[str]:
+    """Word-wrap by display width; continuation rows start with indent and a
+    word wider than a row is cut."""
+    width = max(10, width)
+    rows, cur = [], ""
+    for word in text.split(" "):
+        cand = f"{cur} {word}" if cur.strip() else cur + word
+        if dwidth(cand) <= width:
+            cur = cand
+            continue
+        if cur.strip():
+            rows.append(cur)
+        cur = indent + word
+        while dwidth(cur) > width:
+            head = fit(cur, width)
+            rows.append(head)
+            cur = indent + cur[len(head):]
+    if cur.strip() or not rows:
+        rows.append(cur)
     return rows
 
 
@@ -640,10 +675,10 @@ class Form:
         link_rows = link_rows[:max(0, min(len(link_rows), spare - 1, 8))]
         spare -= len(link_rows)
         notes_rows = max(1, min(6, spare - 1)) if spare > 1 else 1
-        detail_cap = max(0, min(6, spare - notes_rows))
+        detail_cap = max(0, min(10, spare - notes_rows))
         self._links_drawn = []
         put(y, 0, show_links(self.task.get("content", "")), curses.A_BOLD); y += 1
-        for style, text in detail_lines(self.bundle, self.project)[:detail_cap]:
+        for style, text in detail_lines(self.bundle, self.project, w - 1, detail_cap):
             put(y, 0, text, curses.A_DIM if style == "dim" else curses.A_UNDERLINE); y += 1
         cursor = (y, 0)
         self.autofill()
@@ -828,24 +863,31 @@ class Form:
             except curses.error:
                 pass
             return None, 1
-        lines = f.text.split("\n")
-        cl = f.text.count("\n", 0, f.cur)           # cursor line
-        cc = f.cur - (f.text.rfind("\n", 0, f.cur) + 1)
-        if cl < f.scroll:
-            f.scroll = cl
-        if cl >= f.scroll + rows:
-            f.scroll = cl - rows + 1
+        # Soft-wrapped like the name (2026-11-08: "notes ... don't wrap they
+        # are just one line"): each line is cut into avail-wide chunks and
+        # f.scroll counts those visual rows, not lines.
+        chunks = wrap_chunks(f.text, avail)
+        vr = 0                                       # visual row of the cursor
+        for k, (st, seg) in enumerate(chunks):
+            if st <= f.cur <= st + len(seg):
+                vr = k
+                if f.cur < st + len(seg):
+                    break
+        if vr < f.scroll:
+            f.scroll = vr
+        if vr >= f.scroll + rows:
+            f.scroll = vr - rows + 1
         cursor = None
+        attr = curses.A_UNDERLINE | (curses.A_BOLD if f is self.focus else 0)
         for i in range(rows):
-            li = f.scroll + i
-            text = lines[li] if li < len(lines) else ""
-            attr = curses.A_UNDERLINE | (curses.A_BOLD if f is self.focus else 0)
+            k = f.scroll + i
+            seg = chunks[k][1] if k < len(chunks) else ""
             try:
-                scr.addstr(y + i, self.LABEL_W, fit(text, avail) + " " * max(0, avail - dwidth(fit(text, avail))), attr)
+                scr.addstr(y + i, self.LABEL_W, seg + " " * max(0, avail - dwidth(seg)), attr)
             except curses.error:
                 pass
-            if f is self.focus and li == cl:
-                cursor = (y + i, self.LABEL_W + dwidth(lines[cl][:cc]))
+            if f is self.focus and k == vr:
+                cursor = (y + i, self.LABEL_W + dwidth(f.text[chunks[k][0]:f.cur]))
         return cursor, rows
 
     def open_link(self) -> None:
@@ -1074,6 +1116,23 @@ class Form:
                 Path(self.out).write_text(json.dumps(result(vals), ensure_ascii=False))
                 return 0
             self.draw(scr)
+
+
+def wrap_chunks(text: str, width: int) -> list[tuple[int, str]]:
+    """(start index in text, row text) for text soft-wrapped at width, every
+    line (even an empty one) at least one row."""
+    out: list[tuple[int, str]] = []
+    start = 0
+    for line in text.split("\n"):
+        i = 0
+        while True:
+            seg = fit(line[i:], width)
+            out.append((start + i, seg))
+            i += len(seg)
+            if i >= len(line) or not seg:
+                break
+        start += len(line) + 1
+    return out
 
 
 def fit(s: str, width: int) -> str:
