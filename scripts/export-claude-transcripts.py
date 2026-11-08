@@ -5,8 +5,11 @@ Reads ~/.claude/projects/<project>/*.jsonl and writes .md files to
 vault/i447/i446/.ai-transcripts/<project>/. Idempotent: skips sessions
 already exported unless --force is passed.
 
-Large sessions (> SEGMENT_TURNS user turns) are split into multiple files
-named <date>_<slug>_p01.md, <date>_<slug>_p02.md, etc.
+Files are named <date>_<slug>_<sid8>.md; large sessions (> SEGMENT_TURNS user
+turns) are split into <date>_<slug>_<sid8>_p01.md, _p02.md, etc. The sid8 (first
+8 chars of the session id) keeps sessions sharing a date+slug (slug is
+"untitled" for current Claude Code sessions) from overwriting each other.
+Legacy <date>_<slug>[_pNN].md files are left in place, untouched.
 """
 
 import argparse
@@ -212,14 +215,15 @@ def output_paths_for_session(session: dict, out_dir: Path, segment_turns: int):
     pairs = session["pairs"]
     date = session["date"]
     slug = slugify(session["slug"])
+    sid8 = session["session_id"][:8]
+    stem = f"{date}_{slug}_{sid8}"
 
     if len(pairs) <= segment_turns:
-        return [out_dir / f"{date}_{slug}.md"]
+        return [out_dir / f"{stem}.md"]
 
     # Split into segments
-    segments = [pairs[i:i + segment_turns] for i in range(0, len(pairs), segment_turns)]
-    total = len(segments)
-    return [out_dir / f"{date}_{slug}_p{i+1:02d}.md" for i in range(total)]
+    total = (len(pairs) + segment_turns - 1) // segment_turns
+    return [out_dir / f"{stem}_p{i+1:02d}.md" for i in range(total)]
 
 
 def export_session(session: dict, out_dir: Path, segment_turns: int, force: bool, verbose: bool) -> int:
@@ -322,6 +326,10 @@ def main():
         "--project", metavar="PROJECT",
         help="Export only a specific project directory name"
     )
+    parser.add_argument(
+        "--out-base", metavar="DIR", type=Path,
+        help=f"Write under DIR instead of {OUTPUT_BASE} (per-host subdirs preserved); for dry runs"
+    )
     args = parser.parse_args()
 
     chosen = discover_sessions()
@@ -335,6 +343,11 @@ def main():
     # Group by (host, project_dir) for export
     out_by_host: dict[tuple[str, Path, Path], list] = {}
     out_base_for_host = {host: out_base for host, _, out_base in ROOTS}
+    if args.out_base:
+        out_base_for_host = {
+            host: args.out_base / ob.relative_to(OUTPUT_BASE)
+            for host, ob in out_base_for_host.items()
+        }
     for sid, (host, root, proj_dir, session) in chosen.items():
         key = (host, proj_dir, out_base_for_host[host])
         out_by_host.setdefault(key, []).append(session)
