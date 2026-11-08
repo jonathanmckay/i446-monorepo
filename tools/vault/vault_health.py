@@ -963,11 +963,11 @@ def build_report(findings: list[Finding], today: dt.date) -> str:
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
              f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, "
              "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
-             "| # | Check | What it checks | Status | Summary | Auto-fixed |", "|---|---|---|---|---|---|"]
+             "| # | Check | Status | Summary | Auto-fixed | What it checks |", "|---|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.
     for n, f in enumerate(findings, 1):
-        lines.append(f"| {n} | {f.check} | {CHECK_WHAT.get(f.check, '')} | {ICON[f.status]} {f.status} | {f.summary} | {f.fixed or ''} |")
+        lines.append(f"| {n} | {f.check} | {ICON[f.status]} {f.status} | {f.summary} | {f.fixed or ''} | {CHECK_WHAT.get(f.check, '')} |")
     for n, f in enumerate(findings, 1):
         if f.detail:
             lines += ["", f"## {n}. {f.check}"] + [f"- {d}" for d in f.detail]
