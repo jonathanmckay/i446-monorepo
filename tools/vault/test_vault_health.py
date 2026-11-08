@@ -227,3 +227,37 @@ def test_dismissed_alerts_and_neon_days_are_skipped(tmp_path, monkeypatch):
     assert vh.check_neon_rules(now).status == "ok"
     (rd / "2026-10-30.json").write_text(_j.dumps({"summary": {"mismatch": ["D"]}}))
     assert vh.check_neon_rules(now).status == "warn"   # a new D day is not dismissed
+
+
+def _perm_state(d, host, synced_at, merged):
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{host}.json").write_text(json.dumps({"host": host, "synced_at": synced_at, "allow": ["a"], "merged": merged}))
+
+
+def test_perm_sync_reads_synced_state_files(tmp_path, monkeypatch):
+    vh = _load()
+    now = dt.datetime(2026, 11, 8, 12, tzinfo=vh.TZ); t = now.timestamp()
+    monkeypatch.setattr(vh, "PERM_SYNC_DIR", tmp_path)
+    _perm_state(tmp_path, "ix", t - 3600, {"straylight": t - 7200})
+    _perm_state(tmp_path, "straylight", t - 7200, {"ix": t - 10800})
+    assert vh.check_perm_sync(now).status == "ok"
+
+
+def test_perm_sync_warns_when_straylight_never_ran(tmp_path, monkeypatch):
+    vh = _load()
+    now = dt.datetime(2026, 11, 8, 12, tzinfo=vh.TZ)
+    monkeypatch.setattr(vh, "PERM_SYNC_DIR", tmp_path)
+    _perm_state(tmp_path, "ix", now.timestamp(), {})
+    f = vh.check_perm_sync(now)
+    assert f.status == "warn" and f.review and "straylight: no state file" in f.summary
+    assert "install-perm-sync.sh" in f.summary
+
+
+def test_perm_sync_warns_on_one_way_syncthing_lag(tmp_path, monkeypatch):
+    vh = _load()
+    now = dt.datetime(2026, 11, 8, 12, tzinfo=vh.TZ); t = now.timestamp()
+    monkeypatch.setattr(vh, "PERM_SYNC_DIR", tmp_path)
+    _perm_state(tmp_path, "ix", t - 600, {"straylight": t - 1200})
+    _perm_state(tmp_path, "straylight", t - 1200, {"ix": t - 5 * 86400})  # never sees Ix's new state
+    f = vh.check_perm_sync(now)
+    assert f.status == "warn" and "straylight last merged ix's state" in f.summary

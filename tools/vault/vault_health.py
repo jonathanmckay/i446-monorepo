@@ -64,6 +64,8 @@ REPORT_DIR = VAULT / "z_meta"
 ALERTS = VAULT / "z_ibx/alerts.jsonl"
 NEON = Path.home() / "OneDrive/vault-excel/Neon分v12.2.xlsx"
 SKILLS = Path.home() / ".claude/skills"
+PERM_SYNC_DIR = MONO / "scripts/.perm-sync"
+PERM_SYNC_HOSTS = ("ix", "straylight")
 ST_CONFIG = Path.home() / "Library/Application Support/Syncthing/config.xml"
 ST_URL = "http://127.0.0.1:8384"
 AUTO_MARK = "😈"
@@ -579,18 +581,49 @@ def check_skills_backup(now: dt.datetime) -> Finding:
 
 
 def check_perm_sync(now: dt.datetime) -> Finding:
-    # claude-perm-sync.py (launchd on Ix, hourly) merges Claude permission
-    # allowlists ix<->straylight and stamps this file only on full success.
-    # The job runs on Ix, so only Ix has the stamp; off Ix, read Ix's
-    # (2026-10-24: Straylight runs warned "never completed" every week).
-    raw = ix("cat ~/.claude/perm-sync-last-success 2>/dev/null", 20).strip()
-    if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", raw):
-        return Finding("perm-sync", "warn", "no last-success stamp on Ix — claude-perm-sync has never completed", review=True)
-    age_h = (now.timestamp() - float(raw)) / 3600
-    if age_h > 48:
-        return Finding("perm-sync", "warn", f"last successful ix<->straylight permission sync {age_h:.0f}h ago "
-                       "(hourly launchd job; is straylight offline or ssh broken?)", review=True)
-    return Finding("perm-sync", "ok", f"last successful sync {age_h:.1f}h ago")
+    # scripts/claude-perm-sync.py runs hourly on EACH host (Ix: its own plist;
+    # Straylight: scripts/install-perm-sync.sh) and publishes
+    # scripts/.perm-sync/<host>.json with synced_at. The repo is synced, so
+    # either machine can read both stamps locally. Until 2026-11-08 the job ran
+    # on Ix only and sshed into Straylight, which is blocked since 10-28.
+    stale, detail, states = [], [], {}
+    for host in PERM_SYNC_HOSTS:
+        p = PERM_SYNC_DIR / f"{host}.json"
+        try:
+            data = json.loads(p.read_text())
+            age_h = (now.timestamp() - float(data["synced_at"])) / 3600
+        except FileNotFoundError:
+            stale.append(f"{host}: no state file")
+            continue
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            stale.append(f"{host}: unreadable state file ({e})")
+            continue
+        states[host] = data
+        detail.append(f"{host}: ran {age_h:.1f}h ago, {len(data.get('allow', []))} entries")
+        if age_h > 48:
+            stale.append(f"{host}: last sync {age_h:.0f}h ago")
+    # A run proves the job is alive, not that the peer's state reached it
+    # (one-way Syncthing failure). Convergence = each host merged a peer stamp
+    # no more than 48h older than the peer's own latest stamp.
+    for host, data in states.items():
+        for peer, pdata in states.items():
+            if peer == host:
+                continue
+            seen = (data.get("merged") or {}).get(peer)
+            try:
+                lag_h = (float(pdata["synced_at"]) - float(seen)) / 3600
+            except (TypeError, ValueError, KeyError):
+                stale.append(f"{host} has never merged {peer}'s state")
+                continue
+            if lag_h > 48:
+                stale.append(f"{host} last merged {peer}'s state {lag_h:.0f}h behind (Syncthing {peer}→{host}?)")
+    if stale:
+        hint = ("hourly launchd job on each host; on Straylight run "
+                "~/i446-monorepo/scripts/install-perm-sync.sh once" if any(x.startswith("straylight") for x in stale)
+                else "hourly launchd job com.mckay.claude-perm-sync on Ix")
+        return Finding("perm-sync", "warn", f"permission sync stale: {'; '.join(stale)} ({hint})",
+                       detail, review=True)
+    return Finding("perm-sync", "ok", "last syncs " + "; ".join(detail))
 
 
 def check_onedrive_neon(now: dt.datetime) -> Finding:
@@ -946,7 +979,7 @@ CHECK_WHAT = {
     "syncthing": "Syncthing on this host: every device connected, every folder idle and fully synced with no errors. Rescans out-of-sync folders.",
     "git-autopush": "~/vault and ~/i446-monorepo on Ix: no stuck rebase, a commit within 24h, nothing unpushed, no warnings in the autopush logs.",
     "skills-backup": "~/.claude/skills on Ix has a git auto-commit within 24h (cron runs every 10 min).",
-    "perm-sync": "The hourly Ix↔Straylight Claude permission-allowlist sync has succeeded within 48h.",
+    "perm-sync": "Both Ix and Straylight ran the hourly Claude permission-allowlist sync within 48h (state files in i446-monorepo/scripts/.perm-sync).",
     "onedrive-neon": "The Neon workbook in OneDrive was modified within 3 days, and (run off Ix) the Ix and local copies are within 24h of each other.",
     "time-machine": "A Time Machine destination is configured and the latest backup is at most 2 days old (Ix; Straylight is exempt).",
     "ix-cron": "Ix's live crontab matches the committed config/ix.crontab.",

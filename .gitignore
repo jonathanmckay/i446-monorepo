@@ -103,3 +103,7 @@ skills/claude-skills/.trash/
 
 # derived nightly from ~/vault/i156/toggl.sqlite by tools/toggl-db (export-cache); not a source
 tools/personal-dashboard/.toggl-daily-cache.json
+
+# claude-perm-sync.py per-host state (full permission allowlists); exchanged via
+# Syncthing only, never committed
+scripts/.perm-sync/
