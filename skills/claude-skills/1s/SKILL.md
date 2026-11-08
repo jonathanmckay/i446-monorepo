@@ -389,6 +389,13 @@ Analyze:
 Keep it under 260 words total. No hedging.
 ```
 
+### Step 6b: Agent-picks scorecard (pilot 2026-11-09 → 11-22)
+
+Run `python3 ~/i446-monorepo/tools/pick/report.py --since {week_start} --until {day after week_end}`
+and paste its lines verbatim under a `## Agent picks` heading in the review. If
+it says `DOES NOT PAY` two weeks running, say so plainly and recommend
+unloading `com.jm.agent-pick`.
+
 ### Step 7: Write to vault
 
 Create `~/vault/g245/reviews/YYYY-M.W-1s.md`, where `M.W` is the review
