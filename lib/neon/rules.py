@@ -283,8 +283,30 @@ class _Book:
                     cell["unknown"].append(f"{sheet}!{col}: credit without points ({(src or '?')[:30]})")
                 else:
                     cell["credits"].append(float(pts))
+            self._adopt_templates(sheet, date_iso, out, written)
         self._sheets[key] = out
         return out
+
+    def _adopt_templates(self, sheet: str, date_iso: str, out: dict, written: set) -> None:
+        """A cell no daemon wrote and the 03:50 baseline saw blank, that Excel
+        later shows holding the column's own template formula (the formula
+        nearby days' baselines carry, row-relative), takes that formula. It is
+        rulebook, not a credit: 11/4 hcbi!P310 (protein =SUM(AM..AV)) was blank
+        at 03:50 and filled out of band, which zeroed protein and sank W by
+        64.5. A typed credit (`=18+17`, or the template plus `+5`) never
+        matches a template, so it still fails strict."""
+        obs = self.c.execute(
+            """SELECT e.col, e.row, e.after_formula
+                 FROM events e LEFT JOIN row_dates rd ON rd.sheet = e.sheet AND rd.row = e.row
+                WHERE e.sheet=? AND COALESCE(e.date, rd.date)=? AND e.kind='observe'
+                  AND e.jsonl_kind != 'baseline' AND e.row IS NOT NULL
+                  AND e.after_formula LIKE '=%'
+                ORDER BY e.ts, e.id""", (sheet, date_iso)).fetchall()
+        for col, row, f in obs:                       # earliest matching observation wins
+            if col in written or (col in out and out[col]["content"] is not None):
+                continue
+            if _row_relative(f, row) in _column_templates(self.c, sheet, col, date_iso, row):
+                out[col] = {"content": f.strip(), "credits": [], "unknown": [], "observed": None}
 
     def get(self, sheet: str, col: str, row: int):
         key = (sheet, col, row)
@@ -332,6 +354,34 @@ class _Book:
             sign = -1.0 if t.startswith("-") else 1.0
             total += sign * fx.num(fx.evaluate(t.lstrip("+-"), sheet, self.get))
         return total
+
+
+_A1 = re.compile(r"(?<![A-Za-z_'])\$?([A-Z]{1,3})\$?(\d+)(?![\d(])")
+TEMPLATE_WINDOW_DAYS = 14
+
+
+def _row_relative(formula: str, row: int) -> str:
+    """`=SUM(AM310,$AP$309)` at row 310 → `=SUM(AM{0},AP{-1})`. Sheet-qualified
+    refs go relative too ('0n' rows run one behind hcbi on every day)."""
+    return _A1.sub(lambda m: f"{m.group(1)}{{{int(m.group(2)) - row}}}", (formula or "").strip().replace(" ", ""))
+
+
+def _column_templates(c, sheet: str, col: str, date_iso: str, row: int) -> set:
+    """Row-relative formulas this column's 03:50 baselines carried on OTHER
+    rows within ±TEMPLATE_WINDOW_DAYS (a template retired long ago blesses nothing)."""
+    import datetime as _dt
+    d = _dt.date.fromisoformat(date_iso)
+    lo = (d - _dt.timedelta(days=TEMPLATE_WINDOW_DAYS)).isoformat()
+    hi = (d + _dt.timedelta(days=TEMPLATE_WINDOW_DAYS)).isoformat()
+    out = set()
+    for r, f in c.execute(
+            """SELECT e.row, e.after_formula
+                 FROM events e LEFT JOIN row_dates rd ON rd.sheet = e.sheet AND rd.row = e.row
+                WHERE e.sheet=? AND e.col=? AND e.kind='observe' AND e.jsonl_kind='baseline'
+                  AND e.row IS NOT NULL AND e.row != ? AND e.after_formula LIKE '=%'
+                  AND COALESCE(e.date, rd.date) BETWEEN ? AND ?""", (sheet, col, row, lo, hi)):
+        out.add(_row_relative(f, r))
+    return out
 
 
 def _seed_formula(c, date_iso: str, sheet: str, col: str) -> str:

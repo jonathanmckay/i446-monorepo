@@ -322,3 +322,59 @@ def test_w_strict_flags_literal_typed_after_hcbi_formula(db, monkeypatch):
     assert rules.derive_day("2026-10-18", db)["cols"]["W"]["status"] == "ok"
     (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "W"]
     assert any("+5 in hcbi!Y293 formula" in w_ for w_ in miss["why"])
+
+
+# ── W: template formula filled out of band (11/4 hcbi!P310) ──────────────────
+
+P_F = "=SUM(AM{r},AP{r},AS{r},AY{r},BB{r},BE{r},AV{r})"
+
+
+def _p_template_day(db, p_baseline, p_reconcile):
+    """10/18 hcbi day with P seeded `p_baseline` (None = no baseline event at
+    all); 10/17's baseline carries the protein template; Excel shows
+    `p_reconcile` in P at 23:55."""
+    monkey_cols = ("AA", AA_F), ("Y", "='0n'!AE292*2  + 0")
+    for col, f in monkey_cols:
+        ledger.record(_h(col, f), db)
+    for col in ("E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "S", "W", "AI", "U", "T",
+                "AM", "AP", "AS", "AY", "BB", "BE", "AV"):
+        ledger.record(_h(col, ""), db)
+    if p_baseline is not None:
+        ledger.record(_h("P", p_baseline), db)
+    ledger.record(_e(ts="2026-10-17T03:50:00", kind="baseline", sheet="hcbi", col="P", row=292, date="10/17",
+                     value=None, before="", after=P_F.format(r=292), after_value=None, before_value=None,
+                     src="baseline"), db)
+    ledger.record(_on("AE", 0, ts="2026-10-18T07:00:00"), db)
+    ledger.record(_h("AS", "=130", value="+130", kind="append", ts="2026-10-18T10:00:00", src="ate tofu"), db)
+    ledger.record(_h("P", p_reconcile, kind="reconcile", ts="2026-10-18T23:55:00", src="reconcile"), db)
+    ledger.record(_base("W", "=hcbi!AA293+hcbi!Y293", 0), db)
+
+
+def _aa_with_protein(p):
+    return 0 / 21 * 75 + (p - 100) * 0.5
+
+
+@pytest.mark.parametrize("p_baseline", ["", None])
+def test_w_strict_adopts_column_template_filled_after_baseline(db, monkeypatch, p_baseline):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _p_template_day(db, p_baseline, P_F.format(r=293))
+    obs = _aa_with_protein(130)                                                 # 15.0
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293"), db)
+    st = rules.derive_day("2026-10-18", db, strict=True)["cols"]["W"]
+    assert st["derived"] == pytest.approx(obs, abs=1e-3)                        # not (0-100)/2 = -50
+    assert all(m["col"] != "W" for m in rules.strict_check("2026-10-18", db)["misses"])
+
+
+def test_w_strict_does_not_bless_a_typed_tail_on_the_template(db, monkeypatch):
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _p_template_day(db, "", P_F.format(r=293) + "+40")                          # protein +40 typed in Excel
+    obs = _aa_with_protein(170)
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293"), db)
+    (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "W"]
+    assert miss["derived"] == pytest.approx(_aa_with_protein(0), abs=1e-3)
+
+
+def test_row_relative_normalises_offsets_absolutes_and_sheet_refs():
+    assert rules._row_relative(P_F.format(r=310), 310) == rules._row_relative(P_F.format(r=305), 305)
+    assert rules._row_relative("='0n'!AE309*2 + $B$310", 310) == "='0n'!AE{-1}*2+B{0}"
+    assert rules._row_relative("=18+17", 305) == "=18+17"                        # literals untouched
