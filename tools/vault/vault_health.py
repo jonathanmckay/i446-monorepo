@@ -939,7 +939,7 @@ ICON = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
 # check; keep in step with the check functions above.
 CHECK_WHAT = {
     "singletons": "Vault folders holding fewer than ~3 docs, which should be merged into their parent.",
-    "duplicate-notes": "Two or more live notes (outside dated folders) sharing one name, with the notes whose bare [[links]] are ambiguous.",
+    "duplicate-notes": "Two or more live notes (outside dated folders) sharing one name, with the notes whose bare wikilinks to that name are ambiguous.",
     "vault-root": "Loose files at the vault root (only folders, CLAUDE.md and dotfiles belong there) and items at the top of ~ outside the home-folder layout.",
     "style": "Live note filenames and titles: ASCII kebab-case, YYYY-MM-DD dates, no Arabic or CJK+English titles, titles ≤40 chars.",
     "toggl-store": "i156/toggl.sqlite: last completed sync under 36h old, entries on each of the last 7 days, no short sync windows, and the dashboard export caught up.",
