@@ -92,10 +92,18 @@ def test_fixed_point_column_unaffected(df):
 # ── long o314 alias ──────────────────────────────────────────────────────────
 
 def test_long_o314_alias_routes_to_chinese_header(df):
+    # Since 6cc48cc8 (JM 2026-11-03) "/did long o314" IS "/did o314": the alias
+    # still resolves to the 长o314 header, but LONG_TO_BASE_0N then redirects
+    # the minutes to the o314 day total (0n AQ); the 长o314 0.5分/m bonus is
+    # derived from AQ's before/after (see test_o314_long_bonus.py).
     assert df.ONENEON_ALIASES["long o314"] == "长o314"
-    r = _route_one(df, "long o314 30")
-    assert r.step == "1n" and r.col_letter == "V"
-    assert r.variable_value == 15  # .5/m
+    assert df.LONG_TO_BASE_0N["长o314"] == "o314"
+    headers = {"0n": {"o314": "AQ"}, "1n": HEADERS["1n"]}
+    res = df.route_items(df.parse_input("long o314 30"), headers, TQ,
+                         skip_todoist=True)
+    assert len(res) == 1
+    r = res[0]
+    assert (r.step, r.item.name, r.col_num, r.write_value) == ("0n", "o314", "AQ", 30)
 
 
 # ── timer path must apply the same formula ───────────────────────────────────
