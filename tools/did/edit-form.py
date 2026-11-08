@@ -51,6 +51,7 @@ Usage: edit-form.py --id <task id> <cache_file> --out <json> [--focus split]
 from __future__ import annotations
 
 import curses
+import importlib.util
 import json
 import os
 import re
@@ -847,11 +848,27 @@ class Form:
                 cursor = (y + i, self.LABEL_W + dwidth(lines[cl][:cc]))
         return cursor, rows
 
+    def open_link(self) -> None:
+        urls = task_links(self.task, self.bundle)
+        if not urls:
+            self.msg = "no link on this task"
+            return
+        spec = importlib.util.spec_from_file_location("dtd_open_link", Path(__file__).resolve().parent / "dtd-open-link.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _, self.msg = mod.open_url(urls[0], self.task.get("labels"))
+
     # keys
     def handle(self, key) -> str | None:
         """Returns 'save' / 'cancel' / None."""
         f = self.focus
         self.msg = ""
+        if key == "\x0c":
+            # ctrl-l opens the first link, as in the list (2026-11-08: "I hit
+            # ctrl+l in the details page ... nothing happened"). Before any
+            # field handling: a checkbox focus swallowed it, others dropped it.
+            self.open_link()
+            return None
         if f.check and key in ("\n", "\r", curses.KEY_ENTER, curses.KEY_LEFT, curses.KEY_RIGHT):
             # 2026-10-22 ("I couldn't deselect the 'keep remainder'"): only
             # space/x toggled and nothing said so; Enter just moved on. Enter

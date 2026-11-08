@@ -54,6 +54,23 @@ def on_ix() -> bool:
     return socket.gethostname().lower().split(".")[0] == "ix"
 
 
+def open_url(url: str, labels) -> tuple[bool, str]:
+    """Open url in the labels' Chrome profile (over ssh to straylight on ix).
+    Shared with edit-form.py's ctrl-l on the details screen (2026-11-08)."""
+    pdir, pname = dtd_link.profile_for(labels)
+    cmd = open_cmd(url, pdir)
+    if on_ix():
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", STRAYLIGHT,
+               " ".join(shlex.quote(c) for c in cmd)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except Exception as e:  # noqa: BLE001
+        return False, f"✗ link: {e}"
+    if r.returncode != 0:
+        return False, f"✗ link: {(r.stderr or r.stdout).strip()[:120]}"
+    return True, f"🔗 opened in Chrome · {pname}"
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print("usage: dtd-open-link.py <task_id> <cache_file> [header_file]")
@@ -80,21 +97,9 @@ def main(argv: list[str]) -> int:
     if not url:
         say("no link on this task")
         return 1
-    pdir, pname = profile_for(task)
-    cmd = open_cmd(url, pdir)
-    if on_ix():
-        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", STRAYLIGHT,
-               " ".join(shlex.quote(c) for c in cmd)]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-    except Exception as e:  # noqa: BLE001
-        say(f"✗ link: {e}")
-        return 1
-    if r.returncode != 0:
-        say(f"✗ link: {(r.stderr or r.stdout).strip()[:120]}")
-        return 1
-    say(f"🔗 opened in Chrome · {pname}")
-    return 0
+    ok, msg = open_url(url, task.get("labels"))
+    say(msg)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
