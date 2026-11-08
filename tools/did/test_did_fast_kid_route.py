@@ -39,3 +39,20 @@ def test_no_override_keeps_card_label():
     (it,) = df.parse_input("playground with the kids 1500-1530")
     _, col, _ = df._task_credit(it, CARD)
     assert col == df._project_fen_col(["xk87"])
+
+
+def test_kid_nickname_is_the_kid_habit():
+    """JM 2026-11-07: "/did 熙熙 20" = "/did xk26 20". Rewritten at parse, so
+    xk26's cumulative rule applies (a second session adds, never overwrites)
+    and an HHMM start reads as a start time, not 1642 minutes."""
+    (item,) = df.parse_input("熙熙 20")
+    assert (item.name, item.time_value) == ("xk26", 20)
+    assert item.name in df.CUMULATIVE_0N
+    (item,) = df.parse_input("熙熙 1642")
+    assert item.name == "xk26" and item.time_value != 1642
+
+
+def test_kid_codes_create_kid_tagged_toggl_entries():
+    """Kid time files under xk87 + the kid tag via toggl_cli, not xk88."""
+    for kid in ("xk20", "xk22", "xk26"):
+        assert df.HABIT_PROJECT[kid] == kid

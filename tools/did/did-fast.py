@@ -178,6 +178,11 @@ THRESHOLD_1N: dict[str, dict] = {
     "长o314": {"toggl": ("o314", "hcmr"), "min": 30},
     "长冥想": {"toggl": "冥想", "min": 30},
 }
+# Kid nicknames are the kid habit itself: "/did 熙熙 20" = "/did xk26 20"
+# (2026-11-07). Rewritten at parse, so cumulative/variable checks see xk26.
+_sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+from mcp.toggl_server.config import KID_ALIASES  # noqa: E402
+ALIASES.update(KID_ALIASES)
 
 # 0₦ habit name aliases (2026-07-31): "hcmr" is the same underlying activity
 # as "o314", just a different Toggl description -- a /did completion on an
@@ -226,7 +231,8 @@ HABIT_PROJECT: dict[str, str] = {
     "词汇": "hcmc",
     "冥想": "hcm", "o314": "hcm", "hcmr": "hcm", "其他人": "hcm",
     "早餐": "家", "问学": "家",
-    "xk88": "xk88", "xk20": "xk88", "xk22": "xk88", "xk26": "xk88",
+    # Kid time files under xk87 + the kid tag (toggl_cli, 2026-11-07).
+    "xk88": "xk88", "xk20": "xk20", "xk22": "xk22", "xk26": "xk26",
     "睡觉": "睡觉",
     "startup": "g245", "0g": "g245", "tmrw": "g245",
     "i444": "i9", "teams": "i9", "slack github": "i9", "ibx i9": "i9", "stats i9": "i9",
@@ -930,7 +936,8 @@ def parse_input(raw: str) -> list[ParsedItem]:
             # Only for VARIABLE_0N habits where the number is always minutes, not points
             if (len(name_parts[-1]) == 4
                     and 0 <= num // 100 <= 23 and 0 <= num % 100 <= 59
-                    and remaining_name in {v.lower() for v in VARIABLE_0N}):
+                    and ALIASES.get(remaining_name, remaining_name)
+                    in {v.lower() for v in VARIABLE_0N}):
                 now = _daytime.local_now()
                 start_h, start_m = num // 100, num % 100
                 start_min = start_h * 60 + start_m
@@ -948,7 +955,7 @@ def parse_input(raw: str) -> list[ParsedItem]:
         # 1n+ header "1 xk88".
         elif len(name_parts) >= 2 and name_parts[0].isdigit():
             remainder = " ".join(name_parts[1:]).lower()
-            if remainder in {v.lower() for v in VARIABLE_0N}:
+            if ALIASES.get(remainder, remainder) in {v.lower() for v in VARIABLE_0N}:
                 num = int(name_parts[0])
                 if len(name_parts[0]) == 4 and 0 <= num // 100 <= 23 and 0 <= num % 100 <= 59:
                     now = _daytime.local_now()

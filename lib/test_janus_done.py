@@ -117,3 +117,12 @@ def test_kid_from_answer():
     assert jd.kid_from_answer("40") is None
     assert jd.kid_from_answer("") is None
     assert jd.kid_from_answer(None) is None
+
+
+def test_kid_nickname_entry_routes_to_that_kid():
+    """JM 2026-11-07: an untagged "熙熙" entry is Rori's time (xk26)."""
+    assert jd.kid_route("xk87", [], "熙熙") == ("xk26", [])
+    assert jd.kid_route(None, ["-2"], "熙熙 (15)") == ("xk26", ["-2"])
+    assert jd.kid_route("xk87", ["xk20"], "熙熙") == ("xk20", [])   # explicit tag wins
+    assert jd.kid_route("i9", [], "熙熙") == ("i9", [])             # other project: untouched
+    assert jd.kid_route("xk87", [], "lego") == ("xk87", [])

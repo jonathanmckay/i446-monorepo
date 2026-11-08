@@ -82,3 +82,24 @@ def test_bad_kid_answer_logs_nothing(jm, monkeypatch):
     monkeypatch.setattr(jm, "_done_path", lambda *a, **k: jm.janus_done.TIME)
     r = jm.log_entry("45", "math", 26, "xk87", tags=[], kid_ask=True, kid="40")
     assert not r["ok"] and seen == []
+
+
+def test_untagged_nickname_entry_logs_to_that_kid(jm, monkeypatch):
+    """JM 2026-11-07: "熙熙" is Rori; her minutes go to xk26 untagged."""
+    seen: list = []
+    _wire(jm, monkeypatch, [], seen)
+    r = jm.log_entry("46", "熙熙", 15, "", tags=[])
+    assert r["ok"] and not r.get("needs_points")
+    assert seen == ["熙熙 1500-1530 @xk26"]
+
+
+def test_nickname_gap_fill_files_under_xk87_with_kid_tag(jm, monkeypatch):
+    """A bare "熙熙" gap fill used to create a project-less entry."""
+    calls = {}
+    def fake_create(desc, start, stop, dur, project_id=None, tags=None, **kw):
+        calls.update(desc=desc, pid=project_id, tags=tags)
+        return {"id": 1}
+    monkeypatch.setattr(jm.toggl_api, "create_entry", fake_create)
+    r = jm.fill_gap("熙熙", "16:42", "16:57")
+    assert r["ok"], r
+    assert calls == {"desc": "熙熙", "pid": jm.PROJECT_MAP["xk87"], "tags": ["xk26"]}

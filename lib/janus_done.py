@@ -43,7 +43,7 @@ SPLIT_MIN_POINTS = 100
 MAX_INFERRED_POINTS = 500
 
 
-def kid_route(code: str | None, tags) -> tuple[str | None, list]:
+def kid_route(code: str | None, tags, desc: str | None = None) -> tuple[str | None, list]:
     """(code for did-fast's @, habit tags still to log as secondaries).
 
     JM 2026-11-05: xk20 / xk22 / xk26 are sub-projects of xk87
@@ -54,9 +54,15 @@ def kid_route(code: str | None, tags) -> tuple[str | None, list]:
     double-count, since 0n!AZ (the kid columns) already feeds 0分!X."""
     tags = [str(t) for t in (tags or [])]
     try:
-        from mcp.toggl_server.config import SUBPROJECTS
+        from mcp.toggl_server.config import SUBPROJECTS, kid_alias
     except Exception:
         SUBPROJECTS = {"xk20": "xk87", "xk22": "xk87", "xk26": "xk87"}
+        kid_alias = {"熙熙": "xk26"}.get
+    # A kid nickname entry ("熙熙", 2026-11-07) with no kid tag of its own.
+    nick = kid_alias(_ANNOT_RE.sub(" ", desc or "").strip()) if desc else None
+    if nick and (code or "").lower() in ("", "xk87", nick) \
+            and not any(t.lower() in SUBPROJECTS for t in tags):
+        return nick, tags
     if (code or "").lower() in SUBPROJECTS:
         kid = code.lower()
     else:

@@ -610,6 +610,18 @@ class State:
         self.toggl_blocked_until = {"user": 0.0, "ws": 0.0}
         self.day_reload_token = 0  # debounce guard for Ctrl+←/→ day scrubbing
         self.sigusr1_token = 0  # debounce guard for a burst of mutation nudges
+        # janus's OWN multi-write sequences (edit/retime over another entry,
+        # split, ^X of a merged row, typed commands, queued did jobs) each
+        # SIGUSR1 janus once per Toggl write, so a nudge-driven refresh landed
+        # between the DELETE of the overlapped entry and the PUT of the edit:
+        # a blank gap plus the ☀️ flash for 3-5s before the real result (bug
+        # 2026-11-07, "when I do an overwrite it first shows as blank and
+        # flashes at me"). While own_writes > 0 nudges are deferred into one
+        # refresh after the sequence; see _own_writes.
+        self.own_writes = 0
+        self.usr1_deferred = False
+        self.own_loud = False       # a non-quiet flow ran: deferred pass may ☀️
+        self.own_base = 0           # entry count when the sequence began
         # Event cursor (dtd-style highlight, scoped to the current block's
         # gcal event rows — "turn a calendar event into a time entry with one
         # shortcut", user request 2026-07-15). visible_events is the exact
@@ -6506,7 +6518,8 @@ async def _work_consumer(app):
         label, key, job = await STATE.work_q.get()
         STATE.conversion_in_flight = True
         try:
-            await job()
+            async with _own_writes(app, quiet=False):
+                await job()
         except Exception as e:  # noqa: BLE001 — a failed job must not kill the consumer
             flash(f"{label}: {e}", 8.0)
         finally:
@@ -6794,7 +6807,7 @@ def _run_current_timer_done(app) -> None:
         _run_done_command(app, cmd)
         return
     path = _done_points_path(raw_desc)
-    kid, _ = janus_done.kid_route(code, cur.get("tags"))
+    kid, _ = janus_done.kid_route(code, cur.get("tags"), raw_desc)
     if kid and kid != code:  # xk87 + kid tag → "@xk20" (2026-11-05)
         code = kid
         if path in ("ask", "credited"):
@@ -7066,7 +7079,7 @@ def _on_enter(event):
             await asyncio.to_thread(fetch_today, True)
             event.app.invalidate()
 
-        event.app.create_background_task(_split_and_refresh())
+        event.app.create_background_task(_guarded(event.app, _split_and_refresh(), quiet=True))
         return
 
     if STATE.edit_target is not None:
@@ -7333,7 +7346,7 @@ def _on_enter(event):
                 await asyncio.to_thread(fetch_points)
             event.app.invalidate()
 
-        event.app.create_background_task(_apply_edit_and_refresh())
+        event.app.create_background_task(_guarded(event.app, _apply_edit_and_refresh(), quiet=True))
         return
 
     text = input_buffer.text.strip()
@@ -7568,7 +7581,7 @@ def _on_enter(event):
                 mark_dtd_started(desc)
                 _optimistic_start(desc, raw=bare)
         event.app.invalidate()
-    event.app.create_background_task(_run_and_refresh())
+    event.app.create_background_task(_guarded(event.app, _run_and_refresh(), quiet=False))
 
 
 _DF_TAGS_MOD = None  # lazy did-fast module, habit-name lookups only
@@ -7736,7 +7749,7 @@ def _(event):
     cmd += "".join(f" #{_t}" for _t in entry_tags if re.match(r"^-?\w+$", str(_t)))
     # xk87 + kid tag → "@xk20": minutes to the kid's 0n column, no points
     # prompt, and the tag is not logged again as a habit (2026-11-05).
-    kid, sec_tags = janus_done.kid_route(code, entry_tags)
+    kid, sec_tags = janus_done.kid_route(code, entry_tags, desc)
     if kid and kid != code:
         cmd = cmd.replace(f" @{code}", f" @{kid}", 1) if code else cmd + f" @{kid}"
         code = kid
@@ -7988,7 +8001,7 @@ def _(event):
             await asyncio.to_thread(fetch_current)
             event.app.invalidate()
 
-        event.app.create_background_task(_delete_toggl_and_refresh())
+        event.app.create_background_task(_guarded(event.app, _delete_toggl_and_refresh(), quiet=True))
         event.app.invalidate()
         return
     if not (isinstance(item, dict) and item.get("kind") is None and item.get("end_dt")):
@@ -8503,7 +8516,43 @@ async def ticker_points(app):
         _bg_fetch(app, fetch_habits_today)
 
 
-async def _sigusr1_refresh():
+class _own_writes:
+    """Hold SIGUSR1 refreshes while janus is mid-way through its own Toggl
+    writes; on the outermost exit run ONE deferred refresh if any nudge came
+    in. quiet=True (edit, split, ^X) never prayer-flashes; a non-quiet flow
+    (commands, queued /did jobs) keeps ☀️, compared against the entry count
+    from before the sequence started (its own fetch_today has already
+    updated STATE.entries by the time the deferred pass runs)."""
+
+    def __init__(self, app, quiet: bool):
+        self.app, self.quiet = app, quiet
+
+    async def __aenter__(self):
+        if STATE.own_writes == 0:
+            STATE.own_base = len(STATE.entries)
+            STATE.own_loud = False
+        STATE.own_writes += 1
+        if not self.quiet:
+            STATE.own_loud = True
+        return self
+
+    async def __aexit__(self, *exc):
+        STATE.own_writes = max(0, STATE.own_writes - 1)
+        if STATE.own_writes == 0 and STATE.usr1_deferred:
+            STATE.usr1_deferred = False
+            loud = STATE.own_loud
+            self.app.create_background_task(_sigusr1_refresh(
+                quiet=not loud, base=STATE.own_base if loud else None))
+        return False
+
+
+async def _guarded(app, coro, quiet: bool):
+    """Run a janus write-and-refresh coroutine under _own_writes."""
+    async with _own_writes(app, quiet):
+        await coro
+
+
+async def _sigusr1_refresh(quiet: bool = False, base: int | None = None):
     """Triggered by SIGUSR1: immediate full refresh (e.g. after /did starts a timer).
 
     Debounced: a morning backfill fires one SIGUSR1 per /tg, and each refresh does
@@ -8517,19 +8566,25 @@ async def _sigusr1_refresh():
     repaints exactly when the idle nag was mid-flash — the screen stuck in
     the inverted frame until the refresh finished. fetch_current goes first
     with its own repaint so the nag clears the moment the timer is confirmed."""
+    if STATE.own_writes:
+        STATE.usr1_deferred = True  # janus's own write sequence refreshes after
+        return
     STATE.sigusr1_token += 1
     token = STATE.sigusr1_token
     await asyncio.sleep(0.4)  # debounce: collapse a burst of nudges into one refresh
     if token != STATE.sigusr1_token:
         return  # a newer nudge arrived; let the latest one do the work
-    old_count = len(STATE.entries)
+    if STATE.own_writes:
+        STATE.usr1_deferred = True
+        return
+    old_count = len(STATE.entries) if base is None else base
     await asyncio.to_thread(fetch_current)
     app.invalidate()
     await asyncio.to_thread(fetch_today, True)
     await asyncio.to_thread(fetch_short_names)  # /did may have rewritten the cache
     # If entry count grew (task completed → new entry, or timer stopped),
     # flash purple as a prayer/mindfulness prompt
-    if len(STATE.entries) != old_count or STATE.current is None:
+    if not quiet and (len(STATE.entries) != old_count or STATE.current is None):
         flash("☀️", 6.0, style="bold fg:#aa00ff")
     app.invalidate()
     _bg_fetch(app, fetch_points)  # slowest, repaints itself when done

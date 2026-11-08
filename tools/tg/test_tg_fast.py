@@ -293,3 +293,12 @@ def test_trailing_open_ended_dash_backdates_instead_of_starting_now(monkeypatch)
         mod._process_entry(text)
         assert captured and captured[0][0] == "1626", text
         assert "1626" not in captured[0][1] and "-" not in captured[0][1], (text, captured[0][1])
+
+
+def test_resolve_kid_nickname_and_codes_keep_the_kid():
+    """2026-11-07: 熙熙 is Rori (xk26). Kid codes resolve to themselves so
+    toggl_cli files them under xk87 + the kid tag, even with an explicit #tag."""
+    mod = _import_tg_fast()
+    assert mod.resolve("熙熙")[1] == "xk26"
+    assert mod.resolve("熙熙 #-2")[1:] == ("xk26", ["-2"])
+    assert mod.resolve("xk20")[1] == "xk20"

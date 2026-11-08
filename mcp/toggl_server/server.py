@@ -29,6 +29,7 @@ mcp = FastMCP(
 - qz12 — personal finance: investing, stocks, portfolio, taxes, budgeting
 - 家 — strictly extended family: parents, siblings, in-laws, relatives outside the household
 - xk87 — immediate family and home life: kids, spouse, family meals, cooking, chores, errands, groceries, home admin
+- xk20 / xk22 / xk26 — one-on-one time with Theo / Ren / Rori (filed as xk87 + the kid tag); 熙熙 is Rori, so a 熙熙 entry is xk26
 - 睡觉 — sleep: 睡觉, nap, sleep
 - xk88 — social: friends, dinner out, party, socializing, dates
 - s897 — social (extended): community events, networking

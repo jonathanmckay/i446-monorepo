@@ -107,8 +107,15 @@ SHORTCODES = {
     "unsure": ("infra", []),
     "stats m5x2": ("m5x2", []),
     # Kid-time (Theo/Ren/Rori) → family project
-    "xk20": ("xk87", []), "xk22": ("xk87", []), "xk26": ("xk87", []),
+    # The kid code itself, not xk87: toggl_cli files it under xk87 + the
+    # kid tag, and an explicit #tag can't drop it (2026-11-07).
+    "xk20": ("xk20", []), "xk22": ("xk22", []), "xk26": ("xk26", []),
 }
+
+# Kid nicknames (熙熙 → xk26) resolve like the kid code (2026-11-07).
+sys.path.insert(0, str(Path.home() / "i446-monorepo"))
+from mcp.toggl_server.config import KID_ALIASES  # noqa: E402
+SHORTCODES.update({n: (k, []) for n, k in KID_ALIASES.items()})
 
 # Domain-only shortcodes
 DOMAINS = {

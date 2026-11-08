@@ -69,7 +69,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/tg"))
 from flask import Flask, jsonify, render_template_string, request  # noqa: E402
 
 from mcp.toggl_server import toggl_api  # noqa: E402
-from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES, split_subproject, with_subproject_tag  # noqa: E402
+from mcp.toggl_server.config import PROJECT_MAP, PROJECT_NAMES, kid_alias, split_subproject, with_subproject_tag  # noqa: E402
 from neon.rates import meeting_points, speedy_meeting_points  # noqa: E402
 import janus_done  # noqa: E402  /done points paths, shared with desktop janus
 
@@ -1183,6 +1183,8 @@ def fill_gap(desc: str, start_hhmm: str, end_hhmm: str,
     m = _AT.search(desc)
     code = project or (m.group(1) if m else "")
     desc_clean = _AT.sub("", desc).strip()
+    if not code:
+        code = kid_alias(desc_clean) or ""   # "熙熙" → xk26 (2026-11-07)
     pid = None
     raw_code = code
     if code:
@@ -1665,7 +1667,7 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # a rate instead of crediting the minutes at 1x. `points` is the answer.
     path = _done_path(desc, pts, None if day is not None else today)
     # xk87 + kid tag → "@xk20": minutes to the kid's 0n column (2026-11-05).
-    kid_code, _ = janus_done.kid_route(project, list(tags or []) + list(entry_tags or []))
+    kid_code, _ = janus_done.kid_route(project, list(tags or []) + list(entry_tags or []), desc)
     if kid_code and kid_code != project:
         project = kid_code
         path = janus_done.TASK if pts is not None else janus_done.TIME
@@ -1862,7 +1864,7 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
             pts = _speedy_meeting_pts(desc, _hhmm_span_min(start, now), day=now.date())
         path = _done_path(desc, pts, now.date())
         e_tags = [str(t) for t in (e.get("tags") or [])]
-        kid_code, _ = janus_done.kid_route(project, e_tags)
+        kid_code, _ = janus_done.kid_route(project, e_tags, desc)
         if kid_code and kid_code != project:  # xk87 + kid tag → "@xk20" (2026-11-05)
             project = kid_code
             path = janus_done.TASK if pts is not None else janus_done.TIME

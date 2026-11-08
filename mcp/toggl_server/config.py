@@ -43,6 +43,16 @@ PROJECT_NAMES = {v: k for k, v in PROJECT_MAP.items()}
 SUBPROJECTS = {"xk20": "xk87", "xk22": "xk87", "xk26": "xk87"}
 
 
+# Kid nicknames (JM 2026-11-07): an entry or task named with one IS that
+# kid's time, exactly as if the kid code were typed ("熙熙" = "xk26").
+KID_ALIASES = {"熙熙": "xk26"}
+
+
+def kid_alias(desc):
+    """Kid code when `desc` is exactly a kid nickname, else None."""
+    return KID_ALIASES.get(" ".join(str(desc or "").split()).lower())
+
+
 def split_subproject(code):
     """(Toggl project code, tag or None): "xk20" -> ("xk87", "xk20"); any
     other code passes through untouched with no tag."""
