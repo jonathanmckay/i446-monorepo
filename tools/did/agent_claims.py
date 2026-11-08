@@ -549,6 +549,7 @@ SKILL_NO_CLAIM = {
     "inkwelltodo": "files and claims one task per note item itself",
     "closeshell": "hand-off memo at terminal close; it files cards, it is not one",
     "caf": "quick-add to hcbi like /out; no card",
+    "hiit": "writes the future-fit count to hcbi; the daily 'hiit' card is /did hiit or /0n hiit",
 }
 SKILL_RE = __import__("re").compile(
     r"^\s*/(" + "|".join(map(__import__("re").escape, SKILL_CLAIMS)) + r")(?:\s.*)?$", __import__("re").S)
