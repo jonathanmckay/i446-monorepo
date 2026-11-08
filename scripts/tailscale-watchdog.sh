@@ -28,9 +28,9 @@ HOST="$(hostname -s)"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # launchd has a bare PATH; prefer the app binary (proven to accept `up`
-# without sudo), fall back to the CLI.
-TS="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-[ -x "$TS" ] || TS="/usr/local/bin/tailscale"
+# without sudo), fall back to the CLI. TAILSCALE_BIN overrides (tests).
+TS="${TAILSCALE_BIN:-/Applications/Tailscale.app/Contents/MacOS/Tailscale}"
+[ -n "$TAILSCALE_BIN" ] || [ -x "$TS" ] || TS="/usr/local/bin/tailscale"
 
 mkdir -p "$(dirname "$ALERTS")"
 touch "$HEALTH_LOG"
@@ -64,6 +64,23 @@ drain_queue() {
     notify "queue drain FAILED" "$n Neon write(s) still queued — needs a look" "Basso"
   fi
 }
+
+# Wake grace (2026-11-08): all three ix_unreachable alerts (11-02 07:14,
+# 11-05 05:57, 11-08 04:21) were the first run after hours of sleep, before
+# Tailscale had reconnected; each self-healed one or two ticks later as
+# "stopped". A run more than WAKE_GAP_S after the previous one marks a wake;
+# for WAKE_GRACE_S after that, remediation still runs but no alert fires.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/jm"
+TICK_STAMP="$STATE_DIR/tailscale-watchdog.lasttick"
+WAKE_STAMP="$STATE_DIR/tailscale-watchdog.woke"
+WAKE_GAP_S=900
+WAKE_GRACE_S=1800
+mkdir -p "$STATE_DIR"
+now_s=$(date +%s)
+last_tick=$(cat "$TICK_STAMP" 2>/dev/null || echo "$now_s")
+(( now_s - last_tick > WAKE_GAP_S )) && echo "$now_s" > "$WAKE_STAMP"
+echo "$now_s" > "$TICK_STAMP"
+woke=$(cat "$WAKE_STAMP" 2>/dev/null || echo 0)
 
 STATUS="$("$TS" status 2>&1)"
 FIX=""
@@ -125,7 +142,9 @@ if probe; then
 fi
 
 last_alert=$(cat "$ALERT_STAMP" 2>/dev/null || echo 0)
-if (( $(date +%s) - last_alert >= ALERT_EVERY_S )); then
+if (( now_s - woke < WAKE_GRACE_S )); then
+  log "still down ($FIX) — woke $(( (now_s - woke) / 60 ))m ago, in wake grace, not alerting"
+elif (( $(date +%s) - last_alert >= ALERT_EVERY_S )); then
   emit_alert "ix_unreachable_persisted" "$FIX: remediation ran but ssh ix still fails — Neon writes are failing"
   notify "IX UNREACHABLE" "auto-fix failed ($FIX) — Neon writes are failing until this is fixed" "Basso"
   mkdir -p "$(dirname "$ALERT_STAMP")" && date +%s > "$ALERT_STAMP"
