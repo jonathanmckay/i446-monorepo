@@ -460,10 +460,10 @@
     "property_name": "rl16",
     "unit": "C20",
     "tenant_name": "Valero, Love H.",
-    "status": "Renewed",
+    "status": "Eligible",
     "lease_sign_date": "2026-10-23",
     "move_in": "2026-10-28",
-    "renewal_start_date": "2026-11-07",
+    "renewal_start_date": null,
     "last_lease_renewal": "2026-11-07",
     "rent": "1195.00"
   },
@@ -1282,18 +1282,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1075.00"
-  },
-  {
-    "unit_id": 570,
-    "property_name": "rl16",
-    "unit": "C09",
-    "tenant_name": "McMillin, Brian",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2019-08-08",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "1529.00"
   },
   {
     "unit_id": 762,
@@ -3048,18 +3036,6 @@
     "rent": "1132.00"
   },
   {
-    "unit_id": 869,
-    "property_name": "kn47 K1",
-    "unit": "D107",
-    "tenant_name": "Gentry, Crystal  L.",
-    "status": "Eligible",
-    "lease_sign_date": "2026-06-11",
-    "move_in": "2026-06-11",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 873,
     "property_name": "kn47 K1",
     "unit": "D203",
@@ -3154,6 +3130,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "931.00"
+  },
+  {
+    "unit_id": 869,
+    "property_name": "kn47 K1",
+    "unit": "D107",
+    "tenant_name": "Gentry, Crystal  L.",
+    "status": "Eligible",
+    "lease_sign_date": "2026-06-11",
+    "move_in": "2026-06-11",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "1089.00"
   },
   {
     "unit_id": 428,

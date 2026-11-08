@@ -8878,5 +8878,35 @@
     "unit": "D208",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-08",
+    "effective": "2026-11-07",
+    "kind": "moveout",
+    "unit_id": "601",
+    "prop": "rl16",
+    "unit": "D16",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-08",
+    "effective": "2026-11-07",
+    "kind": "moveout",
+    "unit_id": "1097",
+    "prop": "o155-Oak",
+    "unit": "A1",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-08",
+    "effective": "2026-11-25",
+    "kind": "leased",
+    "unit_id": "1277",
+    "prop": "c702",
+    "unit": "A201",
+    "tenant": null,
+    "baseline": false
   }
 ]
