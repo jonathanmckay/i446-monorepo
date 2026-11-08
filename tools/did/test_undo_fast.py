@@ -642,3 +642,18 @@ def test_undo_of_0fen_credit_is_a_ledger_set_the_strict_rule_reproduces(
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_undo_of_recurring_did_keeps_the_recurrence(monkeypatch):
+    """2026-11-03: undoing /did hiit sent only due_date, which strips a
+    recurrence; the habit read due '2026-11-03', the next /did closed it for
+    good, and neon-task-checksum had to recreate it on 11-05."""
+    uf = _load("undo_fast_rec", "undo-fast.py")
+    calls = []
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: calls.append((m, p, b)))
+    errors = []
+    uf._reverse_todoist_entry({"id": "h1", "closed": True, "recurring": True,
+                               "prev_due": "2026-11-03", "due_string": "every day starting 2026-04-02"},
+                              "2026-11-03", errors)
+    assert errors == []
+    assert calls == [("POST", "/tasks/h1", {"due_date": "2026-11-03", "due_string": "every day"})]

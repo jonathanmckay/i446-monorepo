@@ -272,10 +272,16 @@ def _reverse_todoist_entry(td: dict, today_iso: str, errors: list[str]) -> None:
             })
         elif td.get("closed"):
             if td.get("recurring"):
-                # Recurring close advanced the due date; restore it.
-                _api("POST", f"/tasks/{tid}", {
-                    "due_date": td.get("prev_due") or today_iso,
-                })
+                # Recurring close advanced the due date; restore it. A bare
+                # due_date write strips the recurrence (2026-11-03: undoing
+                # /did hiit left it due "2026-11-03", the next /did closed it
+                # for good and neon-task-checksum had to recreate it), so
+                # resend the cadence like the defer reversal below does.
+                body = {"due_date": td.get("prev_due") or today_iso}
+                pattern = _ANCHOR_RE.sub("", td.get("due_string") or "").strip()
+                if pattern:
+                    body["due_string"] = pattern
+                _api("POST", f"/tasks/{tid}", body)
             else:
                 _api("POST", f"/tasks/{tid}/reopen")
     except Exception as e:
