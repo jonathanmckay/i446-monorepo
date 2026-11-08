@@ -281,6 +281,12 @@ HABIT_PROJECT: dict[str, str] = {
     "i444": "i9", "teams": "i9", "slack github": "i9", "ibx i9": "i9", "stats i9": "i9",
     "m5x2 stats": "m5x2", "ibx m5x2": "m5x2", "slack m5x2": "m5x2",
 }
+# 0分 domain for a 0₦ habit's explicit +N bonus / [N] boost, where it differs
+# from HABIT_PROJECT. Kid codes map to themselves above (Toggl subproject),
+# which LABEL_TO_0FEN sends to the "0n:" minutes route, and main() never
+# appends that route to 0分, so "/did xk20 30 [50]" silently dropped the 50
+# (regression from 2026-11-07, Dream v182). The boost belongs on 0分!X.
+HABIT_FEN_PROJECT: dict[str, str] = {"xk20": "xk87", "xk22": "xk87", "xk26": "xk87"}
 
 # Variable task keyword → (domain label, 0分 column)
 VARIABLE_DOMAIN: dict[str, tuple[str, str]] = {
@@ -1805,7 +1811,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
 
             # +N bonus points: write duration + bonus to 0分
             if item.bonus_points:
-                proj = HABIT_PROJECT.get(name_lower)
+                proj = HABIT_FEN_PROJECT.get(name_lower) or HABIT_PROJECT.get(name_lower)
                 fen_col_bonus = LABEL_TO_0FEN.get(proj) if proj else None
                 if fen_col_bonus:
                     r.fen_col = fen_col_bonus
@@ -1817,7 +1823,7 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             # already has its own 0g-column path (col Z) and would
             # double-write here.
             if item.points_override and item.curly_points is None:
-                proj = HABIT_PROJECT.get(name_lower)
+                proj = HABIT_FEN_PROJECT.get(name_lower) or HABIT_PROJECT.get(name_lower)
                 fen_col_override = LABEL_TO_0FEN.get(proj) if proj else None
                 if fen_col_override:
                     r.fen_col = fen_col_override
