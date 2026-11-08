@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-08T08:00:08.349870-08:00"
+  "tasks": {
+    "3 sessions with ren and plan for her for the week": {
+      "todoist_id": "6hx4C7PRg8jXgc92",
+      "minutes": 40
+    },
+    "tasks to 40": {
+      "todoist_id": "6hx4C7Jv4J4HRR32",
+      "minutes": 50
+    },
+    "start cos search": {
+      "todoist_id": "6hx4C7VX4vFq6Mf2",
+      "minutes": 40
+    },
+    "2 hiit": {
+      "todoist_id": "6hx4C7RcFM6VXxFR",
+      "minutes": 40
+    },
+    "no bad media": {
+      "todoist_id": "6hx4CC5Fp7CxFp62",
+      "minutes": 15
+    }
+  },
+  "last_sync": "2026-11-08T10:00:04.342870-08:00"
 }
