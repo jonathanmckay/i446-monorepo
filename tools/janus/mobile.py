@@ -1704,13 +1704,14 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
         return {"ok": False, "error": "already logging"}
     _INFLIGHT.add(key)
     try:
-        return _log_entry_locked(entry_id, desc, minutes, project, tags, day, today, points)
+        return _log_entry_locked(entry_id, desc, minutes, project, tags, day, today, points,
+                                 kid_ask=kid_ask, kid=kid)
     finally:
         _INFLIGHT.discard(key)
 
 
 def _log_entry_locked(entry_id, desc, minutes, project, tags, day, today,
-                      points=None) -> dict:
+                      points=None, kid_ask=False, kid=None) -> dict:
     # The entry's own HHMM-HHMM range rides the command (JM 2026-11-01, the
     # desktop janus's ⌥↵ form): did-fast credits the 地支 block the entry
     # ENDED in and splits a >100分 per-minute entry per block, each block
