@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dream-intake: Gather context from 12 sources into a single JSON snapshot.
+"""dream-intake: Gather context from ~15 sources into a single JSON snapshot.
 
 Used by dream-launch.sh to feed the daily briefing agent. Runs all sources
 concurrently with a 30s per-source timeout, targeting <60s total (<6s typical).
@@ -66,8 +66,15 @@ def load_credentials():
 
     # Gmail OAuth
     eml_dir = Path.home() / ".config" / "eml"
-    _CREDS["gmail_tokens_path"] = eml_dir / "tokens-gmail.json"
-    _CREDS["gmail_secrets_path"] = eml_dir / "gcp-oauth-gmail.keys.json"
+    # Same account table as tools/ibx/ibx.py. tokens.json is mckay@m5c7.com
+    # (m5x2/m5c7 aliases land there); tokens-gmail.json is the personal
+    # jonathan.b.mckay@gmail.com.
+    _CREDS["gmail_accounts"] = [
+        {"name": "m5c7", "tokens": eml_dir / "tokens.json",
+         "secrets": eml_dir / "gcp-oauth.keys.json"},
+        {"name": "jbm", "tokens": eml_dir / "tokens-gmail.json",
+         "secrets": eml_dir / "gcp-oauth-gmail.keys.json"},
+    ]
 
     # Google Calendar OAuth
     gcal_dir = Path.home() / ".config" / "google-calendar-mcp"
@@ -160,50 +167,242 @@ def _google_service(service_name, version, creds):
 
 
 # ---------------------------------------------------------------------------
+# Todoist + Pacific-time helpers
+# ---------------------------------------------------------------------------
+
+def _pt_tz():
+    from zoneinfo import ZoneInfo
+    return ZoneInfo("America/Los_Angeles")
+
+
+def _pt_today():
+    return datetime.datetime.now(_pt_tz()).date()
+
+
+def _pt_midnight(day):
+    """Aware datetime for 00:00 America/Los_Angeles on `day` (DST-correct)."""
+    return datetime.datetime.combine(day, datetime.time(0), tzinfo=_pt_tz())
+
+
+def _to_pt(iso):
+    """Parse an ISO timestamp (Z/offset/naive-UTC) to an aware PT datetime."""
+    if not iso:
+        return None
+    s = iso.replace("Z", "+00:00")
+    try:
+        dt = datetime.datetime.fromisoformat(s)
+    except ValueError:
+        # Python 3.9 fromisoformat rejects 6+ digit fractions with offsets oddly; trim
+        m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(.*)", s)
+        if not m:
+            return None
+        dt = datetime.datetime.fromisoformat(m.group(1) + (m.group(3) or ""))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(_pt_tz())
+
+
+def _utc_z(dt):
+    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_TODOIST_BASE = "https://api.todoist.com/api/v1"
+
+
+def _todoist_token():
+    p = Path.home() / ".config" / "todoist" / "token"
+    tok = p.read_text().strip() if p.exists() else ""
+    if not tok:
+        raise RuntimeError(f"Todoist token missing at {p}")
+    return tok
+
+
+def _todoist_get(path):
+    return _http_request(
+        f"{_TODOIST_BASE}{path}",
+        headers={"Authorization": f"Bearer {_todoist_token()}"},
+        timeout=20,
+    )
+
+
+def _todoist_completed_between(since_dt, until_dt, max_pages=5):
+    """Non-recurring completions (Todoist's completed ledger). Recurring tasks
+    never land here: completing one just reschedules it."""
+    items, cursor = [], None
+    for _ in range(max_pages):
+        q = f"since={_utc_z(since_dt)}&until={_utc_z(until_dt)}&limit=200"
+        if cursor:
+            q += f"&cursor={cursor}"
+        raw = _todoist_get(f"/tasks/completed/by_completion_date?{q}")
+        items.extend(raw.get("items", []))
+        cursor = raw.get("next_cursor")
+        if not cursor:
+            break
+    return items
+
+
+def _todoist_completion_events(since_dt, max_pages=5):
+    """Activity-log completion events since `since_dt` (includes recurring)."""
+    since = _utc_z(since_dt)
+    events, cursor = [], None
+    for _ in range(max_pages):
+        q = "object_type=item&event_type=completed&limit=100"
+        if cursor:
+            q += f"&cursor={cursor}"
+        raw = _todoist_get(f"/activities?{q}")
+        batch = raw.get("results", []) if isinstance(raw, dict) else raw
+        events.extend(batch)
+        if not batch or min(e.get("event_date", "") for e in batch) < since:
+            break
+        cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
+        if not cursor:
+            break
+    return [e for e in events if e.get("event_date", "") >= since]
+
+
+_POINTS_RE = re.compile(r"\[(\d+)\]")
+
+
+def _parse_points(content):
+    """[N] 分 value from task content; last bracket wins (matches /did)."""
+    m = _POINTS_RE.findall(content or "")
+    return int(m[-1]) if m else None
+
+
+# ---------------------------------------------------------------------------
 # Source 1: completed_today
 # ---------------------------------------------------------------------------
 
-@source("completed_today", "Today's completed tasks from ibx queue")
-def _completed_today():
+def _completed_today_file():
+    """The /did-maintained names list. It is only rewritten on the first
+    completion of a day, so at 04:00 PT it still holds YESTERDAY's names."""
     import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
     ct_path = _sp.COMPLETED_TODAY
     if not ct_path.exists():
-        return {"tasks": [], "note": "completed-today.json not found"}
-
+        return None, None, None
     with open(ct_path) as f:
         data = json.load(f)
+    names = data if isinstance(data, list) else data.get("names", data.get("tasks", data.get("items", [])))
+    file_date = data.get("date") if isinstance(data, dict) else None
+    age_hours = (time.time() - ct_path.stat().st_mtime) / 3600
+    return names, file_date, round(age_hours, 1)
 
-    tasks = data if isinstance(data, list) else data.get("tasks", data.get("items", []))
 
-    # Check for staleness (file older than 2 hours)
-    mtime = ct_path.stat().st_mtime
-    age_hours = (time.time() - mtime) / 3600
-    stale = age_hours > 2
+@source("completed_today", "Today's (PT) completed tasks, live from the Todoist activity log")
+def _completed_today():
+    today = _pt_today()
+    out = {"date": today.isoformat()}
+    try:
+        file_names, file_date, file_age = _completed_today_file()
+    except Exception as e:
+        file_names, file_date, file_age = None, None, None
+        out["file_error"] = f"{type(e).__name__}: {e}"
+    out.update({"file_date": file_date, "file_age_hours": file_age})
 
-    # Look for archive
-    archive_path = ct_path.with_name("completed-today-archive.json")
-    archive_count = 0
-    if archive_path.exists():
-        try:
-            with open(archive_path) as f:
-                archive = json.load(f)
-            archive_items = archive if isinstance(archive, list) else archive.get("tasks", [])
-            archive_count = len(archive_items)
-            # Merge: add archived items not already present
-            existing_ids = {t.get("id") for t in tasks if isinstance(t, dict)}
-            for item in archive_items:
-                if isinstance(item, dict) and item.get("id") not in existing_ids:
-                    tasks.append(item)
-        except Exception:
-            pass
+    try:
+        evs = _todoist_completion_events(_pt_midnight(today))
+        tasks = []
+        for e in sorted(evs, key=lambda e: e.get("event_date", "")):
+            ex = e.get("extra_data") or {}
+            content = ex.get("content", "")
+            tasks.append({
+                "id": e.get("object_id"),
+                "content": content,
+                "completed_at": e.get("event_date"),
+                "points": _parse_points(content),
+                "recurring": bool(ex.get("is_recurring")),
+                "labels": ex.get("labels", []),
+            })
+        out.update({"source": "todoist_live", "count": len(tasks), "tasks": tasks,
+                    "stale": False, "age_hours": 0.0})
+        return out
+    except Exception as e:
+        out["live_error"] = f"{type(e).__name__}: {e}"
 
-    return {
+    # Fallback: the local file, but only if it is actually today's.
+    if file_names is not None and file_date == today.isoformat():
+        out.update({"source": "file", "count": len(file_names), "tasks": file_names,
+                    "stale": (file_age or 0) > 2, "age_hours": file_age})
+    else:
+        out.update({"source": "none", "count": 0, "tasks": [], "stale": True,
+                    "age_hours": file_age,
+                    "note": (f"live Todoist failed; completed-today.json is from {file_date}, "
+                             f"not {today.isoformat()} — ignored")})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Source 1b: completed_yesterday_high_value
+# ---------------------------------------------------------------------------
+
+HIGH_VALUE_MIN_POINTS = 500
+# Created-and-completed-same-day is the "real work that appeared and got done"
+# signal. Automation churns out same-day tasks that are not that: 😈 block
+# rituals, `deferred:` posthoc eval records, and #-1g/#0g goal tasks.
+_NOISE_PREFIXES = ("😈", "deferred:")
+_NOISE_LABELS = {"#-1g", "#0g", "posthoc"}
+
+
+def _is_ritual_noise(content, labels):
+    return (content or "").lstrip().startswith(_NOISE_PREFIXES) or bool(_NOISE_LABELS & set(labels or []))
+
+
+@source("completed_yesterday_high_value",
+        "Todoist completions in the last 36h worth >=500 分 or created+completed the same PT day")
+def _completed_yesterday_high_value():
+    now = datetime.datetime.now(_pt_tz())
+    since = now - datetime.timedelta(hours=36)
+    tasks, seen = [], set()
+
+    def _add(tid, content, added_at, completed_at, recurring, labels, project_id):
+        if tid in seen:
+            return
+        pts = _parse_points(content)
+        a, c = _to_pt(added_at), _to_pt(completed_at)
+        same_day = bool(a and c and a.date() == c.date())
+        reasons = []
+        if pts is not None and pts >= HIGH_VALUE_MIN_POINTS:
+            reasons.append(f"points>={HIGH_VALUE_MIN_POINTS}")
+        if same_day and not recurring and not _is_ritual_noise(content, labels):
+            reasons.append("created_and_completed_same_day")
+        if not reasons:
+            return
+        seen.add(tid)
+        tasks.append({
+            "id": tid, "content": content, "points": pts,
+            "added_at": added_at, "completed_at": completed_at,
+            "completed_date_pt": c.date().isoformat() if c else None,
+            "recurring": recurring, "labels": labels or [], "project_id": project_id,
+            "reasons": reasons,
+        })
+
+    for it in _todoist_completed_between(since, now):
+        _add(it.get("id"), it.get("content", ""), it.get("added_at"), it.get("completed_at"),
+             bool((it.get("due") or {}).get("is_recurring")), it.get("labels"), it.get("project_id"))
+
+    # Recurring high-value completions are invisible to the completed ledger.
+    events_error = None
+    try:
+        for e in _todoist_completion_events(since):
+            ex = e.get("extra_data") or {}
+            if ex.get("is_recurring"):
+                _add(e.get("object_id"), ex.get("content", ""), ex.get("date_added"),
+                     e.get("event_date"), True, ex.get("labels"), None)
+    except Exception as e:
+        events_error = f"{type(e).__name__}: {e}"
+
+    tasks.sort(key=lambda t: t.get("completed_at") or "")
+    out = {
+        "window_start": since.isoformat(timespec="seconds"),
+        "window_end": now.isoformat(timespec="seconds"),
+        "min_points": HIGH_VALUE_MIN_POINTS,
         "count": len(tasks),
+        "total_points": sum(t["points"] or 0 for t in tasks),
         "tasks": tasks,
-        "stale": stale,
-        "age_hours": round(age_hours, 1),
-        "archive_merged": archive_count,
     }
+    if events_error:
+        out["recurring_events_error"] = events_error
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +614,22 @@ def _appfolio_rent_roll():
 # Source 5: appfolio_work_orders
 # ---------------------------------------------------------------------------
 
+# AppFolio's work_order report status enum. A WO counts as "open" unless it is
+# in a terminal (closed) state. See _appfolio_work_orders for the full history.
+_WO_CLOSED_STATUSES = {"completed", "complete", "completed no need to bill", "work done",
+                       "canceled", "cancelled", "closed"}
+
+
+def _wo_is_open(status: str) -> bool:
+    """True if an AppFolio work-order status represents an open WO.
+
+    The open statuses (New/Scheduled/Assigned/Estimated/In Progress/On Hold)
+    share no common substring, so detection is by exclusion of the closed set.
+    """
+    s = (status or "").strip().lower()
+    return bool(s) and s not in _WO_CLOSED_STATUSES
+
+
 @source("appfolio_work_orders", "AppFolio open/overdue work orders by property")
 def _appfolio_work_orders():
     vhost = _CREDS.get("af_vhost", "")
@@ -427,11 +642,24 @@ def _appfolio_work_orders():
         "Content-Type": "application/json",
     }
 
-    data = _http_request(url, method="POST", headers=headers, body={})
+    # AppFolio's default work_order report omits some statuses (e.g. Waiting),
+    # and its statuses are New/Assigned/Scheduled/Waiting/Estimated/Work Done/
+    # Completed/Canceled -- none contain "open", so the old substring test
+    # always reported 0 open. Ask for every status (0-9) over a 60-day window (120 days hit the 5,000-row page cap)
+    # and treat anything not closed as open.
+    today = datetime.date.today()
+    body = {
+        "work_order_statuses": [str(i) for i in range(10)],
+        "status_date": "created_at",
+        "status_date_range_from": (today - datetime.timedelta(days=60)).isoformat(),
+        "status_date_range_to": today.isoformat(),
+    }
+    data = _http_request(url, method="POST", headers=headers, body=body)
     results = data.get("results", [])
 
-    today = datetime.date.today()
     by_property: dict[str, dict] = {}
+    open_by_status: dict[str, int] = {}
+    urgent_open = []
     for row in results:
         prop = row.get("property_name", row.get("property", "Unknown"))
         if prop not in by_property:
@@ -439,18 +667,29 @@ def _appfolio_work_orders():
         p = by_property[prop]
         p["total"] += 1
 
-        status = (row.get("status", "") or "").lower()
-        if "open" in status or "in progress" in status or "pending" in status:
-            p["open"] += 1
-            # Check overdue
-            due = row.get("due_date", "")
-            if due:
-                try:
-                    due_date = datetime.date.fromisoformat(due[:10])
-                    if due_date < today:
-                        p["overdue"] += 1
-                except ValueError:
-                    pass
+        status = (row.get("status", "") or "").strip()
+        if not _wo_is_open(status):
+            continue
+        p["open"] += 1
+        open_by_status[status] = open_by_status.get(status, 0) + 1
+        # "overdue" = open and either scheduled in the past or created > 7 days ago
+        ref = row.get("scheduled_start") or row.get("created_at") or ""
+        try:
+            ref_date = datetime.date.fromisoformat(str(ref)[:10])
+            if (row.get("scheduled_start") and ref_date < today) or (
+                not row.get("scheduled_start") and (today - ref_date).days > 7
+            ):
+                p["overdue"] += 1
+        except ValueError:
+            pass
+        if (row.get("priority", "") or "").lower() in ("urgent", "emergency"):
+            urgent_open.append({
+                "property": prop,
+                "unit": row.get("unit_name") or row.get("unit") or "",
+                "status": status,
+                "summary": (row.get("job_description") or row.get("description") or "")[:80],
+                "created": str(row.get("created_at", ""))[:10],
+            })
 
     total_open = sum(p["open"] for p in by_property.values())
     total_overdue = sum(p["overdue"] for p in by_property.values())
@@ -459,6 +698,9 @@ def _appfolio_work_orders():
         "total_work_orders": len(results),
         "total_open": total_open,
         "total_overdue": total_overdue,
+        "open_by_status": open_by_status,
+        "truncated": len(results) >= 5000,
+        "urgent_open": urgent_open[:40],
         "by_property": by_property,
     }
 
@@ -467,36 +709,34 @@ def _appfolio_work_orders():
 # Source 6: gmail_inbox
 # ---------------------------------------------------------------------------
 
-@source("gmail_inbox", "Unread Gmail messages with age flags")
-def _gmail_inbox():
-    creds = _build_google_creds(
-        _CREDS["gmail_tokens_path"],
-        _CREDS["gmail_secrets_path"],
-        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-    )
-    service = _google_service("gmail", "v1", creds)
+# Bug (v176): the source read only tokens-gmail.json, which is the personal
+# jonathan.b.mckay@gmail.com, and reported its 2 unread as "Gmail unread" while
+# mckay@m5c7.com (where all m5x2 mail lands) had 19 non-promo unread. Now
+# every account in _CREDS["gmail_accounts"]; Promotions excluded; counts come
+# from paginated ids, not the 50-message metadata cap.
+GMAIL_QUERY = "is:unread in:inbox -category:promotions"
+GMAIL_METADATA_CAP = 30  # per account
 
-    resp = service.users().messages().list(
-        userId="me", q="is:unread in:inbox", maxResults=50
-    ).execute()
 
-    messages = resp.get("messages", [])
-    if not messages:
-        return {"unread_count": 0, "messages": []}
-
+def _gmail_account_unread(service, query=GMAIL_QUERY, cap=GMAIL_METADATA_CAP):
+    ids, page = [], None
+    while True:
+        resp = service.users().messages().list(
+            userId="me", q=query, maxResults=100, pageToken=page).execute()
+        ids += [m["id"] for m in resp.get("messages", [])]
+        page = resp.get("nextPageToken")
+        if not page or len(ids) >= 500:
+            break
     now = time.time()
     results = []
-    # Batch fetch metadata
-    for msg_stub in messages[:50]:
+    for mid in ids[:cap]:
         msg = service.users().messages().get(
-            userId="me", id=msg_stub["id"], format="metadata",
+            userId="me", id=mid, format="metadata",
             metadataHeaders=["From", "Subject", "Date"],
         ).execute()
-
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         internal_ts = int(msg.get("internalDate", "0")) / 1000
         age_hours = (now - internal_ts) / 3600 if internal_ts else 0
-
         results.append({
             "id": msg["id"],
             "from": headers.get("From", ""),
@@ -505,95 +745,133 @@ def _gmail_inbox():
             "age_hours": round(age_hours, 1),
             "stale": age_hours > 24,
         })
+    return len(ids), results
 
-    stale_count = sum(1 for r in results if r["stale"])
 
-    return {
-        "unread_count": len(results),
-        "stale_count": stale_count,
-        "messages": results,
+@source("gmail_inbox", "Unread non-promo Gmail, every account (m5c7 + jbm), with age flags")
+def _gmail_inbox():
+    by_account, messages, errors = {}, [], {}
+    for acct in _CREDS.get("gmail_accounts", []):
+        try:
+            creds = _build_google_creds(acct["tokens"], acct["secrets"])
+            service = _google_service("gmail", "v1", creds)
+            count, msgs = _gmail_account_unread(service)
+        except Exception as e:
+            errors[acct["name"]] = f"{type(e).__name__}: {e}"
+            continue
+        by_account[acct["name"]] = {
+            "unread_count": count,
+            "stale_count": sum(1 for m in msgs if m["stale"]),
+            "listed": len(msgs),
+        }
+        messages += [{**m, "account": acct["name"]} for m in msgs]
+    if not by_account:
+        raise RuntimeError(f"all Gmail accounts failed: {errors}")
+    out = {
+        "query": GMAIL_QUERY,
+        "unread_count": sum(a["unread_count"] for a in by_account.values()),
+        "stale_count": sum(1 for m in messages if m["stale"]),
+        "by_account": by_account,
+        "messages": messages,
     }
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 # ---------------------------------------------------------------------------
 # Source 7: google_calendar
 # ---------------------------------------------------------------------------
 
-@source("google_calendar", "Today + tomorrow events from Google Calendar")
-def _google_calendar():
-    creds = _build_google_creds(
-        _CREDS["gcal_tokens_path"],
-        _CREDS["gcal_secrets_path"],
-        scopes=["https://www.googleapis.com/auth/calendar.readonly"],
-        account_key="m5c7",
-    )
-    service = _google_service("calendar", "v3", creds)
+# Bug (v176): the source queried only the m5c7 "primary" calendar (plus a
+# "work" one that does not exist) with a UTC window "today T00:00Z" ..
+# "+2d T00:00Z", i.e. 16:00 PST yesterday onward, so Sunday-evening events
+# were labelled "today" on Monday and jbm / m5x2 Cal / 3494 House / CAIS
+# School / 家 Meals were missing. Now delegates to janus's gcal_client: every
+# calendar on the m5c7 account (LX's filtered, same as janus), local-midnight
+# windows from lib/daytime, and it shares janus's 5-min cache
+# (~/.cache/janus/gcal-YYYY-MM-DD.json), which is also the fallback.
+_TG_DIR = Path(__file__).resolve().parent.parent / "tools" / "tg"
+_IMPORT_CAL_SUFFIX = "@import.calendar.google.com"
 
-    today = datetime.date.today()
-    day_after_tomorrow = today + datetime.timedelta(days=2)
-    time_min = f"{today.isoformat()}T00:00:00Z"
-    time_max = f"{day_after_tomorrow.isoformat()}T00:00:00Z"
 
-    calendar_ids = ["primary"]
-    # Try to find "Work" calendar
+def _gcal_client():
+    if str(_TG_DIR) not in sys.path:
+        sys.path.insert(0, str(_TG_DIR))
+    import gcal_client
+    return gcal_client
+
+
+def _gcal_day(gc, day_start, day_end):
     try:
-        cal_list = service.calendarList().list().execute()
-        for cal in cal_list.get("items", []):
-            summary = (cal.get("summary", "") or "").lower()
-            if summary == "work" or "work" in summary:
-                calendar_ids.append(cal["id"])
-                break
-    except Exception:
-        pass
+        return gc.list_events(day_start, day_end), "live-or-janus-cache"
+    except Exception as e:
+        cache = gc.CACHE_DIR / f"gcal-{day_start.date().isoformat()}.json"
+        if not cache.exists():
+            raise
+        return gc._hydrate(json.loads(cache.read_text()), day_start, day_end), \
+            f"janus cache fallback ({type(e).__name__})"
 
-    all_events = []
-    for cal_id in calendar_ids:
-        try:
-            events_resp = service.events().list(
-                calendarId=cal_id,
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy="startTime",
-                maxResults=50,
-            ).execute()
-            for ev in events_resp.get("items", []):
-                start = ev.get("start", {}).get("dateTime", ev.get("start", {}).get("date", ""))
-                end = ev.get("end", {}).get("dateTime", ev.get("end", {}).get("date", ""))
-                all_events.append({
-                    "calendar": cal_id,
-                    "summary": ev.get("summary", "(no title)"),
-                    "start": start,
-                    "end": end,
-                    "status": ev.get("status", ""),
-                    "attendees": len(ev.get("attendees", [])),
-                })
-        except Exception:
-            pass
 
-    # Split into today / tomorrow
-    today_events = []
-    tomorrow_events = []
-    tomorrow_str = (today + datetime.timedelta(days=1)).isoformat()
-    for ev in all_events:
-        if ev["start"].startswith(tomorrow_str):
-            tomorrow_events.append(ev)
-        else:
-            today_events.append(ev)
-
+def _gcal_slim(ev):
+    cal = ev.get("calendar", "")
+    if (ev.get("calendar_id") or "").endswith(_IMPORT_CAL_SUFFIX):
+        cal = f"{cal} (Outlook ICS mirror)"
     return {
-        "today_count": len(today_events),
-        "tomorrow_count": len(tomorrow_events),
-        "today": today_events,
-        "tomorrow": tomorrow_events,
+        "calendar": cal,
+        "summary": ev.get("title", "(no title)"),
+        "start": ev["start_dt"].isoformat(),
+        "end": ev["end_dt"].isoformat(),
+        "all_day": ev.get("all_day", False),
+        "transparency": ev.get("transparency", "opaque"),
     }
+
+
+@source("google_calendar", "Today + tomorrow events, all JM calendars (local-day windows)")
+def _google_calendar():
+    gc = _gcal_client()
+    tz = gc._tz()
+    d0 = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    out, via = {}, {}
+    for label, off in (("today", 0), ("tomorrow", 1)):
+        # Midnight-to-midnight in the active zone, built from the date so a
+        # DST changeover day is 23/25h, not a fixed 24h offset.
+        day = (d0 + datetime.timedelta(days=off)).date()
+        start = datetime.datetime.combine(day, datetime.time(), tz)
+        end = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(), tz)
+        evs, via[label] = _gcal_day(gc, start, end)
+        out[label] = [_gcal_slim(e) for e in evs]
+        out[f"{label}_date"] = day.isoformat()
+    calendars = {}
+    for ev in out["today"] + out["tomorrow"]:
+        calendars[ev["calendar"]] = calendars.get(ev["calendar"], 0) + 1
+    return {
+        "today_date": out["today_date"],
+        "tomorrow_date": out["tomorrow_date"],
+        "today_count": len(out["today"]),
+        "tomorrow_count": len(out["tomorrow"]),
+        "calendars": calendars,
+        "via": via,
+        "today": out["today"],
+        "tomorrow": out["tomorrow"],
+    }
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 # ---------------------------------------------------------------------------
 # Source 8: syncthing_status
 # ---------------------------------------------------------------------------
 
-@source("syncthing_status", "Syncthing sync status and conflict files")
+def _live_conflicts(paths, vault_path):
+    """Drop conflict files under vault/z_old/ (archived; v180 counted 132
+    conflicts, all there, which drowned any live one)."""
+    old = Path(vault_path) / "z_old"
+    return [p for p in paths if Path(p) != old and old not in Path(p).parents]
+
+
+@source("syncthing_status", "Syncthing sync status and conflict files (excluding z_old/)")
 def _syncthing_status():
     # Extract API key from config.xml
     config_path = _CREDS.get("syncthing_config_path")
@@ -623,7 +901,10 @@ def _syncthing_status():
 
     # Check for sync conflict files in vault
     vault_path = Path.home() / "vault"
-    conflicts = glob_mod.glob(str(vault_path / "**" / "*.sync-conflict-*"), recursive=True)
+    conflicts = _live_conflicts(
+        glob_mod.glob(str(vault_path / "**" / "*.sync-conflict-*"), recursive=True),
+        vault_path,
+    )
 
     conn_info = connections.get("connections", {})
     connected_devices = sum(1 for d in conn_info.values() if d.get("connected"))
@@ -639,6 +920,72 @@ def _syncthing_status():
 
 
 # ---------------------------------------------------------------------------
+# Full Disk Access diagnostics (v175)
+# ---------------------------------------------------------------------------
+# Safari History.db, knowledgeC.db and chat.db are TCC-protected. Under cron
+# macOS attributes the read to the *responsible* process (cron), not to
+# python3, so granting FDA to python3 alone does nothing for the 03:00 run.
+# Every night since 10-25 these three sources returned "authorization denied"
+# / PermissionError with no hint of which binary needs the grant.
+
+FDA_SOURCES = ("browser_history", "screen_time", "imessage_recent")
+_FDA_MARKERS = ("authorization denied", "operation not permitted", "permissionerror")
+
+
+def _process_chain(pid=None, limit=12):
+    """[(pid, comm)] from this process up to (excluding) launchd."""
+    import subprocess
+    pid = pid or os.getpid()
+    chain = []
+    for _ in range(limit):
+        try:
+            out = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                                 capture_output=True, text=True, timeout=2).stdout.strip()
+        except Exception:
+            break
+        if not out:
+            break
+        ppid, comm = out.split(None, 1)
+        chain.append((pid, comm.strip()))
+        pid = int(ppid)
+        if pid <= 1:
+            break
+    return chain
+
+
+def fda_binary(chain=None):
+    """The binary that needs Full Disk Access for this run to read TCC DBs."""
+    chain = _process_chain() if chain is None else chain
+    for _, comm in chain:
+        if os.path.basename(comm) == "cron":
+            return "/usr/sbin/cron"
+    for _, comm in reversed(chain):  # outermost app (Terminal, iTerm, sshd...)
+        if ".app/" in comm:
+            return comm.split(".app/")[0] + ".app"
+    return os.path.realpath(chain[-1][1]) if chain else os.path.realpath(sys.executable)
+
+
+def _is_fda_denial(text) -> bool:
+    t = str(text or "").lower()
+    return any(m in t for m in _FDA_MARKERS)
+
+
+def fda_diagnostic(results):
+    """One line naming the binary to grant FDA, or None if nothing was denied."""
+    denied = []
+    for name in FDA_SOURCES:
+        r = results.get(name) or {}
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        if _is_fda_denial(r.get("error")) or _is_fda_denial(data.get("error")):
+            denied.append(name)
+    if not denied:
+        return None
+    return (f"FDA: {', '.join(denied)} denied by macOS privacy (TCC). Grant Full Disk "
+            f"Access to {fda_binary()} (System Settings > Privacy & Security > "
+            f"Full Disk Access), then re-run.")
+
+
+# ---------------------------------------------------------------------------
 # Source 9: browser_history
 # ---------------------------------------------------------------------------
 
@@ -648,9 +995,14 @@ def _browser_history():
     if not src.exists():
         return {"error": "Safari History.db not found"}
 
-    # Copy to /tmp to avoid lock
+    # Copy to /tmp to avoid lock. A PermissionError here is TCC (no Full Disk
+    # Access), not a lock: report it as data so fda_diagnostic can name the
+    # binary, instead of a bare traceback string (v175).
     tmp_db = Path("/tmp/dream_safari_history.db")
-    shutil.copy2(src, tmp_db)
+    try:
+        shutil.copy2(src, tmp_db)
+    except PermissionError as e:
+        return {"error": f"authorization denied: {e}"}
 
     conn = sqlite3.connect(str(tmp_db))
     try:
@@ -825,111 +1177,158 @@ def _imessage_recent():
 # Source 12: slack
 # ---------------------------------------------------------------------------
 
-@source("outlook_inbox", "Outlook unread emails and recent sent (last 24h)")
+# Outlook sources read Straylight's cache, never the live Agency MCP.
+# Ix cron has no work auth (Agency CLI absent; login keychain locked to cron,
+# MSAL -61), so the live calls only ever burned the 30s source timeout
+# (v51..v176: "outlook_inbox timeout" every night). Straylight's
+# tools/tg/outlook-cache-daemon.py writes ~/.cache/janus/outlook-YYYY-MM-DD.json
+# (calendar) and outlook-inbox-YYYY-MM-DD.json (unread, last 48h) every 5 min
+# and rsyncs them to ix:~/.cache/janus/. Missing file = "missing", instantly.
+JANUS_CACHE = Path.home() / ".cache" / "janus"
+OUTLOOK_STALE_HOURS = 6
+
+
+def _local_today() -> datetime.date:
+    return datetime.datetime.now().astimezone().date()
+
+
+def _file_age_hours(path: Path) -> float:
+    return round((time.time() - path.stat().st_mtime) / 3600, 1)
+
+
+@source("outlook_inbox", "Outlook unread emails, last 48h (Straylight cache snapshot)")
 def _outlook_inbox():
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
-    import agency_mcp as mcp
-    from datetime import timezone
-    cutoff = (datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Unread inbox
-    query = (
-        f"?$top=50"
-        f"&$filter=isRead eq false and receivedDateTime ge {cutoff}"
-        f"&$select=id,subject,from,receivedDateTime,bodyPreview"
-        f"&$orderby=receivedDateTime desc"
-    )
-    # 5s timeout (was 30s). The outlook MCP has been timing out reliably for
-    # weeks; burning 30s per call costs ~60s of every intake. If the MCP is
-    # responsive, 5s is plenty for a single SearchMessages. v51 self-improvement.
-    raw = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
-        "queryParameters": query
-    }, timeout=5)
-    unread = []
-    if raw and raw.get("content"):
-        for item in raw["content"]:
-            text = item.get("text", "")
-            try:
-                data = json.loads(text)
-                messages = data if isinstance(data, list) else data.get("value", [])
-                for msg in messages:
-                    unread.append({
-                        "subject": msg.get("subject", ""),
-                        "from": (msg.get("from", {}).get("emailAddress", {}).get("name", "")
-                                 or msg.get("from", {}).get("emailAddress", {}).get("address", "")),
-                        "received": msg.get("receivedDateTime", ""),
-                        "preview": msg.get("bodyPreview", "")[:200],
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    # Recent sent (last 24h) for context on what JM communicated
-    sent_query = (
-        f"?$top=20"
-        f"&$filter=sentDateTime ge {cutoff}"
-        f"&$select=subject,toRecipients,sentDateTime,bodyPreview"
-        f"&$orderby=sentDateTime desc"
-    )
-    raw_sent = mcp.call_tool("mail", "SearchMessagesQueryParameters", {
-        "queryParameters": f"/me/mailFolders/SentItems/messages{sent_query}"
-    }, timeout=5)
-    sent = []
-    if raw_sent and raw_sent.get("content"):
-        for item in raw_sent["content"]:
-            text = item.get("text", "")
-            try:
-                data = json.loads(text)
-                messages = data if isinstance(data, list) else data.get("value", [])
-                for msg in messages:
-                    to_list = [r.get("emailAddress", {}).get("name", "")
-                               for r in msg.get("toRecipients", [])]
-                    sent.append({
-                        "subject": msg.get("subject", ""),
-                        "to": to_list,
-                        "sent": msg.get("sentDateTime", ""),
-                        "preview": msg.get("bodyPreview", "")[:200],
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    return {"unread": unread, "unread_count": len(unread),
-            "sent": sent, "sent_count": len(sent)}
+    today = _local_today()
+    # Today's snapshot, else yesterday's (Straylight asleep since evening).
+    for day in (today, today - datetime.timedelta(days=1)):
+        path = JANUS_CACHE / f"outlook-inbox-{day.isoformat()}.json"
+        if not path.exists():
+            continue
+        try:
+            snap = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            return {"_status": "error", "error": f"unreadable {path.name}: {e}"}
+        age = _file_age_hours(path)
+        msgs = snap.get("messages", [])
+        unread = [{
+            "subject": m.get("subject", ""),
+            "from": m.get("sender", ""),
+            "from_email": m.get("sender_email", ""),
+            "received": m.get("received", ""),
+            "preview": m.get("preview", ""),
+            "importance": m.get("importance", "normal"),
+            "conversation_id": m.get("conversationId", ""),
+        } for m in msgs if not m.get("isRead")]
+        return {
+            "_status": "stale" if age > OUTLOOK_STALE_HOURS else "ok",
+            "cache_file": str(path),
+            "cache_age_hours": age,
+            "snapshot_at": snap.get("generated_at", ""),
+            "window_hours": snap.get("window_hours"),
+            "unread": unread,
+            "unread_count": len(unread),
+            "high_importance": sum(1 for m in unread if m["importance"] == "high"),
+        }
+    return {
+        "_status": "missing",
+        "error": (f"no outlook-inbox-{today}.json or previous day in {JANUS_CACHE}; "
+                  "Straylight outlook-cache-daemon not running or asleep"),
+    }
 
 
-@source("outlook_calendar", "Outlook calendar events (yesterday + today + tomorrow)")
-def _outlook_calendar():
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
-    import agency_mcp as mcp
-    from datetime import timezone
-    yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
-    day_after = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
-    raw = mcp.call_tool("calendar", "ListEvents", {
-        "startDateTime": yesterday,
-        "endDateTime": day_after,
-        "top": "50",
-    }, timeout=5)
+def _janus_outlook_calendar(today=None):
+    today = today or _local_today()
+    events, files, ages = [], [], []
+    for off in (-1, 0, 1):
+        day = today + datetime.timedelta(days=off)
+        path = JANUS_CACHE / f"outlook-{day.isoformat()}.json"
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        files.append(path.name)
+        ages.append(_file_age_hours(path))
+        for ev in raw if isinstance(raw, list) else []:
+            events.append({
+                "day": day.isoformat(),
+                "subject": ev.get("subject", ""),
+                "start": ev.get("start", ""),
+                "end": ev.get("end", ""),
+                "tz": ev.get("start_tz", ""),
+                "all_day": ev.get("is_all_day", False),
+            })
+    if not files:
+        return {"_status": "missing",
+                "error": f"no outlook-YYYY-MM-DD.json around {today} in {JANUS_CACHE}"}
+    today_file = f"outlook-{today.isoformat()}.json"
+    stale = today_file not in files or ages[files.index(today_file)] > OUTLOOK_STALE_HOURS
+    return {"_status": "stale" if stale else "ok", "cache_files": files,
+            "cache_age_hours": max(ages), "events": events, "count": len(events),
+            "note": "Graph times; tz field is the Windows zone name (UTC if blank)"}
+
+
+# v180 (2026-11-06): when Straylight sleeps the janus cache is missing or
+# stale (11-06 03:00: today's file was 7 h old), and Dream had no work
+# calendar. The Google import calendar "MSFT (Slow Sync)" on the m5c7 account
+# mirrors the Outlook calendar (titles + times only) and is reachable from
+# cron with the existing calendar token. Fresh cache wins; otherwise the
+# import calendar; if that fails too, the stale/missing cache result stands.
+MSFT_IMPORT_CAL = "l20n3a79v2lq68fod4de3lvp1ba2iqft@import.calendar.google.com"
+
+
+def _gcal_import_events(today, service=None):
+    if service is None:
+        creds = _build_google_creds(
+            _CREDS["gcal_tokens_path"], _CREDS["gcal_secrets_path"],
+            scopes=["https://www.googleapis.com/auth/calendar.readonly"],
+            account_key="m5c7",
+        )
+        service = _google_service("calendar", "v3", creds)
+    tz = datetime.datetime.now().astimezone().tzinfo
+    first = today - datetime.timedelta(days=1)
+    t_min = datetime.datetime.combine(first, datetime.time(), tz)
+    t_max = datetime.datetime.combine(today + datetime.timedelta(days=2), datetime.time(), tz)
+    resp = service.events().list(
+        calendarId=MSFT_IMPORT_CAL, timeMin=t_min.isoformat(), timeMax=t_max.isoformat(),
+        singleEvents=True, orderBy="startTime", maxResults=100,
+    ).execute()
     events = []
-    if raw and raw.get("content"):
-        for item in raw["content"]:
-            text = item.get("text", "")
-            # Strip "Events retrieved successfully.\n" status prefix
-            idx = min((text.find(c) for c in "{[" if text.find(c) != -1), default=-1)
-            if idx > 0:
-                text = text[idx:]
-            try:
-                data = json.loads(text)
-                ev_list = data if isinstance(data, list) else data.get("value", [])
-                for ev in ev_list:
-                    events.append({
-                        "subject": ev.get("subject", ""),
-                        "start": ev.get("start", {}).get("dateTime", ""),
-                        "end": ev.get("end", {}).get("dateTime", ""),
-                        "organizer": ev.get("organizer", {}).get("emailAddress", {}).get("name", ""),
-                        "is_online": bool(ev.get("onlineMeeting")),
-                    })
-            except (json.JSONDecodeError, TypeError):
-                pass
-    return {"events": events, "count": len(events)}
+    for ev in resp.get("items", []):
+        if ev.get("status") == "cancelled":
+            continue
+        st, en = ev.get("start", {}), ev.get("end", {})
+        start = st.get("dateTime", st.get("date", ""))
+        events.append({
+            "day": start[:10],
+            "subject": ev.get("summary", "(no title)"),
+            "start": start,
+            "end": en.get("dateTime", en.get("date", "")),
+            "tz": st.get("timeZone", ""),
+            "all_day": "date" in st,
+        })
+    return events
+
+
+@source("outlook_calendar", "Outlook calendar, yesterday..tomorrow (Straylight cache, else MSFT Slow Sync import calendar)")
+def _outlook_calendar(today=None, cache=None, gcal=None):
+    today = today or _local_today()
+    cache = cache or _janus_outlook_calendar
+    gcal = gcal or _gcal_import_events
+    res = cache(today)
+    if res.get("_status") == "ok":
+        return {**res, "via": "janus_cache"}
+    try:
+        events = gcal(today)
+    except Exception as e:
+        return {**res, "via": "janus_cache", "gcal_import_error": f"{type(e).__name__}: {e}"}
+    if not events:
+        return {**res, "via": "janus_cache", "gcal_import_error": "no events"}
+    return {"_status": "ok", "via": "gcal_import", "calendar_id": MSFT_IMPORT_CAL,
+            "events": events, "count": len(events),
+            "cache_status": res.get("_status"), "cache_error": res.get("error"),
+            "note": "MSFT (Slow Sync) import calendar: titles and times only, ISO times with offset"}
 
 
 @source("slack", "Slack status (stub)")
@@ -946,37 +1345,212 @@ def _annual_goals_4g():
     nits — see dream-ai-context.md 'Goal-leverage orientation'."""
     import openpyxl  # available in the intake env
     path = Path.home() / "OneDrive" / "vault-excel" / "4g s.xlsx"
-    if not path.exists():
-        return {"error": f"{path} not found", "goals": []}
-    yy = datetime.date.today().strftime("%y")
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
-        sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
-                     wb.sheetnames[0])
-        ws = wb[sheet]
-        goals, tldr = [], None
-        for row in ws.iter_rows(values_only=True):
-            cells = list(row)
-            c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
-            c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
-            blob = (c0 + " " + c1).lower()
-            if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
-                tldr = (c1 or c0)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        if _is_dataless(path):
+            # v174 (2026-10-31): OneDrive Files-On-Demand had evicted the file to a
+            # cloud placeholder. A launchd-context read cannot hydrate it
+            # (PermissionError at 03:00; BadZipFile interactively), so say why and
+            # still anchor the run on the vault narrative.
+            msg = (f"{path.name} is a OneDrive cloud-only placeholder (dataless); "
+                   "fix: Finder > right-click ~/OneDrive/vault-excel > Always Keep on This Device")
+            out = _annual_goals_4g_vault_fallback(msg)
+            out["dataless"] = True
+            return out
+        yy = datetime.date.today().strftime("%y")
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = next((s for s in wb.sheetnames if s.strip().startswith(yy) and "4g" in s),
+                         wb.sheetnames[0])
+            ws = wb[sheet]
+            goals, tldr = [], None
+            for row in ws.iter_rows(values_only=True):
+                cells = list(row)
+                c0 = str(cells[0]).strip() if cells and cells[0] is not None else ""
+                c1 = str(cells[1]).strip() if len(cells) > 1 and cells[1] is not None else ""
+                blob = (c0 + " " + c1).lower()
+                if blob.startswith("tl;dr") or "tl;dr" in blob[:8]:
+                    tldr = (c1 or c0)
+                    continue
+                # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
+                if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
+                    pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
+                    earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
+                    goals.append({
+                        "domain": c0,
+                        "goal": c1,
+                        "target_fen": cells[2],
+                        "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
+                        "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
+                    })
+            return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
+        finally:
+            wb.close()
+    except Exception as e:
+        # OneDrive under macOS TCC routinely denies headless/cron reads
+        # ("Operation not permitted") — which left Dream with NO annual frame
+        # at all (source returned null). Degrade gracefully to the readable
+        # vault narrative so every run still anchors to the year's bets.
+        # Permanent fix: grant Full Disk Access to the intake's python on ix
+        # (one setting that also unlocks Safari history, screen-time, iMessage).
+        return _annual_goals_4g_vault_fallback(str(e))
+
+
+def _annual_goals_4g_vault_fallback(err):
+    """Coarse annual frame from the vault Current-State note when the OneDrive
+    4g workbook is unreadable. Narrative only (no per-goal 分 targets)."""
+    year = datetime.date.today().year
+    doc = Path.home() / "vault" / "g245" / "5e4" / f"4⎡{year} Current State.md"
+    out = {"error": f"4g xlsx unreadable ({err}); using vault fallback",
+           "source": "vault-fallback", "tldr": None, "year_bets": [], "goals": []}
+    if not doc.exists():
+        return out
+    try:
+        lines = doc.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return out
+    # tl;dr line (e.g. "**tl;dr:** ...")
+    for ln in lines:
+        low = ln.lower()
+        if "tl;dr" in low:
+            out["tldr"] = ln.split(":", 1)[-1].strip(" *") if ":" in ln else ln.strip(" *")
+            break
+    # Current-year bullet block under "# Years" (a top-level "- <year>" item
+    # followed by indented sub-bullets).
+    collecting = False
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("-") and stripped.lstrip("- ").startswith(str(year)):
+            collecting = True
+            continue
+        if collecting:
+            # stop at the next top-level bullet or a new heading
+            if (ln and not ln[0].isspace() and stripped.startswith("-")) or stripped.startswith("#"):
+                break
+            if stripped.startswith("-"):
+                out["year_bets"].append(stripped.lstrip("- ").strip())
+    return out
+
+
+@source("weekly_goals_1g", "this week's 1g goals from the g245 2g+1g narrative (the authoritative mirror; the Neon 1g tab is a stale template)")
+def _weekly_goals_1g(today=None, root=None):
+    """Return the current week's block (and next week's, if set) from
+    vault/g245/5e2/<YYYY.MM> 2g+1g-narrative.md. Week headers look like
+    `- **Oct 18 – Oct 24** —`. Without this, every Dream run spent a subagent
+    rediscovering the goals (v163 needed 3 subagents to resolve one bullet)."""
+    today = today or datetime.date.today()
+    root = Path(root) if root else Path.home() / "vault" / "g245" / "5e2"
+    hdr = re.compile(r"^\s*- \*\*([A-Z][a-z]{2}) (\d{1,2}) [–-] ([A-Z][a-z]{2}) (\d{1,2})\*\*")
+    weeks = []
+    for f in sorted(root.glob("*2g+1g-narrative.md"))[-2:]:
+        year = int(f.name[:4])
+        cur = None
+        for line in f.read_text().splitlines():
+            m = hdr.match(line)
+            if m:
+                try:
+                    start = datetime.datetime.strptime(f"{m[1]} {m[2]} {year}", "%b %d %Y").date()
+                    end = datetime.datetime.strptime(f"{m[3]} {m[4]} {year}", "%b %d %Y").date()
+                except ValueError:
+                    cur = None
+                    continue
+                if end < start:  # week crosses New Year
+                    end = end.replace(year=year + 1)
+                cur = {"start": start.isoformat(), "end": end.isoformat(), "lines": [], "file": f.name}
+                weeks.append(cur)
+            elif line.startswith("#"):
+                cur = None
+            elif cur is not None and line.strip() and line.strip() != "-":
+                cur["lines"].append(line.rstrip())
+    iso = today.isoformat()
+    current = next((w for w in weeks if w["start"] <= iso <= w["end"]), None)
+    nxt = next((w for w in weeks if w["start"] > iso), None)
+    # dream-meta (v174) resolver: scans last/this/next month's docs, so weeks that
+    # straddle a month boundary resolve, and flags `stale` when no block covers today.
+    try:
+        resolved = current_1g_week(root.parent.parent, today)
+    except Exception as e:  # noqa: BLE001
+        resolved = {"error": str(e)}
+    return {"current": current, "next": nxt,
+            "next_is_empty": nxt is not None and not nxt["lines"],
+            "resolved": resolved}
+
+
+_SF_DATALESS = 0x40000000  # <sys/stat.h>: file content lives in the cloud, not on disk
+
+
+def _is_dataless(path: Path) -> bool:
+    try:
+        return bool(getattr(os.stat(path), "st_flags", 0) & _SF_DATALESS)
+    except OSError:
+        return False
+
+
+_1G_HEADER = re.compile(r"^- \*\*([A-Z][a-z]{2}) (\d{1,2}) [–-] ([A-Z][a-z]{2}) (\d{1,2})\*\*(.*)$")
+_MON = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+
+
+def parse_1g_weeks(text: str, year: int) -> list[dict]:
+    """Parse '- **Oct 25 – Oct 31** — note' week blocks from a 2g+1g narrative doc.
+    Returns [{start, end, note, lines}] with dates as datetime.date; `lines` is the
+    indented goal outline under the header with <!--1g--> markers stripped."""
+    weeks, cur = [], None
+    for raw in text.splitlines():
+        m = _1G_HEADER.match(raw)
+        if m:
+            m1, d1, m2, d2, note = m.groups()
+            if m1 not in _MON or m2 not in _MON:
+                cur = None
                 continue
-            # A goal row: a domain/category in col0, prose goal in col1, numeric target 分 in col2.
-            if c0 and c1 and len(cells) > 2 and isinstance(cells[2], (int, float)):
-                pct = cells[3] if len(cells) > 3 and isinstance(cells[3], (int, float)) else None
-                earned = cells[4] if len(cells) > 4 and isinstance(cells[4], (int, float)) else None
-                goals.append({
-                    "domain": c0,
-                    "goal": c1,
-                    "target_fen": cells[2],
-                    "pct": round(pct, 3) if isinstance(pct, (int, float)) else None,
-                    "earned_fen": round(earned) if isinstance(earned, (int, float)) else None,
-                })
-        return {"sheet": sheet, "tldr": tldr, "goal_count": len(goals), "goals": goals}
-    finally:
-        wb.close()
+            start = datetime.date(year, _MON[m1], int(d1))
+            end_year = year + 1 if _MON[m2] < _MON[m1] else year
+            cur = {"start": start, "end": datetime.date(end_year, _MON[m2], int(d2)),
+                   "note": note.strip(" —-").strip(), "lines": []}
+            weeks.append(cur)
+            continue
+        if cur is None:
+            continue
+        if raw.startswith(("#", "- ")) or (raw and not raw[0].isspace()):
+            cur = None  # next top-level bullet or heading ends the week block
+            continue
+        line = re.sub(r"\s*<!--1g-->", "", raw).rstrip()
+        if line.strip():
+            cur["lines"].append(line.replace("\t", "  "))
+    return weeks
+
+
+def current_1g_week(vault_dir: Path, today: datetime.date) -> dict:
+    """Find this week's 1g block in g245/5e2/<YYYY.MM> 2g+1g-narrative.md. Weeks
+    straddling a month live in the month they start in, so scan last, this and
+    next month's docs. Falls back to the latest week that has started."""
+    months = []
+    for delta in (-1, 0, 1):
+        y, m = today.year, today.month + delta
+        if m == 0:
+            y, m = y - 1, 12
+        elif m == 13:
+            y, m = y + 1, 1
+        months.append((y, m))
+    weeks, files = [], []
+    for y, m in months:
+        f = vault_dir / "g245" / "5e2" / f"{y}.{m:02d} 2g+1g-narrative.md"
+        if f.exists():
+            files.append(str(f))
+            for w in parse_1g_weeks(f.read_text(encoding="utf-8"), y):
+                w["file"] = str(f)
+                weeks.append(w)
+    if not weeks:
+        return {"error": "no 2g+1g narrative doc found", "files": files}
+    hit = next((w for w in weeks if w["start"] <= today <= w["end"]), None)
+    stale = hit is None
+    if stale:
+        started = [w for w in weeks if w["start"] <= today]
+        hit = max(started, key=lambda w: w["start"]) if started else min(weeks, key=lambda w: w["start"])
+    return {"week": f"{hit['start'].isoformat()}..{hit['end'].isoformat()}",
+            "note": hit["note"], "goals": hit["lines"], "empty": not hit["lines"],
+            "stale": stale, "source": hit["file"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1002,11 +1576,19 @@ def run_sources(selected=None, timeout=30):
         try:
             data = info["fn"]()
             elapsed = time.time() - t0
-            return name, {
-                "status": "ok",
+            # A source may report its own status ("missing", "stale") via a
+            # "_status" key instead of raising (cache-backed sources).
+            status = "ok"
+            if isinstance(data, dict) and "_status" in data:
+                status = data.pop("_status")
+            out = {
+                "status": status,
                 "elapsed_ms": round(elapsed * 1000),
                 "data": data,
             }
+            if status not in ("ok", "stale") and isinstance(data, dict) and "error" in data:
+                out["error"] = data["error"]
+            return name, out
         except Exception as e:
             elapsed = time.time() - t0
             return name, {
@@ -1016,15 +1598,20 @@ def run_sources(selected=None, timeout=30):
                 "error": f"{type(e).__name__}: {e}",
             }
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {}
-        for name, info in sources_to_run.items():
-            fut = pool.submit(_run_one, name, info)
-            futures[fut] = name
-
+    # No `with`: its exit is shutdown(wait=True), which waited out a source
+    # hung past its timeout (agency sign-in: 15-30 min a night, 2026-11-03).
+    # One deadline for all: max_workers=8 queues the rest, so allow one extra
+    # timeout window for the second wave rather than 30s per future in turn.
+    pool = ThreadPoolExecutor(max_workers=8)
+    deadline = time.time() + timeout * 2
+    futures = {}
+    for name, info in sources_to_run.items():
+        fut = pool.submit(_run_one, name, info)
+        futures[fut] = name
+    try:
         for fut in futures:
             try:
-                name, result = fut.result(timeout=timeout)
+                name, result = fut.result(timeout=max(0.0, deadline - time.time()))
                 results[name] = result
             except FuturesTimeout:
                 name = futures[fut]
@@ -1042,8 +1629,23 @@ def run_sources(selected=None, timeout=30):
                     "data": None,
                     "error": f"{type(e).__name__}: {e}",
                 }
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     return results
+
+
+def _exit_now_if_hung():
+    """Executor threads are non-daemon: the interpreter joins them at exit,
+    so one hung source would still hold the launcher after the JSON is
+    written. Hard-exit in that case (atexit hooks skipped on purpose: a hung
+    thread may hold agency_mcp's _lock, which its stop_all needs)."""
+    import threading
+    if any(t.is_alive() for t in threading.enumerate()
+           if t is not threading.main_thread() and not t.daemon):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 # ---------------------------------------------------------------------------
@@ -1086,7 +1688,7 @@ def print_test_table(results):
                 elif "conversation_count" in d:
                     notes = f"conversations={d['conversation_count']}"
                 elif "status" in d:
-                    notes = d["status"]
+                    notes = d.get("reason", d["status"])[:50]
                 else:
                     notes = f"keys={list(d.keys())[:3]}"
 
@@ -1096,13 +1698,13 @@ def print_test_table(results):
             status_str = "\033[32mok\033[0m"
         elif status == "error":
             status_str = "\033[31merror\033[0m"
-        elif status == "timeout":
-            status_str = "\033[33mtimeout\033[0m"
+        elif status in ("timeout", "stale", "missing"):
+            status_str = f"\033[33m{status}\033[0m"
 
         print(f"{name:<25} {status_str:<19} {elapsed:>8}  {notes}")
 
     ok = sum(1 for r in results.values() if r["status"] == "ok")
-    err = sum(1 for r in results.values() if r["status"] != "ok")
+    err = sum(1 for r in results.values() if r["status"] not in ("ok", "skipped"))
     total_ms = sum(r["elapsed_ms"] for r in results.values())
     print("-" * 70)
     print(f"Total: {ok} ok, {err} failed, {total_ms}ms cumulative\n")
@@ -1126,6 +1728,10 @@ def main():
             print(f"  {name}: {desc}")
         return
 
+    # Never let an intake timeout write ~/.config/agency/login-pending.json:
+    # it would refuse every Agency caller on this host for 3 h (v175).
+    os.environ["AGENCY_UNATTENDED"] = "1"
+
     load_credentials()
 
     selected = args.sources.split(",") if args.sources else None
@@ -1134,8 +1740,13 @@ def main():
     results = run_sources(selected=selected, timeout=30)
     duration_ms = round((time.time() - t0) * 1000)
 
+    diag = fda_diagnostic(results)
+
     if args.test:
         print_test_table(results)
+        if diag:
+            print(diag)
+        _exit_now_if_hung()
         return
 
     import socket
@@ -1145,6 +1756,9 @@ def main():
         "duration_ms": duration_ms,
         "sources": results,
     }
+    if diag:
+        output["diagnostics"] = [diag]
+        print(diag, file=sys.stderr)  # lands in .dream-launch.log / agent-run.log
 
     if args.output:
         out_path = Path(args.output)
@@ -1155,7 +1769,13 @@ def main():
     else:
         json.dump(output, sys.stdout, indent=2, default=str)
         print()
+    _exit_now_if_hung()
 
 
 if __name__ == "__main__":
     main()
+    # Hard exit: concurrent.futures registers an atexit hook that joins all
+    # worker threads, which would re-block on any source that blew its timeout.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

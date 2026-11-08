@@ -1015,6 +1015,12 @@ def fetch_today(force=False):
             start_date=(today - dt.timedelta(days=1)).isoformat(),
             end_date=(today + dt.timedelta(days=2)).isoformat(),
         ) or []
+        if view_now().date() != today:
+            # The viewed day changed while this read was in flight (day-nav
+            # during a slow fetch, or midnight): these entries belong to the
+            # OLD day. Drop them; never draw them on, or auto-睡觉 from, the
+            # new one. The next fetch loads the right day.
+            return
         yday = today - dt.timedelta(days=1)
         out = []
         yout = []
@@ -6266,12 +6272,16 @@ def _is_time_based(desc: str) -> bool:
         return bool(name and _habit_tags([name]))
 
 
-def _done_points_path(desc: str) -> str:
+def _done_points_path(desc: str, past_day: bool = False) -> str:
     """task / time / credited / ask for a time entry's /done — decided by
-    lib/janus_done.py so mobile.py (web + iOS) behaves the same."""
+    lib/janus_done.py so mobile.py (web + iOS) behaves the same. `past_day`:
+    completed-today.json is TODAY's record, so on a past-day view nothing
+    counts as crossed off (mobile.py's _done_path passes today=None the same
+    way). Without it, backfilling yesterday's "call steve" after crossing off
+    today's "call steve" credited nothing and marked the row done (v172)."""
     return janus_done.classify(task_points=_resolvable_points(desc),
                                time_based=_is_time_based(desc),
-                               crossed_off=_completed_in_dtd_today(desc))
+                               crossed_off=not past_day and _completed_in_dtd_today(desc))
 
 
 _points_from_answer = janus_done.points_from_answer
@@ -7739,9 +7749,11 @@ def _(event):
     # request 2026-07-27: a run tagged 其他人 credits hcbp points AND 其他人
     # minutes). Meta tags that aren't habit names are filtered out.
     entry_tags: list = []
+    entry_at = None   # Toggl "at": entry_points.claim's made-after-close check
     for _e in STATE.entries:
         if _e.get("id") in (item.get("entry_ids") or []):
             entry_tags = _e.get("tags") or []
+            entry_at = _e.get("at")
             break
     # did-fast recreates the entry from this command (its range trim), so
     # the entry's own single-word tags ride as #tag tokens or they are lost
@@ -7773,7 +7785,7 @@ def _(event):
     # covers a log from dtd, mobile or the other machine. A task closed with
     # no entry yet is this row's points too, even before a fetch linked it.
     if item.get("entry_ids"):
-        entry_points.claim(item["entry_ids"][0], desc, start.date())
+        entry_points.claim(item["entry_ids"][0], desc, start.date(), at=entry_at)
     rec = _recorded_entry_pts(start.date(), item.get("entry_ids") or [])
     if rec is not None:
         flash(f"already logged [{rec}]: not re-running", 6.0)
@@ -7783,7 +7795,7 @@ def _(event):
     # with [N] or a time-based habit/category goes straight to did-fast; a
     # task already crossed off adds nothing; anything else asks instead of
     # silently crediting the minutes at 1x.
-    path = "task" if speedy else _done_points_path(desc)
+    path = "task" if speedy else _done_points_path(desc, past_day=STATE.day_offset != 0)
     if kid and path in ("ask", "credited"):
         path = "time"
     if janus_done.needs_kid(desc, code, entry_tags):
@@ -8482,10 +8494,43 @@ def _release_pid_file():
         PID_FILE.unlink(missing_ok=True)
 
 
+def _off_loop(fn, *args):
+    """Await fn(*args) on a DAEMON thread; the event loop keeps painting.
+
+    Freeze 2026-11-05 06:01 ("both dtd and janus are frozen... I'll have to
+    manually kill the tab"): Straylight woke with DNS down, and every Toggl
+    read sat ~30s in getaddrinfo (urllib's timeout doesn't cover name
+    resolution). ticker_current/ticker_today and main()'s startup reads ran
+    those calls ON the loop, so janus took no keys and drew nothing for ~30s
+    of every 60s, and the first paint came 60s after launch. Daemon thread,
+    not asyncio.to_thread: executor threads are non-daemon and would hold 'q'
+    hostage to a stalled resolver (see _bg_fetch)."""
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+
+    def _settle(ok, val):
+        if not fut.done():
+            (fut.set_result if ok else fut.set_exception)(val)
+
+    def run():
+        try:
+            res, ok = fn(*args), True
+        except BaseException as e:  # noqa: BLE001 — re-raised in the awaiting task
+            res, ok = e, False
+        try:
+            loop.call_soon_threadsafe(_settle, ok, res)
+        except RuntimeError:
+            pass  # loop closed (janus exited mid-fetch): nobody is waiting
+
+    threading.Thread(target=run, daemon=True).start()
+    return fut
+
+
 async def ticker_current(app):
     while True:
         await asyncio.sleep(30)
-        fetch_current()  # shared cache; a live read at most every 5 min
+        # shared cache; a live read at most every 5 min — off the loop (_off_loop)
+        await _off_loop(fetch_current)
         _assert_pid_file()
         app.invalidate()
 
@@ -8493,7 +8538,7 @@ async def ticker_current(app):
 async def ticker_today(app):
     while True:
         await asyncio.sleep(300)
-        fetch_today()
+        await _off_loop(fetch_today)  # network: never on the loop (_off_loop)
         app.invalidate()
 
 
@@ -8611,6 +8656,15 @@ def _bg_fetch(app, fn):
     threading.Thread(target=run, daemon=True).start()
 
 
+async def _startup_toggl_fetches(app):
+    """Startup Toggl reads, off the loop: one live current read (then the
+    shared cache), and a forced day load (must not be throttled/coalesced)."""
+    await _off_loop(fetch_current, False)
+    app.invalidate()
+    await _off_loop(fetch_today, True)
+    app.invalidate()
+
+
 async def _initial_slow_fetches(app):
     """First gcal + points load, off the event loop. These take ~4-15s
     (Excel-over-ssh, gcal/outlook subprocess timeouts); running them before
@@ -8635,9 +8689,12 @@ async def main():
     except Exception:  # noqa: BLE001
         pass
 
-    # Fast fetches only (sub-second) — enough content for an instant first paint.
-    fetch_current(cached=False)  # startup: one live read, then the shared cache
-    fetch_today(True)  # forced: the startup load must not be throttled/coalesced
+    # First paint from local state only: the viewed day's last-confirmed
+    # entries cache + dtd's short names. The startup Toggl reads (one live
+    # current read, one forced day load) run right after, off the loop — they
+    # used to run here and, with DNS down (2026-11-05), held the terminal
+    # blank for 60s before the first frame.
+    _load_viewed_day_cache(force=True)
     fetch_short_names()  # dtd's abbreviated labels (local file read)
 
     # SIGUSR1 → instant refresh (sent by /did, /tg, /done after timer changes)
@@ -8656,6 +8713,7 @@ async def main():
     # Arm the boot grace from the moment the app actually takes the tty
     STATE.boot_time = time.monotonic()
 
+    app.create_background_task(_startup_toggl_fetches(app))
     app.create_background_task(_initial_slow_fetches(app))
     app.create_background_task(ticker_current(app))
     app.create_background_task(ticker_today(app))

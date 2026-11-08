@@ -3,6 +3,7 @@
 the ctrl-z pre-image parser keep working; daemon-down falls back to ix-osa."""
 from __future__ import annotations
 
+from datetime import date
 import importlib.util
 import sys
 from pathlib import Path
@@ -30,8 +31,8 @@ def _w(df, name, col_num, value=1):
 def test_daemon_path_synthesizes_echo_and_pre_images(df, monkeypatch):
     seen = {}
 
-    def fake_batch_write(sheet, writes, *, date=None, row=None, src=None):
-        seen.update(sheet=sheet, writes=writes, date=date, src=src)
+    def fake_batch_write(sheet, writes, *, date=None, row=None, src=None, fallback=True):
+        seen.update(sheet=sheet, writes=writes, date=date, src=src, fallback=fallback)
         return {"ok": True, "row": 293, "results": [
             {"ok": True, "col": "AE", "value": "1", "formula": "1", "chain": "ok",
              "before_value": "", "mode": "set"},
@@ -47,6 +48,7 @@ def test_daemon_path_synthesizes_echo_and_pre_images(df, monkeypatch):
     assert seen["writes"] == [{"col": "AE", "value": 1, "mode": "set"},
                               {"col": "AJ", "value": 15, "mode": "add"}]   # xk20 is cumulative
     assert seen["src"] == "did hiit, xk20"
+    assert seen["fallback"] is False   # no ssh per-cell writes under the raw-script fallback
     assert res.returncode == 0
     assert df.verify_0n_output(res.stdout, writes) is None                # echo satisfies verify
     assert df.parse_pre_lines(res.stdout) == {"31": "", "36": "30"}       # ctrl-z pre-images
@@ -91,8 +93,8 @@ def _w1n(df, name, col, value=1, cumulative=0, variable=False):
 def test_1n_daemon_path_maps_modes_and_synthesizes_echo(df, monkeypatch):
     seen = {}
 
-    def fake_bw(sheet, writes, *, date=None, row=None, src=None):
-        seen.update(sheet=sheet, writes=writes, date=date, src=src)
+    def fake_bw(sheet, writes, *, date=None, row=None, src=None, fallback=True):
+        seen.update(sheet=sheet, writes=writes, date=date, src=src, fallback=fallback)
         return {"ok": True, "row": 20, "results": [
             {"ok": True, "col": "D", "value": "75", "formula": "=0+30+45", "before": "=0+30",
              "before_value": "30", "mode": "append", "chain": "ok"},
@@ -107,6 +109,7 @@ def test_1n_daemon_path_maps_modes_and_synthesizes_echo(df, monkeypatch):
               _w1n(df, "问学 wk", "S", cumulative=20)]
     res = df.write_1n_via_daemon(writes, "10.3")
     assert seen["sheet"] == "1n+" and seen["date"] == "10.3"
+    assert seen["fallback"] is False   # appends: ssh fallback + raw script = double credit
     assert seen["writes"] == [{"col": "D", "value": "+45", "mode": "append"},
                               {"col": "K", "value": 1, "mode": "set"},
                               {"col": "S", "value": "+20", "mode": "append"}]
@@ -179,3 +182,22 @@ def test_timed_out_daemon_write_is_failed_not_retried_by_raw_script(df, monkeypa
     w1 = df.RouteResult(item=item, step="1n", col_letter="P", write_value=1)
     r1 = df.write_1n_via_daemon([w1], "11.1")
     assert r1 is not None and r1.returncode == 1
+
+
+@pytest.mark.parametrize("which", ["0n", "1n"])
+def test_daemon_down_does_not_write_twice(df, monkeypatch, which):
+    """2026-11-06 (Dream v180 code-review): daemon refused but ssh up. The
+    client's per-cell ssh fallback landed the append, returned fallback=True,
+    and did-fast then ran its raw script, which appended again (+45 twice on
+    a variable 1n+ card). The raw script must be the only daemon-down write."""
+    landed = []
+    monkeypatch.setattr(df.neon_excel, "_curl_ex", lambda *a, **k: (None, False))
+    monkeypatch.setattr(df.neon_excel, "_ssh_fallback",
+                        lambda op, sheet, col, *a, **k: landed.append((sheet, col)) or
+                        {"ok": True, "row": 20, "col": col, "value": "1", "fallback": True})
+    if which == "1n":
+        res = df.write_1n_via_daemon([_w1n(df, "family", "D", value=45, variable=True)], "10.3")
+    else:
+        res = df.write_0n_via_daemon([_w(df, "hiit", 31, 20)], "10/19")
+    assert res is None            # main() runs the raw script next
+    assert landed == []           # so nothing may have been written already

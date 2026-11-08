@@ -9,6 +9,9 @@ unchanged formula is journaled as `snapshot`: that is how the rule-engine
 parallel run (lib/neon/rules.py, tools/neon-ledger/neon.py diff) gets Excel's
 truth for the formula cells (0分 D, G:O, P..Z) and for every 0n / hcbi
 constant it must derive from. Cron on ix: 03:50 and 23:55 (config/ix.crontab).
+Then adopts the day's hand-typed hcbi edits into the ledger as source=hand
+(lib/neon/adopt.py; ledger-only, never writes Excel) so the 04:05 strict
+diff sees them.
 
 Sheets / ranges:
   0分  D..Z   (Σ, E/F, blocks, points)       for yesterday + today
@@ -20,6 +23,7 @@ import datetime
 import json
 import sys
 import urllib.request
+from pathlib import Path
 
 URL = "http://127.0.0.1:9876/reconcile"
 
@@ -43,6 +47,41 @@ def span(a: str, b: str) -> list:
     return [col_letter(i) for i in range(col_num(a), col_num(b) + 1)]
 
 
+MAX_BACKFILL_DAYS = 14      # how far back a backfilled day is re-snapshotted
+MAX_EXTRA_DATES = 5         # cap per run: 3 daemon calls per date
+
+
+def backfilled_dates(today: datetime.date) -> list:
+    """Days before yesterday that got a pipeline write in the last 26 h
+    (/0n, caf, out, hiit backfills). Without a fresh snapshot their 0分
+    observation stays the pre-backfill value and the strict check reports
+    phantom misses (11-01 W: +100 reported, live gap 2.6). Newest first,
+    capped; any failure → [] (the old two-day behaviour)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+        from neon import ledger
+        c = ledger.connect()
+        try:
+            ledger.catch_up(c)          # client fallbacks reach only the JSONL
+            ledger.repair_dates(c)
+            since = (datetime.datetime.now() - datetime.timedelta(hours=26)).strftime("%Y-%m-%dT%H:%M:%S")
+            lo = (today - datetime.timedelta(days=MAX_BACKFILL_DAYS)).isoformat()
+            hi = (today - datetime.timedelta(days=1)).isoformat()
+            rows = c.execute(
+                """SELECT DISTINCT COALESCE(e.date, rd.date) AS d FROM events e
+                     LEFT JOIN row_dates rd ON rd.sheet = e.sheet AND rd.row = e.row
+                    WHERE e.ts >= ? AND e.kind IN ('set','credit','credit_ref','text')
+                      AND e.sheet IN ('0分','0n','hcbi')
+                      AND COALESCE(e.date, rd.date) >= ? AND COALESCE(e.date, rd.date) < ?
+                    ORDER BY d DESC""", (since, lo, hi)).fetchall()
+        finally:
+            c.close()
+        return [datetime.date.fromisoformat(r[0]) for r in rows if r[0]][:MAX_EXTRA_DATES]
+    except Exception as e:  # noqa: BLE001
+        print(f"backfilled_dates: {type(e).__name__}: {e}", file=sys.stderr)
+        return []
+
+
 RANGES = {"0分": span("D", "Z"), "0n": span("D", "BK"), "hcbi": span("E", "BE")}
 WEEK_ROW5 = span("C", "AL")   # 1n+ row 5: expected points the 0分 credits reference
 
@@ -61,7 +100,7 @@ def main() -> int:
     today = datetime.date.today()
     rc = 0
     jobs = []
-    for d in (today - datetime.timedelta(days=1), today):
+    for d in backfilled_dates(today) + [today - datetime.timedelta(days=1), today]:
         for sheet, cols in RANGES.items():
             jobs.append({"sheet": sheet, "date": f"{d.month}/{d.day}", "cols": cols, "snapshot": True})
     # 0n row 2 = the habit weights the rule engine applies; a changed weight is
@@ -75,7 +114,30 @@ def main() -> int:
         print(f"{stamp} {body['sheet']} {body.get('date') or 'r' + str(body.get('row'))} "
               f"changes={n}", flush=True)
         rc |= 0 if out.get("ok") else 1
+    rc |= adopt_hand_edits([(today - datetime.timedelta(days=1)).isoformat(), today.isoformat()])
     return rc
+
+
+def adopt_hand_edits(dates: list) -> int:
+    """After the reconcile has journaled Excel's edits, adopt the hand-typed
+    hcbi ones into the ledger as source=hand (lib/neon/adopt.py). Ledger-only:
+    never writes Excel. NEON_ADOPT=0 disables. A failure here must not hide
+    the reconcile's own result, so it is logged and reported as rc 1."""
+    import os
+    if os.environ.get("NEON_ADOPT", "1") == "0":
+        return 0
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+        from neon import adopt
+        out = adopt.run(dates)
+    except Exception as e:  # noqa: BLE001
+        print(f"hand-adopt FAILED: {type(e).__name__}: {e}", flush=True)
+        return 1
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    print(f"{stamp} hand-adopt {','.join(dates)} adopted={len(out)}", flush=True)
+    for e in out:
+        print(f"  {e['sheet']}!{e['col']}{e['row']}: {e['ledger_before']!r} -> {e['after']!r}", flush=True)
+    return 0
 
 
 if __name__ == "__main__":

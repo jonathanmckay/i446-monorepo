@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import re
 import sys
 import urllib.error
@@ -32,7 +33,23 @@ from urllib.parse import quote
 # Constants (same as did-fast.py)
 # ---------------------------------------------------------------------------
 
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+def _todoist_token() -> str:
+    """lib/todoist.py's lookup order (token file, then env), plus the keychain
+    item the Ix scripts use. The secret is never hard-coded (2026-10-30)."""
+    f = Path.home() / ".config/todoist/token"
+    if f.exists():
+        return f.read_text().strip()
+    for k in ("TODOIST_TOKEN", "TODOIST_API_TOKEN", "TODOIST_API_KEY"):
+        if os.environ.get(k):
+            return os.environ[k].strip()
+    try:
+        return subprocess.run(["security", "find-generic-password", "-s", "todoist-api-key", "-w"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+TODOIST_TOKEN = _todoist_token()
 TODOIST_BASE = "https://api.todoist.com/api/v1"
 
 POINTS_RE = re.compile(r"\[(\d+)\]")
@@ -56,6 +73,10 @@ DEFAULT_CLAIMED_POINTS = 2
 # is IDENTICAL in content to the card its recurring parent regenerates — two
 # stale undated "AoS (15) [15]" copies caused the 2026-07-24 dtd same-name
 # mess. The date stamp keeps every deferred copy distinct.
+# All recurring copies joined 2026-11-02: an xk87-only recurring task (no
+# habit label) produced exact twins of its parent's next card (6hvVF42cGQ6G8Jqc
+# / 6hvV7wVCF3fQ3qcw). handle_recurring now stamps every copy; HABIT_LABELS
+# still gates the habits-deferred marker.
 HABIT_LABELS = {"0neon", "夜neon", "1neon"}
 
 
@@ -72,6 +93,18 @@ def deferred_marker_path(when: date | None = None) -> Path:
     list reload and undo-fast removes the id on ctrl-z."""
     return (Path.home() / ".cache/jm"
             / f"habits-deferred-{(when or date.today()).isoformat()}.ids")
+
+
+def deferred_mirror_path(when: date | None = None) -> Path:
+    """This host's Syncthing-carried copy of the per-day marker, in vault
+    z_ibx (dtd.sh/dtd.py union every host's). Undo-fast clears the id here
+    too, and must compute the same host slug. A function (not inline) so tests
+    can redirect it — inline, every pytest run appended TASK123/TASK456 to
+    the live vault file."""
+    import socket
+    host = re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
+    return (Path.home() / "vault/z_ibx"
+            / f"habits-deferred-{host}-{(when or date.today()).isoformat()}.ids")
 
 
 def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
@@ -93,10 +126,7 @@ def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
     # its own ~/.cache/jm). Append the id to a per-host copy in the vault
     # z_ibx, which Syncthing carries to every host; dtd.py unions them all.
     try:
-        import socket
-        host = re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
-        m = (Path.home() / "vault/z_ibx"
-             / f"habits-deferred-{host}-{date.today().isoformat()}.ids")
+        m = deferred_mirror_path()
         if m.parent.is_dir():
             with open(m, "a") as f:
                 f.write(f"{task_id}\n")
@@ -430,6 +460,12 @@ def handle_recurring(task: dict, target_date: str,
     skip_copy=True ("0"/blank defer target): the occurrence is skipped, not
     carried — no one-off copy is created; the parent just advances to its next
     natural occurrence, which becomes the reported target_date.
+
+    Absorbed defer: when target_date is on/after the parent's next occurrence
+    and the copy would be content-identical to the parent (i.e. not a dated
+    habit copy), the copy is redundant — the advanced parent already surfaces
+    the same task on/before the target. It is treated exactly like skip mode
+    (no copy, target_date = next occurrence, "absorbed": True in the result).
     """
     task_id = task["id"]
     content = task["content"]
@@ -451,15 +487,30 @@ def handle_recurring(task: dict, target_date: str,
 
     # 1. One-off deferred copy of THIS occurrence (non-recurring), due target.
     #    Skip mode carries nothing — the occurrence is simply skipped.
-    #    Daily habits (0neon/夜neon) get the origin date stamped into the copy
-    #    so it stays distinct from the daily card (see HABIT_LABELS).
+    #    Every created copy gets the origin date stamped in so it stays
+    #    distinct from the card the parent regenerates (2026-11-02: an
+    #    xk87-only recurring task deferred into an exact twin of its parent's
+    #    next card, 6hvVF42cGQ6G8Jqc / 6hvV7wVCF3fQ3qcw).
+    #
+    #    Bug (2026-10-23): "→ 2026-10-23 (recurring; next 2026-10-23)" — the
+    #    copy was made unconditionally, so a target on/after next_date left
+    #    two same-day tasks (the copy + the advanced parent). A non-habit copy
+    #    whose target is not BEFORE next_date is absorbed by the parent's own
+    #    next occurrence. Habit copies (HABIT_LABELS) are deliberately
+    #    distinct catch-up cards and are still created.
     copy = None
     copy_content = content
-    if skip_copy:
+    absorbed = False
+    if not skip_copy and not (HABIT_LABELS & set(labels)):
+        try:
+            absorbed = date.fromisoformat(str(target_date)[:10]) >= date.fromisoformat(next_date)
+        except ValueError:
+            absorbed = False  # unparsed target: keep the old copy behavior
+    if skip_copy or absorbed:
+        skip_copy = True
         target_date = next_date
     else:
-        if HABIT_LABELS & set(labels):
-            copy_content = _dated_copy_content(content, current_due)
+        copy_content = _dated_copy_content(content, current_due)
         copy = create_task(copy_content, labels, project_id, target_date, priority)
 
     # 2. Posthoc eval record (due today, immediately closed) — created and
@@ -514,6 +565,7 @@ def handle_recurring(task: dict, target_date: str,
         "remaining_points": total_points,
         "closed": False,
         "deferred_copy_content": copy_content if copy else None,
+        "absorbed": absorbed,
         "stubs": {"today": posthoc["id"],
                   "deferred_copy": copy["id"] if copy else None,
                   "future": task_id},

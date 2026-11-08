@@ -611,9 +611,10 @@ def _as_text_setter(value) -> str:
 
 def do_batch_write(req: dict) -> dict:
     """N value/formula writes to one sheet/date in ONE osascript call:
-    {sheet, date|row, writes: [{col, value, mode?: "set"|"add"|"append", src?}], src?}.
+    {sheet, date|row, writes: [{col, value, mode?: "set"|"add"|"max"|"append", src?}], src?}.
     `mode: "add"` adds to a numeric cell (0n cumulative habits: 问学, xk20…),
-    first write on a blank/0 cell behaves like "set"; `mode: "append"` is
+    first write on a blank/0 cell behaves like "set"; `mode: "max"` sets a
+    numeric cell only if blank or below the value (o314 day total); `mode: "append"` is
     /append's formula concatenation ("+45" → `=old+45`, journaled as kind
     append) for 1n+ minutes and hcbi. Each cell is journaled
     (and double-written to the semantic ledger) individually, with its
@@ -645,6 +646,14 @@ def do_batch_write(req: dict) -> dict:
                       f'        set value of theCell to {value}\n'
                       f'    else\n'
                       f'        set value of theCell to (oldValue as number) + {value}\n'
+                      f'    end if')
+        elif mode == "max" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            # Never lower the cell: a day-total write (o314) that would be
+            # below what is already there is a no-op (did-fast 2026-11-04).
+            setter = (f'if oldValue = "" then\n'
+                      f'        set value of theCell to {value}\n'
+                      f'    else if (oldValue as number) < {value} then\n'
+                      f'        set value of theCell to {value}\n'
                       f'    end if')
         elif mode == "text":
             setter = _as_text_setter(value)

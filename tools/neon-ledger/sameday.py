@@ -22,9 +22,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 MONO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(MONO / "lib"))
@@ -36,7 +38,9 @@ CARD = "⚠ Neon ledger drift today"
 COL_CODE = {"Q": "0g", "R": "i9", "S": "m5x2", "T": "g245", "U": "hcmc",
             "V": "hcm", "W": "hcb", "X": "xk87", "Y": "s897"}
 
-_CELL = re.compile(r"^(0n|hcbi)!([A-Z]+)\d*(?:\((.+?)\))?: Excel (\S+), ledger (\S+)")
+# Values are bare (1, blank) or `backticked` when the cell holds a formula
+# (rules._ref_diffs); a formula may contain ", " so match backticks exactly.
+_CELL = re.compile(r"^(0n|hcbi)!([A-Z]+)\d*(?:\((.+?)\))?: Excel (`[^`]*`|\S+), ledger (`[^`]*`|\S+)")
 HEADERS = Path.home() / ".claude/skills/did/headers.json"
 ADOPT = "sameday.py adopt"
 _TYPED = re.compile(r"^([+-]\d+(?:\.\d+)?) in (?:Excel|0分) formula, never journaled")
@@ -51,9 +55,12 @@ def _num(s: str) -> str:
         return s
 
 
-def fixes(misses: list[dict]) -> list[str]:
-    """One actionable line per cause in the strict check's misses."""
+def fixes(misses: list[dict], day: Optional[dt.date] = None) -> list[str]:
+    """One actionable line per cause in the strict check's misses. `day` is
+    the checked date: adopt lines name it unless it is today, since adopt
+    defaults to today's row."""
     out: list[str] = []
+    on = f" --date {day.isoformat()}" if day and day != dt.date.today() else ""
     for m in misses:
         col, code = m["col"], COL_CODE.get(m["col"], "?")
         for why in m.get("why") or []:
@@ -64,12 +71,14 @@ def fixes(misses: list[dict]) -> list[str]:
             if z:
                 sheet, cell, hdr, xv, lv = z.groups()
                 hdr = " ".join((hdr or cell).replace("\xa0", " ").split())
-                cleared = xv in ("—", "None", "blank", "''")
+                xv = xv.strip("`")
+                cleared = xv in ("—", "None", "blank", "''", "")
                 # Re-set the same value through the daemon. Not /did: it adds
                 # for cumulative habits, closes the card and can credit again.
-                v = "''" if cleared else _num(xv)
-                what = "cleared" if cleared else f"= {_num(xv)} typed"
-                out.append(f"{sheet}!{cell} ({hdr}) {what} in Excel → `{ADOPT} {sheet}!{cell} {v}`")
+                v = "''" if cleared else shlex.quote(_num(xv))
+                what = ("cleared" if cleared else f"formula {xv} typed" if xv.startswith("=")
+                        else f"= {_num(xv)} typed")
+                out.append(f"{sheet}!{cell} ({hdr}) {what} in Excel → `{ADOPT} {sheet}!{cell} {v}{on}`")
             elif t:
                 n = t.group(1)
                 out.append(f"0分!{col} has {n} typed into Excel → delete it from the cell, then "
@@ -156,7 +165,7 @@ def main() -> int:
     if res["pass"]:
         print(f"{day}: clean")
         return 0
-    lines = fixes(res["misses"])
+    lines = fixes(res["misses"], day)
     if not lines:
         print(f"{day}: incomplete (no observation yet), no card")
         return 0

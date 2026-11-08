@@ -161,3 +161,60 @@ def test_credit_lines_stay_out_of_entry_records(store):
 def test_no_credits_is_a_no_op_and_tests_stay_out(monkeypatch):
     monkeypatch.delenv("ENTRY_POINTS_DIR", raising=False)
     assert ep.link([_entry()], TODAY) == {} and ep.claim("9", "1 i447", TODAY) is None
+
+
+# ── rule (a), Dream v180: a credit goes only to an entry started on or before
+# the close day, in link() and claim() alike ─────────────────────────────────
+MON, WED = dt.date(2026, 11, 2), dt.date(2026, 11, 4)
+
+
+def _weekly(day=MON, weekly=True, cid="1hcb@2026-11-02"):
+    ep.record_credit(cid, ["1 hcb (60) [60]"], 60, day, SAT, weekly=weekly)
+
+
+def test_a_mid_week_catch_up_does_not_take_mondays_weekly_credit(store):
+    """Monday's 1 hcb closed with no entry; Wednesday's session is week_fill's
+    catch-up of last week, so it must log on its own."""
+    _weekly()
+    wed = _entry("9", desc="1 hcb", when=(2026, 11, 4, 7, 0))
+    assert ep.link([wed], WED) == {}
+    assert ep.claim("9", "1 hcb", WED) is None
+    assert ep.for_day("2026-11-04") == {}
+
+
+def test_an_entry_on_the_close_day_still_takes_the_credit(store):
+    _weekly()
+    assert ep.link([_entry("9", desc="1 hcb", when=(2026, 11, 2, 7, 0))], WED) == {"9": 60}
+
+
+def test_a_weekly_credit_takes_a_backfill_from_earlier_in_its_week(store):
+    _weekly()
+    sun = _entry("9", desc="1 hcb", when=(2026, 11, 1, 7, 0))
+    last_week = _entry("8", desc="1 hcb", when=(2026, 10, 31, 7, 0))
+    assert ep.link([last_week, sun], WED) == {"9": 60}
+
+
+def test_a_saturday_close_is_still_weekly(store):
+    """_credit_until gives until == day on a Saturday: the flag, not the
+    dates, says the card is weekly."""
+    _weekly(day=SAT, cid="1hcb@2026-11-07")
+    assert ep.claim("9", "1 hcb", WED) == 60
+
+
+def test_a_daily_credit_takes_only_its_own_day(store):
+    ep.record_credit("d@2026-11-05", ["1 i447"], 25, TODAY, TODAY, weekly=False)
+    assert ep.link([_entry("8", when=(2026, 11, 4, 9, 0))], TODAY) == {}
+    assert ep.claim("8", "1 i447", dt.date(2026, 11, 4)) is None
+    assert ep.claim("9", "1 i447", TODAY) == 25
+
+
+def test_old_lines_without_the_flag_infer_weekly_from_until(store):
+    _credit()                    # TODAY..SAT, no flag: weekly
+    assert ep.claim("9", "1 i447", dt.date(2026, 11, 6)) is None
+    assert ep.claim("9", "1 i447", dt.date(2026, 11, 3)) == 25
+
+
+def test_claim_checks_the_entry_was_made_after_the_close(store):
+    _credit()
+    assert ep.claim("9", "1 i447", TODAY, at="2026-01-01T00:00:00+00:00") is None
+    assert ep.claim("9", "1 i447", TODAY, at="2099-01-01T00:00:00+00:00") == 25

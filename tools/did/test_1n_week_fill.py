@@ -103,7 +103,8 @@ def test_both_writers_use_the_resolver_and_skip_past_dates():
 
 def test_did_fast_keeps_row_and_pre_image_per_group():
     fast = _src("did-fast.py")
-    assert 'week_row_by_col.get(r.col_letter, week_row)' in fast
+    # a failed group's entry gets no row, never the last good group's (b073b48e)
+    assert 'week_row_by_col.get(r.col_letter)  # failed batch' in fast
     assert "pre_1n.update(parse_pre_lines(_group_result.stdout))" in fast
     assert "one_n_result = parse" not in fast
 

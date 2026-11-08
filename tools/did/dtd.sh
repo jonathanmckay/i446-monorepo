@@ -1840,6 +1840,10 @@ print -- "\$EPOCHREALTIME\tedit-end\t\$1" >> "\$TIMING" 2>/dev/null
 {
 trap '' HUP
 out=\$(python3 "\$EDIT_FAST" --fields --id "\$1" "$DTD_CACHE_FILE" --json "\$_out" 2>&1)
+_efrc=\$?
+# Failed save (2026-11-05): keep the form's answers for the record log below
+# before the result file goes, so the typed edit can be recovered.
+_form=""; (( _efrc != 0 )) && _form="\$(<"\$_out")" 2>/dev/null
 rm -f "\$_out"
 # Drop task-detail's 10-min cache so ctrl-o / a re-edit shows the new title.
 rm -f "\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/task-detail/\$1.json" 2>/dev/null
@@ -1858,6 +1862,8 @@ if [[ -n "\$_split_line" ]]; then
   "/tmp/dtd-$DTD_ID.split.sh" "\$1" "\$pts" "\$done_name" "" "\$rem_pts" "\$done_min" "\$rem_min" "\$done_short" "\$rem_short" "\$done_bonus" "\$rem_bonus" "\$rem_due" "\$keep"
 else
   echo "\${out:-✗ edit failed}" > "\$HDR"
+  # a crash (traceback, no ✗ line): show its last line, not the first
+  (( _efrc != 0 )) && [[ "\$out" != ✗* ]] && echo "✗ edit not saved (rc \$_efrc): \${\${\${(f)out}[-1]}:0:120}" > "\$HDR"
   _port="\$(cat "$DTD_PORT" 2>/dev/null)"
   if [[ -n "\$_port" ]]; then
     _today="\$(date +%Y-%m-%d)"
@@ -1870,7 +1876,17 @@ else
   fi
   "/tmp/dtd-$DTD_ID.bgrefresh.sh"   # then the ctrl-r pull, so Todoist-side changes show (2026-10-22)
 fi
-print -- "\$EPOCHREALTIME\tedit-saved\t\$1" >> "\$TIMING" 2>/dev/null
+# edit-saved only when edit-fast succeeded (2026-11-05, "a failed save leaves
+# no record": it was stamped unconditionally, and the ✗ line lived only in
+# the header, which the next action overwrites). A failure stamps edit-failed
+# and appends a kind=edit record (rc, edit-fast's output, the form's answers)
+# to the synced record log, so dtd-log.py shows it on either machine.
+if (( _efrc == 0 )); then
+  print -- "\$EPOCHREALTIME\tedit-saved\t\$1" >> "\$TIMING" 2>/dev/null
+else
+  print -- "\$EPOCHREALTIME\tedit-failed\t\$1 rc=\$_efrc" >> "\$TIMING" 2>/dev/null
+  DTD_EF_OUT="\$out" DTD_EF_FORM="\$_form" python3 -c 'import json, os, sys, time; print(json.dumps({"ts": time.time(), "host": sys.argv[1], "sid": sys.argv[2], "kind": "edit", "status": "failed", "id": sys.argv[3], "rc": int(sys.argv[4]), "output": os.environ.get("DTD_EF_OUT", "")[-600:], "form": os.environ.get("DTD_EF_FORM", "")[:4000]}, ensure_ascii=False))' "$DTD_HOSTSLUG" "$DTD_ID" "\$1" "\$_efrc" >> "$DTD_RECLOG" 2>/dev/null
+fi
 } </dev/null >> "/tmp/dtd-edit.log" 2>&1 &!
 
 EDITEOF
@@ -3089,9 +3105,9 @@ for s in d.values():
   # after a successful DELETE (a failed delete must not be undoable, or
   # ctrl-z would recreate a task that still exists)
   pre=\$(curl -s "https://api.todoist.com/api/v1/tasks/\$tid" \\
-    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
+    -H "Authorization: Bearer \$(cat ~/.config/todoist/token)" 2>/dev/null)
   code=\$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "https://api.todoist.com/api/v1/tasks/\$tid" \\
-    -H "Authorization: Bearer 7eb82f47aba8b334769351368e4e3e3284f980e5" 2>/dev/null)
+    -H "Authorization: Bearer \$(cat ~/.config/todoist/token)" 2>/dev/null)
   if [[ "\$code" == 2* ]]; then
     printf '%s' "\$pre" | python3 -c "
 import json, sys
@@ -3231,7 +3247,7 @@ trap '' HUP   # outlive the tty: a dtd exit (or a closing pane) mid-write must n
 python3 -c "
 import json, re, sys, urllib.request
 
-TOKEN = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+TOKEN = open(__import__('os').path.expanduser('~/.config/todoist/token')).read().strip()
 BASE = 'https://api.todoist.com/api/v1'
 HDR = {'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'}
 
@@ -3352,10 +3368,11 @@ if remaining_bonus > 0:
     _tags.append(f'{{{remaining_bonus}}}')
 new_content = ' '.join([remaining_desc or clean] + _tags)
 if keep_rem:
-    api('POST', f'/tasks/{tid}', {
-        'content': new_content,
-        'due_date': rem_date,
-    })
+    _body = {'content': new_content}
+    # a plain due_date strips a recurring task's cadence (v169 review)
+    if not (task.get('due') or {}).get('is_recurring'):
+        _body['due_date'] = rem_date
+    api('POST', f'/tasks/{tid}', _body)
 else:
     api('POST', f'/tasks/{tid}/close')
 if rem_short and keep_rem:
@@ -3404,7 +3421,7 @@ if not label_arg:
 # 'Rev on ground transit. Buy nightshade, 2' logged its 10 points as '2').
 # NB: NO bare double quotes in this comment — they terminate the enclosing
 # python -c string and silently break the whole split (see line ~551).
-safe_name = re.sub(r'[,;]+', ' ', clean)
+safe_name = re.sub(r'[,;，；]+', ' ', clean)  # fullwidth too: did-fast splits on them
 def _credit(item):
     df = subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/did-fast.py', '--points-only', item],
                         capture_output=True, text=True, timeout=30)
@@ -3438,6 +3455,7 @@ record = {
     'didfast': didfast_out,
     'didfast_bonus': didfast_bonus,
     'closed': not keep_rem,
+    'recurring': bool((task.get('due') or {}).get('is_recurring')),
 }
 subprocess.run(['python3', '$HOME/i446-monorepo/tools/did/undo-fast.py',
                 '--append', 'PLACEHOLDER_JOURNAL'],
@@ -3513,7 +3531,7 @@ python3 "$TOGGL_CLI" start "$clean" $project >/dev/null 2>&1
 python3 -c "
 import json, sys, urllib.request
 q = sys.argv[1].lower()
-TOKEN = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+TOKEN = open(__import__('os').path.expanduser('~/.config/todoist/token')).read().strip()
 try:
     with open(sys.argv[2]) as f:
         d = json.load(f)
@@ -3693,7 +3711,15 @@ DTD_BGREFRESH="/tmp/dtd-$DTD_ID.bgrefresh.sh"
 cat > "$DTD_BGREFRESH" << BGREFRESHEOF
 #!/bin/zsh
 [[ -n "\${DTD_WARM:-}" ]] && exit 0
-python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 && cp "$CACHE" "$DTD_CACHE_FILE"
+# ctrl-r's worker (2026-11-06, see DTD_REFRESH): runs detached, so it owns the
+# header — success or failure lands in \$DTD_HDR and is pushed to fzf below.
+if python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1; then
+  cp "$CACHE" "$DTD_CACHE_FILE"
+  echo "🔄 refreshed" > "$DTD_HDR"
+else
+  echo "⚠ refresh failed (offline?) — showing the saved list" > "$DTD_HDR"
+fi
+rm -f "$DTD_BGREFRESH.pid"
 _port="\$(cat "$DTD_PORT" 2>/dev/null)"
 [[ -n "\$_port" ]] || exit 0
 _reload="$DTD_LIST '$DTD_CACHE_FILE' '$DTD_DONE_FILE' '$DTD_REMOVED' '\$(date +%Y-%m-%d)' '${COLUMNS:-80}' '$DTD_SKIPPED' '$DTD_TIMER' '$DTD_VIEW' '$DTD_BLOCKPICK' '$DTD_DOMAIN'"
@@ -3718,10 +3744,31 @@ cat > "$DTD_REFRESH" << REFRESHEOF
 #!/bin/zsh
 [[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}refresh\${_T}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
-python3 "$DID_FAST" --refresh-cache
-cp "$CACHE" "$DTD_CACHE_FILE"
+# Never block fzf on the network (freeze 2026-11-05 06:01, "both dtd and
+# janus are frozen... I'll have to manually kill the tab"): this script runs
+# under execute-silent, which takes no keys until it exits, and the refresh it
+# used to run inline (lock wait <=20s, then Todoist reads that each sat ~30s in
+# DNS on a laptop that woke offline, with retries) held dtd dead for minutes.
+# Now the refresh runs detached in \$DTD_BGREFRESH, which writes the header and
+# reload-syncs fzf itself when it lands. A healthy refresh (1-4 s) still lands
+# inside the 3 s grace below, so online ctrl-r looks the same as before. One
+# refresh at a time: mashing ctrl-r offline must not stack did-fast processes.
+_pf="$DTD_BGREFRESH.pid"
+if [[ -r "\$_pf" ]] && kill -0 "\$(<"\$_pf")" 2>/dev/null; then
+  echo "⏳ refresh still running (offline?) — the list updates when it lands" > "$DTD_HDR"
+else
+  echo "⏳ refreshing…" > "$DTD_HDR"
+  "$DTD_BGREFRESH" </dev/null >/dev/null 2>&1 &!
+  _bp=\$!
+  print -r -- "\$_bp" > "\$_pf"
+  # Builtins only (zselect, EPOCHREALTIME): an external sleep per 0.1 s
+  # turn more than doubled the wall time under Defender exec scans.
+  zmodload zsh/zselect 2>/dev/null
+  _dl=\$(( EPOCHREALTIME + 3 ))
+  while (( EPOCHREALTIME < _dl )) && kill -0 "\$_bp" 2>/dev/null; do zselect -t 10; done
+  kill -0 "\$_bp" 2>/dev/null && echo "⏳ refresh still running (offline?) — the list updates when it lands" > "$DTD_HDR"
+fi
 : > "$DTD_DOMAIN"   # ctrl-r also clears the domain-search scope
-echo "🔄 refreshed" > "$DTD_HDR"
 # Reset any mouse-tracking mode a child enabled, and drain any bytes already
 # queued in the tty buffer from scroll/click events during the refresh above
 # — leaked SGR motion sequences type themselves into fzf's query as literal
@@ -4330,5 +4377,5 @@ kill "$TALLY_PID" 2>/dev/null
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
 stty susp '^Z' < /dev/tty 2>/dev/null   # give ^Z back to the shell (see DTD_ID)
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_BGREFRESH.pid" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
 rm -rf "$DTD_RESOLVED_DIR" 2>/dev/null

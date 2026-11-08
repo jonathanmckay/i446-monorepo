@@ -28,7 +28,10 @@ WID = "2092616"
 def log(m): print(m, flush=True)
 
 # --- Toggl ---
-TKEY = json.load(open(CLAUDE_JSON))["mcpServers"]["toggl_server"]["env"]["TOGGL_API_KEY"]
+try:
+    TKEY = json.load(open(CLAUDE_JSON))["mcpServers"]["toggl_server"]["env"]["TOGGL_API_KEY"]
+except (OSError, KeyError, ValueError):
+    TKEY = ""  # importable without credentials (tests); requests will 403
 THDR = {"Authorization": "Basic " + base64.b64encode((TKEY+":api_token").encode()).decode()}
 
 _proj = {}
@@ -52,9 +55,27 @@ def tags_map():
     _tags_loaded[0] = True
     return _tags
 
+from zoneinfo import ZoneInfo
+TZ = ZoneInfo("America/Los_Angeles")
+
+def local_day_bounds(day):
+    """RFC3339 [start, end) of `day` in Pacific time, DST-aware.
+
+    Regression (2026-11-03): toggl_day passed bare YYYY-MM-DD dates, which
+    Toggl reads as UTC midnight, so every entry after 16:00 PST (17:00 PDT)
+    fell into the next UTC day and was dropped from the day's backfill (11-03
+    /0r: 10 events missing)."""
+    s = dt.datetime.combine(day, dt.time(), TZ)
+    e = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(), TZ)
+    return s.isoformat(), e.isoformat()
+
+def toggl_day_url(day):
+    s, e = local_day_bounds(day)
+    q = urllib.parse.urlencode({"start_date": s, "end_date": e})
+    return f"https://api.track.toggl.com/api/v9/me/time_entries?{q}"
+
 def toggl_day(day):
-    s = day.isoformat(); e = (day+dt.timedelta(days=1)).isoformat()
-    url = f"https://api.track.toggl.com/api/v9/me/time_entries?start_date={s}&end_date={e}"
+    url = toggl_day_url(day)
     for attempt in range(5):
         try:
             return json.load(urllib.request.urlopen(urllib.request.Request(url, headers=THDR), timeout=30))

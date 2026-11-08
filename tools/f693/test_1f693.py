@@ -62,3 +62,19 @@ def test_dry_run_from_json_writes_nothing(tmp_path):
     assert "--- f693.md entry ---" in r.stdout
     after = m.F693_DOC.read_text() if m.F693_DOC.exists() else None
     assert before == after
+
+
+def test_stoplight_tab_never_runs_bare_cc(monkeypatch):
+    """In a fresh cmux surface `cc` is the C compiler (48b1e593)."""
+    calls = []
+
+    class R:
+        stdout = "OK surface:7 pane:3"
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return R()
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    assert m.launch_stoplight_tab() == "cc tab opened: /1f693 stoplight"
+    cmd = calls[1][calls[1].index("--command") + 1]
+    assert "claude-tracked '/1f693 stoplight'" in cmd and not cmd.startswith("cc ")

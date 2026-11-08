@@ -43,6 +43,7 @@ def load(days: int, host: str | None = None) -> list[dict]:
 def summarize(recs: list[dict]) -> dict:
     done = [r for r in recs if r.get("kind") == "done"]
     picks = [r for r in recs if r.get("kind") == "pick"]
+    edit_failed = [r for r in recs if r.get("kind") == "edit" and r.get("status") == "failed"]
     ok = [r for r in done if r.get("status") in ("ok", "already", "recorded")]
     failed = [r for r in done if r.get("status") not in ("ok", "already", "recorded")]
     by_bucket = collections.Counter(r.get("bucket") for r in ok)
@@ -61,6 +62,7 @@ def summarize(recs: list[dict]) -> dict:
         "est_vs_actual": est_pairs, "picks": len(picks), "picks_with_query": len(queried), "picks_beyond_15": len(deep),
         "queries": collections.Counter((p.get("q") or "").strip().lower() for p in queried).most_common(10),
         "failed_items": [(r.get("content"), r.get("writes")) for r in failed],
+        "edit_failed": [(r.get("id"), r.get("rc"), (r.get("output") or "").strip().splitlines()[-1:] or [""]) for r in edit_failed],
         "task_rows": tasks, "deep_picks": deep,
     }
 
@@ -99,6 +101,8 @@ def main() -> int:
             print(f"    {time.strftime('%H:%M', time.localtime(r['ts']))} {r.get('host','')[:3]} {r.get('content','')[:44]:<44} {est:>5}{act:>5} {pts:>6}{od:>5}  {w}")
     for c, w in s["failed_items"]:
         print(f"  ✗ {c}  {w}")
+    for tid, rc, last in s["edit_failed"]:
+        print(f"  ✗ edit not saved: task {tid} rc={rc}  {last[0][:80]}")
     for c in s["tasks_no_value"]:
         print(f"  no value: {c}")
     return 0

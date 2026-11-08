@@ -322,3 +322,22 @@ def test_w_strict_flags_literal_typed_after_hcbi_formula(db, monkeypatch):
     assert rules.derive_day("2026-10-18", db)["cols"]["W"]["status"] == "ok"
     (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "W"]
     assert any("+5 in hcbi!Y293 formula" in w_ for w_ in miss["why"])
+
+
+def test_w_strict_names_blank_parent_not_its_journaled_children(db, monkeypatch):
+    # 11-04: hcbi!P310 (protein SUM) was blank at the 03:50 baseline and its
+    # formula was typed by hand later. Strict P is blank, so it never reaches
+    # AS (a journaled /ate +30); the old report blamed that +30 as "never
+    # journaled" instead of naming P alone.
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _hcbi_day(db)
+    ledger.record(_h("P", "", ts="2026-10-18T03:50:01"), db)                    # blank at baseline
+    ledger.record(_h("P", "=SUM(AM293,AP293,AS293,AY293,BB293,BE293,AV293)",
+                     kind="reconcile", ts="2026-10-18T23:55:00", src="reconcile"), db)
+    obs = _expected_aa() + 10 + 20
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293+20"), db)
+    st = rules.derive_day("2026-10-18", db, strict=True)["cols"]["W"]
+    assert st["derived"] == pytest.approx(obs - 15, abs=1e-3)                 # (0-100)/2 vs (30-100)/2
+    (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "W"]
+    assert any(w_.startswith("hcbi!P293") and "=SUM(AM293" in w_ for w_ in miss["why"])
+    assert not any("never journaled" in w_ for w_ in miss["why"]), miss["why"]

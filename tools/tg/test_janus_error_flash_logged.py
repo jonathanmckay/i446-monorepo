@@ -67,6 +67,13 @@ def test_the_whole_error_reaches_the_event_log(monkeypatch):
 
 def test_the_footer_stays_one_line():
     # Explicit 2026-10-20 decision: errors go to the log, the box does not grow.
-    assert "height=1" in SRC[SRC.index("footer_window = Window("):][:200]
+    # 396b6d51 (2026-11-01): the height is footer_height(), exactly one line
+    # unless a pending ask() is up (test_janus_ask_footer.py covers that case).
+    assert "height=footer_height" in SRC[SRC.index("footer_window = Window("):][:200]
+    fh = SRC[SRC.index("def footer_height("):]
+    fh = fh[:fh.index("\ndef ", 1)]
+    assert "Dimension.exact(1)" in fh and "if pending_ask()" in fh
     body = SRC[SRC.index("def render_footer()"):SRC.index("def _current_block_lines(")]
-    assert body.count("return [") == 2 and "textwrap" not in body
+    # flash, pending ask (396b6d51), hint: three one-line returns, no wrapping helper
+    body = body[:body.index("def footer_height(")]
+    assert body.count("return [") == 3 and "textwrap" not in body
