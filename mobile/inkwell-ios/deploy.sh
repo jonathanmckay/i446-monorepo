@@ -6,8 +6,11 @@
 export PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
 DEVICE=00008160-000435C93EE00036
 DIR="$HOME/i446-monorepo/mobile/inkwell-ios"
-TRIGGER="$HOME/.cache/jm/ios-deploy-trigger"
-LOG="$HOME/.cache/jm/ios-deploy.log"
+# TRIGGER/LOG overridable: com.jm.ios-deploy-sync (scripts/install-ios-deploy-sync.sh,
+# 2026-11-08) points both into Syncthing'd ~/files/i447 so Ix sessions can
+# deploy without inbound ssh to Straylight (blocked since 2026-10-28).
+TRIGGER="${TRIGGER:-$HOME/.cache/jm/ios-deploy-trigger}"
+LOG="${LOG:-$HOME/.cache/jm/ios-deploy.log}"
 cd "$DIR" || exit 1
 SCHEMES=$(head -1 "$TRIGGER" 2>/dev/null)
 [ -z "$SCHEMES" ] && SCHEMES="janus dtd"
