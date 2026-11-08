@@ -12,6 +12,10 @@ a lapsed token meant a sign-in prompt every 5 min. This process owns ONE
 server for its lifetime, the way local Janus used to. When a sign-in tab is
 already pending in Safari it skips the fetch rather than opening another
 (agency_mcp.entra_login_pending). 2026-10-05.
+
+2026-11-02: each cycle also writes the unread-inbox snapshot
+(outlook-inbox-YYYY-MM-DD.json, last 48h) with the same Agency server, so
+Dream's intake on Ix can read the work inbox it otherwise cannot reach.
 """
 
 import datetime as dt
@@ -63,6 +67,12 @@ def fetch():
             log(f"{s:%F}: {n} events")
         except Exception as e:
             log(f"{s:%F}: {e}")
+    try:
+        snap = oc.fetch_unread_inbox()
+        ok += 1
+        log(f"inbox: {snap['count']} unread (last {snap['window_hours']}h)")
+    except Exception as e:
+        log(f"inbox: {e}")
     drain_server_pipes()
     return ok
 
