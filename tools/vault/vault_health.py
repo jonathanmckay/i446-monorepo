@@ -15,7 +15,7 @@ Checks (v1, 2026-09-27):
   syncthing      device connectivity, folder state, remote completion, errors
   git-autopush   ~/vault and ~/i446-monorepo: stuck rebase, stale commit,
                  unpushed commits, autopush log warnings
-  skills-backup  ~/.claude/skills local git auto-commit freshness
+  skills-backup  ~/.claude/skills (in the monorepo since 10-17) last-commit freshness
   onedrive-neon  Neon workbook mtime (and Ix↔Straylight parity when run off Ix)
   time-machine   destination configured + latest backup age
   ix-cron        Ix's live crontab matches the committed config/ix.crontab
@@ -568,14 +568,14 @@ def check_git_autopush(now: dt.datetime) -> Finding:
 
 
 def check_skills_backup(now: dt.datetime) -> Finding:
-    ts = ix("cd ~/.claude/skills && git log -1 --format=%ct").strip().splitlines()[-1] if True else ""
+    ts = ix("cd ~/.claude/skills && git log -1 --format=%ct -- .").strip().splitlines()[-1] if True else ""
     try:
         age_h = (now.timestamp() - int(ts)) / 3600
     except ValueError:
         return Finding("skills-backup", "warn", f"could not read ~/.claude/skills git log on Ix: {ts[:80]}", review=True)
     if age_h > 24:
-        return Finding("skills-backup", "warn", f"last auto-commit {age_h:.0f}h ago (cron is every 10 min)", review=True)
-    return Finding("skills-backup", "ok", f"last auto-commit {age_h:.1f}h ago")
+        return Finding("skills-backup", "warn", f"last skills commit {age_h:.0f}h ago (monorepo autopush runs every 10 min)", review=True)
+    return Finding("skills-backup", "ok", f"last skills commit {age_h:.1f}h ago")
 
 
 def check_perm_sync(now: dt.datetime) -> Finding:

@@ -39,11 +39,17 @@ if git diff --cached --quiet; then
     echo "[$TS] no changes, but $UNPUSHED unpushed commit(s) -- syncing"
 else
     CHANGED=$(git diff --cached --stat | tail -1)
-    if ! git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q; then
+    if git commit -m "$PREFIX: $(date '+%Y-%m-%d %H:%M')" -q; then
+        echo "[$TS] committed: $CHANGED"
+    elif git diff --cached --quiet; then
+        # Another committer took the staged changes first (2026-11-08: the old
+        # ~/.claude/skills backup cron, which became part of this repo through a
+        # symlink on 10-17, raced this one every tick). Nothing is lost; sync.
+        echo "[$TS] commit raced: another process committed first -- syncing"
+    else
         echo "[$TS] ERROR: commit failed (pre-commit hook rejected it?) — changes remain staged"
         exit 1
     fi
-    echo "[$TS] committed: $CHANGED"
 fi
 
 # Push the CURRENT branch, not a hardcoded main. This lets a clone sit on a

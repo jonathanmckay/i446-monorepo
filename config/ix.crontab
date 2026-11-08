@@ -27,8 +27,6 @@
 # /0r nightly time-record archive — Toggl + m5c7 calendars -> vault + gcal (jbm past-time view)
 0 2 * * * /Users/mckay/bin/run_0r_archive.sh
 
-# Auto-backup ~/.claude/skills every 10 min (no remote push, local-only)
-*/10 * * * * cd $HOME/.claude/skills && git add -A && git diff --cached --quiet || git commit -q -m "auto: $(date +\%Y-\%m-\%d\ \%H:\%M)" >> /tmp/claude-skills-autocommit.log 2>&1
 # Prune Claude snapshot backups older than 30 days, nightly
 5 3 * * * bash $HOME/i446-monorepo/scripts/claude-backup-cleanup.sh >> /tmp/claude-backup-cleanup.log 2>&1
 # git-autopush-healthcheck: catch stuck rebases / detached HEAD that silently halt sync
