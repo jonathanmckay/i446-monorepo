@@ -2248,7 +2248,8 @@ def run_command(text: str) -> dict:
 
 @app.route("/api/run", methods=["POST"])
 def api_run():
-    text = ((request.get_json(force=True, silent=True) or {}).get("text") or "").strip()
+    text = fen_split.fullwidth_points(
+        ((request.get_json(force=True, silent=True) or {}).get("text") or "").strip())
     if not text:
         return jsonify({"ok": False, "error": "nothing to run"}), 400
     return jsonify(run_command(text))
@@ -2257,7 +2258,7 @@ def api_run():
 @app.route("/api/fill", methods=["POST"])
 def api_fill():
     b = request.get_json(force=True, silent=True) or {}
-    desc = (b.get("desc") or "").strip()
+    desc = fen_split.fullwidth_points((b.get("desc") or "").strip())
     if not desc:
         return jsonify({"ok": False, "error": "no description"}), 400
     return jsonify(fill_gap(desc, b.get("start") or "", b.get("end") or "",
@@ -2270,7 +2271,7 @@ def api_log():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id") or not b.get("desc"):
         return jsonify({"ok": False, "error": "id+desc required"}), 400
-    return jsonify(log_entry(str(b["id"]), b["desc"].strip(),
+    return jsonify(log_entry(str(b["id"]), fen_split.fullwidth_points(b["desc"].strip()),
                              int(b.get("minutes") or 0), (b.get("project") or "").strip(),
                              tags=b.get("tags") or [], day=_parse_day(b.get("date")),
                              points=None if b.get("points") is None else str(b["points"]),
@@ -2283,7 +2284,7 @@ def api_edit():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id"):
         return jsonify({"ok": False, "error": "id required"}), 400
-    r = edit_entry(str(b["id"]), b.get("desc") or "",
+    r = edit_entry(str(b["id"]), fen_split.fullwidth_points(b.get("desc") or ""),
                    (b.get("start") or "").strip(), (b.get("end") or "").strip(),
                    (b.get("project") or "").strip(),
                    tags=b.get("tags") if "tags" in b else None, day=_parse_day(b.get("date")))
@@ -2312,7 +2313,7 @@ def api_adjust_points():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id") or not b.get("desc") or b.get("points") is None:
         return jsonify({"ok": False, "error": "id+desc+points required"}), 400
-    return jsonify(adjust_points(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip(),
+    return jsonify(adjust_points(str(b["id"]), fen_split.fullwidth_points(b["desc"].strip()), (b.get("project") or "").strip(),
                                  str(b["points"]), day=_parse_day(b.get("date"))))
 
 
@@ -2337,7 +2338,7 @@ def api_convert_event():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("title") or not b.get("start_iso") or not b.get("end_iso"):
         return jsonify({"ok": False, "error": "title+start_iso+end_iso required"}), 400
-    return jsonify(convert_event(b["title"], b["start_iso"], b["end_iso"],
+    return jsonify(convert_event(fen_split.fullwidth_points(b["title"]), b["start_iso"], b["end_iso"],
                                  (b.get("code") or "").strip(), bool(b.get("is_past")),
                                  day=_parse_day(b.get("date"))))
 
@@ -2347,7 +2348,7 @@ def api_done_current():
     b = request.get_json(force=True, silent=True) or {}
     if not b.get("id") or not b.get("desc"):
         return jsonify({"ok": False, "error": "id+desc required"}), 400
-    return jsonify(done_current(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip(),
+    return jsonify(done_current(str(b["id"]), fen_split.fullwidth_points(b["desc"].strip()), (b.get("project") or "").strip(),
                                 points=None if b.get("points") is None else str(b["points"]),
                                 kid_ask=bool(b.get("kid_ask")),
                                 kid=None if b.get("kid") is None else str(b["kid"])))

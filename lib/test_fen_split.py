@@ -88,3 +88,16 @@ def test_strip_points():
 def test_typed_pair_re_is_token_anchored():
     assert [m.groups() for m in fs.TYPED_PAIR_RE.finditer("x [30] @h335 [10] @i9")] == [("30", "h335"), ("10", "i9")]
     assert list(fs.TYPED_PAIR_RE.finditer("x[30] @h335")) == []
+
+
+def test_fullwidth_brackets_count_as_points():
+    # A Chinese IME types [ ] as 【】 (JM 2026-11-08).
+    assert fs.total_points("read COD deck 【30】") == 30
+    assert fs.parse_points("x 【30】 @h335 [10] @i9") == [(30, "h335"), (10, "i9")]
+    assert fs.set_total("a 【5】", 8) == "a [8]"
+    assert fs.strip_points("a 【5】 b") == "a b"
+    assert [m.groups() for m in fs.TYPED_PAIR_RE.finditer("x 【30】 @h335")] == [("30", "h335")]
+
+
+def test_fullwidth_points_normalises_digits_only():
+    assert fs.fullwidth_points("x 【12】 【notes】") == "x [12] 【notes】"

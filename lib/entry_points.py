@@ -31,7 +31,7 @@ from pathlib import Path
 HOST = os.uname().nodename.split(".")[0].lower()
 _cache: dict = {"key": None, "days": {}}
 _credit_cache: dict = {"key": None, "credits": {}}
-_ANNOT = re.compile(r"\(\d*\)|\[\d*G?\]|\{\d*\}|(?<!\S)[@#]\S+")
+_ANNOT = re.compile(r"\(\d*\)|[\[【]\d*G?[\]】]|\{\d*\}|(?<!\S)[@#]\S+")
 _DATE_SUFFIX = re.compile(r"\s+\d{1,2}[./]\d{1,2}\s*$")
 
 

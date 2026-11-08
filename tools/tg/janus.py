@@ -50,6 +50,7 @@ from zoneinfo import ZoneInfo  # noqa: E402
 
 from prompt_toolkit import Application  # noqa: E402
 from prompt_toolkit.buffer import Buffer  # noqa: E402
+from prompt_toolkit.document import Document  # noqa: E402
 from prompt_toolkit.filters import Condition  # noqa: E402
 from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES  # noqa: E402
 from prompt_toolkit.key_binding import KeyBindings  # noqa: E402
@@ -6388,7 +6389,18 @@ def run_did_fast_data(text: str, flags: tuple[str, ...] | None = None) -> tuple[
 # ─── App ───────────────────────────────────────────────────────────────────
 
 kb = KeyBindings()
-input_buffer = Buffer(multiline=False)
+
+
+def _fullwidth_points(buf: Buffer) -> None:
+    """Rewrite 【N】 to [N] as it is typed (a Chinese IME's [ ], JM
+    2026-11-08). Same length, so the cursor stays put; the nested change
+    event finds nothing left to rewrite."""
+    new = fen_split.fullwidth_points(buf.text)
+    if new != buf.text:
+        buf.document = Document(new, buf.cursor_position)
+
+
+input_buffer = Buffer(multiline=False, on_text_changed=_fullwidth_points)
 
 
 # The input is always focused (Claude/dtd style): you just type a tg command —

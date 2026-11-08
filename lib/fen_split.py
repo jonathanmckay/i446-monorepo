@@ -23,12 +23,19 @@ import re
 from typing import Optional
 
 # "[30]" optionally followed by " @code". The code may carry a hyphen
-# ("-1g"-style labels) and CJK (家). A "[1/m]" rate marker never matches
+# ("-1g"-style labels) and CJK (家). Full-width 【30】 (a Chinese IME's [ ])
+# counts the same (JM 2026-11-08); rewrites always emit ASCII [N]. A "[1/m]" rate marker never matches
 # (digits only inside the brackets).
-PAIR_RE = re.compile(r"\[(\d+)\](?:[ \t]*@([\w\-一-鿿]+))?")
+PAIR_RE = re.compile(r"[\[【](\d+)[\]】](?:[ \t]*@([\w\-一-鿿]+))?")
 # A standalone "[N] @code" pair anchored on both sides, for callers that must
 # consume whole tokens out of typed input (did-fast's parse_input).
-TYPED_PAIR_RE = re.compile(r"(?<!\S)\[(\d+)\][ \t]*@([\w\-一-鿿]+)(?!\S)")
+TYPED_PAIR_RE = re.compile(r"(?<!\S)[\[【](\d+)[\]】][ \t]*@([\w\-一-鿿]+)(?!\S)")
+
+
+def fullwidth_points(text: str) -> str:
+    """【N】 -> [N]. For input boundaries (janus) so what gets written to
+    Toggl/Todoist is ASCII and the many local r"\\[(\\d+)\\]" regexes see it."""
+    return re.sub(r"【(\d+)】", r"[\1]", text or "")
 
 
 def parse_points(content: str) -> list[tuple[int, Optional[str]]]:
