@@ -75,14 +75,18 @@ DENY = [
 
 
 def worker_permissions(rdir: Path, wt: Path | None, tid: str) -> list[str]:
+    # File rules take `//abs/path` for an absolute path (a single `/` means
+    # relative to the project root).
     allow = ["Read", "Grep", "Glob", "WebSearch", "WebFetch",
-             f"Write({rdir}/**)", f"Edit({rdir}/**)"] + READ_MCP
+             f"Write(/{rdir}/**)", f"Edit(/{rdir}/**)"] + READ_MCP
     if wt:
-        allow += [f"Write({wt}/**)", f"Edit({wt}/**)",
-                  f"Bash(git -C {wt} status*)", f"Bash(git -C {wt} diff*)",
-                  f"Bash(git -C {wt} add*)", f"Bash(git -C {wt} commit*)",
+        allow += [f"Write(/{wt}/**)", f"Edit(/{wt}/**)"]
+        # the worker's cwd is the worktree, so plain and -C forms both appear
+        for g in ("status", "diff", "log", "add", "commit"):
+            allow += [f"Bash(git {g}*)", f"Bash(git -C {wt} {g}*)"]
+        allow += [f"Bash(git push origin HEAD:agent/{tid})",
                   f"Bash(git -C {wt} push origin HEAD:agent/{tid})",
-                  f"Bash(cd {wt} && python3 -m pytest*)", f"Bash(python3 -m pytest {wt}*)"]
+                  "Bash(python3 -m pytest*)", "Bash(ls*)"]
     return allow
 
 
@@ -285,6 +289,8 @@ def work(task: dict, p: dict) -> str:
         todoist._request("POST", f"/tasks/{tid}", {"labels": labels})
         todoist.add_comment(tid, picks.summary_comment(tid))
         agent_claims.mark_done(session, [tid])
+        # mark_done queues a Stop-hook note for interactive sessions; no hook runs for this one
+        (agent_claims.CLAIMS_DIR / "by-session" / f"{session}.note").unlink(missing_ok=True)
     else:
         picks.set_status(tid, "failed")
         agent_claims.clear_task(tid)
@@ -320,7 +326,16 @@ def main() -> int:
     if a.dry_run:
         return 0
     for c in chosen:
-        print(f"  {c['task_id']}: {work(byid[c['task_id']], c)}")
+        try:
+            res = work(byid[c["task_id"]], c)
+        except Exception as e:  # noqa: BLE001  one bad pick must not strand a 😈 or stop the rest
+            res = "fail"
+            picks.log("fail", c["task_id"], **{"class": c["class"], "reason": f"runner: {e}"[:300]})
+            picks.set_status(c["task_id"], "failed")
+            agent_claims.clear_task(c["task_id"])
+            subprocess.run(["git", "-C", str(picks.REPO), "worktree", "remove", "--force",
+                            f"/private/tmp/agent-{c['task_id']}"], capture_output=True)
+        print(f"  {c['task_id']}: {res}")
     return 0
 
 

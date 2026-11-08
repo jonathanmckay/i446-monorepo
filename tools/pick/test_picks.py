@@ -190,3 +190,18 @@ def test_done_claim_survives_ttl_while_receipt_ready(tmp_path, monkeypatch):
     (tmp_path / "receipts" / "waiting" / "status").write_text("ready\n")
     left = ac.load(root, now=1000 + ac.RELEASED_TTL + 5)
     assert "waiting" in left and left["waiting"]["done"] and "stale" not in left
+
+
+# --- worker permissions --------------------------------------------------------
+def test_worker_allowlist_is_scoped_and_never_sends():
+    import run
+    allow = run.worker_permissions(Path("/Users/x/vault/z_ibx/agent-picks/receipts/t"),
+                                   Path("/private/tmp/agent-t"), "t")
+    assert "Write(//Users/x/vault/z_ibx/agent-picks/receipts/t/**)" in allow
+    assert "Edit(//private/tmp/agent-t/**)" in allow
+    assert "Bash(git push origin HEAD:agent/t)" in allow
+    assert not any("send" in a or "HEAD:wip" in a for a in allow)
+    assert "mcp__workspace-mcp__send_gmail_message" in run.DENY
+    assert "mcp__imessage_server__imessage_send" in run.DENY
+    no_wt = run.worker_permissions(Path("/r"), None, "t")
+    assert not any(a.startswith("Bash(") for a in no_wt)
