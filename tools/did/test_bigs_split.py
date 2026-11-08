@@ -53,18 +53,21 @@ if __name__ == "__main__":
     sys.exit(subprocess.call([sys.executable, "-m", "pytest", __file__, "-q"]))
 
 
-def test_big_kids_literature_splits_like_bigs():
-    # 2026-09-27: the daily 大孩子文学时间 card replaced xk20/xk22; minutes halve.
-    cols, results = _route("大孩子文学时间 40")
-    assert cols == {36: 20, 37: 20}, cols
+def test_kid_chinese_cards_route_all_minutes_to_one_kid():
+    # 2026-11-08: 琪琪中文 / 轩轩中文 replaced the shared 大孩子文学时间 card.
+    cols, results = _route("琪琪中文 15")
+    assert cols == {37: 15}, cols
+    cols, results = _route("轩轩中文 (25) 25")
+    assert cols == {36: 25}, cols
     assert all(r.step == "0n" for r in results)
 
 
-def test_big_kids_literature_closes_its_own_card():
-    items = df.parse_input("大孩子文学时间 31")
-    tq = {"0neon": [{"id": "T1", "content": "大孩子文学时间 (30) [50]", "labels": ["0neon", "xk87"]}],
+def test_kid_chinese_card_closes_its_own_card():
+    items = df.parse_input("琪琪中文 31")
+    tq = {"0neon": [{"id": "T1", "content": "琪琪中文 (15) [20]", "labels": ["0neon", "xk87"]},
+                    {"id": "T2", "content": "轩轩中文 (25) [30]", "labels": ["0neon", "xk87"]}],
           "夜neon": [], "1neon": []}
     results = df.route_items(items, HEADERS, tq, skip_todoist=False)
-    by_col = {r.col_num: r for r in results}
-    assert by_col[36].write_value == 16 and by_col[37].write_value == 15
-    assert by_col[36].todoist_task and by_col[36].todoist_task["id"] == "T1"
+    assert len(results) == 1
+    assert results[0].col_num == 37 and results[0].write_value == 31
+    assert results[0].todoist_task and results[0].todoist_task["id"] == "T1"

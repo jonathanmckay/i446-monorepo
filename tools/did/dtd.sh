@@ -1003,6 +1003,8 @@ case "\$clean_base" in
   xk20) _ip="xk20 分 (Theo)";;
   xk22) _ip="xk22 分 (Ren)";;
   xk26) _ip="xk26 分 (Rori)";;
+  琪琪中文) _ip="琪琪中文 minutes (Ren)";;
+  轩轩中文) _ip="轩轩中文 minutes (Theo)";;
   i444) _ip="i444 count (0 = none today)";;
   hiit) _ip="hiit minutes";;
   新闻) _ip="新闻 minutes";;

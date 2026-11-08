@@ -132,10 +132,11 @@ ALIASES = {"skin2skin": "问学", "stats m5x2": "stats m5x2",
 # completion was clobbering the first instead of accumulating).
 CUMULATIVE_0N = {"问学", "xk20", "xk22", "xk26"}
 # Habits whose typed minutes are split in half across two 0n columns (odd
-# minute to the first). "bigs" = generic time with both big kids;
-# "大孩子文学时间" = the daily big-kids literature card (2026-09-27, replaced
-# the separate xk20 / xk22 daily cards).
-SPLIT_HABITS = {"bigs": ("xk20", "xk22"), "大孩子文学时间": ("xk20", "xk22")}
+# minute to the first). "bigs" = generic time with both big kids.
+# 琪琪中文 / 轩轩中文 = the per-kid daily Chinese cards (2026-11-08, replaced
+# the shared 大孩子文学时间 card): a one-column "split" routes every minute
+# to that kid's 0n column and closes the card itself.
+SPLIT_HABITS = {"bigs": ("xk20", "xk22"), "琪琪中文": ("xk22",), "轩轩中文": ("xk20",)}
 CUMULATIVE_1N = {}  # fixed increment per occurrence
 
 # Variable tasks: points derived from timer duration, not fixed row-3 values
@@ -1581,28 +1582,29 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
     # "bigs" = time with both big kids → split the minutes between xk20 (Theo)
     # and xk22 (Ren), then let the normal 0₦ path handle each. Odd minute goes
     # to xk20. e.g. `did bigs 26` → xk20 +13, xk22 +13.
-    # 2026-09-27: "大孩子文学时间" (the daily big-kids literature card that
-    # replaced the separate xk20 / xk22 cards) splits the same way; its own
-    # 0neon card is closed via the xk20 result (see split_parents below).
+    # 2026-11-08: 琪琪中文 / 轩轩中文 are one-column splits (all minutes to
+    # xk22 / xk20); their own 0neon card is closed via the first result (see
+    # split_parents below). A trailing "(N)" estimate from the card text is
+    # dropped from the key so "琪琪中文 (15)" still routes.
     expanded: list[ParsedItem] = []
-    split_parents: dict[int, str] = {}   # id(xk20 item) → original habit name
+    split_parents: dict[int, str] = {}   # id(first split item) → original habit name
     for item in items:
-        key = item.name.strip().lower()
+        key = re.sub(r"\s*\(\d+\)$", "", item.name.strip()).lower()
         if key in SPLIT_HABITS:
-            first, second = SPLIT_HABITS[key]
+            cols = SPLIT_HABITS[key]
             if item.time_range:
                 total = time_range_minutes(item.time_range[0], item.time_range[1])
             elif item.time_value is not None:
                 total = item.time_value
             else:
                 total = 1
-            a = ParsedItem(raw=item.raw, name=first, time_value=(total + 1) // 2,
-                           target_date=item.target_date)
-            expanded.append(a)
-            expanded.append(ParsedItem(raw=item.raw, name=second, time_value=total // 2,
-                                       target_date=item.target_date))
+            n = len(cols)
+            parts = [ParsedItem(raw=item.raw, name=col, time_value=total // n + (1 if i < total % n else 0),
+                                target_date=item.target_date)
+                     for i, col in enumerate(cols)]
+            expanded.extend(parts)
             if key != "bigs":
-                split_parents[id(a)] = item.name.strip()
+                split_parents[id(parts[0])] = re.sub(r"\s*\(\d+\)$", "", item.name.strip())
         else:
             expanded.append(item)
     items = expanded
@@ -2075,8 +2077,8 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
         r.error = domain_label  # stash domain label for posthoc creation
         results.append(r)
 
-    # Close the split habit's own 0neon card (e.g. 大孩子文学时间) through the
-    # xk20 half — the halves matched xk20/xk22 by header, so without this the
+    # Close the split habit's own 0neon card (e.g. 琪琪中文) through its
+    # first column — the halves matched xk20/xk22 by header, so without this the
     # parent card would stay open (Step 3 must always close Todoist).
     if split_parents and not skip_todoist:
         neon_tasks_all = tq.get("0neon", []) + tq.get("夜neon", [])
