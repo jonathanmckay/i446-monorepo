@@ -29,7 +29,8 @@ TASK_STATE_FILE = Path.home() / ".config/imsg/todoist_task.json"
 OPEN_SCRIPT = Path(__file__).parent / "ibx-open-imsg.sh"
 
 APPLE_EPOCH_OFFSET = 978307200
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+_TOKEN_FILE = Path.home() / ".config/todoist/token"  # never hard-code: the old literal leaked via the public repo (2026-11-08)
+TODOIST_TOKEN = _TOKEN_FILE.read_text().strip() if _TOKEN_FILE.exists() else os.environ.get("TODOIST_TOKEN", "")
 TODOIST_API = "https://api.todoist.com/api/v1"
 
 

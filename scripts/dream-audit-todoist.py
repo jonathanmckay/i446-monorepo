@@ -29,7 +29,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+_TOKEN_FILE = Path.home() / ".config/todoist/token"  # never hard-code: the old literal leaked via the public repo (2026-11-08)
+TODOIST_TOKEN = _TOKEN_FILE.read_text().strip() if _TOKEN_FILE.exists() else ""
 BASE = "https://api.todoist.com/api/v1"
 MUTATION_CAP_DEFAULT = 10
 

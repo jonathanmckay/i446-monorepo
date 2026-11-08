@@ -1079,7 +1079,10 @@ def block_name_for_hours(start_hour: int) -> str:
 
 
 def _todoist_token() -> str:
-    """Todoist API token from env (launchd/cron pass TODOIST_API_KEY) or keychain."""
+    """Todoist API token: the token file, else env TODOIST_API_KEY, else keychain."""
+    f = Path.home() / ".config/todoist/token"   # single source (2026-11-08)
+    if f.exists() and f.read_text().strip():
+        return f.read_text().strip()
     token = os.environ.get("TODOIST_API_KEY", "").strip()
     if not token:
         try:

@@ -134,7 +134,7 @@ def add_goals(grid, start, end):
 
 # ---------- Todoist completed -> ✓ ----------
 def add_todoist(grid, start, end):
-    token = '7eb82f47aba8b334769351368e4e3e3284f980e5'
+    token = open(os.path.expanduser('~/.config/todoist/token')).read().strip()
     # One query PER DAY (2026-10-05): the endpoint returns at most 200 items
     # for the whole since/until window and no next_cursor, so a busy week came
     # back as only its newest ~3 days and the early days showed no ✓ at all.

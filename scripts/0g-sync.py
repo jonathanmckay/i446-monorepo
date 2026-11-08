@@ -152,7 +152,10 @@ class MdTask(NamedTuple):
 # --- API Key ---
 
 def get_api_key() -> str:
-    """Read TODOIST_API_KEY from env or macOS Keychain."""
+    """Read the token file, then TODOIST_API_KEY from env, then macOS Keychain."""
+    f = Path.home() / ".config/todoist/token"   # single source (2026-11-08)
+    if f.exists() and f.read_text().strip():
+        return f.read_text().strip()
     key = os.environ.get("TODOIST_API_KEY")
     if key:
         return key

@@ -441,6 +441,9 @@ def read_sheets():
 
 def _token() -> str:
     import os
+    f = Path.home() / ".config/todoist/token"   # single source (2026-11-08)
+    if f.exists() and f.read_text().strip():
+        return f.read_text().strip()
     tok = os.environ.get("TODOIST_API_KEY")
     if tok:
         return tok

@@ -1294,7 +1294,7 @@ def load_tasks_data(n_days=DAYS, end=None):
       shared across all callers regardless of n_days, so widening the window
       (e.g. for a monthly chart view) only pays the network cost once.
     """
-    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    token = (Path.home() / ".config/todoist/token").read_text().strip()
     today = date.today()
     last = end or today
     all_days = [last - timedelta(days=n) for n in range(n_days, -1, -1)]
@@ -1344,7 +1344,7 @@ def load_tasks_by_block(n_days=GRANULAR_BLOCK_DAYS, end=None):
     window missing the key, not just today/yesterday. Bounded cost since the
     per-block view only spans GRANULAR_BLOCK_DAYS days.
     """
-    token = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+    token = (Path.home() / ".config/todoist/token").read_text().strip()
     today = end or date.today()
     day_list = [today - timedelta(days=n) for n in range(n_days - 1, -1, -1)]
 

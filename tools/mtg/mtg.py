@@ -31,7 +31,8 @@ VAULT = Path.home() / "vault"
 STATE_FILE = VAULT / "h335/d358/.mtg-state.json"
 CONFIG_FILE = VAULT / "h335/d358/.mtg-config.json"
 D359_DIR = VAULT / "d359"
-TODOIST_TOKEN = "7eb82f47aba8b334769351368e4e3e3284f980e5"
+_TOKEN_FILE = Path.home() / ".config/todoist/token"  # never hard-code: the old literal leaked via the public repo (2026-11-08)
+TODOIST_TOKEN = _TOKEN_FILE.read_text().strip() if _TOKEN_FILE.exists() else os.environ.get("TODOIST_TOKEN", "")
 
 MTG_CONFIG_DIR = Path.home() / ".config/mtg"
 # OAuth client from workspace-mcp (scoped to m5c7.com)
