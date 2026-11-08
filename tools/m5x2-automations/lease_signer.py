@@ -310,7 +310,6 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
 
 _APPFOLIO_URL_RE = re.compile(r'https?://(?:sg\.appfolio\.com/ls/click\?[^\s>\"]+|[a-z]+\.appfolio\.com/[^\s>\"]+)', re.I)
 _COUNTERSIGN_SUBJECT_RE = re.compile(r'countersign', re.I)
-_UNIT_RE = re.compile(r'for\s+([\w\d]+\s+[\w\d]+\s+-\s+[\w\d]+)', re.I)
 _TENANT_RE = re.compile(r'Tenants?\s+([\w ,]+)', re.I)
 
 
@@ -341,21 +340,26 @@ def is_autosign_email(item: dict, autosign_senders: list[str]) -> bool:
 
 
 def parse_email_metadata(item: dict) -> dict:
-    """Extract property/unit/tenants from the email for DB logging."""
+    """Extract property/unit/tenants/doc type + the auto-sign hold decision.
+
+    Unit parsing and classification live in lease_policy (see its docstring
+    for the 2026-11-08 new-leases-only rule). The old _UNIT_RE only matched
+    "kn47 K1 - L102"-shaped units, so ~85% of signings logged a blank unit.
+    """
+    import lease_policy as _policy
+
     subject = item.get("preview", "")
     body    = item.get("body", "")
-    text    = subject + " " + body
-
-    unit    = (_UNIT_RE.search(text) or [None, ""])[1].strip()
+    html_body = item.get("_data", {}).get("email", {}).get("html_body", "")
+    verdict = _policy.classify(subject, body, html_body)
     tenants = (_TENANT_RE.search(body) or [None, ""])[1].strip()
-    property_ = unit.split()[0] if unit else ""
-    lease_type = "renewal" if "renewal" in text.lower() else "new"
 
     return {
-        "property":    property_,
-        "unit":        unit,
+        "property":    verdict["property"],
+        "unit":        verdict["unit"],
         "tenants":     tenants,
-        "lease_type":  lease_type,
+        "lease_type":  verdict["doc_type"],
+        "hold_reason": verdict["hold_reason"],
     }
 
 

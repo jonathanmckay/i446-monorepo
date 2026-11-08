@@ -254,32 +254,38 @@ def _clear_auth_alert():
     _AUTH_ALERT_PATH.unlink(missing_ok=True)
 
 
-def send_review_alert(service, item: dict, meta: dict, url: str, error: str):
+def send_review_alert(service, item: dict, meta: dict, url: str, error: str,
+                      held: bool = False):
     """Email JM AND the original forwarder when the autosigner fails on a
     lease for content reasons (no sign button, no confirmation, etc.) — the
     2026-09 gap this closes: _flag_for_review used to be completely silent,
     so failed leases sat unsigned under a label nobody watches until someone
     happened to notice in AppFolio. The sender needs to know too since
     they're the one who'll otherwise assume it's handled."""
-    unit = meta.get("unit", "unknown unit")
+    unit = meta.get("unit") or "unparsed unit"
     _, sender_addr = email.utils.parseaddr(item.get("from", ""))
     recipients = [NOTIFY_TO]
     if sender_addr and sender_addr.lower() != NOTIFY_TO.lower():
         recipients.append(sender_addr)
     try:
+        lead = ("The lease auto-signer HELD this document for JM by policy "
+                "(only new leases auto-sign):" if held else
+                "The lease auto-signer could NOT sign this lease automatically:")
         body = (
-            f"The lease auto-signer could NOT sign this lease automatically:\n\n"
+            f"{lead}\n\n"
             f"Unit:    {unit}\n"
             f"Tenants: {meta.get('tenants', '')}\n"
-            f"Type:    {meta.get('lease_type', 'renewal')}\n"
-            f"Error:   {error}\n"
+            f"Type:    {meta.get('lease_type', 'unknown')}\n"
+            f"{'Reason' if held else 'Error'}:  {error}\n"
+            f"Subject: {item.get('preview', '')}\n"
             f"Link:    {url}\n\n"
-            f"JM needs to sign this one personally in AppFolio.\n"
+            f"JM needs to review and sign this one personally in AppFolio.\n"
         )
         msg = email.mime.text.MIMEText(body)
         msg["To"] = ", ".join(recipients)
         msg["From"] = NOTIFY_TO
-        msg["Subject"] = f"⚠ Auto-sign failed — {unit} needs JM to sign manually"
+        msg["Subject"] = (f"⚠ Held for JM — {unit}: {error}" if held else
+                          f"⚠ Auto-sign failed — {unit} needs JM to sign manually")
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         service.users().messages().send(userId="me", body={"raw": raw}).execute()
         log.info(f"Sent manual-sign-needed alert to {', '.join(recipients)} for {unit}")
@@ -320,10 +326,42 @@ def send_notification(service, item: dict, meta: dict, result: dict, count: int)
 # ---------------------------------------------------------------------------
 
 
+def hold_for_human(service, item: dict, meta: dict, url: str, email_id: str) -> str:
+    """Route a policy-held doc (renewal, addendum, rent change, MTM, re-sign,
+    unknown template, unparsed unit) to the existing needs-human path: log
+    it, record status='held', label it lease-signer/needs-review (read, kept
+    in the inbox, never archived) and send the manual-sign alert to JM + the
+    forwarder. sign_lease is never called."""
+    reason = meta.get("hold_reason") or "held"
+    log.warning(f"Held for JM ({reason}): {meta.get('unit') or email_id}")
+    try:
+        _autodb.log_signing(
+            DB_PATH,
+            property=meta.get("property", ""),
+            unit=meta.get("unit", ""),
+            tenants=meta.get("tenants", ""),
+            lease_type=meta.get("lease_type", "unknown"),
+            source_sender=item.get("from", ""),
+            source_subject=item.get("preview", ""),
+            appfolio_url=url,
+            status="held",
+        )
+    except Exception as e:
+        log.error(f"Failed to log held doc to Sheets (continuing anyway): {e}")
+    try:
+        if email_id:
+            _flag_for_review(service, email_id)
+            log.info(f"Flagged email {email_id} for manual review ({_REVIEW_LABEL})")
+    except Exception as e:
+        log.warning(f"Failed to flag {email_id} for review: {e}")
+    send_review_alert(service, item, meta, url, reason, held=True)
+    return "held"
+
+
 def process_email(service, item: dict) -> str:
     """Sign a single countersign email.
 
-    Returns one of: "success", "auth_failed", "failed", "skipped".
+    Returns one of: "success", "auth_failed", "failed", "skipped", "held".
     Archives ONLY on success. Auth failures are left fully untouched (unread,
     in inbox) so they retry after re-login; content failures are labeled for
     review and dropped from the unread queue. A failure is never archived —
@@ -338,7 +376,14 @@ def process_email(service, item: dict) -> str:
         return "skipped"
 
     meta = _signer.parse_email_metadata(item)
-    log.info(f"Signing: {meta.get('unit', url[:60])}")
+    email_id = item.get("_data", {}).get("email", {}).get("id", "")
+
+    # Policy gate (2026-11-08): only parseable NEW leases auto-sign. Checked
+    # before any browser launch so a held doc is never touched in AppFolio.
+    if meta.get("hold_reason"):
+        return hold_for_human(service, item, meta, url, email_id)
+
+    log.info(f"Signing: {meta['unit']}")
 
     try:
         result = _signer.sign_lease(url, headless=True)
@@ -362,7 +407,7 @@ def process_email(service, item: dict) -> str:
             property=meta.get("property", ""),
             unit=meta.get("unit", ""),
             tenants=meta.get("tenants", ""),
-            lease_type=meta.get("lease_type", "renewal"),
+            lease_type=meta.get("lease_type", "unknown"),
             source_sender=item.get("from", ""),
             source_subject=item.get("preview", ""),
             appfolio_url=url,
@@ -370,8 +415,6 @@ def process_email(service, item: dict) -> str:
         )
     except Exception as e:
         log.error(f"Failed to log signing to Sheets (continuing anyway): {e}")
-
-    email_id = item.get("_data", {}).get("email", {}).get("id", "")
 
     if status == "success":
         log.info(f"Signed successfully: {meta.get('unit', '')}")
