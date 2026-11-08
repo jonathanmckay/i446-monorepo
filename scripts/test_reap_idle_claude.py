@@ -78,8 +78,7 @@ def test_reap_signals_the_tree_captured_before_the_parent_dies(monkeypatch):
     assert 200 in alive
 
 
-def test_ix_crontab_runs_the_reaper_before_dream():
+def test_ix_crontab_runs_the_reaper_at_0245():
     cron = (HERE.parent / "config" / "ix.crontab").read_text().splitlines()
     reap = next(l for l in cron if "reap-idle-claude.py" in l and not l.startswith("#"))
-    dream = next(l for l in cron if "dream-launch.sh" in l and not l.startswith("#"))
-    assert reap.split()[:2] == ["45", "2"] and dream.split()[:2] == ["0", "3"]
+    assert reap.split()[:2] == ["45", "2"]

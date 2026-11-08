@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""reap-idle-claude.py: end Claude Code sessions idle for 48 h+ before dream.
+"""reap-idle-claude.py: end Claude Code sessions idle for 48 h+ before the overnight jobs.
 
     reap-idle-claude.py [--dry-run] [--hours N]
 
 2026-11-08 ("fix Ix memory"): jetsam killed claude.exe at 03:03 on 11-06 with
 swap at 98%. No single spawner: ~30 interactive sessions idle for days (each
-claude plus its MCP node servers, 25+ GB together) left no room for the 03:00
-dream run. Cron runs this at 02:45 (config/ix.crontab).
+claude plus its MCP node servers, 25+ GB together) left no room for the overnight
+jobs. Cron runs this at 02:45 (config/ix.crontab).
 
 A session is reaped when all hold:
   - its ~/.claude/sessions/<pid>.json is kind "interactive" (bg jobs never),
