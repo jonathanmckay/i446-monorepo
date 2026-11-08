@@ -73,6 +73,12 @@ once, open Xcode › Window › Devices and Simulators, select imago-c, and tick
 **"Connect via network."** After that the phone only needs to be unlocked and
 on the network; the cable is never required again.
 
+**From an Ix session (2026-11-08):** `echo dtd > ~/files/i447/ios-deploy-trigger.txt`
+(space-separated schemes) and read `~/files/i447/ios-deploy.log` until `deploy done`.
+Syncthing carries the trigger to Straylight, where `com.jm.ios-deploy-sync`
+(installed once by `scripts/install-ios-deploy-sync.sh`) runs `deploy.sh` in the
+GUI session. Needed because inbound ssh to Straylight is blocked since 2026-10-28.
+
 **Must run in a GUI login session on Straylight** (Terminal.app, or Screen
 Sharing) — not SSH. `codesign` needs the unlocked login keychain; over SSH it
 fails with `errSecInternalComponent` (compile/provisioning succeed, only the
