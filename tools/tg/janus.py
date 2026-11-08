@@ -6799,6 +6799,15 @@ def _run_current_timer_done(app) -> None:
         code = kid
         if path in ("ask", "credited"):
             path = "time"
+    if janus_done.needs_kid(raw_desc, code, cur.get("tags")):
+        # math / english / 中文 with no #xk20/#xk22/#xk26: ask which kid
+        # gets the minutes (JM 2026-11-07).
+        STATE.event_sel = None
+        STATE.done_target = {"desc": raw_desc, "start_dt": start, "code": code,
+                             "kid_ask": True}
+        input_buffer.text = ""
+        ask(f'"{raw_desc}": {janus_done.KID_PROMPT}')
+        return
     if path == "ask":
         # Not a task with [N] and not a time-based habit/category: janus is
         # the interactive points-conversion interface (user request
@@ -6955,6 +6964,24 @@ def _on_enter(event):
         # A finished row carries its own end; the running timer ends now.
         end = dtgt.get("end_dt") or dt.datetime.now(_tz())
         minutes = int((end - dtgt["start_dt"]).total_seconds() // 60)
+        if dtgt.get("kid_ask"):
+            kid = janus_done.kid_from_answer(text)
+            if kid is None:
+                flash(f"not a kid (20 Theo / 22 Ren / 26 Rori): {text!r} — done cancelled", 4.0)
+                return
+            # Minutes to the kid's 0n column; #kid keeps the tag on the
+            # entry did-fast recreates. A row's own command keeps its tags.
+            cmd = dtgt.get("row_key") or f"{dtgt['desc']} {dtgt['start_dt']:%H%M}-{end:%H%M}"
+            code = dtgt.get("code")
+            cmd = (cmd.replace(f" @{code}", f" @{kid}", 1) if code and f" @{code}" in cmd
+                   else cmd + f" @{kid}")
+            cmd += f" #{kid}" + dtgt.get("suffix", "")
+            if dtgt.get("row_key"):
+                _run_row_did(event.app, cmd, dtgt["row_key"], _did_flags(),
+                             entry_ids=dtgt.get("entry_ids"), day=dtgt["start_dt"].date())
+            else:
+                _run_done_command(event.app, cmd)
+            return
         pts = _points_from_answer(text, minutes)
         if pts is None:
             flash(f"not a number or rate: {text!r} — done cancelled", 4.0)
@@ -7746,6 +7773,13 @@ def _(event):
     path = "task" if speedy else _done_points_path(desc)
     if kid and path in ("ask", "credited"):
         path = "time"
+    if janus_done.needs_kid(desc, code, entry_tags):
+        STATE.done_target = {"desc": desc, "start_dt": start, "end_dt": end,
+                             "code": code, "suffix": suffix, "row_key": cmd,
+                             "entry_ids": item.get("entry_ids") or [], "kid_ask": True}
+        input_buffer.text = ""
+        ask(f'"{desc}" ({item["dur_min"]}m): {janus_done.KID_PROMPT}')
+        return
     if path == "credited":
         _mark_cmd_done_today(cmd)
         flash(f'"{desc}" already crossed off today — no extra 分 for the entry', 6.0)

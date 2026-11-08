@@ -23,6 +23,9 @@ from typing import Callable
 
 TASK, TIME, CREDITED, ASK = "task", "time", "credited", "ask"
 
+# 0n kid-time columns (Theo / Ren / Rori), 1分 a minute via 0n!AZ.
+KID_TIME_0N = {"xk20", "xk22", "xk26"}
+
 # Block attribution (JM 2026-11-01): a finished entry that crosses a 地支
 # block boundary credits the block it ENDED in. A per-minute entry worth more
 # than SPLIT_MIN_POINTS is split at each boundary instead: one Toggl entry
@@ -63,6 +66,32 @@ def kid_route(code: str | None, tags) -> tuple[str | None, list]:
         return code, tags
     return kid, [t for t in tags if t.lower() != kid]
 
+
+
+# Teaching sessions whose minutes belong to one kid (fen.md xk87: Math,
+# English, 中文). Untagged, a janus client asks which kid (JM 2026-11-07).
+KID_PROMPT = "which kid? 20 Theo · 22 Ren · 26 Rori"
+_KID_ANSWERS = {
+    "xk20": ("xk20", "20", "theo", "t"),
+    "xk22": ("xk22", "22", "ren", "r"),
+    "xk26": ("xk26", "26", "rori", "aurora", "a"),
+}
+
+
+def needs_kid(desc: str | None, code: str | None, tags) -> bool:
+    """A math / english / 中文 entry with no kid tag (#xk20/#xk22/#xk26):
+    its minutes have no kid column yet, so the client asks."""
+    from neon.rates import VARIABLE_SESSION_BONUS
+    name = " ".join(_ANNOT_RE.sub(" ", desc or "").split()).lower()
+    if name not in VARIABLE_SESSION_BONUS:
+        return False
+    return kid_route(code, tags)[0] not in KID_TIME_0N
+
+
+def kid_from_answer(text) -> str | None:
+    """"20" / "xk20" / "theo" / "t" → "xk20" (likewise Ren, Rori); else None."""
+    t = str(text or "").strip().lower().lstrip("#@")
+    return next((k for k, alts in _KID_ANSWERS.items() if t in alts), None)
 
 # did-fast's own watchdog (default 120s, sized for dtd's worker) exits it mid-run,
 # whatever the caller's timeout says. Janus runs it off the UI, so a slow Excel
@@ -227,6 +256,11 @@ def did_points(result: dict) -> int:
         from neon.rates import zero_n_points
         minutes = result.get("session_value", result.get("value")) or 0
         pts += zero_n_points(result.get("name") or "", minutes) or 0
+        # Kid time (xk20/xk22/xk26) reaches 0分!X through 0n!AZ at 1分/min.
+        # Kept out of ZERO_N_MULTIPLIERS, which dtd also uses to reprice
+        # cards (bug 2026-11-07: a 26m "math #xk20" showed [0]).
+        if (result.get("name") or "").strip().lower() in KID_TIME_0N:
+            pts += minutes
     if not pts and result.get("variable_1n"):
         pts = result.get("variable_value") or 0
     return int(math.floor(pts + 0.5))   # half points (0.5/m bonuses) round up

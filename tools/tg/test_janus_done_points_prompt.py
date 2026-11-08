@@ -241,3 +241,56 @@ def test_enter_with_rate_answer_prices_the_minutes(tmp_path, monkeypatch):
     mod.input_buffer.text = "2/m"
     _binding(mod, ("c-m",)).handler(_FakeEvent())
     assert mod.STATE.queued_cmds == {"fix the parser bug 1400-1430 [60]"}
+
+
+# ─── math / english / 中文 with no kid tag ask which kid (JM 2026-11-07) ──
+
+def test_untagged_math_asks_which_kid_not_points(tmp_path, monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, desc="math", tmp_path=tmp_path)
+    mod._run_current_timer_done(_FakeApp())
+    assert mod.STATE.queued_cmds == set(), "must not credit xk87 blind"
+    assert mod.STATE.done_target["kid_ask"] is True
+    assert "Theo" in mod.STATE.pending_ask and "Ren" in mod.STATE.pending_ask
+
+
+def test_tagged_math_runs_without_asking(tmp_path, monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, desc="math", tmp_path=tmp_path)
+    mod.STATE.current["tags"] = ["xk22"]
+    mod._run_current_timer_done(_FakeApp())
+    assert mod.STATE.done_target is None
+    (cmd,) = mod.STATE.queued_cmds
+    assert "@xk22" in cmd
+
+
+def test_enter_with_kid_answer_routes_minutes_to_that_kid(tmp_path, monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 9, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, desc="math", tmp_path=tmp_path)
+    start = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
+    mod.STATE.done_target = {"desc": "math", "start_dt": start, "code": "xk87",
+                             "kid_ask": True}
+    mod.input_buffer.text = "20"
+    _binding(mod, ("c-m",)).handler(_FakeEvent())
+    (cmd,) = mod.STATE.queued_cmds
+    assert cmd == "math 1400-1430 @xk20 #xk20"
+
+
+def test_enter_with_non_kid_answer_cancels(tmp_path, monkeypatch):
+    mod = _load_tui()
+    now = dtm.datetime(2026, 8, 9, 14, 30, 0, tzinfo=TZ)
+    _freeze_now(mod, now, monkeypatch)
+    _setup(mod, desc="math", tmp_path=tmp_path)
+    start = dtm.datetime(2026, 8, 9, 14, 0, 0, tzinfo=TZ)
+    mod.STATE.done_target = {"desc": "math", "start_dt": start, "code": "xk87",
+                             "kid_ask": True}
+    mod.input_buffer.text = "40"
+    _binding(mod, ("c-m",)).handler(_FakeEvent())
+    assert mod.STATE.queued_cmds == set()
+    assert "not a kid" in mod.STATE.flash

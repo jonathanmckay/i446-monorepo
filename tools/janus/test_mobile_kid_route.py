@@ -53,3 +53,32 @@ def test_toggl_subproject_maps_to_xk87_plus_tag(jm):
     assert tcfg.with_subproject_tag("xk22", ["xk22"]) == ["xk22"]
     assert tcfg.with_subproject_tag("i9", None) is None
     assert jm._resolve_project("@xk22") == (tcfg.PROJECT_MAP["xk87"], "xk87")
+
+
+def test_untagged_math_asks_which_kid_when_client_can_answer(jm, monkeypatch):
+    """JM 2026-11-07: math / english / 中文 route by kid tag, or ask."""
+    seen: list = []
+    _wire(jm, monkeypatch, [], seen)
+    monkeypatch.setattr(jm, "_done_path", lambda *a, **k: jm.janus_done.TIME)
+    r = jm.log_entry("43", "math", 26, "xk87", tags=[], kid_ask=True)
+    assert r.get("needs_kid") and "Theo" in r["prompt"] and seen == []
+    r = jm.log_entry("43", "math", 26, "xk87", tags=[], kid_ask=True, kid="20")
+    assert r["ok"] and seen == ["math 1500-1530 @xk20 #xk20"]
+
+
+def test_untagged_math_from_old_client_is_not_asked(jm, monkeypatch):
+    """The iOS app predates needs_kid: without kid_ask it logs as before,
+    instead of reading an unknown answer as success."""
+    seen: list = []
+    _wire(jm, monkeypatch, [], seen)
+    monkeypatch.setattr(jm, "_done_path", lambda *a, **k: jm.janus_done.TIME)
+    r = jm.log_entry("44", "math", 26, "xk87", tags=[])
+    assert not r.get("needs_kid") and seen == ["math 1500-1530 @xk87"]
+
+
+def test_bad_kid_answer_logs_nothing(jm, monkeypatch):
+    seen: list = []
+    _wire(jm, monkeypatch, [], seen)
+    monkeypatch.setattr(jm, "_done_path", lambda *a, **k: jm.janus_done.TIME)
+    r = jm.log_entry("45", "math", 26, "xk87", tags=[], kid_ask=True, kid="40")
+    assert not r["ok"] and seen == []

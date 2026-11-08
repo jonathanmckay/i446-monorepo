@@ -84,3 +84,36 @@ def test_entry_points_by_id_follows_recreated_toggl_entries():
     # nothing recreated: the row's own entry gets the points
     assert jd.entry_points_by_id({"results": [{"0fen": {"points": 420}}]}, [99]) == {"99": 420}
     assert jd.entry_points_by_id({"results": []}, []) == {}
+
+
+def test_did_points_prices_kid_time_minutes():
+    """2026-11-07: "math" 16:30-16:56 #xk20 wrote 26 to 0n!AJ (0分!X via
+    0n!AZ, 1分/min), but janus recorded [0]: did_points priced step-0n
+    results only through ZERO_N_MULTIPLIERS, which has no xk20/xk22/xk26."""
+    for kid in ("xk20", "xk22", "xk26"):
+        r = {"name": kid, "step": "0n", "value": 26, "col": 36}
+        assert jd.did_points(r) == 26
+    # the variable "math" result on the kid route carries no 0fen of its own
+    assert jd.did_points({"name": "math", "step": "variable", "value": None}) == 0
+
+
+def test_untagged_teaching_session_needs_a_kid():
+    """JM 2026-11-07: math / english / 中文 route by #xk20/#xk22/#xk26, or
+    janus asks which kid."""
+    assert jd.needs_kid("math", "xk87", [])
+    assert jd.needs_kid("中文 (25)", None, ["-2"])
+    assert jd.needs_kid("English", "xk87", None)
+    assert not jd.needs_kid("math", "xk87", ["xk20"])
+    assert not jd.needs_kid("math", "xk22", [])
+    assert not jd.needs_kid("lego", "xk87", [])
+    assert not jd.needs_kid("goodnight math & lights out", "xk87", [])
+
+
+def test_kid_from_answer():
+    assert jd.kid_from_answer("20") == "xk20"
+    assert jd.kid_from_answer(" Ren ") == "xk22"
+    assert jd.kid_from_answer("#xk26") == "xk26"
+    assert jd.kid_from_answer("a") == "xk26"
+    assert jd.kid_from_answer("40") is None
+    assert jd.kid_from_answer("") is None
+    assert jd.kid_from_answer(None) is None

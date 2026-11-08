@@ -1598,7 +1598,8 @@ def _done_path(desc: str, task_pts: int | None, today: _dt.date | None) -> str:
 
 def log_entry(entry_id: str, desc: str, minutes: int, project: str,
               tags: list[str] | None = None, day: _dt.date | None = None,
-              points: str | None = None) -> dict:
+              points: str | None = None, kid_ask: bool = False,
+              kid: str | None = None) -> dict:
     """`day` (2026-10-26, swipes on previous days): a past-day entry logs
     with the viewed M/D appended and --past-ok, so the 分 land on THAT day
     (the desktop janus's past-day rule, 2026-09-28) and it ledgers there."""
@@ -1634,10 +1635,22 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # a rate instead of crediting the minutes at 1x. `points` is the answer.
     path = _done_path(desc, pts, None if day is not None else today)
     # xk87 + kid tag → "@xk20": minutes to the kid's 0n column (2026-11-05).
-    kid, _ = janus_done.kid_route(project, list(tags or []) + list(entry_tags or []))
-    if kid and kid != project:
-        project = kid
+    kid_code, _ = janus_done.kid_route(project, list(tags or []) + list(entry_tags or []))
+    if kid_code and kid_code != project:
+        project = kid_code
         path = janus_done.TASK if pts is not None else janus_done.TIME
+    elif (kid_ask or kid is not None) and janus_done.needs_kid(
+            desc, project, list(tags or []) + list(entry_tags or [])):
+        # math / english / 中文 with no kid tag (JM 2026-11-07). Only a client
+        # that sends kid_ask gets the question; the iOS app predates it.
+        if kid is None:
+            return {"ok": True, "needs_kid": True, "desc": desc, "minutes": minutes,
+                    "prompt": janus_done.KID_PROMPT}
+        kid_code = janus_done.kid_from_answer(kid)
+        if kid_code is None:
+            return {"ok": False, "error": f"not a kid (20/22/26): {kid!r}"}
+        project, path = kid_code, janus_done.TIME
+        entry_tags = list(entry_tags or []) + [kid_code]
     if path == janus_done.CREDITED:
         _ledger_add(today, entry_id, f"{desc} already crossed off — no extra 分")
         return {"ok": True, "already": True, "credited": True}
@@ -1781,7 +1794,8 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
         _INFLIGHT.discard(key)
 
 
-def done_current(entry_id: str, desc: str, project: str, points: str | None = None) -> dict:
+def done_current(entry_id: str, desc: str, project: str, points: str | None = None,
+                 kid_ask: bool = False, kid: str | None = None) -> dict:
     """The /done action for the running timer: stop it AND grant its points
     in one shot — mirrors tools/tg/janus.py's _run_current_timer_done. A
     completed HHMM-nowHHMM did-fast command's Toggl-creation step calls
@@ -1817,10 +1831,22 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
         if pts is None:  # 25m meeting → [30] (2026-10-22)
             pts = _speedy_meeting_pts(desc, _hhmm_span_min(start, now), day=now.date())
         path = _done_path(desc, pts, now.date())
-        kid, _ = janus_done.kid_route(project, e.get("tags"))
-        if kid and kid != project:  # xk87 + kid tag → "@xk20" (2026-11-05)
-            project = kid
+        e_tags = [str(t) for t in (e.get("tags") or [])]
+        kid_code, _ = janus_done.kid_route(project, e_tags)
+        if kid_code and kid_code != project:  # xk87 + kid tag → "@xk20" (2026-11-05)
+            project = kid_code
             path = janus_done.TASK if pts is not None else janus_done.TIME
+        elif (kid_ask or kid is not None) and janus_done.needs_kid(desc, project, e_tags):
+            # Untagged math / english / 中文: which kid? (JM 2026-11-07)
+            if kid is None:
+                return {"ok": True, "needs_kid": True, "desc": desc,
+                        "minutes": int((now - start).total_seconds() // 60),
+                        "prompt": janus_done.KID_PROMPT}
+            kid_code = janus_done.kid_from_answer(kid)
+            if kid_code is None:
+                return {"ok": False, "error": f"not a kid (20/22/26): {kid!r}"}
+            project, path = kid_code, janus_done.TIME
+            e_tags.append(kid_code)
         if path == janus_done.CREDITED:
             # Crossed off in dtd first: just stop the timer, no extra 分.
             try:
@@ -1846,7 +1872,7 @@ def done_current(entry_id: str, desc: str, project: str, points: str | None = No
             text += f" [{pts}]"
         if project:
             text += f" @{project}"
-        text += _tag_tokens([str(t) for t in (e.get("tags") or [])])
+        text += _tag_tokens(e_tags)
         r = _run_did_fast(text, flags)
         if r["ok"]:
             note = f"{desc} done {start:%H%M}-{now:%H%M} → {r['step']}"
@@ -2215,7 +2241,9 @@ def api_log():
     return jsonify(log_entry(str(b["id"]), b["desc"].strip(),
                              int(b.get("minutes") or 0), (b.get("project") or "").strip(),
                              tags=b.get("tags") or [], day=_parse_day(b.get("date")),
-                             points=None if b.get("points") is None else str(b["points"])))
+                             points=None if b.get("points") is None else str(b["points"]),
+                             kid_ask=bool(b.get("kid_ask")),
+                             kid=None if b.get("kid") is None else str(b["kid"])))
 
 
 @app.route("/api/edit", methods=["POST"])
@@ -2288,7 +2316,9 @@ def api_done_current():
     if not b.get("id") or not b.get("desc"):
         return jsonify({"ok": False, "error": "id+desc required"}), 400
     return jsonify(done_current(str(b["id"]), b["desc"].strip(), (b.get("project") or "").strip(),
-                                points=None if b.get("points") is None else str(b["points"])))
+                                points=None if b.get("points") is None else str(b["points"]),
+                                kid_ask=bool(b.get("kid_ask")),
+                                kid=None if b.get("kid") is None else str(b["kid"])))
 
 
 @app.route("/api/where", methods=["POST"])
@@ -2753,19 +2783,31 @@ function askPoints(r, d){
   return prompt('points for "'+r.desc+'" ('+d.minutes+'m)? total (40) or rate (.5/m)', '');
 }
 
-async function commitDone(line, r, points){
+// needs_kid (JM 2026-11-07): untagged math / english / 中文 — which kid?
+function askKid(r, d){
+  return prompt('"'+r.desc+'" ('+d.minutes+'m): '+(d.prompt||'which kid? 20 / 22 / 26'), '');
+}
+
+async function commitDone(line, r, points, kid){
   line.classList.add('converting');
   try {
-    const body = {id:r.id, desc:r.desc, project:r.project};
+    const body = {id:r.id, desc:r.desc, project:r.project, kid_ask:true};
     if(points !== undefined) body.points = points;
+    if(kid !== undefined) body.kid = kid;
     const resp = await fetch('/api/done-current', {method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const d = await resp.json();
+    if(d.needs_kid){
+      line.classList.remove('converting');
+      const k = askKid(r, d);
+      if(k === null){ toast('not logged', true); return; }
+      return commitDone(line, r, points, k);
+    }
     if(d.needs_points){
       line.classList.remove('converting');
       const a = askPoints(r, d);
       if(a === null){ toast('not logged', true); return; }
-      return commitDone(line, r, a);
+      return commitDone(line, r, a, kid);
     }
     if(d.credited){ toast('stopped · already crossed off ✓'); load(); return; }
     if(!d.ok){
@@ -2778,19 +2820,27 @@ async function commitDone(line, r, points){
   } catch(e){ line.classList.remove('converting'); toast('offline', true); }
 }
 
-async function commitLog(line, r, points){
+async function commitLog(line, r, points, kid){
   line.classList.add('logged');
   try {
-    const body = {id:r.id, desc:r.desc, minutes:r.minutes, project:r.project, tags:r.tags||[]};
+    const body = {id:r.id, desc:r.desc, minutes:r.minutes, project:r.project, tags:r.tags||[],
+                  kid_ask:true};
     if(points !== undefined) body.points = points;
+    if(kid !== undefined) body.kid = kid;
     const resp = await fetch('/api/log', {method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const d = await resp.json();
+    if(d.needs_kid){
+      line.classList.remove('logged');
+      const k = askKid(r, d);
+      if(k === null){ toast('not logged', true); return; }
+      return commitLog(line, r, points, k);
+    }
     if(d.needs_points){
       line.classList.remove('logged');
       const a = askPoints(r, d);
       if(a === null){ toast('not logged', true); return; }
-      return commitLog(line, r, a);
+      return commitLog(line, r, a, kid);
     }
     if(d.credited){ toast('already crossed off — no extra 分'); return; }
     if(d.already){ toast('already logged'); return; }
