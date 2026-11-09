@@ -40,6 +40,28 @@ LOG_FILE = Path(__file__).resolve().parent / ".0g-sync.log"
 TODOIST_API_BASE = "https://api.todoist.com/api/v1"
 TODOIST_0G_PROJECT_ID = "6XfvCQ3p8Gq6fhGR"
 
+# Domain label → the Todoist project a 0g goal is filed in (JM 2026-11-09:
+# "once I make goals, infer the project and add that as the 'project' for the
+# tasks"). Ids from find-projects 2026-11-09. A goal whose domain is unknown or
+# unmapped stays in the 0g project. Every path that reads 0g goals back
+# (run_sync, run_cleanup, dtd, -2n) selects by the #0g label, never by project.
+DOMAIN_PROJECT = {
+    "i9": "6XQ3GMQRVmPgPM4W", "m5x2": "6Crfmq5Pjp462w3C", "g245": "6Crfmq5PpX4JhP4c",
+    "qz12": "6Crfmq5Pw4Vc6rqF", "hcm": "6Crfmq5PmCxPmf2V", "hcb": "6Crfmq5PmcCPc7PC",
+    "hcbp": "6Crfmq5Q33gJ5Q3P", "hcbc": "6Crfmq5Q3CHgFCpV", "hci": "6Crfmq5PmPjqrx4x",
+    "hcmc": "6PWgGPhJmxFp93Hf", "xk88": "6Crfmq5PpmP4jgfv", "xk87": "6Crfmq5QFg895Mcw",
+    "s897": "6Crfmq5Pp27hV9qM", "家": "6Crfmq5PjWxHRfpx", "i447": "6Crfmq5Pqm2PFQFc",
+    "i444": "6M6RxxQrj72pRcM7", "f693": "6Crfmq5PxX3vQ58m", "f692": "6Crfmq5Pq7g95wMw",
+    "f694": "6Crfmq5Q7QH7gfwJ", "epcn": "6H2WF96ChxjvMRcr", "m828": "6Crfmq5Q2M3wgqFH",
+    "o314": "6Crfmq5QC2RGmwjp", "n156": "6Crfmq5PrJX6V2Cw", "q5n7": "6FgJq6cJ4cqr4Xg7",
+    "i8": "6QVVMQ6HPqF4M7Wf",
+}
+
+
+def project_for(domain: Optional[str]) -> str:
+    """Todoist project for a goal's domain; the 0g project when unknown."""
+    return DOMAIN_PROJECT.get(domain or "", TODOIST_0G_PROJECT_ID)
+
 # Matches: - [ ] description {60}  or  - [ ] description <60>
 TASK_RE = re.compile(
     r"^(\s*-\s*\[)([ xX])(\]\s+)"  # checkbox
@@ -69,52 +91,87 @@ def flip_to_checked(line: str) -> str:
     return f"{m.group(1)}x{m.group(3)}{m.group(4)}"
 
 
-# Domain detection rules: (pattern, label)
+# Domain detection rules: (pattern, label). First match wins, so order is
+# specificity: explicit codes, then the domain whose keywords are least
+# ambiguous. Single source of truth for 0g goal routing — the /0g skill calls
+# `0g-sync.py route` instead of carrying its own copy (2026-11-09; the two
+# tables had drifted: this one emitted hcbi/hcmp, which did-fast's
+# LABEL_TO_0FEN does not know, and sent family/home goals to xk88).
 DOMAIN_RULES = [
-    # Explicit domain codes (highest priority)
+    # Explicit domain codes (highest priority; "@i9" matches too)
     (r'\bi9\b', 'i9'),
     (r'\bm5x2\b', 'm5x2'),
     (r'\bg245\b', 'g245'),
     (r'\bqz12\b', 'qz12'),
-    (r'\bhcmp\b', 'hcmp'),
-    (r'\bhcbi\b', 'hcbi'),
+    (r'\b(hcmp|hcm)\b', 'hcm'),
+    (r'\bhcbp\b', 'hcbp'),
+    (r'\bhcbc\b', 'hcbc'),
+    (r'\b(hcbi|hcb)\b', 'hcb'),
+    (r'\bhci\b', 'hci'),
     (r'\bhcmc\b', 'hcmc'),
     (r'\bxk88\b', 'xk88'),
     (r'\bxk87\b', 'xk87'),
     (r'\bs897\b', 's897'),
     (r'\bi447\b', 'i447'),
+    (r'\bi444\b', 'i444'),
     (r'\bf693\b', 'f693'),
     (r'\bf694\b', 'f694'),
+    (r'\bf692\b', 'f692'),
     (r'\bo314\b', 'o314'),
     (r'\bepcn\b', 'epcn'),
     (r'\bm828\b', 'm828'),
     (r'\bq5n7\b', 'q5n7'),
     (r'\bi8\b', 'i8'),
+    (r'\bn156\b', 'n156'),
+    (r'家', '家'),
     # Keyword-based detection
-    (r'\b(microsoft|msft|copilot|coreai|azure|github)\b', 'i9'),
-    (r'\b(mckay capital|fund|tenant|lease|property|appfolio|r20\d|ps\d+|rl\d+)\b', 'm5x2'),
-    (r'\b(finance|investment|portfolio|stock|401k|tax|ira|schwab|vanguard)\b', 'qz12'),
-    (r'\b(goal|review|neon|sprint|checkin)\b', 'g245'),
-    (r'\b(health|fitness|sleep|diet|exercise|hiit|basketball|workout|run)\b', 'hcbi'),
-    (r'\b(meditation|mindfulness|breathing|journal)\b', 'hcmp'),
-    (r'\b(read|book|article|podcast|kindle)\b', 'hcmc'),
-    (r'\b(theo|ren|kids|school|curriculum)\b', 'xk87'),
-    (r'\b(family|home|house)\b', 'xk88'),
-    (r'\b(friend|social|party|event|visit)\b', 's897'),
-    (r'\b(ian|leeroy|stefanie|andie|louisa|olga)\b', 'm5x2'),
+    (r'\b(mckay capital|fund|tenant|lease|property|appfolio|occupancy|maintenance|p&l|'
+     r'bookkeeping|eviction|renewal|vacancy|r20\d|ps\d+|rl\d+|l912|h604|'
+     r'ian|leeroy|stefanie|andie|louisa|olga|lx|hz)\b', 'm5x2'),
+    (r'\b(microsoft|msft|copilot|coreai|azure|github|xbox|platform|teams|metrics|standup|'
+     r'sprint|retro|slt|1:1|pr|deploy|pipeline|experiments?|experimentation|forza|halo|'
+     r'activation|exp)\b', 'i9'),
+    (r'\b(theo|ren|aurora|rori|kids|school|math|homework|reading|lego|ptc|curriculum|'
+     r'family|home|house|ashan|gi)\b', 'xk87'),
+    (r'\b(exercise|gym|hiit|bball|basketball|yoga|stretch|legs|workout|fitness|'
+     r'running|lift|weights)\b', 'hcbp'),
+    (r'\b(eat|food|meal|calories|nutrition|breakfast|lunch|dinner|snack|health|sleep|'
+     r'diet|weight|cpap)\b', 'hcb'),
+    (r'\b(meditat\w*|mindfulness|breathing|journal|prayer|reflect|dream)\b|冥想', 'hcm'),
+    (r'\b(news|youtube|podcast|article|book|kindle|read)\b|新闻', 'hcmc'),
+    (r'\b(invest\w*|stocks?|portfolio|taxes|tax|budget|finance|401k|ira|schwab|'
+     r'vanguard)\b', 'qz12'),
+    (r'\b(social|friends?|party|visit|dinner out)\b', 's897'),
+    (r'\b(admin|tooling|setup|infra|claude|system|dtd|janus|vault|skill|cron|ledger|'
+     r'neon)\b', 'i447'),
+    (r'\b(goal|review|plan|weekly|1s|checkin|points)\b|分', 'g245'),
 ]
 
 
-def detect_labels(description: str) -> List[str]:
-    """Detect domain labels from task description. Always includes #0g."""
-    labels = [OG_LABEL]
-    desc_lower = description.lower()
+def detect_domain(description: str) -> Optional[str]:
+    """First DOMAIN_RULES match for a goal's text, or None."""
+    desc_lower = (description or "").lower()
     for pattern, label in DOMAIN_RULES:
         if re.search(pattern, desc_lower, re.IGNORECASE):
-            if label not in labels:
-                labels.append(label)
-            break  # first domain match wins
+            return label
+    return None
+
+
+def detect_labels(description: str) -> List[str]:
+    """Todoist labels for a 0g goal: always #0g, plus the detected domain."""
+    labels = [OG_LABEL]
+    domain = detect_domain(description)
+    if domain and domain not in labels:
+        labels.append(domain)
     return labels
+
+
+def route_goal(description: str) -> Dict:
+    """{content, domain, labels, project_id}: everything a writer needs to file
+    one 0g goal. Used by run_sync and by the /0g skill (`0g-sync.py route`)."""
+    domain = detect_domain(description)
+    return {"content": description, "domain": domain,
+            "labels": detect_labels(description), "project_id": project_for(domain)}
 
 # --- Logging ---
 
@@ -279,10 +336,20 @@ class TodoistClient:
         }
 
     def get_project_tasks(self, project_id: str) -> List[Dict]:
+        return self._list_tasks({"project_id": project_id})
+
+    def get_label_tasks(self, label: str) -> List[Dict]:
+        """Active tasks carrying `label` in any project (API v1 `label` param;
+        verified live 2026-11-09 — unlike a `@label` filter string, it is not
+        confused by the leading '#'). How 0g goals are found now that they live
+        in their domain projects."""
+        return self._list_tasks({"label": label})
+
+    def _list_tasks(self, base_params: Dict) -> List[Dict]:
         all_tasks = []
         cursor = None
         while True:
-            params = {"project_id": project_id, "limit": 200}
+            params = dict(base_params, limit=200)
             if cursor:
                 params["cursor"] = cursor
             resp = requests.get(
@@ -300,10 +367,11 @@ class TodoistClient:
         return all_tasks
 
     def create_task(self, content: str, minutes: Optional[int] = None,
-                    labels: Optional[List[str]] = None) -> Dict:
+                    labels: Optional[List[str]] = None,
+                    project_id: Optional[str] = None) -> Dict:
         payload = {
             "content": content,
-            "project_id": TODOIST_0G_PROJECT_ID,
+            "project_id": project_id or TODOIST_0G_PROJECT_ID,
             "priority": 4,  # API 4 = display p1
             "due_string": "today",
         }
@@ -489,10 +557,12 @@ def run_sync(client: TodoistClient, dry_run: bool):
     unchecked = [t for t in og_tasks if not t.checked]
     logger.info("Found %d unchecked tasks in 0₲", len(unchecked))
 
-    # Step 1: Get active Todoist tasks in 0g project
-    todoist_tasks = client.get_project_tasks(TODOIST_0G_PROJECT_ID)
+    # Step 1: Get active 0g goals — by #0g label, since each goal now lives in
+    # its domain's project (2026-11-09). A task that loses the label is treated
+    # as gone, exactly as one moved out of the 0g project was before.
+    todoist_tasks = client.get_label_tasks(OG_LABEL)
     todoist_active_ids = {t["id"] for t in todoist_tasks}
-    logger.info("Todoist 0g project has %d active tasks", len(todoist_active_ids))
+    logger.info("Todoist has %d active #0g goals", len(todoist_active_ids))
 
     # Step 2: Reverse sync — find completed/deleted Todoist tasks, flip [ ] to [x] in MD.
     # Preserving the line (rather than removing) lets the 03:59 build-order archive
@@ -576,13 +646,16 @@ def run_sync(client: TodoistClient, dry_run: bool):
             logger.info("Adopted existing Todoist task: %s (id=%s)", task.description, existing_match["id"])
             continue
 
-        # New task
-        labels = detect_labels(task.description)
+        # New task: labels + project from the goal text (route_goal)
+        route = route_goal(task.description)
+        labels, project_id = route["labels"], route["project_id"]
         if dry_run:
-            logger.info("[DRY RUN] Would create: %s (%sm) labels=%s", task.description, task.minutes, labels)
+            logger.info("[DRY RUN] Would create: %s (%sm) labels=%s project=%s",
+                        task.description, task.minutes, labels, project_id)
         else:
             try:
-                result = client.create_task(task.todoist_content, task.minutes, labels=labels)
+                result = client.create_task(task.todoist_content, task.minutes,
+                                            labels=labels, project_id=project_id)
                 state["tasks"][task.key] = {
                     "todoist_id": result["id"],
                     "minutes": task.minutes,
@@ -707,8 +780,12 @@ def run_cleanup(client: TodoistClient, dry_run: bool):
             write_md(MD_FILE, new_lines)
             logger.info("Removed %d checked tasks from 0₲", len(checked_indices))
 
-    # Clear Todoist 0g project
-    todoist_tasks = client.get_project_tasks(TODOIST_0G_PROJECT_ID)
+    # Clear yesterday's goals: everything still in the 0g project (leftover
+    # -1g block goals) plus every #0g goal filed in a domain project.
+    by_id: Dict[str, Dict] = {}
+    for t in client.get_project_tasks(TODOIST_0G_PROJECT_ID) + client.get_label_tasks(OG_LABEL):
+        by_id.setdefault(t["id"], t)
+    todoist_tasks = list(by_id.values())
     if todoist_tasks:
         if dry_run:
             logger.info("[DRY RUN] Would delete %d Todoist tasks", len(todoist_tasks))
@@ -718,7 +795,7 @@ def run_cleanup(client: TodoistClient, dry_run: bool):
                     client.delete_task(t["id"])
                 except requests.exceptions.HTTPError as e:
                     logger.warning("Failed to delete task %s: %s", t["id"], e)
-            logger.info("Deleted %d tasks from Todoist 0g project", len(todoist_tasks))
+            logger.info("Deleted %d Todoist goal tasks (0g project ∪ #0g label)", len(todoist_tasks))
 
     # Reset state
     if not dry_run:
@@ -749,13 +826,22 @@ def _collapse_blanks(lines: List[str]) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Sync 0₲ goals between MD and Todoist")
-    parser.add_argument("mode", choices=["sync", "cleanup"], help="Operation mode")
+    parser.add_argument("mode", choices=["sync", "cleanup", "route"], help="Operation mode")
+    parser.add_argument("goals", nargs="*",
+                        help="route: goal texts → one JSON line each {content, domain, labels, project_id}")
     parser.add_argument("--dry-run", action="store_true", help="Show changes without applying")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     args = parser.parse_args()
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    if args.mode == "route":
+        # No API call: the /0g skill asks here for each goal's labels + project
+        # so skill and cron can never disagree on where a goal is filed.
+        for g in args.goals:
+            print(json.dumps(route_goal(g), ensure_ascii=False))
+        return
 
     api_token = get_api_key()
     client = TodoistClient(api_token)

@@ -132,3 +132,81 @@ class TestRunSyncBehavior:
         )
         # Affirmative check that we still flip.
         assert "flip_to_checked" in src
+
+
+# --- Project routing (JM 2026-11-09: "infer the project and add that as the
+# 'project' for the tasks") ---------------------------------------------------
+
+class TestDomainRouting:
+    def test_explicit_codes_and_at_codes_win(self):
+        assert zg.detect_domain("@i9 ship the dashboard") == "i9"
+        assert zg.detect_domain("review m5x2 P&L") == "m5x2"      # code beats the g245 'review'
+
+    def test_old_label_names_normalize_to_what_did_fast_knows(self):
+        """hcbi/hcmp were emitted before; did-fast's LABEL_TO_0FEN only knows
+        hcb/hcm/hcbp, so those goals logged to 个."""
+        assert zg.detect_domain("read book on hcbi") == "hcb"
+        assert zg.detect_domain("hcmp sit") == "hcm"
+
+    def test_family_and_home_are_xk87_not_xk88(self):
+        assert zg.detect_domain("family dinner at home") == "xk87"
+
+    def test_bare_run_is_not_exercise(self):
+        assert zg.detect_domain("run the numbers on l912") == "m5x2"
+        assert zg.detect_domain("Full HIIT with weights") == "hcbp"
+
+    def test_unknown_goal_has_no_domain_and_stays_in_0g_project(self):
+        r = zg.route_goal("Progress with hiring {15}")
+        assert r["domain"] is None and r["labels"] == ["#0g"]
+        assert r["project_id"] == zg.TODOIST_0G_PROJECT_ID
+
+    def test_route_goal_maps_domain_to_its_todoist_project(self):
+        r = zg.route_goal("Full HIIT with weights {25}")
+        assert r["labels"] == ["#0g", "hcbp"] and r["project_id"] == zg.DOMAIN_PROJECT["hcbp"]
+        assert zg.project_for("nope") == zg.TODOIST_0G_PROJECT_ID
+        for dom, pid in zg.DOMAIN_PROJECT.items():
+            assert pid.startswith("6") and len(pid) == 16, (dom, pid)
+
+
+class TestLabelBasedSync:
+    def test_run_sync_finds_goals_by_label_not_project(self):
+        """Goals live in their domain projects now; the active set and the
+        adopt loop must come from the #0g label fetch or every goal outside the
+        0g project would be flipped [x] as 'completed'."""
+        src = (Path(__file__).parent / "0g-sync.py").read_text()
+        body = src[src.index("def run_sync("):src.index("def run_cleanup(")]
+        assert "client.get_label_tasks(OG_LABEL)" in body
+        assert "get_project_tasks(TODOIST_0G_PROJECT_ID)" not in body
+        assert "route_goal(task.description)" in body and "project_id=project_id" in body
+
+    def test_create_task_posts_the_routed_project(self, monkeypatch):
+        seen = {}
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"id": "x"}
+        monkeypatch.setattr(zg.requests, "post", lambda url, headers=None, json=None: seen.update(json) or _Resp())
+        c = zg.TodoistClient("tok")
+        c.create_task("Full HIIT {25}", labels=["#0g", "hcbp"], project_id=zg.DOMAIN_PROJECT["hcbp"])
+        assert seen["project_id"] == zg.DOMAIN_PROJECT["hcbp"]
+        c.create_task("plain", labels=["#0g"])
+        assert seen["project_id"] == zg.TODOIST_0G_PROJECT_ID
+
+    def test_label_fetch_uses_the_label_param(self, monkeypatch):
+        calls = []
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"results": [{"id": "a"}], "next_cursor": None}
+        monkeypatch.setattr(zg.requests, "get", lambda url, headers=None, params=None: calls.append(params) or _Resp())
+        assert zg.TodoistClient("tok").get_label_tasks("#0g") == [{"id": "a"}]
+        assert calls == [{"label": "#0g", "limit": 200}]
+
+    def test_cleanup_deletes_union_of_0g_project_and_label(self, monkeypatch, tmp_path):
+        md = tmp_path / "build-order.md"
+        md.write_text("## 0₲\n\n### 以后的目标\n")
+        monkeypatch.setattr(zg, "MD_FILE", md)
+        monkeypatch.setattr(zg, "save_state", lambda state: None)
+        client = MagicMock()
+        client.get_project_tasks.return_value = [{"id": "a"}]            # leftover -1g in 0g project
+        client.get_label_tasks.return_value = [{"id": "a"}, {"id": "b"}]  # b = goal filed in m5x2
+        zg.run_cleanup(client, dry_run=False)
+        assert sorted(c.args[0] for c in client.delete_task.call_args_list) == ["a", "b"]

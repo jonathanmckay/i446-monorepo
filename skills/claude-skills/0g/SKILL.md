@@ -20,8 +20,14 @@ card is already done today, nothing is claimed and the release is a no-op.
 
 - **Build order**: `~/vault/g245/5e-1/build-order.md`
 - **Section**: `## 0₲` (stop at the next `##` or `###` heading)
-- **Todoist project**: `0g` (ID: `6XfvCQ3p8Gq6fhGR`)
-- **Todoist labels**: `#0g` on every task (plus the `@code` domain label if present)
+- **Todoist project**: the goal's **domain project** (i9 → `6XQ3GMQRVmPgPM4W`, m5x2 → `6Crfmq5Pjp462w3C`, xk87 → `6Crfmq5QFg895Mcw`, hcbp → `6Crfmq5Q33gJ5Q3P`, g245 → `6Crfmq5PpX4JhP4c`, …). A goal with no inferable domain stays in `0g` (ID: `6XfvCQ3p8Gq6fhGR`). JM 2026-11-09: "once I make goals, infer the project and add that as the 'project' for the tasks."
+- **Todoist labels**: `#0g` on every task, plus the domain label when there is one
+- **Routing is computed, not guessed here.** `scripts/0g-sync.py` (the 2-hourly cron that also files build-order goals) owns the keyword table and the domain → project map. Ask it, one JSON line per goal:
+  ```bash
+  python3 ~/i446-monorepo/scripts/0g-sync.py route "<goal 1>" "<goal 2>" ...
+  # → {"content": ..., "domain": "hcbp", "labels": ["#0g", "hcbp"], "project_id": "6Crfmq5Q33gJ5Q3P"}
+  ```
+  Use its `labels` and `project_id` verbatim. An explicit `@code` in the goal text wins (the script matches it); strip the `@code` from the Todoist content afterwards.
 
 ## Notation Parsing
 
@@ -38,25 +44,9 @@ Strip `@code` from the displayed task content in Todoist (it becomes a label). K
 
 ## Domain Auto-Categorization
 
-If a goal has an explicit `@code` annotation, use that. Otherwise, infer the domain from keywords in the goal text:
+Done by `0g-sync.py route` (above) — do not hand-infer. Its rules: explicit codes (`i9`, `m5x2`, `@xk87`, …) first, then keywords per domain (Microsoft/Xbox/GitHub → `i9`; property/tenant/Ian/Stefanie → `m5x2`; Theo/Ren/school/family/home → `xk87`; HIIT/bball/gym → `hcbp`; food/meal/sleep → `hcb`; meditation/journal/dream → `hcm`; news/podcast/read → `hcmc`; invest/tax → `qz12`; friends/party → `s897`; admin/claude/dtd → `i447`; goal/review/plan/分 → `g245`). Edit `DOMAIN_RULES` in `scripts/0g-sync.py` to change routing; the cron and this skill then agree by construction.
 
-| Keywords | Domain |
-|----------|--------|
-| xbox, platform, copilot, github, teams, metrics, standup, sprint, retro, SLT, 1:1 (work context), PR, deploy, pipeline, experimentation, forza, halo, activation | `i9` |
-| property, tenant, lease, rent, AppFolio, occupancy, maintenance, P&L, bookkeeping, eviction, unit, renewal, vacancy | `m5x2` |
-| school, math, kids, Theo, Ren, Aurora, homework, reading, lego, PTC | `xk87` |
-| exercise, gym, HIIT, bball, basketball, run, walk, yoga, stretch, legs | `hcbp` |
-| eat, food, meal, calories, nutrition, breakfast, lunch, dinner, snack | `hcb` |
-| meditat, journal, prayer, reflect, o314, 冥想, dream | `hcm` |
-| news, 新闻, YouTube, podcast, read (media), article, book review | `hcmc` |
-| invest, stocks, portfolio, taxes, budget, finance | `qz12` |
-| goal, review, plan, weekly, 1s | `g245` |
-| social, friends, dinner out, call (non-work) | `s897` |
-| admin, tooling, setup, infra, fix computer, claude, system | `i447` |
-
-If no keywords match and no `@code` is provided, default to `g245` (daily goals are meta by nature).
-
-The inferred domain is added as a Todoist label alongside `#0g`.
+**No match → no domain label and the task stays in the `0g` project.** Do not default to `g245`: the cron does not, and the two paths must file the same goal the same way.
 
 ## Behavior
 
@@ -122,12 +112,12 @@ The logger is idempotent and merges into today's section, so running `/0g` sever
 
 **Step 3: Add to Todoist (with dedup)**
 
-First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each goal, skip creation if an open task with matching content already exists in the project (compare after stripping whitespace; substring match is sufficient).
+First, fetch existing open `#0g` tasks using `find-tasks` with `labels: ["#0g"]` (goals live in their domain projects now, so a `projectId` dedup would miss them). For each goal, skip creation if an open task with matching content already exists (compare after stripping whitespace; substring match is sufficient).
 
-For each **new** goal (no existing match), create a Todoist task:
+For each **new** goal (no existing match), run `0g-sync.py route` on it and create a Todoist task:
 - **Content**: goal text (with `(N)`, `[N]`, `{N}` preserved; `@code` stripped)
-- **Project**: `0g` (ID `6XfvCQ3p8Gq6fhGR`)
-- **Labels**: `["#0g", "<domain>"]` — domain from explicit `@code` or auto-inferred (see Domain Auto-Categorization above)
+- **Project**: the route's `project_id` (the domain's project; `0g` when no domain)
+- **Labels**: the route's `labels` (`["#0g"]` or `["#0g", "<domain>"]`)
 - **Priority**: `p1`
 - **Due**: today
 - **Duration**: from `(N)` if present
@@ -176,7 +166,7 @@ python3 ~/i446-monorepo/scripts/0g_log.py "<goal 1 content>" "<goal 2 content>" 
 
 **Step 2: Add to Todoist (with dedup)**
 
-First, fetch existing open tasks in the `0g` project (ID `6XfvCQ3p8Gq6fhGR`) using `find-tasks`. For each unchecked goal, skip creation if an open task with matching content already exists (substring match). Create only non-duplicate tasks (same format as above — parse annotations from the text).
+First, fetch existing open `#0g` tasks using `find-tasks` with `labels: ["#0g"]` (dedup across every domain project, not just `0g`). For each unchecked goal, skip creation if an open task with matching content already exists (substring match). Create only non-duplicate tasks (same format as above — `0g-sync.py route` for project + labels, annotations parsed from the text).
 
 **Step 3: Mark 0g habit done**
 
