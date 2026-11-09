@@ -2239,6 +2239,12 @@ for _mp in _glob.glob(_os.path.expanduser('~/vault/z_ibx/habits-deferred-*-%s.id
 zeroneon = [t for t in _sec('0neon', _tomorrow) + _sec('夜neon', _tomorrow)
             if t.get('id') not in _deferred_ids
             and t['due'] <= today]
+# The marker now covers EVERY deferred recurring parent (defer-fast,
+# 2026-11-09), so apply it to the general today bucket too: hcmc's daily
+# 'validate no yt,英文,...' lives here, not in 0neon, and after a skip it came
+# back in a relaunched dtd whose cache predated the defer, inviting a second
+# skip that pushed the series past today. Rituals/-1g above are never deferred.
+today_tasks = [t for t in today_tasks if t.get('id') not in _deferred_ids]
 # Block-snooze (ctrl-v, 2026-07-24): ids hidden until their chosen 地支 block
 # starts. File is {date, snoozes: {id: start_hour}}; a stale date voids it.
 # Uses the CURRENT clock (not the session-start today arg) so an idle-open

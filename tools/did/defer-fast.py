@@ -76,9 +76,17 @@ def deferred_marker_path(when: date | None = None) -> Path:
 
 
 def mark_habit_deferred(task_id: str, labels: list[str]) -> None:
-    """Record a deferred daily habit's parent id for today (best-effort)."""
-    if not HABIT_LABELS & set(labels):
-        return
+    """Record a deferred recurring parent's id for today (best-effort).
+
+    Every recurring parent, not only 0neon/夜neon/1neon habits (2026-11-09):
+    the gate left any other recurring card (hcmc's daily "validate no yt,
+    英文,…") protected only by the session-local REMOVED.ids and an eventual
+    did-fast --refresh-cache. The periodic did-refresh-cache job never refetches
+    the broad "today" bucket, so a dtd relaunched before did-fast ran showed
+    the pre-defer cache, the card came back, and a second "skip" pushed the
+    series a day past today (Nov 8: 11-09 → 11-10, so no 英文 card on Nov 9).
+    dtd's list builder and dtd.py already hide these ids unconditionally."""
+    del labels  # kept for the call signature; no longer gates the marker
     try:
         p = deferred_marker_path()
         p.parent.mkdir(parents=True, exist_ok=True)

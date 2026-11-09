@@ -34,12 +34,18 @@ def test_marker_written_for_daily_habit(monkeypatch, tmp_path):
     assert marker.read_text().splitlines() == ["TASK123", "TASK456"]
 
 
-def test_marker_skipped_for_non_habit(monkeypatch, tmp_path):
+def test_marker_written_for_any_recurring_parent(monkeypatch, tmp_path):
+    """Regression 2026-11-09: hcmc's daily "validate no yt,英文,…" card was
+    deferred (skipped) at 08:44, a dtd relaunched at 09:54 on a cache that
+    still predated the defer showed it again, and a second skip advanced the
+    series to Nov 10 -- no 英文 card on Nov 9. The per-day marker used to be
+    gated on 0neon/夜neon/1neon labels; every recurring parent needs it."""
     df = _load("defer_fast_marker2", "defer-fast.py")
     marker = tmp_path / "habits-deferred.ids"
     monkeypatch.setattr(df, "deferred_marker_path", lambda when=None: marker)
-    df.mark_habit_deferred("TASK789", ["xk87"])  # ordinary task, not a daily habit
-    assert not marker.exists()
+    df.mark_habit_deferred("TASK789", ["hcmc"])   # recurring, not a 0neon habit
+    df.mark_habit_deferred("TASK790", [])         # no labels at all
+    assert marker.read_text().splitlines() == ["TASK789", "TASK790"]
 
 
 def test_marker_path_is_day_keyed():

@@ -62,6 +62,20 @@ def test_habit_deferred_on_other_host_is_hidden(tmp_path):
     assert dtd.build_tasks() == []
 
 
+def test_non_habit_recurring_deferred_on_other_host_is_hidden(tmp_path):
+    """Regression 2026-11-09: hcmc's daily 'validate no yt,英文,…' (label hcmc,
+    general today bucket, not 0neon) was skipped on Straylight at 08:44, came
+    back in a dtd relaunched at 09:54 on a pre-defer cache, and a second skip
+    moved the series to Nov 10. The marker now covers every recurring parent
+    and must hide the today bucket too, not only 0neon/夜neon."""
+    card = _task("v1", "validate no yt,英文,aggregator or banned (1) [25]", TODAY,
+                 recurring=True, labels=["hcmc"])
+    _setup(tmp_path, {"updated": dt.datetime.now().isoformat(), "today": [card]})
+    assert [t["id"] for t in dtd.build_tasks()] == ["v1"]
+    (dtd.MIRROR_DIR / f"habits-deferred-straylight-refit-{TODAY}.ids").write_text("v1\n")
+    assert dtd.build_tasks() == []
+
+
 @pytest.mark.parametrize("section", ["0neon", "夜neon"])
 @pytest.mark.parametrize("recurring", [False, True])
 def test_daily_tasks_api_uses_same_due_date_cutoff_as_cli(tmp_path, monkeypatch, section, recurring):

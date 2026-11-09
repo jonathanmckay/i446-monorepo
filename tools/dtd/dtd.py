@@ -474,8 +474,8 @@ def _snoozed_ids() -> set[str]:
     return ids
 
 def _deferred_habit_ids() -> set[str]:
-    """Recurring 0neon/夜neon habit-parent ids deferred (/defer) today,
-    hidden for the rest of today. Mirrors tools/did/dtd.sh's read of the same
+    """Recurring parent ids deferred (/defer) today -- 0neon/夜neon habits and,
+    since 2026-11-09, every other recurring card -- hidden for the rest of today. Mirrors tools/did/dtd.sh's read of the same
     per-day marker file (same gap as _snoozed_ids above)."""
     day = _today().isoformat()
     # Local marker plus every host's synced mirror in z_ibx (2026-10-22: a
@@ -540,6 +540,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     # Match the CLI's date cutoff, including deferred one-off habit copies.
     zeroneon = [t for t in sec("0neon", today) + sec("夜neon", today)
                 if t.get("id") not in _deferred_ids]
+    # Every deferred recurring parent is marked since 2026-11-09 (not only
+    # 0neon habits), so hide them from the general today bucket as well --
+    # mirrors tools/did/dtd.sh. Rituals / -1g above are never deferred.
+    today_tasks = [t for t in today_tasks if t.get("id") not in _deferred_ids]
     oneneon = sec("1neon", today)
     zerog = [t for t in today_tasks
              if has(t, "#0g") and not has(t, "-1neon") and not has(t, "#-1g")]
