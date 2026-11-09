@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-09T08:00:06.047503-08:00"
+  "tasks": {
+    "1532 分 「50」": {
+      "todoist_id": "6hxFxM43XP3qrrm2",
+      "minutes": 15
+    },
+    "progress with hiring": {
+      "todoist_id": "6hxFxM5HhqCQ7wRR",
+      "minutes": 15
+    },
+    "full hiit with weights": {
+      "todoist_id": "6hxFxM7Q6j67rp6R",
+      "minutes": 25
+    }
+  },
+  "last_sync": "2026-11-09T09:30:09.307501-08:00"
 }
