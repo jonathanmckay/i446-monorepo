@@ -5067,6 +5067,32 @@ def main():
         except Exception:
             pass
 
+    # Fire-and-forget: 1st hci photo proof (JM 2026-11-09). When today's
+    # `1st hci` 0neon card actually closed in this run, check Photos for a
+    # selfie in the last 2h and dock -5 on 0分!个 if there is none
+    # (tools/hci/selfie_check.py; it logs to ~/.local/state/jm/1st-hci-selfie.jsonl
+    # and never docks when the library has no recent assets to judge from).
+    # Gated on target_date == today, not past_target: `/did 1st hci yesterday`
+    # still closes today's recurring card, and must not dock today.
+    _today_md = f"{_daytime.today().month}/{_daytime.today().day}"
+    if target_date == _today_md:
+        for r in fast:
+            td = r.todoist_task or {}
+            if (r.step == "todoist"
+                    and td.get("content", "").lower().startswith("1st hci")
+                    and close_results.get(td.get("id"), (False, None))[0]):
+                try:
+                    with open("/tmp/1st-hci-selfie.log", "a") as _sl:
+                        subprocess.Popen(
+                            [sys.executable,
+                             str(Path(__file__).resolve().parents[1] / "hci" / "selfie_check.py"),
+                             "--apply"],
+                            stdout=_sl, stderr=_sl, start_new_session=True,
+                        )
+                except Exception:
+                    pass
+                break
+
     _emit(output)
     failed = _write_failures(output)
     if not failed:
