@@ -3269,6 +3269,32 @@ def _on_ix() -> bool:
     return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
 
 
+def _stamp_current_block(emoji: str) -> None:
+    """Stamp `emoji` on the CURRENT 地支 block header from a 0n habit mark
+    (☀️ from ص, 📧 from the inbox habits). Single-writer + lock-protected,
+    same as run_ritual's stamp (2026-08-02): this used to read-modify-write
+    build-order.md unconditionally on WHATEVER machine did-fast.py runs on,
+    with no lock at all -- the exact same lost-update exposure run_ritual had
+    before its own fix. Never raises: a habit mark must not fail on a stamp."""
+    try:
+        import sys as _s3
+        _s3.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+        import neon_blocks as _nb3
+        _bname = _nb3.current_block(_daytime.local_now().hour)
+        if _on_ix():
+            _bo = Path.home() / "vault/g245/5e-1/build-order.md"
+            if _bo.exists():
+                with _nb3.build_order_lock():
+                    _t = _bo.read_text(encoding="utf-8")
+                    _nt, _ch = _nb3.stamp_emoji(_t, _bname, emoji)
+                    if _ch:
+                        _bo.write_text(_nt, encoding="utf-8")
+        else:
+            _stamp_on_ix(_bname, emoji)
+    except Exception:
+        pass  # non-critical
+
+
 def _stamp_on_ix(block: str, emoji: str) -> Optional[tuple[bool, str]]:
     """Apply a block-header stamp on IX's build-order copy (single writer).
     Returns (changed, resulting_text): changed=True means freshly stamped,
@@ -4462,30 +4488,22 @@ def main():
     PRAYER_HABITS = {"ص"}
     prayer_done = any(r.item.name.lower() in PRAYER_HABITS for r in fast if r.step == "0n")
     if prayer_done:
-        # Single-writer + lock-protected, same as run_ritual's stamp (2026-08-02):
-        # this used to read-modify-write build-order.md unconditionally on
-        # WHATEVER machine did-fast.py runs on, with no lock at all — the
-        # exact same lost-update exposure run_ritual had before its own fix,
-        # just never caught here because it's a rarer path than a manual
-        # ritual completion.
-        try:
-            import sys as _s3
-            _s3.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
-            import neon_blocks as _nb3
-            _now_h = _daytime.local_now().hour
-            _bname = _nb3.current_block(_now_h)
-            if _on_ix():
-                _bo = Path.home() / "vault/g245/5e-1/build-order.md"
-                if _bo.exists():
-                    with _nb3.build_order_lock():
-                        _t = _bo.read_text(encoding="utf-8")
-                        _nt, _ch = _nb3.stamp_emoji(_t, _bname, "☀️")
-                        if _ch:
-                            _bo.write_text(_nt, encoding="utf-8")
-            else:
-                _stamp_on_ix(_bname, "☀️")
-        except Exception:
-            pass  # non-critical
+        _stamp_current_block("☀️")
+
+    # 5c-bis. Inbox marker (2026-11-09, 1-1n idea 3): marking any daily inbox
+    # habit (/ibx0, /did ibx i9, ...) stamps 📧 on the current block the way ص
+    # stamps ☀️. The daemon trusts 📧 on header presence and credits the block's
+    # -1ibx 3 分 at reconcile, so processing the inbox earns the ritual without
+    # a separate 😈 -1ibx close (a later close is idempotent on the stamp). The
+    # 1-1n heatmap reads the same stamp. Names go through header_normalize, the
+    # path 0n routing uses, so "ibx - s897" and "ibx s897" both match.
+    INBOX_HABITS = {"ibx s897", "ibx i9", "ibx m5x2", "slack i9", "slack m5x2",
+                    "slack github", "teams"}
+    inbox_done = any(
+        header_normalize(ZERO_N_ALIASES.get(r.item.name.lower(), r.item.name)) in INBOX_HABITS
+        for r in fast if r.step == "0n")
+    if inbox_done:
+        _stamp_current_block("📧")
 
     # 5d. (removed) The -1l task marker (✅) is daemon-owned. It used to be
     # stamped here on the *current* in-progress block on every task completion,

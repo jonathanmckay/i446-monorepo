@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the -1n (-1₦) block-ritual heatmap: day x 2-hour Earthly-Branch block,
 showing which build-order ritual icons were hit. Multi-source:
-  Toggl       -> 📧 inbox, ⏱️ time-log  (bucketed by entry start time)
-  Build order -> 🎯 goal set (-1₲ checkbox), ☀️ prayer (header stamp); v_logs + live
+  Toggl       -> ⏱️ time-log, 📧 inbox fallback  (bucketed by entry start time)
+  Build order -> 🎯 goal set (-1₲ checkbox), ☀️ prayer + 📧 inbox (header stamps); archive + live
   Todoist     -> ✓ task completed (completed_at bucketed by block)
 Usage: make_heatmap.py START END   (YYYY-MM-DD inclusive). Prints markdown.
 """
@@ -128,6 +128,13 @@ def add_goals(grid, start, end):
                     # prayer_marker, did-fast). Authoritative ritual marker.
                     if block and '☀️' in line:
                         grid[day][block].add('☀️')
+                    # 📧 inbox: header stamp written by the -1ibx card close
+                    # (did-fast run_ritual), -2n/inbound, and did-fast's ibx
+                    # habit marks (2026-11-09). Toggl `ibx` entries remain a
+                    # fallback in add_toggl; the week of Nov 2-8 had 38/63
+                    # stamped headers against 3 Toggl entries.
+                    if block and '📧' in line:
+                        grid[day][block].add('📧')
                 elif block and re.match(r'^\s*- \[[ xX]\]\s*\S', line):
                     grid[day][block].add('🎯')
         day += dt.timedelta(days=1)

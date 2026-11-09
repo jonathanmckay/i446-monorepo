@@ -54,7 +54,7 @@ Then append three sections, in order:
 | Symbol | Ritual | Source |
 |--------|--------|--------|
 | ☀️ | prayer (salah) | Build order: ☀️ stamp on the block header (written by /ص, prayer_marker, did-fast). Past days from `vault/g245/v_logs/YYYY.MM.DD-build-order.md`, today from live `build-order.md` |
-| 📧 | inbox processed | Toggl: description starts with `ibx` |
+| 📧 | inbox processed | Build order: 📧 stamp on the block header (written by the -1ibx card close, -2n/inbound, and did-fast when an ibx/slack/teams 0n habit is marked). Toggl description starting with `ibx` as fallback |
 | 🎯 | goal set for block (-1g) | Build order `## -1₲` section: non-empty checkbox under the block header. Past days from `vault/g245/v_logs/YYYY.MM.DD-build-order.md`, today from the live `build-order.md` |
 | ⏱️ | time logged | Toggl: `-1t` / `-1l` / `0t` / `0l` |
 | ✓ | task completed | Todoist completed tasks (`/api/v1/tasks/completed`) by completed_at |

@@ -1187,6 +1187,10 @@ chmod +x "$DTD_DONE_HIDE"
 # window that's already been shown to matter -- cutting it doesn't prove the
 # race is fully closed, but it's a genuine, measured reduction in it, not a
 # refactor for its own sake.
+# -1g prefill sidecar (2026-11-09): the list generator writes the top open 0₲
+# goal here (empty when none) on every render; the done router reads it so
+# alt-enter on the 😈 -1g card opens the form only when a prefill is on show.
+DTD_PREFILL="/tmp/dtd-$DTD_ID.prefill"
 DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
@@ -1239,12 +1243,22 @@ _b64="\${_out#*\$'\\n'}"
 _ex="exclude+"
 [[ "\$_id" == BLOCK:* ]] && _ex=""
 print -- "\$EPOCHREALTIME\trouter-resolved\t\$_t_base" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
+# alt-enter on the 😈 -1g card while a prefill is on show (2026-11-09: "if I
+# hit opt enter, it goes to the screen where I can enter, but the prefill
+# already exists, hit ctrl+s then it saves") opens the -1g form instead of
+# completing: its ghost line 1 is that prefill and ^S accepts it. With no
+# prefill (empty sidecar) the card completes instantly as before. No exclude+:
+# a cancelled form keeps the row; the detached save hides it via the refresh.
+if [[ "\$_t_base" == "😈 -1g" && -s "$DTD_PREFILL" ]]; then
+  printf 'execute(%s %s %s --detach)' "$DTD_FORM" "\$_id" "$HOME/i446-monorepo/tools/-1g/-1g-form.py"
+else
 case "\$_t_base" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
     printf '%sexecute(%s %s %s)' "\$_ex" "$DTD_DONE" "\$_id" "\$_b64" ;;
   *)
     printf '%sexecute-silent(%s %s; %s %s %s >/dev/null 2>&1)' "\$_ex" "$DTD_DONE_HIDE" "\$_id" "$DTD_DONE" "\$_id" "\$_b64" ;;
 esac
+fi
 print -- "\$EPOCHREALTIME\trouter-end\t\$_id" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 ROUTEREOF
 chmod +x "$DTD_DONE_ROUTER"
@@ -2278,6 +2292,26 @@ import sys as _sys
 _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/lib'))
 from blocks import BLOCK_START as _BLOCK_LABEL_HOURS
 _now_hour = _dt.datetime.now().hour
+# -1g prefill (2026-11-09): the top open 0₲ goal for the current block, shown
+# on the 😈 -1g card after a second 😈 and written to the .prefill sidecar
+# next to the cache file so the done router can route alt-enter to the form.
+# One build-order read per render; any failure means no prefill, never a
+# broken list.
+def _zerog_prefill():
+    pf = None
+    try:
+        import neon_blocks as _nbp
+        pf = _nbp.zerog_prefill(_nbp.BUILD_ORDER.read_text(encoding='utf-8'),
+                                _nbp.current_block(_now_hour))
+    except Exception:
+        pf = None
+    try:
+        with open(cache_file.rsplit('.', 2)[0] + '.prefill', 'w') as _pff:
+            _pff.write(pf or '')
+    except Exception:
+        pass
+    return pf
+_PREFILL = _zerog_prefill()
 # Woken (2026-10-05): a task whose delay or block label has passed TODAY
 # floats to the top of its tier, so 'hide until 酉' means 'and then put it
 # first'. Snooze entries expire by value but stay in the file for the day,
@@ -2587,6 +2621,11 @@ for t in unique:
     # Display the cached short (Haiku) name when present so long m5x2-style
     # tasks keep their (N)/[N] estimates visible; fall back to full content.
     display = t.get('short') or raw
+    # 😈 -1g card: show the 0₲ prefill after a second 😈 so JM knows alt-enter
+    # will accept it (2026-11-09). Ritual cards carry no estimates, so a plain
+    # append keeps the row layout.
+    if is_ritual and _PREFILL and clean.replace('\U0001F608', '').strip() == '-1g':
+        display = raw + ' \U0001F608 ' + _PREFILL
 
     # Markdown links (/todo stores URLs as '[(link)](https://…)') collapse to
     # their visible text for layout; the first one becomes an OSC 8 terminal

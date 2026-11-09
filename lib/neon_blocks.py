@@ -490,3 +490,58 @@ def append_daily_goals(goals: list[str], build_order: Path | None = None) -> lis
         if added:
             bo.write_text(new_text, encoding="utf-8")
     return added
+
+
+# ---------------------------------------------------------------------------
+# 0₲ → -1g prefill (moved here from tools/-1g/-1g-form.py 2026-11-09 so dtd's
+# list generator can show the same text on the 😈 -1g card).
+# ---------------------------------------------------------------------------
+_TRAILING_POINTS_RE = re.compile(r"(\s*(\{\d+\}|\[\d+\]))+\s*$")
+
+
+def _goal_key(goal: str) -> str:
+    """Comparison key: no trailing points, no @code, case/space-folded."""
+    g = _TRAILING_POINTS_RE.sub("", _GOAL_AT_RE.sub(" ", goal))
+    return " ".join(g.lower().split())
+
+
+def zerog_prefill(text: str, block: str) -> str | None:
+    """Pure: the line-1 prefill for the -1g form and the 😈 -1g card
+    (2026-11-02: "#1 integrated into -1g such that it's a prefill but when I
+    put any text in it disappears"). First unchecked flush-left `- [ ]` under
+    `## 0₲` (above `###` subsections) not already a goal of `block`. Trailing
+    `{N}`/`[N]` are dropped: a 0g bonus like {40} would blow the ≤18/block -1g
+    budget, and a leftover lone [N] would turn the goal into a plain todo; the
+    block default {10} applies."""
+    lines = text.split("\n")
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith(DAILY_SECTION))
+    except StopIteration:
+        return None
+    daily = []
+    for l in lines[start + 1:]:
+        if l.startswith("#"):
+            break
+        m = re.match(r"^- \[ \]\s*(.+)$", l)
+        if m:
+            daily.append(m.group(1).strip())
+    present = set()
+    for i, l in enumerate(lines):
+        if l.startswith("## -1₲"):
+            for h in range(i + 1, len(lines)):
+                if lines[h].startswith("## "):
+                    break
+                if lines[h].startswith("- ") and _block_line_name(lines[h]) == block:
+                    for c in lines[h + 1:]:
+                        if not c.startswith("    "):
+                            break
+                        m = re.match(r"^    - \[[ xX]\]\s*(.*)$", c)
+                        if m and m.group(1).strip():
+                            present.add(_goal_key(m.group(1)))
+                    break
+            break
+    for g in daily:
+        cand = _TRAILING_POINTS_RE.sub("", g).strip()
+        if cand and _goal_key(cand) not in present:
+            return cand
+    return None
