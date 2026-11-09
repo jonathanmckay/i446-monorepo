@@ -178,6 +178,10 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
     `appends` = [(col, value), ...] or [{"col":…, "value":…, "src":…}, …].
     Falls back to per-cell ssh appends when the daemon is down."""
     items = [a if isinstance(a, dict) else {"col": a[0], "value": a[1]} for a in appends]
+    # The daemon pastes the value onto the formula as-is: a bare 80 after "+52"
+    # became "+5280" (2026-11-08). Sign numbers here.
+    items = [{**i, "value": f"{i['value']:+g}"} if isinstance(i.get("value"), (int, float))
+             and not isinstance(i.get("value"), bool) else i for i in items]
     body = {"sheet": sheet, "appends": items}
     if date is not None:
         body["date"] = date
