@@ -10,6 +10,7 @@ wiping the existing goals or their completion state.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -27,6 +28,13 @@ def _load():
 
 
 m = _load()
+
+
+@pytest.fixture(autouse=True)
+def _suggest_log_to_tmp(tmp_path, monkeypatch):
+    """main() renders the -1g card, which appends an eval record; keep tests
+    out of the real vault/g245/v_logs log."""
+    monkeypatch.setattr(m, "SUGGEST_LOG_DIR", tmp_path / "v_logs")
 
 
 # ── append_block_goals: preserves existing goals + done state ───────────────
@@ -224,3 +232,45 @@ def test_dash2n_goal_card_silent_when_goals_exist(monkeypatch):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── -1g suggestion eval log (2026-11-09) ─────────────────────────────────────
+
+def test_split_reason_code():
+    assert m.split_reason_code("skip -w") == ("skip", "wrong-domain")
+    assert m.split_reason_code("-w") == ("", "wrong-domain")
+    assert m.split_reason_code("foo, bar -s") == ("foo, bar", "stale")
+    assert m.split_reason_code("1,3") == ("1,3", None)
+    # a hyphenated word inside a goal is not a reason code
+    assert m.split_reason_code("fix the x-b thing") == ("fix the x-b thing", None)
+    assert m.split_reason_code("") == ("", None)
+
+
+def test_log_1g_suggestions_writes_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(m, "_short_host", lambda: "testhost")
+    sugg = [
+        {"content": "prep for Standup (09:00)", "source": "cal", "domain": "i9"},
+        {"content": "ship the thing [20]", "value": 20, "time": None,
+         "ratio": 0.6, "domain": "i9", "id": "x"},  # todoist fallback: no source key
+    ]
+    m.log_1g_suggestions("巳", sugg, "1", [1], [], None,
+                         existing_goals=[], mode="inbound", log_dir=tmp_path)
+    m.log_1g_suggestions("巳", sugg, "skip", [], [], "stale",
+                         existing_goals=["a"], mode="-2n", log_dir=tmp_path)
+    m.log_1g_suggestions("巳", sugg, "", [], [], None,
+                         existing_goals=["a"], mode="-2n", log_dir=tmp_path)
+    m.log_1g_suggestions("巳", sugg, "write the memo", [], ["write the memo"], None,
+                         existing_goals=[], mode="-2n", log_dir=tmp_path)
+    path = tmp_path / "-1g-suggest.testhost.jsonl"
+    recs = [json.loads(l) for l in path.read_text().splitlines()]
+    assert [r["response_kind"] for r in recs] == ["pick", "skip", "keep", "custom"]
+    assert recs[0]["picks"] == [1]
+    assert recs[0]["suggestions"][1]["source"] == "todoist"
+    assert recs[1]["reason"] == "stale"
+    assert recs[3]["custom"] == ["write the memo"]
+    assert recs[0]["block"] == "巳" and recs[0]["mode"] == "inbound"
+
+
+def test_log_1g_suggestions_never_raises(monkeypatch):
+    # unwritable dir → swallowed
+    m.log_1g_suggestions("巳", [], "1", [1], [], None, log_dir="/dev/null/nope")

@@ -10,6 +10,7 @@ the gap audit.
 from __future__ import annotations
 
 import importlib.util
+import pytest
 import re
 import sys
 from pathlib import Path
@@ -25,6 +26,13 @@ def _load():
 
 
 m = _load()
+
+
+@pytest.fixture(autouse=True)
+def _suggest_log_to_tmp(tmp_path, monkeypatch):
+    """main() renders the -1g card, which appends an eval record; keep tests
+    out of the real vault/g245/v_logs log."""
+    monkeypatch.setattr(m, "SUGGEST_LOG_DIR", tmp_path / "v_logs")
 
 
 class _DummyThread:

@@ -1162,6 +1162,76 @@ def format_suggestions(suggestions):
     return "\n".join(lines)
 
 
+# ── -1g suggestion eval log ───────────────────────────────────────────────
+# Every render of the -1g card appends one JSON line so the suggester can be
+# evaluated offline (skills/claude-skills/1-1n/suggest_eval.py). The user's
+# response IS the label: picked numbers = positives for those candidates,
+# typed custom goals = all negative + the gold answer, skip = unlabeled.
+# Per-host file (Syncthing cannot merge concurrent appends); the rollup globs.
+SUGGEST_LOG_DIR = Path.home() / "vault/g245/v_logs"
+_REASON_CODES = {"w": "wrong-domain", "s": "stale", "b": "not-2h", "d": "duplicate"}
+_REASON_RE = re.compile(r"(?:^|\s)-([wsbd])\s*$")
+
+
+def split_reason_code(resp: str):
+    """Strip an optional trailing reason token (`-w` wrong domain, `-s` stale /
+    already done, `-b` not 2h-sized, `-d` duplicate) from a goal-card response.
+    Returns (resp_without_code, reason_or_None). `skip -w` → ("skip", "wrong-domain");
+    a bare `-w` → ("", "wrong-domain")."""
+    if not resp:
+        return resp, None
+    m = _REASON_RE.search(resp)
+    if not m:
+        return resp, None
+    return resp[: m.start()].rstrip(), _REASON_CODES[m.group(1)]
+
+
+def _short_host() -> str:
+    import platform
+    return (platform.node() or "unknown").split(".")[0]
+
+
+def log_1g_suggestions(block_name, suggestions, resp, picks, custom, reason,
+                       existing_goals=None, mode="-2n", log_dir=None):
+    """Append one eval record for a -1g card render. Never raises."""
+    try:
+        if resp is None or resp.strip() == "" or resp.strip().lower() == "skip":
+            kind = "keep" if (existing_goals and not reason) else "skip"
+        elif picks and custom:
+            kind = "mixed"
+        elif picks:
+            kind = "pick"
+        else:
+            kind = "custom"
+        now = datetime.now().astimezone()
+        rec = {
+            "ts": now.isoformat(timespec="seconds"),
+            "date": now.date().isoformat(),
+            "weekday": now.strftime("%a"),
+            "block": block_name,
+            "host": _short_host(),
+            "mode": mode,
+            "existing_goals": len(existing_goals or []),
+            "suggestions": [
+                {"content": s.get("content", ""),
+                 "source": s.get("source", "todoist"),
+                 "domain": s.get("domain", "")}
+                for s in (suggestions or [])
+            ],
+            "response_kind": kind,
+            "picks": list(picks or []),
+            "custom": list(custom or []),
+            "reason": reason,
+            "raw": resp or "",
+        }
+        d = Path(log_dir) if log_dir else SUGGEST_LOG_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / f"-1g-suggest.{rec['host']}.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
 # ── Block-aware goal synthesis ─────────────────────────────────────────────
 # Synthesize 3 candidate goals for the current 2h block from 4 signals:
 #   [cal] meetings in-block (Google Calendar)
@@ -1693,6 +1763,10 @@ def main(skip_comms=None):
                 options="add/pick/skip" if existing_goals else "pick/goals/skip",
                 preserve_case=True,
             )
+            # Optional trailing reason code (`skip -w`, `foo, bar -s`): strip it
+            # before the skip check and before it can land in a goal's text.
+            resp, reason_code = split_reason_code(resp or "")
+            pick_idx = []
             if resp and resp.lower() != "skip":
                 # Check if response is number picks from suggestions
                 goals_text = resp
@@ -1704,6 +1778,7 @@ def main(skip_comms=None):
                             idx_pick = int(part)
                             if 1 <= idx_pick <= len(suggestions):
                                 picks.append(suggestions[idx_pick - 1]["content"])
+                                pick_idx.append(idx_pick)
                     if picks:
                         goals_text = "\n".join(picks)
 
@@ -1712,6 +1787,12 @@ def main(skip_comms=None):
                 # the block already has goals, APPEND (preserve done-state of
                 # existing goals); otherwise write fresh.
                 parsed_goals = parse_goals_text(goals_text)
+                log_1g_suggestions(
+                    block_name, suggestions, resp, pick_idx,
+                    [] if pick_idx else parsed_goals, reason_code,
+                    existing_goals=existing_goals,
+                    mode="inbound" if skip_comms else "-2n",
+                )
                 if existing_goals:
                     wrote_locally = append_block_goals(block_name, parsed_goals)
                 else:
@@ -1734,11 +1815,18 @@ def main(skip_comms=None):
                     _ritual_credit_line("-1g", complete_ritual("-1g"))
                 else:
                     console.print(f"[red]  ⚠ failed to write goals to build order[/red]")
-            elif existing_goals:
-                # Kept existing goals; make sure the idle panel shows them.
-                current_goals = list(existing_goals)
-                # Goals already exist this block → close the -1g card + credit.
-                _ritual_credit_line("-1g", complete_ritual("-1g"))
+            else:
+                # skip / empty: unlabeled for the eval, but record what was shown.
+                log_1g_suggestions(
+                    block_name, suggestions, resp, [], [], reason_code,
+                    existing_goals=existing_goals,
+                    mode="inbound" if skip_comms else "-2n",
+                )
+                if existing_goals:
+                    # Kept existing goals; make sure the idle panel shows them.
+                    current_goals = list(existing_goals)
+                    # Goals already exist this block → close the -1g card + credit.
+                    _ritual_credit_line("-1g", complete_ritual("-1g"))
 
         # ── Card 3: eat (rituals-only / inbound) ──────────────────────
         # Ask what was eaten this block; pass the raw answer to /ate.

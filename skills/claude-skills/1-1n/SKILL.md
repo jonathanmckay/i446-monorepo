@@ -29,7 +29,7 @@ OUT=~/vault/g245/5e-1/1e-1n/$(date +%Y.%m.%d)-block-ritual-heatmap.md
 open "obsidian://open?vault=vault&file=g245%2F5e-1%2F1e-1n%2F$(basename "$OUT")&newTab=true"
 ```
 
-Then append three sections, in order:
+Then append four sections, in order:
 
 1. **Commentary.** Phase shifts, weakest rituals. Keep it factual and brief.
 2. **Week-over-week.** Append the helper's output, then a short **Read.** paragraph
@@ -41,7 +41,17 @@ Then append three sections, in order:
    It compares START..END with the 7 days before it: ritual density, Σ/P/Q 分 from
    0分, per-day Σ, and mean block 分 with vs without each ritual (correlational;
    say so, never call it an effect).
-3. **Five ideas (分-positive, not trade-offs).** Five ways to raise ritual hit rates
+3. **-1g suggestion eval.** Append the helper's output. It reads the
+   `v_logs/-1g-suggest.*.jsonl` records the goal card writes on every render
+   (pick / custom / skip, optional `-w -s -b -d` reason code) and reports pick
+   rate per source and block, how often a typed goal was in the pool but
+   outranked vs absent, and whether picked goals were `- [x]` by block end.
+   Add one line naming the weakest source and whether the fix is ranking or
+   a missing source. Pick rate is a preference label, not an outcome.
+   ```bash
+   python3 ~/.claude/skills/1-1n/suggest_eval.py <START> <END> >> "$OUT"
+   ```
+4. **Five ideas (分-positive, not trade-offs).** Five ways to raise ritual hit rates
    that also *increase* total 分 rather than shifting it between columns or
    inflating it via rule changes. Ground each in a number from this week's tables.
    Prefer mechanisms (daemon defaults, auto-award checks, capture at creation)
