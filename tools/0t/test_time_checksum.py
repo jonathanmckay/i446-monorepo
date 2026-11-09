@@ -1,4 +1,4 @@
-"""/0t's Toggl checksum: no hole over 5m, no non-sleep task over 2h."""
+"""/0t's Toggl checksum: no hole over 5m, no non-sleep task over 150m."""
 import datetime as dt
 import importlib.util
 import json
@@ -95,14 +95,14 @@ def test_long_task_is_a_warning_not_an_error():
     r = _long_day()
     assert r["ok"] is True and r["needs_override"] is True
     text = tc.render(r)
-    assert "⚠️ 1 task over 2h needs your override" in text and "✅" not in text
+    assert "⚠️ 1 task over 150m needs your override" in text and "✅" not in text
 
 
 def test_override_clears_the_warning_and_says_so():
     key = _long_day()["long_entries"][0]["key"]
     r = _long_day({key})
     assert r["needs_override"] is False
-    assert "✅ no hole over 5m, 1 over 2h overridden" in tc.render(r)
+    assert "✅ no hole over 5m, 1 over 150m overridden" in tc.render(r)
 
 
 def test_a_task_that_grows_warns_again():
@@ -132,9 +132,9 @@ def test_render_never_offers_fill_when_nothing_was_checked():
     assert "fill" not in tc.render({"date": "2026-11-03", "status": "no data", "ok": None})
 
 
-def test_two_hour_entry_is_allowed_one_minute_over_is_not():
-    assert tc.long_entries(DAY, [e(t(9), t(11))], cov) == []
-    assert [x["minutes"] for x in tc.long_entries(DAY, [e(t(9), t(11, 1))], cov)] == [121]
+def test_150m_entry_is_allowed_one_minute_over_is_not():
+    assert tc.long_entries(DAY, [e(t(9), t(11, 30))], cov) == []
+    assert [x["minutes"] for x in tc.long_entries(DAY, [e(t(9), t(11, 31))], cov)] == [151]
 
 
 def test_block_splits_of_one_task_count_as_one():

@@ -543,7 +543,7 @@ def ledger_streak(day: date) -> dict:
 # Distinct from 1 (real failure, Fallback): for these the skill never runs the Fallback.
 USAGE_EXIT = 2             # bad date or failed override: nothing was done
 CHECKSUM_MISS_EXIT = 3     # a hole over 5m; everything else finished
-CHECKSUM_WARN_EXIT = 4     # a task over 2h waiting for JM's override; everything else finished
+CHECKSUM_WARN_EXIT = 4     # a task over 150m waiting for JM's override; everything else finished
 
 
 def _checksum_mod():

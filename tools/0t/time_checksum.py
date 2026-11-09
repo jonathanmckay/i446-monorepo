@@ -1,6 +1,6 @@
 """time_checksum.py — /0t's check that a day's Toggl adds up (JM 2026-11-06).
 
-A hole over 5m is an error. A non-sleep task running over 2h without a review is
+A hole over 5m is an error. A non-sleep task running over 150m without a review is
 a warning that comes back until JM overrides it (/0t ok <date>). Holes of 5m or
 less are fine, however many there are (JM 2026-11-06). It never writes to Neon
 and never stops 0t being marked done; in a Claude session (0t-fast.py --session)
@@ -19,7 +19,8 @@ import socket
 from pathlib import Path
 
 MIN_GAP_MIN = 6            # "over 5m"; /2n's minutes are rounded and its filter is >=
-MAX_ENTRY_MIN = 120
+MAX_ENTRY_MIN = 150      # JM 2026-11-09, was 120
+_LONG = f"over {MAX_ENTRY_MIN}m"   # the label render() uses for the long-task check
 SEAM_MIN = 1               # same task with a seam this small is one sitting
 LIVE_REACH_DAYS = 85       # v9 stops at ~90 days; older days stay on the nightly store
 STATE_PATH = Path.home() / ".local/state/jm/0t-gaps.json"   # NOT /2n's: an unattended
@@ -153,16 +154,16 @@ def render(report: dict | str) -> str:
     for name in report.get("unreadable_overrides", []):
         L.append(f"⚠️ {name} is unreadable, so its overrides are ignored")
     if not gaps and not long_:
-        note = f", {len(done)} over 2h overridden" if done else ", no task over 2h"
+        note = f", {len(done)} {_LONG} overridden" if done else f", no task {_LONG}"
         return "\n".join(L + [f"Time checksum {day}: ✅ no hole over 5m{note}"])
     head = []
     if gaps:
         head.append(f"❌ {len(gaps)} hole{'s'[:len(gaps) != 1]} over 5m")
     if long_:
-        head.append(f"⚠️ {len(long_)} task{'s'[:len(long_) != 1]} over 2h need{'s'[:len(long_) == 1]} your override")
+        head.append(f"⚠️ {len(long_)} task{'s'[:len(long_) != 1]} {_LONG} need{'s'[:len(long_) == 1]} your override")
     L.append(f"Time checksum {day}: " + ", ".join(head))
     if done:
-        L.append(f"({len(done)} over 2h already overridden)")
+        L.append(f"({len(done)} {_LONG} already overridden)")
     if gaps:
         L += ["", "Missing blocks:"]
         for g in gaps:
@@ -171,7 +172,7 @@ def render(report: dict | str) -> str:
             what = f'{g["fill"]} @{g["code"]} ({g["confidence"]})' if _usable(g) else "no suggestion"
             L.append(f"  #{g['id']} {g['start']}–{g['end']} {g['minutes']}m → {what}" + (f"  [{side}]" if side else ""))
     if long_:
-        L += ["", "Warnings, over 2h with no review:"]
+        L += ["", f"Warnings, {_LONG} with no review:"]
         for x in long_:
             L.append(f"  {x['start']}–{x['end']} {x['minutes']}m {x['desc']} @{x['code']} → "
                      "split it where you stopped or switched, or relabel what it was")
