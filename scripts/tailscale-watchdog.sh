@@ -52,6 +52,14 @@ notify() {  # notify <title> <body> [sound]
 
 probe() { ssh -o ConnectTimeout=5 -o BatchMode=yes ix true 2>/dev/null; }
 
+# Internet-at-all check (2026-11-09): on a phone hotspot that dropped for 20 min
+# the watchdog read "ssh ix failed" as a Tailscale fault and restarted the app
+# twice. A dead uplink is not Tailscale's problem and restarting it fixes
+# nothing, so when the public internet is unreachable we log and stop; the
+# net-probe job owns that alert. NET_PROBE_BIN overrides ping (tests).
+PING="${NET_PROBE_BIN:-/sbin/ping}"
+internet_up() { "$PING" -c 1 -W 3000 1.1.1.1 >/dev/null 2>&1 || "$PING" -c 1 -W 3000 8.8.8.8 >/dev/null 2>&1; }
+
 drain_queue() {
   [ -s "$QUEUE" ] || return 0
   local n
@@ -89,7 +97,12 @@ if echo "$STATUS" | grep -qi "stopped"; then
 elif echo "$STATUS" | grep -qi "MagicSock function.*is not running"; then
   FIX="wedge"
 elif ! probe; then
-  FIX="probe_failed"
+  if internet_up; then
+    FIX="probe_failed"
+  else
+    log "internet down (no reply from 1.1.1.1/8.8.8.8) — ssh ix failing for that reason, not remediating Tailscale"
+    exit 1
+  fi
 fi
 
 if [ -z "$FIX" ]; then

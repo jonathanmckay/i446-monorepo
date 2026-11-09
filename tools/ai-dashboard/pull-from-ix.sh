@@ -19,9 +19,11 @@ fi
 
 rsync_one() {
   local src="$1" dst="$2"
-  rsync -az --force \
+  # --timeout + ServerAlive (2026-11-09): a laptop sleep mid-transfer left this rsync
+  # hung for 30 min holding a dead ssh to ix; both sides now give up within ~60 s.
+  rsync -az --force --timeout=60 \
     --exclude='*.tmp' --exclude='.DS_Store' \
-    -e 'ssh -o ConnectTimeout=10 -o BatchMode=yes' \
+    -e 'ssh -o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3' \
     "$REMOTE:$src" "$dst" 2>&1 | tail -5
 }
 
@@ -30,7 +32,7 @@ rsync_one() {
 
   # Snapshot ix's live Copilot DB on the remote (safe sqlite copy), then pull.
   # Use $HOME (not ~) — sqlite3 does not expand tilde inside .backup arguments.
-  ssh -o ConnectTimeout=10 -o BatchMode=yes "$REMOTE" \
+  ssh -o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "$REMOTE" \
     'sqlite3 "$HOME/.copilot/session-store.db" ".backup $HOME/.copilot/session-store.snapshot.db" 2>&1' \
     || echo "  warn: remote sqlite .backup failed"
 
