@@ -2,7 +2,7 @@
 """1st hci photo proof: was a selfie taken in the last N hours?
 
 Spawned in the background by did-fast after the `1st hci` 0neon card closes
-(JM 2026-11-09). Reads the macOS Photos library on Ix read-only, looks for a
+(JM 2026-11-09). Reads the System Photo Library on Ix (external "Ix Photos" volume) read-only, looks for a
 photo created inside the window that Photos detected a face in (front-camera
 lens preferred), and with --apply docks the 1st hci credit by appending -5 to
 today's 0分!个 through the excel-http daemon when there is none.
@@ -33,14 +33,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
 
-PHOTOS_DB = Path.home() / "Pictures/Photos Library.photoslibrary/database/Photos.sqlite"
+# The System Photo Library (iCloud-synced, 47k assets) lives on the external
+# "Ix Photos" volume; ~/Pictures holds an old 720-asset library that iCloud
+# never fed. First existing path wins (JM 2026-11-09).
+PHOTOS_DB_CANDIDATES = [
+    Path("/Volumes/Ix Photos/Photos Library.photoslibrary/database/Photos.sqlite"),
+    Path.home() / "Pictures/Photos Library.photoslibrary/database/Photos.sqlite",
+]
+
+
+def default_db() -> Path:
+    for c in PHOTOS_DB_CANDIDATES:
+        if c.exists():
+            return c
+    return PHOTOS_DB_CANDIDATES[0]
 LOG = Path.home() / ".local/state/jm/1st-hci-selfie.jsonl"
 APPLE_EPOCH = 978307200  # 2001-01-01 → unix
 
 
 def _snapshot(db: Path, tmpdir: str) -> Path:
-    """Copy db + wal + shm so we read a consistent view without touching
-    photolibraryd's lock (immutable=1 would skip the WAL and miss today)."""
+    """Fallback only: copy db + wal + shm when an in-place read-only open is
+    refused (immutable=1 would skip the WAL and miss today's assets)."""
     dst = Path(tmpdir) / "Photos.sqlite"
     shutil.copy2(db, dst)
     for suffix in ("-wal", "-shm"):
@@ -54,7 +67,7 @@ def query(db: Path, since: dt.datetime, now: dt.datetime | None = None) -> dict:
     """Return {newest_added, newest_created, candidates:[{created, lens, faces, filename}]}
     for photos (ZKIND=0, not trashed/hidden) created at or after `since`."""
     now = now or dt.datetime.now().astimezone()
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
     try:
         newest_added, newest_created = con.execute(
             "select max(ZADDEDDATE), max(ZDATECREATED) from ZASSET").fetchone()
@@ -121,7 +134,7 @@ def main(argv=None) -> int:
     ap.add_argument("--apply", action="store_true", help="append -points to 0分!个 when status is none")
     ap.add_argument("--points", type=int, default=5)
     ap.add_argument("--date", help="M/D row (default today)")
-    ap.add_argument("--db", default=str(PHOTOS_DB))
+    ap.add_argument("--db", default=str(default_db()))
     ap.add_argument("--live-days", type=int, default=7,
                     help="library counts as live if any asset was added within this many days")
     ap.add_argument("--dock-when-stale", action="store_true",
@@ -138,8 +151,13 @@ def main(argv=None) -> int:
         db = Path(a.db)
         if not db.exists():
             raise FileNotFoundError(str(db))
-        with tempfile.TemporaryDirectory() as td:
-            q = query(_snapshot(db, td), since, now)
+        try:
+            # In place: the 1.7 GB system library reads in ~0.1 s and the WAL
+            # is honoured, so today's assets are visible.
+            q = query(db, since, now)
+        except sqlite3.OperationalError:
+            with tempfile.TemporaryDirectory() as td:
+                q = query(_snapshot(db, td), since, now)
         rec["newest_added"] = q["newest_added"]
         status, match = decide(q, now, a.live_days)
         rec["status"], rec["match"] = status, match
