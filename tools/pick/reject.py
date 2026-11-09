@@ -43,10 +43,9 @@ def reject(task_id: str, note: str) -> bool:
     ac = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ac)
     ac.clear_task(task_id)
-    br = picks.branch(task_id)
-    if br:
-        subprocess.run(["git", "-C", str(picks.REPO), "push", "-q", "origin", "--delete", br],
-                       capture_output=True)
+    for key, br in picks.branches(task_id):
+        subprocess.run(["git", "-C", str(picks.REPOS[key]["path"]), "push", "-q", "origin",
+                        "--delete", br], capture_output=True)
     return True
 
 

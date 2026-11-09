@@ -199,12 +199,31 @@ def test_worker_allowlist_is_scoped_and_never_sends():
                                    Path("/private/tmp/agent-t"), "t")
     assert "Write(//Users/x/vault/z_ibx/agent-picks/receipts/t/**)" in allow
     assert "Edit(//private/tmp/agent-t/**)" in allow
-    assert "Bash(git push origin HEAD:agent/t)" in allow
+    assert "Bash(git -C /private/tmp/agent-t push origin HEAD:agent/t)" in allow
+    # a push must name its worktree: the plain form could land the wrong repo's tip
+    assert "Bash(git push origin HEAD:agent/t)" not in allow
     assert not any("send" in a or "HEAD:wip" in a for a in allow)
     assert "mcp__workspace-mcp__send_gmail_message" in run.DENY
     assert "mcp__imessage_server__imessage_send" in run.DENY
     no_wt = run.worker_permissions(Path("/r"), None, "t")
     assert not any(a.startswith("Bash(") for a in no_wt)
+    # two repos (2026-11-09): each worktree writable and pushable to agent/<tid>, nothing else
+    two = run.worker_permissions(Path("/r"), {"monorepo": Path("/private/tmp/agent-t"),
+                                              "dashboards": Path("/private/tmp/agent-t-dashboards")}, "t")
+    assert "Edit(//private/tmp/agent-t-dashboards/**)" in two
+    assert "Bash(git -C /private/tmp/agent-t-dashboards push origin HEAD:agent/t)" in two
+    assert not any("HEAD:main" in a for a in two)
+
+
+def test_branches_parses_legacy_and_per_repo_lines(store):
+    d = picks.receipt_dir("t")
+    d.mkdir(parents=True)
+    (d / "branch").write_text("agent/t\n")
+    assert picks.branches("t") == [("monorepo", "agent/t")]
+    (d / "branch").write_text("monorepo agent/t\ndashboards agent/t\nnowhere agent/t\nmonorepo agent/t\n")
+    assert picks.branches("t") == [("monorepo", "agent/t"), ("dashboards", "agent/t")]
+    assert picks.branch("t")  # validate_receipt's truthiness check still holds
+    assert picks.REPOS["dashboards"]["land"] == "pr" and picks.REPOS["monorepo"]["land"] == "merge"
 
 
 # --- second pass: asks (2026-11-09) ----------------------------------------------

@@ -56,7 +56,7 @@ CLAUDE = "/opt/homebrew/bin/claude"
 PICKER_BUDGET = "0.50"
 WORKER_BUDGET = "3.00"
 WORKER_TIMEOUT = 40 * 60
-WORKTREE_CLASSES = ("code", "dashboard")
+WORKTREE_CLASSES = picks.CODE_CLASSES
 
 # Read-only MCP tools plus Gmail drafts. Everything that sends, posts, deletes
 # or writes to a shared system is absent here AND listed in DENY.
@@ -79,23 +79,31 @@ DENY = [
     "mcp__workspace-mcp__manage_drive_access", "mcp__workspace-mcp__modify_sheet_values",
     "mcp__workspace-mcp__batch_update_doc", "mcp__workspace-mcp__modify_doc_text",
     "Bash(git push origin HEAD:wip*)", "Bash(git push origin HEAD:main*)",
+    "Bash(git -C * push origin HEAD:wip*)", "Bash(git -C * push origin HEAD:main*)",
     "Bash(git checkout*)", "Bash(git switch*)", "Bash(rm -rf*)", "Bash(curl*)",
 ]
 
 
-def worker_permissions(rdir: Path, wt: Path | None, tid: str) -> list[str]:
+def worker_permissions(rdir: Path, wts: dict[str, Path] | Path | None, tid: str) -> list[str]:
+    """`wts` is {repo key: worktree} (a bare Path is one monorepo worktree)."""
     # File rules take `//abs/path` for an absolute path (a single `/` means
     # relative to the project root).
     allow = ["Read", "Grep", "Glob", "WebSearch", "WebFetch",
              f"Write(/{rdir}/**)", f"Edit(/{rdir}/**)"] + READ_MCP
-    if wt:
-        allow += [f"Write(/{wt}/**)", f"Edit(/{wt}/**)"]
-        # the worker's cwd is the worktree, so plain and -C forms both appear
+    if isinstance(wts, Path):
+        wts = {"monorepo": wts}
+    if wts:
+        # the worker's cwd is a worktree, so plain and -C forms both appear for
+        # read/commit; a push must name its worktree (-C) so it can't land the
+        # wrong repo's tip on agent/<tid> when cwd is the other worktree
         for g in ("status", "diff", "log", "add", "commit"):
-            allow += [f"Bash(git {g}*)", f"Bash(git -C {wt} {g}*)"]
-        allow += [f"Bash(git push origin HEAD:agent/{tid})",
-                  f"Bash(git -C {wt} push origin HEAD:agent/{tid})",
-                  "Bash(python3 -m pytest*)", "Bash(ls*)"]
+            allow.append(f"Bash(git {g}*)")
+        allow += ["Bash(python3 -m pytest*)", "Bash(ls*)"]
+        for wt in wts.values():
+            allow += [f"Write(/{wt}/**)", f"Edit(/{wt}/**)"]
+            for g in ("status", "diff", "log", "add", "commit"):
+                allow.append(f"Bash(git -C {wt} {g}*)")
+            allow.append(f"Bash(git -C {wt} push origin HEAD:agent/{tid})")
     return allow
 
 
@@ -159,9 +167,10 @@ PICKER_PROMPT = """You choose which of JM's Todoist tasks an autonomous agent sh
 unattended, on his always-on Mac (Ix). JM reviews every result; a wrong pick costs him review time, \
 so choose for precision, not coverage. Picking nothing is fine.
 
-The agent can: change code in ~/i446-monorepo (in a git worktree, pushed to a review branch), read \
-~/vault and the web, read AppFolio, QuickBooks, Google Docs/Sheets/Drive/Gmail, Todoist and Toggl, \
-and save Gmail drafts. It can NOT: send or post anything, edit shared Docs/Sheets, make calls, attend \
+The agent can: change code in ~/i446-monorepo and in the m5x2 AppFolio dashboards repo \
+(~/code/appfolio-dashboards: the leasing funnel, leasing goals, occupancy, grounds and DQ pages; each \
+in a git worktree, pushed to a review branch, the dashboards one as a PR), read ~/vault and the web, \
+read AppFolio, QuickBooks, Google Docs/Sheets/Drive/Gmail, Todoist and Toggl, and save Gmail drafts. It can NOT: send or post anything, edit shared Docs/Sheets, make calls, attend \
 meetings, reach Microsoft systems, or make judgment calls that are JM's.
 
 A task qualifies only if ALL hold:
@@ -378,21 +387,49 @@ def ask_only(tid: str) -> int:
 
 def _dirty() -> set[str]:
     out = set()
-    for repo in (Path.home() / "vault", picks.REPO):
+    for repo in [Path.home() / "vault"] + [c["path"] for c in picks.REPOS.values()]:
         r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
                            capture_output=True, text=True)
         out |= {f"{repo.name}/{l[3:]}" for l in r.stdout.splitlines()}
     return out
 
 
-def _worktree(tid: str) -> Path:
-    wt = Path(f"/private/tmp/agent-{tid}")
-    subprocess.run(["git", "-C", str(picks.REPO), "fetch", "-q", "origin", "wip"], check=True)
-    if wt.exists():
-        subprocess.run(["git", "-C", str(picks.REPO), "worktree", "remove", "--force", str(wt)])
-    subprocess.run(["git", "-C", str(picks.REPO), "worktree", "add", "-q", "--detach", str(wt),
-                    "origin/wip"], check=True)
-    return wt
+def _worktree_path(tid: str, key: str) -> Path:
+    # the monorepo keeps the 11-08 name; other repos get a suffix
+    return Path(f"/private/tmp/agent-{tid}" + ("" if key == "monorepo" else f"-{key}"))
+
+
+def _remove_worktrees(tid: str) -> None:
+    for key, cfg in picks.REPOS.items():
+        subprocess.run(["git", "-C", str(cfg["path"]), "worktree", "remove", "--force",
+                        str(_worktree_path(tid, key))], capture_output=True)
+
+
+def _worktrees(tid: str) -> dict[str, Path]:
+    """One detached worktree per repo in picks.REPOS, off origin/<base>. A repo
+    whose clone is missing or whose fetch fails is skipped and logged (the
+    worker's prompt lists only what exists), so a hiccup on one repo can't
+    fail a pick that only needed the other."""
+    out: dict[str, Path] = {}
+    for key, cfg in picks.REPOS.items():
+        repo, base = cfg["path"], cfg["base"]
+        if not (repo / ".git").exists():
+            continue
+        wt = _worktree_path(tid, key)
+        r = subprocess.run(["git", "-C", str(repo), "fetch", "-q", "origin", base],
+                           capture_output=True, text=True)
+        if r.returncode:
+            picks.log("worktree_skipped", tid, repo=key, reason=("fetch: " + r.stderr.strip())[:200])
+            continue
+        if wt.exists():
+            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)])
+        r = subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(wt),
+                            f"origin/{base}"], capture_output=True, text=True)
+        if r.returncode:
+            picks.log("worktree_skipped", tid, repo=key, reason=("add: " + r.stderr.strip())[:200])
+            continue
+        out[key] = wt
+    return out
 
 
 def work(task: dict, p: dict) -> str:
@@ -406,16 +443,21 @@ def work(task: dict, p: dict) -> str:
                               "confidence": p.get("confidence"), "plan": p.get("proof_plan")})
     session = f"pick-{time.strftime('%Y%m%d')}-{tid}"
     agent_claims.claim(task, session)
-    wt = _worktree(tid) if cls in WORKTREE_CLASSES else None
-    if wt:
-        where = (f"Change code ONLY in the git worktree {wt} (a detached checkout of wip); "
-                 f"writes anywhere else are denied.")
-        code_rule = (f"If you changed code: commit in {wt}, run `git -C {wt} push origin "
-                     f"HEAD:agent/{tid}`, write `agent/{tid}` to {rdir}/branch, and save "
-                     f"`git -C {wt} diff origin/wip` as {rdir}/diff.patch.")
+    wts = _worktrees(tid) if cls in WORKTREE_CLASSES else {}
+    if wts:
+        listing = "; ".join(f"{wt} = {key}, a detached checkout of {picks.REPOS[key]['desc']} "
+                            f"at origin/{picks.REPOS[key]['base']}" for key, wt in wts.items())
+        where = (f"Change code ONLY in these git worktrees: {listing}. Writes anywhere else are "
+                 f"denied. Pick the repo the task is about; most tasks touch one.")
+        code_rule = ("If you changed code: commit in the worktree you changed, run "
+                     f"`git -C <that worktree> push origin HEAD:agent/{tid}`, append one line "
+                     f"`<repo> agent/{tid}` (repo = {' or '.join(wts)}) to {rdir}/branch, and save "
+                     f"`git -C <that worktree> diff origin/<base>` as {rdir}/diff.patch (one file; "
+                     "concatenate if you changed two repos).")
     else:
         where = f"Read ~/vault and ~/i446-monorepo freely; you can write only inside {rdir}."
         code_rule = ""
+    wt = wts.get("monorepo") or (next(iter(wts.values())) if wts else None)
     try:
         comments = "\n".join(f"- {c.get('content', '')[:400]}" for c in todoist.get_comments(tid)) or "(none)"
     except Exception:  # noqa: BLE001
@@ -427,16 +469,16 @@ def work(task: dict, p: dict) -> str:
                                   code_rule=code_rule, answer=task.get("jm_answer") or "(none)")
     before, t0 = _dirty(), time.time()
     out = claude(prompt, model=None, budget=WORKER_BUDGET, cwd=wt or rdir,
-                 allow=worker_permissions(rdir, wt, tid),
-                 add_dirs=[Path.home() / "vault", picks.REPO] + ([wt] if wt else []),
+                 allow=worker_permissions(rdir, wts, tid),
+                 add_dirs=[Path.home() / "vault", picks.REPO] + list(wts.values()),
                  timeout=WORKER_TIMEOUT)
     secs, cost = int(time.time() - t0), out.get("total_cost_usd")
     text = str(out.get("result", ""))
     (rdir / "agent.log").write_text(text)
     side = sorted(s for s in _dirty() - before
                   if "z_ibx/agent-picks" not in s and "z_ibx/agent-claims" not in s)
-    if wt:
-        subprocess.run(["git", "-C", str(picks.REPO), "worktree", "remove", "--force", str(wt)])
+    if wts:
+        _remove_worktrees(tid)
 
     result, reason = picks.outcome(text, bool(out.get("is_error")), tid, cls)
     if result == "ready" and side:
@@ -510,8 +552,7 @@ def main() -> int:
             picks.log("fail", c["task_id"], **{"class": c["class"], "reason": f"runner: {e}"[:300]})
             picks.set_status(c["task_id"], "failed")
             agent_claims.clear_task(c["task_id"])
-            subprocess.run(["git", "-C", str(picks.REPO), "worktree", "remove", "--force",
-                            f"/private/tmp/agent-{c['task_id']}"], capture_output=True)
+            _remove_worktrees(c["task_id"])
         print(f"  {c['task_id']}: {res}")
     return 0
 

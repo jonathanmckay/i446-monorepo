@@ -33,6 +33,24 @@ EVENTS = ROOT / "events.jsonl"
 RECEIPTS = ROOT / "receipts"
 ALERTS = Path.home() / "vault" / "z_ibx" / "alerts.jsonl"
 REPO = Path.home() / "i446-monorepo"
+# Repos the worker may change code in (2026-11-09: the AppFolio dashboards
+# joined; the Tours Scheduled fix lives there). The worker gets one detached
+# worktree per repo, off `base`, and pushes agent/<task_id> to that repo. On
+# accept, `land` says how merge.py lands it: "merge" pushes a merge commit to
+# base (monorepo wip, like autopush); "pr" opens a GitHub PR (the dashboards
+# team lands main by PR and CI deploys it; main is NOT branch-protected on
+# GitHub, so the worker's allowlist is the only thing stopping a direct push).
+# The receipt's `branch` file lists "<repo> agent/<task_id>" lines; a bare
+# "agent/<task_id>" line is monorepo.
+CODE_CLASSES = ("code", "dashboard")   # classes that work in worktrees and must ship a branch
+REPOS: dict[str, dict] = {
+    "monorepo": {"path": REPO, "base": "wip", "land": "merge",
+                 "desc": "~/i446-monorepo (JM's tools, vault scripts, dtd, Neon)"},
+    "dashboards": {"path": Path.home() / "code" / "appfolio-dashboards", "base": "main", "land": "pr",
+                   "desc": "m5x2/appfolio-dashboards (the AppFolio dashboards site: leasing funnel, "
+                           "leasing goals, occupancy, grounds, DQ; Python builders in scripts/, "
+                           "HTML templates in templates/, deployed by GitHub Actions)"},
+}
 
 MAX_PICKS = 3
 MIN_CONFIDENCE = 0.7
@@ -135,6 +153,24 @@ def branch(task_id: str, root: Path | None = None) -> str | None:
         return None
 
 
+def branches(task_id: str, root: Path | None = None) -> list[tuple[str, str]]:
+    """[(repo key, branch)] from the receipt's branch file. Each line is
+    "<repo> <branch>" or a bare "<branch>" (monorepo, the 11-08 format).
+    Unknown repo keys are dropped; duplicates collapse."""
+    text = branch(task_id, root) or ""
+    alias = {"dashboard": "dashboards", "i446-monorepo": "monorepo", "i446": "monorepo"}
+    out: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        repo, br = (parts[0], parts[1]) if len(parts) >= 2 else ("monorepo", parts[0])
+        repo = alias.get(repo, repo)
+        if repo in REPOS and (repo, br) not in out:
+            out.append((repo, br))
+    return out
+
+
 def validate_receipt(task_id: str, cls: str, root: Path | None = None) -> tuple[bool, str]:
     d = receipt_dir(task_id, root)
     try:
@@ -148,8 +184,14 @@ def validate_receipt(task_id: str, cls: str, root: Path | None = None) -> tuple[
                  if p.is_file() and p.name not in ("receipt.md", "status", "branch", "agent.log")]
     if not artifacts:
         return False, "no artifact besides receipt.md"
-    if cls == "code" and not ((d / "diff.patch").exists() and branch(task_id, root)):
-        return False, "code receipt needs diff.patch and a branch file"
+    if cls in CODE_CLASSES:
+        if not (d / "diff.patch").exists():
+            return False, f"{cls} receipt needs diff.patch"
+        if not branches(task_id, root):
+            # a branch file naming no known repo would otherwise pass here and
+            # then never land (merge.py would find nothing to do)
+            return False, (f"{cls} receipt needs a branch file with '<repo> agent/<id>' lines, "
+                           f"repo in {', '.join(REPOS)}")
     return True, "ok"
 
 
