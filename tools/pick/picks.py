@@ -41,6 +41,17 @@ MIN_ACCEPT_RATE = 0.7
 REVIEW_SHARE = 1 / 3          # review may cost at most this share of the task's (N)
 RETRY_AFTER_DAYS = 7          # an abstained/failed task is not re-picked for this long
 
+# Asks (2026-11-09, second pass): a near-miss the picker would take if JM
+# supplied one fact gets a `😈? <question>` comment and a parked (released)
+# claim so dtd shows it at the top with 🕐; JM answers in the ctrl-o notes
+# field (the description) or as a plain comment. The next run reads the
+# answer and picks with it in hand.
+MAX_ASKS = 3                  # questions posted per run
+ASK_RETRY_DAYS = 7            # a task asked or answered inside this window is not asked again
+ASK_SESSION = "pick-ask"      # the agent_claims session that owns parked asks
+ASK_PREFIX = "😈? "
+AGENT_COMMENT_PREFIXES = ("😈", "dtd-short:")   # comments that are never JM's answer
+
 CLASSES = ("code", "dashboard", "analysis", "draft")
 
 # Proof contract per class: what the receipt must show, in the agent's prompt
@@ -211,6 +222,113 @@ def filter_picks(arr: list, ids: set[str], allowed: dict, maxn: int) -> list[dic
         if p.get("task_id") in ids and p.get("class") in allowed and conf >= MIN_CONFIDENCE:
             out.append(p)
     return out[:maxn]
+
+
+# --- asks (second pass) --------------------------------------------------------
+def parse_picker(text: str) -> tuple[list, list]:
+    """(picks, near) from the picker's reply. New shape is an object
+    {"picks": [...], "near": [...]}; a bare array (the 11-08 shape) is picks only.
+    Raises ValueError when neither parses."""
+    text = text or ""
+    i_obj, i_arr = text.find("{"), text.find("[")
+    if i_obj >= 0 and (i_arr < 0 or i_obj < i_arr):
+        obj = json.loads(text[i_obj: text.rindex("}") + 1])
+        if isinstance(obj, dict) and ("picks" in obj or "near" in obj):
+            picks_, near = obj.get("picks") or [], obj.get("near") or []
+            return (picks_ if isinstance(picks_, list) else []), (near if isinstance(near, list) else [])
+        raise ValueError("picker object without picks/near")
+    if i_arr < 0:
+        raise ValueError("no JSON in picker reply")
+    arr = json.loads(text[i_arr: text.rindex("]") + 1])
+    return (arr if isinstance(arr, list) else []), []
+
+
+def filter_near(arr: list, ids: set[str], maxn: int = MAX_ASKS) -> list[dict]:
+    """Near-misses worth acting on: a known task, needs ∈ {fact, capability},
+    a non-empty one-line question. Best first, at most maxn."""
+    out = []
+    for p in arr if isinstance(arr, list) else []:
+        if not isinstance(p, dict) or p.get("task_id") not in ids:
+            continue
+        needs = str(p.get("needs") or "").strip().lower()
+        q = " ".join(str(p.get("question") or "").split())
+        if needs not in ("fact", "capability") or not q:
+            continue
+        out.append({"task_id": p["task_id"], "class": p.get("class"), "needs": needs,
+                    "question": q[:300], "confidence": p.get("confidence")})
+    return out[:maxn]
+
+
+def desc_hash(text: str | None) -> str:
+    """Stable hash of a description: edit-form saves desc.rstrip(), so an
+    untouched ctrl-o save must not read as an answer."""
+    import hashlib
+    return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()[:12]
+
+
+def open_asks(evs: list[dict], now: float | None = None) -> dict[str, dict]:
+    """task_id -> its newest `ask` inside ASK_RETRY_DAYS with no later `answered`."""
+    now = now or time.time()
+    cutoff = now - ASK_RETRY_DAYS * 86400
+    out: dict[str, dict] = {}
+    for e in evs:
+        tid, ev, ts = e.get("task_id"), e.get("event"), e.get("ts", 0)
+        if not tid or ts < cutoff:
+            continue
+        if ev == "ask":
+            out[tid] = e
+        elif ev == "answered":
+            out.pop(tid, None)
+    return out
+
+
+def asked_recently(evs: list[dict], now: float | None = None) -> set[str]:
+    """Tasks asked, answered or flagged as a capability gap inside ASK_RETRY_DAYS:
+    never a second 😈? on the same card in the window (the 22:00 picker tends
+    to return a just-answered task as `near` again)."""
+    now = now or time.time()
+    cutoff = now - ASK_RETRY_DAYS * 86400
+    return {e["task_id"] for e in evs
+            if e.get("ts", 0) >= cutoff and e.get("task_id")
+            and e.get("event") in ("ask", "answered", "capability_gap")}
+
+
+def _comment_ts(c: dict) -> int:
+    import calendar
+    s = str(c.get("posted_at") or c.get("postedAt") or "")[:19]
+    try:
+        return calendar.timegm(time.strptime(s, "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return 0
+
+
+def answer_for(ask: dict, task: dict, comments: list[dict]) -> str | None:
+    """JM's answer to an open ask, or None. The description changing since the
+    ask counts (dtd ctrl-o notes field); so does any comment posted after the
+    ask that is not an agent's (😈 …, dtd-short: …). The newest wins."""
+    desc = (task.get("description") or "").strip()
+    if desc_hash(desc) != ask.get("desc_hash"):
+        return desc or None
+    later = [c for c in comments or []
+             if _comment_ts(c) > int(ask.get("ts", 0))
+             and not str(c.get("content") or "").lstrip().startswith(AGENT_COMMENT_PREFIXES)
+             and str(c.get("content") or "").strip()]
+    if later:
+        return str(max(later, key=_comment_ts).get("content")).strip()
+    return None
+
+
+def ask_stats(evs: list[dict], since: int = 0, until: int | None = None) -> dict[str, int]:
+    """asks, answered, and how many answered tasks were then picked / accepted.
+    The question pass pays only if answered → accepted; that is the number /1s watches."""
+    until = until or 2 ** 62
+    asked = {e["task_id"] for e in evs if e.get("event") == "ask" and since <= e.get("ts", 0) < until}
+    answered = {e["task_id"] for e in evs if e.get("event") == "answered"
+                and since <= e.get("ts", 0) < until and e["task_id"] in asked}
+    picked = {e["task_id"] for e in evs if e.get("event") == "pick" and e["task_id"] in answered}
+    accepted = {e["task_id"] for e in evs if e.get("event") == "accept" and e["task_id"] in answered}
+    return {"asks": len(asked), "answered": len(answered), "answered_picked": len(picked),
+            "answered_accepted": len(accepted)}
 
 
 def outcome(text: str, is_error: bool, task_id: str, cls: str,

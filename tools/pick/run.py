@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""run.py — the daily agent-picks run (launchd com.jm.agent-pick, 06:00 on Ix).
+"""run.py — the agent-picks run (launchd com.jm.agent-pick, 06:00 and 22:00 on Ix).
 
     run.py [--dry-run] [--max N] [--only <task_id>]
+    run.py --ask-only <task_id>        capture time, from /todo
+
+Two passes a day (2026-11-09). The picker also returns near-misses: tasks it
+would take if JM supplied one fact. Those get a `😈? <question>` comment and
+are parked at the top of dtd (🕐). JM answers in the ctrl-o notes field or as
+a plain comment; the next run reads the answer (detect_answers), shows it to
+the picker as `jm_answer`, and works the task if it now qualifies. Capability
+gaps (a repo or system the worker can't reach) go to the alert sink instead.
 
 1. preflight: a headless `claude --print` must answer, else alert and stop
    (Ix's headless auth was silently logged out for months; see
@@ -26,6 +34,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -105,9 +114,12 @@ def claude(prompt: str, *, model: str | None, budget: str, cwd: Path, timeout: i
         cmd += ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
     for d in add_dirs:
         cmd += ["--add-dir", str(d)]
+    # --ask-only runs from inside an interactive Claude session (/todo); a nested
+    # `claude --print` refuses to start while CLAUDECODE & co. are inherited.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
     try:
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                           timeout=timeout, cwd=str(cwd))
+                           timeout=timeout, cwd=str(cwd), env=env)
     except subprocess.TimeoutExpired:
         return {"is_error": True, "result": "TIMEOUT", "total_cost_usd": None}
     try:
@@ -158,12 +170,29 @@ A task qualifies only if ALL hold:
 {contract}
 - JM could verify the proof in well under a third of the task's (N) minutes
 
+A candidate with a "jm_answer" field is one you asked about earlier; JM has answered. Judge it with \
+the answer in hand and prefer it when it now qualifies: he spent time answering.
+
+Also report near-misses: tasks you would pick at confidence >= 0.7 if ONE thing were different. \
+Most "review X", "fix X", "pull X" and "draft X" tasks are near-misses, missing one of three facts: \
+the deliverable (reconcile the totals and list discrepancies? summarize? a draft reply?), the source \
+(which doc, sheet, thread id, file), or the test for correct (which of two numbers is right, what \
+counts as done). "needs": "fact" when JM could supply it in one line; "needs": "capability" when the \
+agent lacks access or a tool (a repo outside ~/i446-monorepo, a system it can't reach), whatever JM \
+says. Ask the one question whose answer would let you pick; it must be answerable in one line, and a \
+task that needs a paragraph of context is not a near-miss. Up to {maxasks} near-misses, best first; \
+report all you find up to that cap. Tasks that are JM's own judgment, calls, purchases or decisions \
+are neither picks nor near-misses.
+
 Candidates (JSON lines):
 {cands}
 
-Return ONLY a JSON array, at most {maxn} items, best first:
-[{{"task_id": "...", "class": "code|dashboard|analysis|draft", "proof_plan": "one sentence: the exact \
-proof JM will see", "confidence": 0.0-1.0}}]
+Return ONLY a JSON object:
+{{"picks": [{{"task_id": "...", "class": "code|dashboard|analysis|draft", "proof_plan": "one sentence: \
+the exact proof JM will see", "confidence": 0.0-1.0}}],
+ "near": [{{"task_id": "...", "class": "code|dashboard|analysis|draft", "confidence": 0.0-1.0, \
+"needs": "fact|capability", "question": "one sentence JM can answer in one line"}}]}}
+"picks" has at most {maxn} items, best first; both arrays may be empty.
 """
 
 WORKER_PROMPT = """You are completing one of JM's Todoist tasks unattended. JM will review your result \
@@ -174,6 +203,7 @@ TASK {task_id}: {content}
 Description: {description}
 Comments:
 {comments}
+JM's answer to the agent's earlier question (😈?): {answer}
 
 Class: {cls}. Required proof: {contract}
 Picker's proof plan: {plan}
@@ -199,30 +229,151 @@ Final line of your output: `RECEIPT {rdir}/receipt.md` (or `ABSTAIN: <reason>`).
 """
 
 
-def pick(cands: list[dict], maxn: int, disabled: dict[str, str]) -> tuple[list[dict], float | None]:
+def pick(cands: list[dict], maxn: int, disabled: dict[str, str]
+         ) -> tuple[list[dict], list[dict], float | None]:
+    """(picks, near-misses, cost). A candidate carrying `jm_answer` (set by
+    detect_answers) is shown to the picker with that answer."""
     allowed = {k: v for k, v in picks.CONTRACT.items() if k not in disabled}
     if not allowed or not cands:
-        return [], None
-    lines = [json.dumps({"task_id": t["id"], "content": t["content"],
-                         "description": (t.get("description") or "")[:400],
-                         "labels": t.get("labels")}, ensure_ascii=False) for t in cands]
+        return [], [], None
+    lines = []
+    for t in cands:
+        rec = {"task_id": t["id"], "content": t["content"],
+               "description": (t.get("description") or "")[:400], "labels": t.get("labels")}
+        if t.get("jm_answer"):
+            rec["jm_answer"] = t["jm_answer"]
+        lines.append(json.dumps(rec, ensure_ascii=False))
     prompt = PICKER_PROMPT.format(contract="\n".join(f"  {k}: {v}" for k, v in allowed.items()),
-                                  cands="\n".join(lines), maxn=maxn)
+                                  cands="\n".join(lines), maxn=maxn, maxasks=picks.MAX_ASKS)
     out = claude(prompt, model="sonnet", budget=PICKER_BUDGET, cwd=Path.home(), timeout=600)
-    text = str(out.get("result", ""))
+    text, cost = str(out.get("result", "")), out.get("total_cost_usd")
     try:
-        arr = json.loads(text[text.index("["): text.rindex("]") + 1])
+        arr, near_raw = picks.parse_picker(text)
     except ValueError:
         picks.log("picker_fail", detail=text[:300])
-        return [], out.get("total_cost_usd")
-    chosen = picks.filter_picks(arr, {t["id"] for t in cands}, allowed, maxn)
+        return [], [], cost
+    ids = {t["id"] for t in cands}
+    chosen = picks.filter_picks(arr, ids, allowed, maxn)
+    near = picks.filter_near(near_raw, ids)
     if arr and not chosen:
         # The picker saw something but nothing cleared the bar: keep its
         # reasoning so an empty day is explainable from events.jsonl alone.
         picks.log("picker_abstain", detail=json.dumps(
             [{"task_id": p.get("task_id"), "class": p.get("class"),
               "confidence": p.get("confidence")} for p in arr if isinstance(p, dict)])[:600])
-    return chosen, out.get("total_cost_usd")
+    return chosen, near, cost
+
+
+# --- second pass: ask, then work once answered (2026-11-09) ---------------------
+def ask(task: dict, item: dict) -> str:
+    """Post `😈? <question>` on the task and park it: an agent claim set straight
+    to released, which dtd draws at the top with 🕐 (waiting on JM) for a day
+    with no dtd change. Same claim → released → drop-from-index sequence as
+    closeshell.followup, so a later plain claim(…, ASK_SESSION) can't release
+    every earlier ask. Never touches a task another session holds."""
+    tid = str(task["id"])
+    if tid in agent_claims.load():
+        picks.log("ask_skipped", tid, reason="claimed")
+        return "skipped"
+    todoist.add_comment(tid, picks.ASK_PREFIX + item["question"])
+    picks.log("ask", tid, **{"class": item.get("class"), "confidence": item.get("confidence"),
+                             "question": item["question"],
+                             "desc_hash": picks.desc_hash(task.get("description"))})
+    agent_claims.claim(task, picks.ASK_SESSION, also=True)
+    agent_claims.set_state(tid, "released")
+    agent_claims._set_held(picks.ASK_SESSION,
+                           [i for i in agent_claims.held(picks.ASK_SESSION) if i != tid],
+                           agent_claims.CLAIMS_DIR)
+    return "asked"
+
+
+def capability_gap(task: dict, item: dict) -> None:
+    """The agent lacks access or a tool, not a fact: that is a one-time infra fix,
+    so it goes to the alert sink (/1-i446 reads it), not onto JM's card."""
+    tid = str(task["id"])
+    picks.alert("capability", f"{tid} {task.get('content', '')[:80]}: {item['question']}",
+                severity="warning")
+    picks.log("capability_gap", tid, **{"class": item.get("class"), "question": item["question"]})
+
+
+def detect_answers(tasks: list[dict], evs: list[dict]) -> int:
+    """For every candidate with an open ask, read JM's answer (description edit
+    or plain comment) onto the task as `jm_answer`, log it, and un-park the card.
+    Only the ask's own parked claim is cleared; a live /d claim stays."""
+    opens = picks.open_asks(evs)
+    if not opens:
+        return 0
+    claims = agent_claims.load()
+    n = 0
+    for t in tasks:
+        tid = str(t["id"])
+        ask_ev = opens.get(tid)
+        if not ask_ev:
+            continue
+        try:
+            comments = todoist.get_comments(tid)
+        except Exception:  # noqa: BLE001
+            comments = []
+        ans = picks.answer_for(ask_ev, t, comments)
+        if not ans:
+            continue
+        t["jm_answer"] = ans[:600]
+        picks.log("answered", tid, answer=ans[:400])
+        if claims.get(tid, {}).get("session") == picks.ASK_SESSION:
+            agent_claims.clear_task(tid)
+        n += 1
+    return n
+
+
+def handle_near(near: list[dict], byid: dict[str, dict], chosen: list[dict]) -> int:
+    """Act on the picker's near-misses: facts become asks (MAX_ASKS per run),
+    capabilities become alerts. Nothing picked this run or asked/answered inside
+    ASK_RETRY_DAYS is asked again. Returns the number of questions posted."""
+    skip = {c["task_id"] for c in chosen} | picks.asked_recently(picks.events())
+    posted = 0
+    for item in near:
+        tid = item["task_id"]
+        if tid in skip or tid not in byid:
+            continue
+        if item["needs"] == "capability":
+            capability_gap(byid[tid], item)
+            continue
+        if posted >= picks.MAX_ASKS:
+            break
+        try:
+            if ask(byid[tid], item) == "asked":
+                posted += 1
+        except Exception as e:  # noqa: BLE001
+            picks.log("ask_fail", tid, reason=str(e)[:200])
+    return posted
+
+
+def ask_only(tid: str) -> int:
+    """Capture time (/todo): is this one new task a near-miss? If so, ask now,
+    while the context is in JM's head. Never works it; no preflight (its
+    failure path raises a critical alert, and /todo also runs off Ix)."""
+    task = todoist.get_task(tid)
+    if not task or task.get("checked"):
+        print(f"{tid}: no open task")
+        return 1
+    evs = picks.events()
+    ok, why = picks.eligible(task, set(), picks.recently_attempted(evs))
+    if not ok:
+        print(f"{tid}: not eligible ({why})")
+        return 0
+    if tid in picks.asked_recently(evs) or tid in agent_claims.load():
+        print(f"{tid}: already asked or claimed")
+        return 0
+    chosen, near, cost = pick([task], 1, picks.disabled_classes(evs))
+    picks.log("ask_only", tid, picked=bool(chosen), near=[n["needs"] for n in near], picker_cost=cost)
+    if chosen:
+        print(f"{tid}: pickable as-is ({chosen[0]['class']} {chosen[0].get('confidence')}); "
+              "the next run takes it")
+        return 0
+    posted = handle_near(near, {tid: task}, [])
+    print(f"{tid}: " + (f"asked: {near[0]['question']}" if posted else
+                        ("capability gap alerted" if near else "not a near-miss")))
+    return 0
 
 
 def _dirty() -> set[str]:
@@ -273,7 +424,7 @@ def work(task: dict, p: dict) -> str:
                                   description=task.get("description") or "(none)",
                                   comments=comments, cls=cls, contract=picks.CONTRACT[cls],
                                   plan=p.get("proof_plan"), where=where, rdir=rdir,
-                                  code_rule=code_rule)
+                                  code_rule=code_rule, answer=task.get("jm_answer") or "(none)")
     before, t0 = _dirty(), time.time()
     out = claude(prompt, model=None, budget=WORKER_BUDGET, cwd=wt or rdir,
                  allow=worker_permissions(rdir, wt, tid),
@@ -313,29 +464,44 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--max", type=int, default=picks.MAX_PICKS)
     ap.add_argument("--only")
+    ap.add_argument("--ask-only", metavar="TASK_ID",
+                    help="capture time (/todo): ask about this one task if it is a near-miss; never work it")
     a = ap.parse_args()
+    if a.ask_only:
+        return ask_only(a.ask_only)
     if not preflight():
         print("preflight failed: headless claude is not logged in")
         return 1
     evs = picks.events()
     disabled = picks.disabled_classes(evs)
-    claimed = set(agent_claims.load())
+    # Parked asks are claims too (released, 🕐); they must stay eligible or the
+    # second pass never sees the answer.
+    claimed = {t for t, r in agent_claims.load().items() if r.get("session") != picks.ASK_SESSION}
     recent = picks.recently_attempted(evs)
     tasks = candidates()
+    answered = detect_answers(tasks, evs)
     if a.only:
         ok = [t for t in tasks if t["id"] == a.only]
     else:
         ok = [t for t in tasks if picks.eligible(t, claimed, recent)[0]]
-    print(f"{len(tasks)} today|overdue, {len(ok)} eligible; disabled classes: {disabled or 'none'}")
-    chosen, cost = pick(ok, a.max, disabled)
-    picks.log("run", n_tasks=len(tasks), n_eligible=len(ok), picked=[c["task_id"] for c in chosen],
+    print(f"{len(tasks)} today|overdue, {len(ok)} eligible, {answered} answered; "
+          f"disabled classes: {disabled or 'none'}")
+    chosen, near, cost = pick(ok, a.max, disabled)
+    picks.log("run", n_tasks=len(tasks), n_eligible=len(ok), n_answered=answered,
+              picked=[c["task_id"] for c in chosen], near=[n["task_id"] for n in near],
               picker_cost=cost, disabled=disabled, dry_run=a.dry_run)
     byid = {t["id"]: t for t in ok}
     for c in chosen:
         print(f"  pick {c['task_id']} [{c['class']} {c.get('confidence')}] "
               f"{byid[c['task_id']]['content']} — {c.get('proof_plan')}")
+    for n in near:
+        print(f"  near {n['task_id']} [{n['needs']} {n.get('confidence')}] "
+              f"{byid[n['task_id']]['content']} — {n['question']}")
     if a.dry_run:
         return 0
+    asked = handle_near(near, byid, chosen)
+    if asked:
+        print(f"  asked {asked}")
     for c in chosen:
         try:
             res = work(byid[c["task_id"]], c)

@@ -205,3 +205,79 @@ def test_worker_allowlist_is_scoped_and_never_sends():
     assert "mcp__imessage_server__imessage_send" in run.DENY
     no_wt = run.worker_permissions(Path("/r"), None, "t")
     assert not any(a.startswith("Bash(") for a in no_wt)
+
+
+# --- second pass: asks (2026-11-09) ----------------------------------------------
+def test_parse_picker_object_and_legacy_array():
+    picks_, near = picks.parse_picker('noise {"picks": [{"task_id": "1"}], "near": [{"task_id": "2"}]} tail')
+    assert [p["task_id"] for p in picks_] == ["1"] and [n["task_id"] for n in near] == ["2"]
+    picks_, near = picks.parse_picker('[{"task_id": "1", "class": "code"}]')
+    assert picks_[0]["task_id"] == "1" and near == []
+    picks_, near = picks.parse_picker('{"picks": [], "near": []}')
+    assert picks_ == [] and near == []
+    with pytest.raises(ValueError):
+        picks.parse_picker("I would pick nothing today.")
+    with pytest.raises(ValueError):
+        picks.parse_picker('{"task_id": "1"}')
+
+
+def test_filter_near_keeps_known_fact_or_capability_with_question():
+    arr = [
+        {"task_id": "1", "needs": "fact", "question": "Which number\nis right?", "class": "code"},
+        {"task_id": "2", "needs": "Capability", "question": "repo outside monorepo"},
+        {"task_id": "9", "needs": "fact", "question": "unknown task"},
+        {"task_id": "3", "needs": "mood", "question": "bad needs"},
+        {"task_id": "4", "needs": "fact", "question": ""},
+        "garbage",
+    ]
+    out = picks.filter_near(arr, {"1", "2", "3", "4"})
+    assert [(n["task_id"], n["needs"]) for n in out] == [("1", "fact"), ("2", "capability")]
+    assert out[0]["question"] == "Which number is right?"
+    assert len(picks.filter_near([{"task_id": str(i), "needs": "fact", "question": "q"} for i in range(9)],
+                                 {str(i) for i in range(9)}, maxn=2)) == 2
+
+
+def test_open_asks_and_asked_recently():
+    now = 1_000_000
+    d = 86400
+    evs = [
+        {"ts": now - 10 * d, "event": "ask", "task_id": "old"},             # outside window
+        {"ts": now - 2 * d, "event": "ask", "task_id": "a", "question": "q1"},
+        {"ts": now - 1 * d, "event": "ask", "task_id": "b"},
+        {"ts": now - 12 * 3600, "event": "answered", "task_id": "b"},
+        {"ts": now - 1 * d, "event": "capability_gap", "task_id": "c"},
+    ]
+    assert set(picks.open_asks(evs, now)) == {"a"}
+    assert picks.open_asks(evs, now)["a"]["question"] == "q1"
+    assert picks.asked_recently(evs, now) == {"a", "b", "c"}
+
+
+def test_answer_for_description_edit_or_plain_comment():
+    desc = "Dashboard is wrong.\n"
+    ask = {"ts": 1_000_000, "desc_hash": picks.desc_hash(desc)}
+    # an untouched ctrl-o save (edit-form rstrips) is not an answer
+    assert picks.answer_for(ask, {"description": "Dashboard is wrong."}, []) is None
+    # a description edit is
+    assert picks.answer_for(ask, {"description": "Dashboard is wrong. 17% is right."}, []) == \
+        "Dashboard is wrong. 17% is right."
+    # agent comments and comments from before the ask are not
+    older = {"posted_at": "1970-01-12T13:46:39.000000Z", "content": "earlier note"}       # ts 999999
+    agent = {"posted_at": "1970-01-12T13:46:41.000000Z", "content": "😈? which one?"}
+    short = {"posted_at": "1970-01-12T13:46:42.000000Z", "content": "dtd-short:abc:x"}
+    assert picks.answer_for(ask, {"description": desc}, [older, agent, short]) is None
+    # a plain comment after the ask is; the newest wins
+    c1 = {"posted_at": "1970-01-12T13:46:45.000000Z", "content": "17% is right"}
+    c2 = {"posted_at": "1970-01-12T13:47:00.000000Z", "content": "actually 16.8%, see sheet"}
+    assert picks.answer_for(ask, {"description": desc}, [c1, agent, c2]) == "actually 16.8%, see sheet"
+
+
+def test_ask_stats_counts_conversion():
+    evs = [
+        {"ts": 10, "event": "ask", "task_id": "a"},
+        {"ts": 11, "event": "ask", "task_id": "b"},
+        {"ts": 12, "event": "answered", "task_id": "a"},
+        {"ts": 13, "event": "pick", "task_id": "a"},
+        {"ts": 14, "event": "accept", "task_id": "a"},
+        {"ts": 15, "event": "pick", "task_id": "c"},         # never asked: not conversion
+    ]
+    assert picks.ask_stats(evs) == {"asks": 2, "answered": 1, "answered_picked": 1, "answered_accepted": 1}

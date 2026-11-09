@@ -114,4 +114,15 @@ Refresh the dtd task cache so the new task appears in any running dtd instance:
 python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache &>/dev/null &
 ```
 
-Run in background, fire-and-forget. Do not wait for it or report its output.
+Then, on Ix only, let zheng (tools/pick) look at the new task while its
+context is still in JM's head. If the task is a near-miss, it posts a
+`😈? <question>` comment within a minute and parks the card at the top of dtd
+(🕐); JM answers in the ctrl-o notes field. Use the `id` from the add-tasks
+result:
+
+```bash
+[ "$(hostname -s)" = ix ] && python3 ~/i446-monorepo/tools/pick/run.py --ask-only <task_id> &>/dev/null &
+```
+
+Run both in background, fire-and-forget. Do not wait for them or report their
+output.

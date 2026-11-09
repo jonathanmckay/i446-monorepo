@@ -45,6 +45,10 @@ def report(evs: list[dict], since: int, until: int) -> str:
          else "net: no reviewed outcomes yet"),
         f"waiting on JM: {len(waiting)}" + (f" ({', '.join(waiting)})" if waiting else ""),
     ]
+    a = picks.ask_stats(evs, since, until)
+    if a["asks"]:
+        lines.append(f"asked {a['asks']} · answered {a['answered']} · answered→picked "
+                     f"{a['answered_picked']} · answered→accepted {a['answered_accepted']}")
     dis = picks.disabled_classes(evs)
     if dis:
         lines.append("disabled: " + "; ".join(f"{k} ({v})" for k, v in dis.items()))

@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- agent-picks pilot (tools/pick/run.py): 06:00 daily on Ix, 2026-11-09 to 11-22.
-     Install: cp to ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) <that path> -->
+<!-- agent-picks pilot (tools/pick/run.py): 06:00 and 22:00 daily on Ix, 2026-11-09 to 11-22.
+     06:00 picks and asks (😈? on near-misses); JM answers during the day; 22:00 picks
+     again with the answers in hand and works them (2026-11-09, second pass).
+     Install: cp to ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) <that path>
+     Reinstall after an edit: launchctl bootout gui/$(id -u)/com.jm.agent-pick; then bootstrap. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -12,12 +15,20 @@
         <string>/Users/mckay/i446-monorepo/tools/pick/run.py</string>
     </array>
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>6</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>6</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>22</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
