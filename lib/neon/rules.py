@@ -269,20 +269,33 @@ class _Book:
                            OR (e.kind='observe' AND e.jsonl_kind='baseline'))
                     ORDER BY e.ts, e.id""", (sheet, date_iso)).fetchall()
             written: set = set()
+            seeded: set = set()                 # cols a set/text/baseline gave content
+            first_credit: dict = {}             # col → after-formula of its first credit
             for col, kind, jkind, pts, value, after, src in rows:
                 cell = out.setdefault(col, {"content": None, "credits": [], "unknown": [], "observed": None})
                 if kind == "observe":
                     if col not in written:
                         cell.update(content=_content(after), credits=[], unknown=[])
+                        seeded.add(col)
                     continue
                 written.add(col)
                 if kind in ("set", "text"):
                     raw = after if (after or "").strip() else value
                     cell.update(content=_content(raw), credits=[], unknown=[])
+                    seeded.add(col)
                 elif pts is None:
                     cell["unknown"].append(f"{sheet}!{col}: credit without points ({(src or '?')[:30]})")
                 else:
                     cell["credits"].append(float(pts))
+                    first_credit.setdefault(col, after or "")
+            # No baseline landed before the first credit (03:50 reconcile down):
+            # the cell's structure ('0n'!AE313*2 behind Y) comes from what the
+            # daemon saw at that credit, minus its literal. Same rule as _seed_formula.
+            for col, after in first_credit.items():
+                if col not in seeded and out[col]["content"] is None:
+                    f = _refs_only(after)
+                    if f:
+                        out[col]["content"] = f
         self._sheets[key] = out
         return out
 
@@ -334,21 +347,52 @@ class _Book:
         return total
 
 
+def _refs_only(formula: str) -> str:
+    """A formula with its literal terms dropped: "=hcbi!AA314+hcbi!Y314+20-126"
+    → "=hcbi!AA314+hcbi!Y314". Empty when nothing but literals remains."""
+    kept = []
+    for t in split_terms(formula or ""):
+        body = t[1:] if t[:1] in "+-" else t
+        if _NUM.match(body) or _eval_arith(t) is not None:
+            continue
+        kept.append(t)
+    if not kept:
+        return ""
+    if kept[0][:1] == "+":
+        kept[0] = kept[0][1:]
+    return "=" + "".join(kept)
+
+
 def _seed_formula(c, date_iso: str, sheet: str, col: str) -> str:
     """The formula strict mode starts a cell from: the last daemon `set`, or
-    the newest baseline when no write came first."""
+    the day's baseline when no write came first.
+
+    When the 03:50 baseline never landed (2026-11-08: neon-reconcile got 504
+    on every sheet and the W check then reported the whole hcbi row as
+    "never journaled"), fall back to the structure the daemon itself saw:
+    the first credit's after-formula minus its literal, else the newest
+    observation minus literals. Literals always come from the ledger's
+    credits, so the fallback only supplies the cell refs."""
     seed, seen = "", False
-    for kind, after in c.execute(
-            """SELECT kind, after_formula FROM events WHERE date=? AND sheet=? AND col=?
-                 AND (kind IN ('set','credit','credit_ref') OR (kind='observe' AND jsonl_kind='baseline'))
+    first_credit, newest_obs = "", ""
+    for kind, jkind, after in c.execute(
+            """SELECT kind, jsonl_kind, after_formula FROM events WHERE date=? AND sheet=? AND col=?
+                 AND (kind IN ('set','credit','credit_ref') OR kind='observe')
                ORDER BY ts, id""", (date_iso, sheet, col)).fetchall():
         if kind == "observe":
-            if not seen:
-                seed = after or ""
+            if jkind == "baseline":
+                if not seen:
+                    seed = after or ""
+            elif after:
+                newest_obs = after
             continue
         seen = True
         if kind == "set":
             seed = after or ""
+        elif not first_credit and after:
+            first_credit = after
+    if not seed:
+        seed = _refs_only(first_credit) or _refs_only(newest_obs)
     return seed
 
 

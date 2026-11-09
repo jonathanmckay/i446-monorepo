@@ -240,12 +240,14 @@ def _h(col, after, value=None, kind="baseline", ts="2026-10-18T03:50:00", src="b
               after=after, after_value=av, before_value=None, src=src)
 
 
-def _hcbi_day(db, reconcile_w=None):
+def _hcbi_day(db, reconcile_w=None, w_baseline=True, y_baseline=True):
     """A 10/18 hcbi row seeded at 03:50, two /ate appends, one hiit mark."""
     for col, f in (("AA", AA_F), ("Y", "='0n'!AE292*2  + 0"),
                    ("U", "=SUM(AL293,AO293,AR293,AU293,AX293,BD293,BA293)"),
                    ("P", "=SUM(AM293,AP293,AS293,AY293,BB293,BE293,AV293)"),
                    ("T", "=IF(COUNTA(AK293,AN293,AQ293,AT293,AW293,AZ293,BC293)>=3,20,0)")):
+        if col == "Y" and not y_baseline:
+            continue
         ledger.record(_h(col, f), db)
     for col in ("E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "S", "W", "AI",
                 "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR", "AS", "AT", "AU", "AV",
@@ -257,7 +259,8 @@ def _hcbi_day(db, reconcile_w=None):
                          src="ate eggs"), db)
     ledger.record(_h("AQ", "eggs", value=", eggs", kind="append", ts="2026-10-18T10:00:00", src="ate eggs"), db)
     ledger.record(_h("T", "10", value="10", kind="write", ts="2026-10-18T10:00:01", src="ate-tier"), db)
-    ledger.record(_base("W", "=hcbi!AA293+hcbi!Y293", -50), db)
+    if w_baseline:
+        ledger.record(_base("W", "=hcbi!AA293+hcbi!Y293", -50), db)
     ledger.record(_e(ts="2026-10-18T12:00:00", col="W", value="+20", before="=hcbi!AA293+hcbi!Y293",
                      after="=hcbi!AA293+hcbi!Y293+20", after_value="0"), db)
     if reconcile_w is not None:                                                 # caf typed into hcbi
@@ -322,3 +325,37 @@ def test_w_strict_flags_literal_typed_after_hcbi_formula(db, monkeypatch):
     assert rules.derive_day("2026-10-18", db)["cols"]["W"]["status"] == "ok"
     (miss,) = [m for m in rules.strict_check("2026-10-18", db)["misses"] if m["col"] == "W"]
     assert any("+5 in hcbi!Y293 formula" in w_ for w_ in miss["why"])
+
+
+def test_w_strict_seeds_from_the_first_credit_when_the_baseline_is_missing(db, monkeypatch):
+    """2026-11-08: the 03:50 reconcile got 504 everywhere, so 0分!W had no
+    baseline. Strict seeded W from "" and reported every journaled hcbi write
+    as 'never journaled'. The first credit's after-formula carries the refs."""
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _hcbi_day(db, w_baseline=False)
+    obs = _expected_aa() + 10 + 20
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293+20"), db)
+    assert rules._seed_formula(db, "2026-10-18", "0分", "W") == "=hcbi!AA293+hcbi!Y293"
+    assert rules.derive_day("2026-10-18", db, strict=True)["cols"]["W"]["status"] == "ok"
+    assert all(m["col"] != "W" for m in rules.strict_check("2026-10-18", db)["misses"])
+
+
+def test_refs_only_strips_literals_and_products():
+    assert rules._refs_only("=hcbi!AA314+hcbi!Y314+20-126-3.75") == "=hcbi!AA314+hcbi!Y314"
+    assert rules._refs_only("='0n'!BH292 + 35+ 7*45 -'1n+'!C5") == "='0n'!BH292-'1n+'!C5"
+    assert rules._refs_only("=20+15") == "" and rules._refs_only("") == ""
+
+
+def test_hcbi_cell_structure_falls_back_to_its_first_credit_without_baseline(db, monkeypatch):
+    """Same outage, one level down: hcbi!Y (='0n'!AE*2) had no baseline, so
+    strict summed Y's credits on a blank and reported the hiit cell as
+    'ledger blank'. The first credit's after-formula carries the ref."""
+    monkeypatch.setattr(rules, "load_weights", lambda conn=None: {})
+    _hcbi_day(db, w_baseline=False, y_baseline=False)
+    ledger.record(_h("Y", "='0n'!AE292*2  + 0+15", value="+15", kind="append",
+                     ts="2026-10-18T11:00:00", src="did hcbp"), db)
+    obs = _expected_aa() + 10 + 15 + 20
+    ledger.record(_snap("W", obs, "=hcbi!AA293+hcbi!Y293+20"), db)
+    st = rules.derive_day("2026-10-18", db, strict=True)["cols"]["W"]
+    assert st["status"] == "ok" and st["derived"] == pytest.approx(obs, abs=1e-3)
+    assert all(m["col"] != "W" for m in rules.strict_check("2026-10-18", db)["misses"])
