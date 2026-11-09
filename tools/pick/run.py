@@ -215,7 +215,14 @@ def pick(cands: list[dict], maxn: int, disabled: dict[str, str]) -> tuple[list[d
     except ValueError:
         picks.log("picker_fail", detail=text[:300])
         return [], out.get("total_cost_usd")
-    return picks.filter_picks(arr, {t["id"] for t in cands}, allowed, maxn), out.get("total_cost_usd")
+    chosen = picks.filter_picks(arr, {t["id"] for t in cands}, allowed, maxn)
+    if arr and not chosen:
+        # The picker saw something but nothing cleared the bar: keep its
+        # reasoning so an empty day is explainable from events.jsonl alone.
+        picks.log("picker_abstain", detail=json.dumps(
+            [{"task_id": p.get("task_id"), "class": p.get("class"),
+              "confidence": p.get("confidence")} for p in arr if isinstance(p, dict)])[:600])
+    return chosen, out.get("total_cost_usd")
 
 
 def _dirty() -> set[str]:
