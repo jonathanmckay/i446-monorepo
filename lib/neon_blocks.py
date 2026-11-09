@@ -505,14 +505,84 @@ def _goal_key(goal: str) -> str:
     return " ".join(g.lower().split())
 
 
-def zerog_prefill(text: str, block: str) -> str | None:
-    """Pure: the line-1 prefill for the -1g form and the 😈 -1g card
+# -1g prefill rejections (2026-11-09: "the suggested -1g goal has been
+# something I haven't accepted twice in a row, and it's suggested a third
+# time"). The -1g form records a rejection whenever line 1 is submitted as
+# anything other than the ghost; a goal rejected PREFILL_REJECT_LIMIT times
+# in the same 0₲ day is skipped and the next open 0₲ goal is offered instead.
+# Keyed by the 0₲ day (04:00 cutoff, like the daily reset), so it clears with
+# the goals. Per-machine state: a rejection on Straylight does not suppress
+# the prefill on ix. Path overridable via JM_1G_PREFILL_REJECTS (tests).
+PREFILL_REJECT_LIMIT = 2
+_PREFILL_REJECTS_DEFAULT = Path.home() / ".local" / "state" / "jm" / "1g-prefill-rejects.json"
+
+
+def _prefill_rejects_path() -> Path:
+    import os
+    env = os.environ.get("JM_1G_PREFILL_REJECTS")
+    return Path(env).expanduser() if env else _PREFILL_REJECTS_DEFAULT
+
+
+def zerog_day(now: dt.datetime | None = None) -> str:
+    """The 0₲ day a moment belongs to: calendar date of (now - 4h), so
+    00:00-03:59 still counts as the previous day's goals."""
+    if now is None:
+        try:
+            import daytime
+            now = daytime.local_now()
+        except Exception:  # noqa: BLE001
+            now = dt.datetime.now()
+    return (now - dt.timedelta(hours=4)).date().isoformat()
+
+
+def load_prefill_rejects(day: str | None = None) -> dict[str, int]:
+    """{goal_key: rejection count} for the given 0₲ day; {} when the file is
+    missing, unreadable or from another day."""
+    day = day or zerog_day()
+    try:
+        data = json.loads(_prefill_rejects_path().read_text(encoding="utf-8"))
+        if data.get("date") != day:
+            return {}
+        rej = data.get("rejects") or {}
+        return {str(k): int(v) for k, v in rej.items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def note_prefill_rejected(goal: str, day: str | None = None) -> int:
+    """Record that the prefill `goal` was not accepted; returns the new count.
+    Written atomically (tmp + replace) so a concurrent dtd render never sees a
+    torn file."""
+    import os
+    day = day or zerog_day()
+    rej = load_prefill_rejects(day)
+    key = _goal_key(goal)
+    rej[key] = rej.get(key, 0) + 1
+    path = _prefill_rejects_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps({"date": day, "rejects": rej}, ensure_ascii=False, indent=1),
+                   encoding="utf-8")
+    os.replace(tmp, path)
+    return rej[key]
+
+
+def rejected_prefill_keys(day: str | None = None) -> set[str]:
+    """Goal keys rejected PREFILL_REJECT_LIMIT or more times today."""
+    return {k for k, n in load_prefill_rejects(day).items() if n >= PREFILL_REJECT_LIMIT}
+
+
+def zerog_prefill(text: str, block: str, skip: set[str] | None = None) -> str | None:
+    """Pure given `skip`: the line-1 prefill for the -1g form and the 😈 -1g card
     (2026-11-02: "#1 integrated into -1g such that it's a prefill but when I
     put any text in it disappears"). First unchecked flush-left `- [ ]` under
     `## 0₲` (above `###` subsections) not already a goal of `block`. Trailing
     `{N}`/`[N]` are dropped: a 0g bonus like {40} would blow the ≤18/block -1g
     budget, and a leftover lone [N] would turn the goal into a plain todo; the
-    block default {10} applies."""
+    block default {10} applies. `skip` is the set of goal keys to pass over
+    (default: today's twice-rejected prefills, rejected_prefill_keys())."""
+    if skip is None:
+        skip = rejected_prefill_keys()
     lines = text.split("\n")
     try:
         start = next(i for i, l in enumerate(lines) if l.startswith(DAILY_SECTION))
@@ -542,6 +612,6 @@ def zerog_prefill(text: str, block: str) -> str | None:
             break
     for g in daily:
         cand = _TRAILING_POINTS_RE.sub("", g).strip()
-        if cand and _goal_key(cand) not in present:
+        if cand and _goal_key(cand) not in present and _goal_key(cand) not in skip:
             return cand
     return None

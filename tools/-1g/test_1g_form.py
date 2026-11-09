@@ -304,3 +304,24 @@ def test_form_typing_then_erasing_does_not_resurrect_prefill(form, monkeypatch, 
 
 def test_form_backspace_dismisses_prefill(form, monkeypatch, tmp_path):
     assert _drive(form, monkeypatch, tmp_path, "\x7f\x13") == ["", "", ""]
+
+
+def test_form_typing_over_prefill_records_a_rejection(form, monkeypatch, tmp_path):
+    """2026-11-09: declining the ghost must count, so the third form offers a new goal."""
+    rej = tmp_path / "rej.json"
+    monkeypatch.setenv("JM_1G_PREFILL_REJECTS", str(rej))
+    monkeypatch.setattr(form.nb, "zerog_day", lambda now=None: "2026-11-09")
+    assert _drive(form, monkeypatch, tmp_path, "x\x13") == ["x", "", ""]
+    assert form.nb.load_prefill_rejects() == {"good interviews, then rest": 1}
+    assert _drive(form, monkeypatch, tmp_path, "\x7f\x13") == ["", "", ""]   # dismiss + blank save
+    assert form.nb.load_prefill_rejects() == {"good interviews, then rest": 2}
+    # third form: the twice-rejected goal is gone, the next open 0g goal is the ghost
+    assert _drive(form, monkeypatch, tmp_path, "\x13") == ["- tasks to 80", "", ""]
+
+
+def test_form_accepting_prefill_records_nothing(form, monkeypatch, tmp_path):
+    rej = tmp_path / "rej.json"
+    monkeypatch.setenv("JM_1G_PREFILL_REJECTS", str(rej))
+    assert _drive(form, monkeypatch, tmp_path, "\x13") == ["- Good interviews, then rest", "", ""]
+    assert _drive(form, monkeypatch, tmp_path, "Good interviews, then rest\x13")[0] == "Good interviews, then rest"
+    assert not rej.exists()

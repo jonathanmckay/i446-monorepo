@@ -139,3 +139,46 @@ def test_daily_locked_writer_on_tmp_copy(tmp_path: Path):
     assert added == ["walk 20m {15}"]
     assert "- [ ] walk 20m {15}\n" in bo.read_text(encoding="utf-8")
     assert (tmp_path / "build-order.lock").exists()
+
+
+ZEROG_BO = """## 0₲
+- [ ] first goal {20}
+- [ ] second goal {10}
+- [ ] third goal
+
+## -1₲
+- 申
+    - [ ]
+"""
+
+
+def test_zerog_prefill_moves_on_after_two_rejections_same_day(monkeypatch, tmp_path):
+    """2026-11-09: a prefill declined twice in a row was offered a third time."""
+    monkeypatch.setenv("JM_1G_PREFILL_REJECTS", str(tmp_path / "rej.json"))
+    day = "2026-11-09"
+    monkeypatch.setattr(nb, "zerog_day", lambda now=None: day)
+    assert nb.zerog_prefill(ZEROG_BO, "申") == "first goal"
+    assert nb.note_prefill_rejected("first goal") == 1
+    assert nb.zerog_prefill(ZEROG_BO, "申") == "first goal"       # one strike: still offered
+    assert nb.note_prefill_rejected("first goal {20}") == 2        # key ignores points
+    assert nb.zerog_prefill(ZEROG_BO, "申") == "second goal"      # two strikes: next goal
+    nb.note_prefill_rejected("second goal"); nb.note_prefill_rejected("second goal")
+    assert nb.zerog_prefill(ZEROG_BO, "申") == "third goal"
+    # explicit skip keeps the function pure for callers that manage their own state
+    assert nb.zerog_prefill(ZEROG_BO, "申", skip=set()) == "first goal"
+
+
+def test_prefill_rejections_reset_with_the_0g_day(monkeypatch, tmp_path):
+    monkeypatch.setenv("JM_1G_PREFILL_REJECTS", str(tmp_path / "rej.json"))
+    monkeypatch.setattr(nb, "zerog_day", lambda now=None: "2026-11-09")
+    nb.note_prefill_rejected("first goal"); nb.note_prefill_rejected("first goal")
+    assert nb.zerog_prefill(ZEROG_BO, "申") == "second goal"
+    monkeypatch.setattr(nb, "zerog_day", lambda now=None: "2026-11-10")
+    assert nb.load_prefill_rejects() == {}
+    assert nb.zerog_prefill(ZEROG_BO, "申") == "first goal"
+
+
+def test_zerog_day_has_0400_cutoff():
+    import datetime as dt
+    assert nb.zerog_day(dt.datetime(2026, 11, 10, 3, 59)) == "2026-11-09"
+    assert nb.zerog_day(dt.datetime(2026, 11, 10, 4, 0)) == "2026-11-10"

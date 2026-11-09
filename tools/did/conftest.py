@@ -15,3 +15,8 @@ import tempfile
 
 _MIRROR = tempfile.mkdtemp(prefix="jm-test-completed-mirror-")
 os.environ["JM_COMPLETED_MIRROR_DIR"] = _MIRROR
+
+# -1g prefill rejections (2026-11-09): dtd's list generator calls
+# neon_blocks.zerog_prefill(), which reads this file; keep tests off the real one.
+os.environ.setdefault("JM_1G_PREFILL_REJECTS",
+                      os.path.join(tempfile.mkdtemp(prefix="jm-test-1g-rejects-"), "rejects.json"))

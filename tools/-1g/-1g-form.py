@@ -396,6 +396,16 @@ def run_form(block: str, daily: bool = False) -> list[str] | None:
     out = [a.text.strip() for a in areas]
     if ghost["on"] and not out[0]:
         out[0] = "- " + prefill   # bullet form: parse_goals_text won't split on its commas
+    elif prefill:
+        # Line 1 was typed over, dismissed or left blank: the suggestion was not
+        # accepted. After PREFILL_REJECT_LIMIT such submits today zerog_prefill
+        # moves on to the next open 0₲ goal (2026-11-09). A cancel (^Q) never
+        # reaches here, so bailing out of the form is not a rejection.
+        if _goal_key(out[0].lstrip("- ")) != _goal_key(prefill):
+            try:
+                nb.note_prefill_rejected(prefill)
+            except Exception:  # noqa: BLE001 - bookkeeping must never lose the goals
+                pass
     return out
 
 
