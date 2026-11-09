@@ -82,3 +82,14 @@ def test_ix_crontab_runs_the_reaper_at_0245():
     cron = (HERE.parent / "config" / "ix.crontab").read_text().splitlines()
     reap = next(l for l in cron if "reap-idle-claude.py" in l and not l.startswith("#"))
     assert reap.split()[:2] == ["45", "2"]
+
+
+def test_dead_tmux_only_detached_cc_sessions_at_a_bare_shell():
+    m = _load()
+    # pane pids: 10 bare zsh; 20 zsh running claude-tracked (child 21); 30 attached;
+    # 40 python foreground; 50 not a cc-* session; 60/61 one dead pane + one live pane
+    table = {10: 1, 20: 1, 21: 20, 30: 1, 40: 1, 50: 1, 60: 1, 61: 1, 62: 61}
+    panes = [("cc-095453", 0, "zsh", 10), ("cc-busy", 0, "zsh", 20), ("cc-phone", 1, "zsh", 30),
+             ("cc-claude", 0, "Python", 40), ("dtd", 0, "zsh", 50),
+             ("cc-split", 0, "zsh", 60), ("cc-split", 0, "zsh", 61)]
+    assert m.dead_tmux(panes, table) == ["cc-095453"]

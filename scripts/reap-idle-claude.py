@@ -18,6 +18,12 @@ A session is reaped when all hold:
 Its whole process tree is captured before SIGTERM (children re-parent to
 launchd once the session dies), then survivors get SIGKILL after a grace.
 One JSON line per decision goes to ~/Library/Logs/reap-idle-claude.jsonl.
+
+Second pass (2026-11-08, "Termius thread picker"): a cc-* tmux session whose
+Claude has exited sits at a bare zsh forever (claude-tracked drops to a shell),
+and 30 of them padded the phone's tmux session list to ~60 rows. Kill every
+cc-* tmux session that no client is attached to and whose panes are all a
+shell with no child processes.
 """
 from __future__ import annotations
 
@@ -36,6 +42,7 @@ SESSIONS = HOME / ".claude" / "sessions"
 CLAIMS = HOME / "i446-monorepo" / "tools" / "did" / "agent_claims.py"
 LOG = HOME / "Library" / "Logs" / "reap-idle-claude.jsonl"
 REAPABLE = ("idle", "waiting")
+SHELLS = ("zsh", "-zsh", "bash", "-bash", "sh")
 GRACE = 10
 
 
@@ -139,6 +146,32 @@ def reap(pids: list[int], table: dict[int, int]) -> dict[int, int]:
     return left
 
 
+def tmux_panes() -> list[tuple[str, int, str, int]]:
+    """(session, clients attached, pane foreground command, pane pid) for every pane; [] without tmux."""
+    try:
+        out = subprocess.run(["tmux", "list-panes", "-a", "-F",
+                              "#{session_name}\t#{session_attached}\t#{pane_current_command}\t#{pane_pid}"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    rows = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 4 and parts[1].isdigit() and parts[3].isdigit():
+            rows.append((parts[0], int(parts[1]), parts[2], int(parts[3])))
+    return rows
+
+
+def dead_tmux(panes: list[tuple[str, int, str, int]], table: dict[int, int]) -> list[str]:
+    """Detached cc-* sessions whose every pane is an idle shell (no children)."""
+    by: dict[str, list[bool]] = {}
+    for name, attached, cmd, pid in panes:
+        if not name.startswith("cc-"):
+            continue
+        by.setdefault(name, []).append(not attached and cmd in SHELLS and not descendants(pid, table))
+    return sorted(n for n, ok in by.items() if all(ok))
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -157,10 +190,17 @@ def main(argv: list[str]) -> int:
             if r["pid"] in killed:
                 r["sigkilled"] = killed[r["pid"]]
             f.write(json.dumps(r) + "\n")
+        dead = dead_tmux(tmux_panes(), ps_table())
+        for name in dead:
+            if not a.dry_run:
+                subprocess.run(["tmux", "kill-session", "-t", f"={name}"], capture_output=True)
+            f.write(json.dumps({"ts": ts, "dry_run": a.dry_run, "action": "kill-tmux", "tmux": name}) + "\n")
     for r in rows:
         if not r["skip"]:
             print(f"{'would reap' if a.dry_run else 'reaped'} {r['pid']} {r['name'] or ''} idle {r['idle_h']}h")
     print(f"{len(doomed)} of {len(rows)} live sessions {'to reap' if a.dry_run else 'reaped'}")
+    print(f"{len(dead)} dead cc-* tmux sessions {'to kill' if a.dry_run else 'killed'}"
+          + (f": {' '.join(dead)}" if dead else ""))
     return 0
 
 
