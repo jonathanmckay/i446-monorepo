@@ -7,6 +7,8 @@ next to the cache file. The done router (alt-enter) opens the -1g form when
 that sidecar is non-empty ("the prefill already exists, hit ctrl+s then it
 saves") and completes the card instantly, as before, when it is empty.
 """
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -109,10 +111,11 @@ def test_missing_build_order_never_breaks_the_list(tmp_path):
 
 def test_router_opens_form_only_with_prefill_on_show():
     body = _heredoc("DTD_DONE_ROUTER", "ROUTEREOF")
-    guard = re.search(r'if \[\[ "\\\$_t_base" == "😈 -1g" && -s "(/tmp/dtd-\$DTD_ID\.prefill)" \]\]; then\n'
-                      r"  printf 'execute\(%s %s %s --detach\)' \"(/tmp/dtd-\$DTD_ID\.form\.sh)\"", body)
-    assert guard, body[:800]
-    assert "-1g/-1g-form.py" in body
+    i = body.index('if [[ "\\$_t_base" == "😈 -1g" && -s "$DTD_PREFILL" ]]; then')
+    branch = body[i:i + 400]
+    assert "printf 'execute(%s %s %s --detach)' \"$DTD_FORM\" \"\\$_id\"" in branch, branch
+    assert "-1g/-1g-form.py" in branch
+    assert "exclude" not in branch.split("else")[0], "a cancelled form must keep the row"
     # the plain-completion branches are untouched (one execute, one execute-silent)
     assert body.count("printf '%sexecute(") == 1 and body.count("printf '%sexecute-silent(") == 1
     # the sidecar path the router reads is the one the generator writes
