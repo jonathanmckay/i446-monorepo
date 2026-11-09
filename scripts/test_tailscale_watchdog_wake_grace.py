@@ -11,7 +11,7 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent / "tailscale-watchdog.sh"
 
 
-def _run(tmp_path, last_tick_ago, woke_ago=None):
+def _run(tmp_path, last_tick_ago, woke_ago=None, internet_up=True):
     home = tmp_path / "home"
     (home / "i446-monorepo" / "scripts").mkdir(parents=True)
     state = tmp_path / "state" / "jm"
@@ -23,13 +23,14 @@ def _run(tmp_path, last_tick_ago, woke_ago=None):
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     stubs = {"ts": 'echo "100.64.0.1 ix mckay@ macOS -"',   # status looks fine, so FIX=probe_failed
-             "ssh": "exit 255", "osascript": "exit 0", "open": "exit 0", "sleep": "exit 0"}
+             "ssh": "exit 255", "osascript": "exit 0", "open": "exit 0", "sleep": "exit 0",
+             "ping": "exit 0" if internet_up else "exit 2"}
     for name, body in stubs.items():
         f = bin_ / name
         f.write_text(f"#!/bin/sh\n{body}\n")
         f.chmod(0o755)
     env = dict(os.environ, HOME=str(home), XDG_STATE_HOME=str(tmp_path / "state"),
-               TAILSCALE_BIN=str(bin_ / "ts"), PATH=f"{bin_}:/usr/bin:/bin")
+               TAILSCALE_BIN=str(bin_ / "ts"), NET_PROBE_BIN=str(bin_ / "ping"), PATH=f"{bin_}:/usr/bin:/bin")
     rc = subprocess.run(["/bin/bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=30).returncode
     alerts = home / "vault" / "z_ibx" / "alerts.jsonl"
     log = (home / "i446-monorepo" / "scripts" / ".tailscale-watchdog-health.log").read_text()
@@ -50,3 +51,10 @@ def test_still_in_grace_on_the_next_tick(tmp_path):
 def test_outage_while_awake_still_alerts(tmp_path):
     rc, alerts, log = _run(tmp_path, last_tick_ago=300, woke_ago=3 * 3600)
     assert rc == 1 and "ix_unreachable_persisted" in alerts
+
+
+def test_internet_down_is_not_a_tailscale_fault(tmp_path):
+    """2026-11-09: hotspot dropped for 20 min; the watchdog restarted Tailscale twice for it."""
+    rc, alerts, log = _run(tmp_path, last_tick_ago=300, woke_ago=3 * 3600, internet_up=False)
+    assert rc == 1 and alerts == ""
+    assert "internet down" in log and "detected" not in log
