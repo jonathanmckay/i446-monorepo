@@ -26,7 +26,7 @@ One row per fiscal week, row 3 = `1.1`, never appended to. m5x2 columns:
 | Col | Meaning | Source |
 |-----|---------|--------|
 | A | M.W fiscal week label | verify, don't write |
-| G | Rating: `MM` / `MA` / `EE` (missed / met ambition / exceeded) | Question 1 |
+| G | Rating: `MS` / `MM` / `MA` / `EE` (missed significantly / missed / met ambition / exceeded; MS is below MM, added 2026-11-09 for week 11.1) | Question 1 |
 | H | Review of the last week | Question 2 |
 | I | Goals for next week | Question 3 |
 | J | m5x2 points that week (`='1分+1s'!H<row-1>`, formula, don't overwrite) | sheet |
@@ -51,11 +51,11 @@ Columns B–F are `/1i9`'s; leave them alone.
 - the review week's `/1s` doc (`~/vault/g245/reviews/YYYY-M.W-1s.md`, "Goals Detail"), if it exists.
 
 Then, with each question, offer a drafted answer the user can accept with "ok" or edit:
-1. **Rating**: compare the week's actual minutes/points and the goals' % done against last week's stated goal; suggest MM/MA/EE with a one-line reason.
+1. **Rating**: compare the week's actual minutes/points and the goals' % done against last week's stated goal; suggest MS/MM/MA/EE with a one-line reason (MS when the week barely happened: well under half the 分 goal and the planned block lost).
 2. **Review (col H)**: one sentence naming which 1g goals got done or moved, plus the biggest Toggl blocks.
 3. **Next week (col I)**: carry forward unfinished 1g goals, phrased as concrete outcomes.
 
-5. **Ask the 3 questions** in chat: rating (`MM`/`MA`/`EE`), review of last
+5. **Ask the 3 questions** in chat: rating (`MS`/`MM`/`MA`/`EE`), review of last
    week, goals for next week. Offer the week's biggest Toggl m5x2 blocks as the
    suggested review text.
 6. **Write** through the excel-http daemon (journaled; never raw AppleScript).

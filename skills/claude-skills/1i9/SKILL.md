@@ -33,7 +33,7 @@ week. Columns (confirmed against live data 2026-09-15):
 | Col | Meaning | Source |
 |-----|---------|--------|
 | A | M.W fiscal week label (e.g. `9.2`) | already populated — verify, don't write |
-| B | Rating vs. expectations: `MM` (missed) / `MA` (met ambition) / `EE` (exceeded) / `OL` (out: sick or leave, week not rated) | Question 1 |
+| B | Rating vs. expectations: `MS` (missed significantly, below MM; added 2026-11-09) / `MM` (missed) / `MA` (met ambition) / `EE` (exceeded) / `OL` (out: sick or leave, week not rated) | Question 1 |
 | C | i9 points that week (`='1分+1s'!G<row-1>`, formula, don't overwrite) | sheet |
 | D | What got done last week | Question 2 |
 | E | What exceeding expectations looks like this week | Question 3 |
@@ -113,7 +113,7 @@ user rather than writing to the wrong row.
 - the review week's `/1s` doc (`~/vault/g245/reviews/YYYY-M.W-1s.md`, "Goals Detail"), if it exists.
 
 Then, with each question, offer a drafted answer the user can accept with "ok" or edit:
-1. **Rating**: compare the week's actual minutes/points and the goals' % done against last week's stated goal; suggest MM/MA/EE with a one-line reason.
+1. **Rating**: compare the week's actual minutes/points and the goals' % done against last week's stated goal; suggest MS/MM/MA/EE with a one-line reason.
 2. **Review (col D)**: one sentence naming which 1g goals got done or moved, plus the biggest Toggl blocks.
 3. **Next week (col E)**: carry forward unfinished 1g goals, phrased as concrete outcomes.
 
@@ -122,7 +122,7 @@ Then, with each question, offer a drafted answer the user can accept with "ok" o
 Ask directly in the conversation (this is a 3-field survey, not worth a
 dedicated TUI):
 
-1. **Rating vs. expectations** — offer `MM` / `MA` / `EE` (missed / met
+1. **Rating vs. expectations** — offer `MS` / `MM` / `MA` / `EE` (missed significantly / missed / met
    ambition / exceeded), plus `OL` for a week that was out (sick, leave;
    JM used it 2026-10-02 for week 9.4); a single-select question fits well here.
 2. **What did I get done last week?** — free text.
