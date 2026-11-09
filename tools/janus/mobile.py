@@ -719,6 +719,16 @@ def _fetch_calendar_raw(day_start: _dt.datetime, day_end: _dt.datetime) -> list[
 HIDDEN_EVENTS = Path.home() / ".local/state/jm/janus-hidden-events.json"
 HIDDEN_EVENTS_KEEP_DAYS = 30
 
+# Outlook "Do Not Schedule" holds ("DNS", "Dns - Work") are calendar hygiene,
+# not meetings: never a row, never a meeting title. Mirrors tools/tg/janus.py's
+# _is_dns_hold verbatim (JM 2026-11-09). Not a prefix match — "DNS migration
+# review" would be a real meeting.
+_DNS_HOLD = re.compile(r"^\s*dns(?:\s*[-–—:·|]\s*\S.*)?\s*$", re.IGNORECASE)
+
+
+def _is_dns_hold(title: str | None) -> bool:
+    return bool(_DNS_HOLD.match(title or ""))
+
 
 def _hidden_event_keys() -> set:
     try:
@@ -773,6 +783,8 @@ def _filter_events(raw: list[dict], entries: list[dict]) -> list[dict]:
     for ev in raw:
         if ev.get("all_day") or ev.get("transparency") == "transparent":
             continue
+        if _is_dns_hold(ev.get("title")):
+            continue
         if _event_key(ev.get("title") or "", ev["start_dt"].isoformat(), ev["end_dt"].isoformat()) in hidden:
             continue
         if _event_covered(ev, entries) or _event_tracked(ev, entries):
@@ -799,7 +811,8 @@ def _fetch_events_today(entries: list[dict], day: _dt.date | None = None) -> lis
     # an entry titled like one is a meeting for the speedy-meeting rule.
     _MEETING_TITLES[today] = {_norm_meeting_title(ev.get("title") or "")
                               for ev in raw if not ev.get("all_day")
-                              and ev.get("transparency") != "transparent"} - {""}
+                              and ev.get("transparency") != "transparent"
+                              and not _is_dns_hold(ev.get("title"))} - {""}
     return _filter_events(raw, entries)
 
 

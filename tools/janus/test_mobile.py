@@ -1186,3 +1186,15 @@ def test_log_entry_claims_a_task_closed_before_the_entry(jm, tmp_path, monkeypat
 def test_a_per_minute_habit_closed_in_dtd_logs_its_rate_not_row_2_weight():
     src = (Path(__file__).parent / "mobile.py").read_text()
     assert 'r["rate_points"]\n' in src and 'closed_in_dtd' in src
+
+
+def test_filter_events_drops_dns_holds_but_not_dns_meetings(jm):
+    """JM 2026-11-09: Outlook 'Do Not Schedule' holds ("DNS", "Dns - Work")
+    are calendar hygiene, not meetings — never a row. A real meeting whose
+    title merely starts with DNS still shows."""
+    hold = _ev(jm, 8, 0, 9, 0, title="Dns - Work")
+    bare = _ev(jm, 13, 0, 14, 0, title="DNS")
+    real = _ev(jm, 15, 0, 15, 30, title="DNS migration review")
+    out = jm._filter_events([hold, bare, real], [])
+    assert [o["title"] for o in out] == ["DNS migration review"]
+    assert jm._is_dns_hold(" dns ") and jm._is_dns_hold("DNS: focus") and not jm._is_dns_hold("")

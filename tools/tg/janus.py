@@ -1081,6 +1081,17 @@ def fetch_today(force=False):
 
 HIDDEN_EVENTS = Path.home() / ".local/state/jm/janus-hidden-events.json"
 HIDDEN_EVENTS_KEEP_DAYS = 30
+
+# Outlook "Do Not Schedule" holds (JM 2026-11-09: "make it so that DNS (Dns)
+# blocks don't show up"). Titled exactly "DNS" or "Dns - Work" / "DNS: …";
+# they are calendar hygiene, not meetings, so they are dropped at the fetch
+# and never reach the timeline, the gutter busy-bar or the block heads.
+# Deliberately NOT a prefix match: "DNS migration review" is a real meeting.
+_DNS_HOLD = re.compile(r"^\s*dns(?:\s*[-–—:·|]\s*\S.*)?\s*$", re.IGNORECASE)
+
+
+def _is_dns_hold(title: str | None) -> bool:
+    return bool(_DNS_HOLD.match(title or ""))
 _hidden_ev_cache: dict = {"mtime": None, "keys": set()}
 
 
@@ -1154,7 +1165,8 @@ def fetch_gcal(force=False):
             seen_ev.add(k)
             deduped.append(e)
         hidden = _load_hidden_events()
-        deduped = [e for e in deduped if _hidden_event_key(e) not in hidden]
+        deduped = [e for e in deduped if _hidden_event_key(e) not in hidden
+                   and not _is_dns_hold(e.get("title"))]
         STATE.events = deduped
         STATE.last_gcal_fetch = time.monotonic()
         _shorten_events(combined)
