@@ -98,7 +98,11 @@ def claude(prompt: str, *, model: str | None, budget: str, cwd: Path, timeout: i
     if allow is not None:
         cmd += ["--allowedTools", ",".join(allow), "--disallowedTools", ",".join(DENY)]
     else:
-        cmd += ["--tools", ""]   # the picker only reads its prompt
+        # The picker only reads its prompt. Also skip the user-scope MCP servers:
+        # their tool schemas add ~185K tokens of system prompt, which blew the
+        # picker's $0.50 budget on the first turn (2026-11-09 first run, $0.92,
+        # empty result).
+        cmd += ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
     for d in add_dirs:
         cmd += ["--add-dir", str(d)]
     try:
