@@ -74,3 +74,27 @@ def test_dash_one_ritual_does_not_resolve_to_the_weekly_card(tmp_path):
                              "today": [{"id": "R1", "content": "-1g (5) [5]"}]}))
     assert rt.task_for_desc("-1g", queue_path=q)["id"] == "R1"
     assert rt.task_for_desc("1g", queue_path=q)["id"] == "W1"
+
+
+def test_completed_dash_one_ritual_leaves_no_task_not_the_weekly_card(tmp_path):
+    """2026-11-09: "I finish -1g and it puts me directly into 1g." Saving the
+    -1g form closes the 😈 -1g ritual card, so it leaves the queue while its
+    Toggl timer keeps running. The exact pass then found nothing and the
+    dash-folded fallback resolved '-1g' to the weekly '1g' card, which dtd
+    floated to the top with the running spinner. A leading dash is part of
+    the name: '-1g' must never resolve to '1g'."""
+    q = tmp_path / "task-queue.json"
+    q.write_text(json.dumps({"1neon": [{"id": "W1", "content": "1g (20) [20]"}],
+                             "today": [{"id": "T1", "content": "teams (4) [10]"}]}))
+    assert rt.task_for_desc("-1g", queue_path=q) is None
+    assert rt.task_for_desc("1g", queue_path=q)["id"] == "W1"
+
+
+def test_dash_one_ritual_resolves_to_its_demon_prefixed_card(tmp_path):
+    """The live ritual card is '😈 -1g', not '-1g': the timer's description
+    drops the 😈 (dtd start.sh), so the resolver must ignore it too, or the
+    running ritual card never gets its spinner."""
+    q = tmp_path / "task-queue.json"
+    q.write_text(json.dumps({"1neon": [{"id": "W1", "content": "1g (20) [20]"}],
+                             "today": [{"id": "R1", "content": "😈 -1g", "labels": ["-1neon"]}]}))
+    assert rt.task_for_desc("-1g", queue_path=q)["id"] == "R1"

@@ -51,6 +51,12 @@ def norm(s: str) -> str:
     return re.sub(r"[\s\-—–]+", " ", _ANNOT_RE.sub("", s or "")).strip().lower()
 
 
+def _bare(s: str) -> str:
+    """Annotation-stripped, 😈-stripped, lowercased name with its dashes
+    intact: the exact-match key, where '-1g' and '1g' are different names."""
+    return _ANNOT_RE.sub("", (s or "").replace("\U0001F608", "")).strip().lower()
+
+
 def task_for_desc(desc, queue_path=None):
     """The dtd/Todoist task whose content matches this timer description, from
     the task-queue cache. None when nothing matches (a timer that names no
@@ -66,7 +72,13 @@ def task_for_desc(desc, queue_path=None):
     # dash-folded key. norm() strips a leading dash, so '-1g' == '1g' and the
     # walk returned whichever came first: the -1g ritual timer resolved to the
     # weekly 1g card, and dtd's running row lost its spinner (2026-10-22).
-    exact = _ANNOT_RE.sub("", desc or "").strip().lower()
+    # The fallback keeps a leading dash significant (2026-11-09: saving the
+    # -1g form closes the 😈 -1g card, so the exact pass found nothing and the
+    # fallback lit the weekly 1g card as running, "puts me directly into 1g").
+    # The 😈 ritual marker is not part of the name on either side: dtd's
+    # start.sh strips it from the Toggl description (the card reads '😈 -1g').
+    exact = _bare(desc)
+    signed = exact.startswith("-")
     found = None
 
     def walk(o, key):
@@ -83,9 +95,9 @@ def task_for_desc(desc, queue_path=None):
             for v in o:
                 walk(v, key)
 
-    walk(data, lambda c: _ANNOT_RE.sub("", c).strip().lower() == exact)
+    walk(data, lambda c: _bare(c) == exact)
     if found is None:
-        walk(data, lambda c: norm(c) == target)
+        walk(data, lambda c: norm(c) == target and _bare(c).startswith("-") == signed)
     return found
 
 
