@@ -193,6 +193,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--week", help="Sunday of the leasing week to read (default: last complete week)")
+    ap.add_argument("--write", action="store_true", help="also save status.json for dashboard.py's Now column")
     a = ap.parse_args()
     today = dt.date.today()
     if a.week:
@@ -201,6 +202,10 @@ def main():
         last_sat = today - dt.timedelta(days=(today.weekday() + 2) % 7 or 7)
         week = last_sat - dt.timedelta(days=6)
     rows = build_rows(today, week)
+    if a.write:
+        (ROOT / "status.json").write_text(json.dumps(
+            {"as_of": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "week": week.isoformat(), "rows": rows},
+            ensure_ascii=False, indent=1))
     if a.json:
         print(json.dumps({"as_of": today.isoformat(), "week": week.isoformat(), "rows": rows}, ensure_ascii=False, indent=1)); return
     print(f"as of {today.isoformat()} · leasing week starting {week.isoformat()}\n")

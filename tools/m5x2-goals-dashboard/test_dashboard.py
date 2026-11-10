@@ -63,3 +63,26 @@ def test_p1_rows_render_before_p2(monkeypatch, tmp_path):
     monkeypatch.setattr(dashboard, "GOALS_PATH", f)
     html = dashboard.render()
     assert html.index("first") < html.index("second") < html.index("third")
+
+
+def test_now_column_from_status_json(monkeypatch, tmp_path):
+    import json
+    goals = {"title": "T", "quarter": "Q", "sections": [{"name": "S", "goals": [
+        {"p": "P1", "dri": "b", "goal": "first", "target": "y"},
+        {"p": "P2", "dri": "a", "goal": "second", "target": "x"},
+    ]}]}
+    (tmp_path / "goals.json").write_text(json.dumps(goals))
+    (tmp_path / "status.json").write_text(json.dumps({"as_of": "2026-11-10T13:05-08:00", "rows": [
+        {"section": "S", "goal": "first", "status": "82 not-ready", "note": "c702 18"},
+        {"section": "S", "goal": "second", "status": "manual", "note": "LeeRoy"},
+    ]}))
+    monkeypatch.setattr(dashboard, "GOALS_PATH", tmp_path / "goals.json")
+    monkeypatch.setattr(dashboard, "STATUS_PATH", tmp_path / "status.json")
+    html = dashboard.render()
+    assert "<th" in html and "Now" in html
+    assert "82 not-ready" in html and "c702 18" in html
+    assert 'class="now manual"' in html
+    assert "now as of 2026-11-10 13:05" in html
+    # no status.json → column renders with a dash, no crash
+    monkeypatch.setattr(dashboard, "STATUS_PATH", tmp_path / "missing.json")
+    assert "—" in dashboard.render()

@@ -14,6 +14,7 @@ from flask import Flask, abort, request
 
 ROOT = Path(__file__).parent
 GOALS_PATH = ROOT / "goals.json"
+STATUS_PATH = ROOT / "status.json"   # written by status.py --write (hourly cron on ix)
 
 app = Flask(__name__)
 
@@ -39,6 +40,17 @@ def load_goals(q=None):
 
 def _e(value):
     return escape("" if value is None else str(value))
+
+
+def load_status():
+    """{(section, goal): row} from status.json plus its as_of, or ({}, None)."""
+    if not STATUS_PATH.exists():
+        return {}, None
+    try:
+        d = json.loads(STATUS_PATH.read_text())
+    except (OSError, ValueError):
+        return {}, None
+    return {(r.get("section"), r.get("goal")): r for r in d.get("rows", [])}, d.get("as_of")
 
 
 STYLE = """
@@ -72,7 +84,10 @@ col.c-dri { width: 96px; }
 col.c-goal { width: auto; }
 col.c-actual { width: 120px; }
 col.c-link { width: 72px; }
-col.c-base, col.c-target { width: 18%; }
+col.c-base, col.c-target { width: 15%; }
+col.c-now { width: 17%; }
+.now { font-weight: 600; }
+.now.manual { color: var(--muted); font-weight: 400; }
 col.c-due { width: 92px; }
 col.c-src { width: 14%; }
 .metric { color: var(--muted); font-size: 11px; margin-top: 3px; }
@@ -101,14 +116,14 @@ tbody tr:nth-child(even) { background: var(--row-alt); }
 
 LEGACY_COLS = [("P", "c-p"), ("DRI", "c-dri"), ("Goal", "c-goal"), ("Q1 Actual", "c-actual"), ("Link", "c-link")]
 ROADMAP_COLS = [("P", "c-p"), ("DRI", "c-dri"), ("Goal", "c-goal"), ("Baseline", "c-base"),
-                ("Target", "c-target"), ("Due", "c-due"), ("Source", "c-src")]
+                ("Now", "c-now"), ("Target", "c-target"), ("Due", "c-due"), ("Source", "c-src")]
 
 
 def _is_roadmap(data):
     return any("target" in g for s in data.get("sections", []) for g in s.get("goals", []))
 
 
-def _row(g, roadmap):
+def _row(g, roadmap, now=None):
     p = _e(g.get("p", ""))
     cells = [f'<td class="p p-{p}">{p}</td>', f'<td class="dri">{_e(g.get("dri"))}</td>']
     if roadmap:
@@ -117,8 +132,16 @@ def _row(g, roadmap):
             goal += f'<div class="metric">{_e(g["metric"])}</div>'
         if g.get("link"):
             goal += f' <a href="{_e(g["link"])}" target="_blank">open →</a>'
+        if now is None:
+            now_cell = '<td class="now na">—</td>'
+        else:
+            manual = str(now.get("status", "")).startswith("manual")
+            cls = "now manual" if manual else "now"
+            now_cell = (f'<td class="{cls}" title="{_e(now.get("note"))}">{_e(now.get("status"))}'
+                        + (f'<div class="metric">{_e(now.get("note"))}</div>' if now.get("note") else "") + '</td>')
         cells += [f'<td class="goal">{goal}</td>',
                   f'<td class="actual">{_e(g.get("baseline"))}</td>',
+                  now_cell,
                   f'<td class="actual">{_e(g.get("target"))}</td>',
                   f'<td class="due">{_e(g.get("due"))}</td>',
                   f'<td class="src">{_e(g.get("source"))}</td>']
@@ -134,9 +157,12 @@ def _row(g, roadmap):
 def render(q=None):
     data = load_goals(q)
     roadmap = _is_roadmap(data)
+    status, status_as_of = load_status() if roadmap else ({}, None)
     cols = ROADMAP_COLS if roadmap else LEGACY_COLS
     title = _e(data.get("title") or "m5x2 GOALS")
     sub = _e(data.get("quarter", ""))
+    if status_as_of:
+        sub += f" · now as of {_e(status_as_of[:16].replace('T', ' '))}"
     if data.get("as_of"):
         sub += f" · as of {_e(data['as_of'])}"
     colgroup = "".join(f'<col class="{c}">' for _, c in cols)
@@ -145,7 +171,7 @@ def render(q=None):
     for section in data.get("sections", []):
         # P1 before P2 within a section (JM 2026-11-10); stable, so json order breaks ties.
         goals = sorted(section.get("goals", []), key=lambda g: str(g.get("p", "P9")))
-        rows = "".join(_row(g, roadmap) for g in goals)
+        rows = "".join(_row(g, roadmap, status.get((section.get("name"), g.get("goal")))) for g in goals)
         sections_html.append(
             f'<div class="section">'
             f'<h2>{_e(section.get("name"))}</h2>'
