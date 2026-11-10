@@ -36,6 +36,9 @@ last month's). `[month]` is the month the window ENDS in: `10`, `oct`,
 
 ## Self-clearing
 
-After the report it marks the `2 hci` card done via `tools/did/run.py "2 hci"`
-(1n+ credit + Todoist close) and refreshes the dtd cache. `--no-mark` skips
+After the report it marks the `2 hci` card done: did-fast with `--task-id`
+(the card is a monthly `5^2₦` card since 2026-11-09, not a 1n+ weekly column;
+Todoist close + 0分 hci points), then writes the month's 15 into the 1n+ 2₦
+block row whose col B is `2 hci` (row 87, E:P = Jan..Dec), and refreshes the
+dtd cache. `--no-mark` skips
 that.

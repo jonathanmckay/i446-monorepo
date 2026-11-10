@@ -237,10 +237,30 @@ def credit_monthly_cell(month: int, points: int | None = None) -> dict:
     return {"ok": bool(r.get("ok")), "row": row, "col": col, "value": pts, "raw": r}
 
 
+def find_card_id() -> str | None:
+    """The open '2 hci' monthly card (label 5^2₦ since 2026-11-09). did-fast
+    only name-matches the 0neon/1neon/夜neon buckets, so the id is passed with
+    --task-id and resolved directly."""
+    try:
+        sys.path.insert(0, str(MONO / "lib"))
+        import todoist
+        for t in todoist.find_tasks(labels=["5^2₦"], content_contains="2 hci", limit=10):
+            if t.get("content", "").lower().startswith("2 hci"):
+                return str(t["id"])
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def mark_done(month: int) -> None:
     """Self-clear the '2 hci' card through the normal /did path (Todoist close
     + 0分 points), then stamp the month's cell in the 1n+ 2₦ block."""
-    subprocess.run([sys.executable, str(MONO / "tools/did/run.py"), "2 hci"], check=False)
+    tid = find_card_id()
+    if tid:
+        subprocess.run([sys.executable, str(MONO / "tools/did/did-fast.py"),
+                        "--task-id", tid, "2 hci"], check=False)
+    else:
+        subprocess.run([sys.executable, str(MONO / "tools/did/run.py"), "2 hci"], check=False)
     try:
         r = credit_monthly_cell(month)
         tag = f"skipped ({r['skipped']})" if r.get("skipped") else ("ok" if r.get("ok") else f"FAILED {r.get('error')}")
