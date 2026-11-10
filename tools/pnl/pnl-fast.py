@@ -91,6 +91,7 @@ def noi_flag_phrase(actual, budget, units):
 #   2. ~/.config/m5x2/appfolio.env            (canonical, chmod 600, per machine)
 #   3. tools/m5x2-occupancy-dashboard/.env    (gitignored; same pair, legacy)
 APPFOLIO_ENV_FILES = [
+    Path.home() / "files/i447/secrets/appfolio.env",   # Syncthing "files" folder: one copy for ix + Straylight
     Path.home() / ".config/m5x2/appfolio.env",
     Path(__file__).resolve().parents[1] / "m5x2-occupancy-dashboard" / ".env",
 ]
