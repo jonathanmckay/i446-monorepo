@@ -880,7 +880,34 @@ async def _confirm_after_tg(app) -> None:
             return
 
 
+# One Toggl fetch at a time (2026-11-10). fetch_current / fetch_today used to
+# run inside the asyncio loop from their tickers, so a stalled request froze
+# the whole TUI (Straylight, 2h, flapping hotel link). They now run on daemon
+# threads like fetch_gcal, serialized by this lock so a late-finishing ticker
+# can never overwrite the entries a forced post-command fetch just loaded, and
+# two fetch_today threads can never double-fire the auto-睡觉 writes. Tickers
+# take it non-blocking and skip the tick when a fetch is already in flight
+# (no thread pile-up on a dead link); forced callers block and run after.
+_FETCH_LOCK = threading.RLock()
+
+
+def _ticker_fetch(fn, *args):
+    """Ticker entry point: run fn under _FETCH_LOCK, or skip if it is held."""
+    if not _FETCH_LOCK.acquire(blocking=False):
+        return False
+    try:
+        fn(*args)
+        return True
+    finally:
+        _FETCH_LOCK.release()
+
+
 def fetch_current(cached=True):
+    with _FETCH_LOCK:
+        return _fetch_current_impl(cached)
+
+
+def _fetch_current_impl(cached=True):
     """Refresh the running timer. cached=True (default) rides the shared current
     cache, which every mutation in toggl_api now write-throughs from its own
     response (2026-10-20), so a post-command refresh sees the new state with
@@ -990,6 +1017,11 @@ def _load_viewed_day_cache(force=False) -> None:
 
 
 def fetch_today(force=False):
+    with _FETCH_LOCK:
+        return _fetch_today_impl(force)
+
+
+def _fetch_today_impl(force=False):
     """Reload the viewed day's Toggl entries.
 
     force=True is a deliberate single action (just ran a command, ctrl-r, SIGUSR1)
@@ -8509,7 +8541,9 @@ def _release_pid_file():
 async def ticker_current(app):
     while True:
         await asyncio.sleep(30)
-        fetch_current()  # shared cache; a live read at most every 5 min
+        # Off the event loop (2026-11-10): a stalled Toggl read used to freeze
+        # the TUI. Skipped when another fetch is in flight (_ticker_fetch).
+        _bg_fetch(app, lambda: _ticker_fetch(fetch_current))  # shared cache; live read ≤ every 5 min
         _assert_pid_file()
         app.invalidate()
 
@@ -8517,7 +8551,7 @@ async def ticker_current(app):
 async def ticker_today(app):
     while True:
         await asyncio.sleep(300)
-        fetch_today()
+        _bg_fetch(app, lambda: _ticker_fetch(fetch_today))
         app.invalidate()
 
 

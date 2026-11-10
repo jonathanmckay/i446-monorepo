@@ -143,6 +143,11 @@ def _guard_network():
             and urllib.request.urlopen is _REAL_URLOPEN):
         raise RuntimeError("Toggl API call blocked under pytest (set TOGGL_ALLOW_NETWORK=1 to allow)")
 _MAX_429_DELAY = float(os.environ.get("TOGGL_MAX_429_DELAY", "30"))
+# Per-request socket timeout (2026-11-10). Without one a stalled connect or a
+# half-open read blocks forever; janus on Straylight froze for 2h on a flapping
+# hotel link with its tickers stuck inside urlopen. Covers connect/recv only,
+# not getaddrinfo.
+_HTTP_TIMEOUT = float(os.environ.get("TOGGL_HTTP_TIMEOUT", "10"))
 
 
 def _request(method, path, body=None, base=None, want_headers=False):
@@ -182,7 +187,7 @@ def _request(method, path, body=None, base=None, want_headers=False):
         req.add_header("Authorization", _auth_header())
         req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
                 if resp.status == 200:
                     raw = resp.read()
                     result = json.loads(raw) if raw else None
@@ -501,7 +506,7 @@ def delete_entry(entry_id):
     req = urllib.request.Request(f"{BASE_URL}{path}", method="DELETE")
     req.add_header("Authorization", _auth_header())
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
             ok = resp.status in (200, 204)
             _log_request("DELETE", path, resp.status, getattr(resp, "headers", None))
             if ok:

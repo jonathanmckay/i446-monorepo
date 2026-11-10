@@ -132,7 +132,8 @@ def test_fetch_today_marks_entries_known_on_success_and_unknown_on_failure():
     current_known — the AST shape, since a live network call isn't
     exercised here."""
     src = (HERE / "janus.py").read_text()
-    i_def = src.index("def fetch_today(")
+    # fetch_today is a locking wrapper since 2026-11-10; the body lives in _fetch_today_impl.
+    i_def = src.index("def _fetch_today_impl(")
     i_end = src.index("\n\n\n", i_def)
     body = src[i_def:i_end]
     assert "STATE.entries_known = True" in body
