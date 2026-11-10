@@ -158,7 +158,7 @@
   },
   "m5x2-stats": {
    "match": "m5x2 stats",
-   "content": "m5x2 stats (4) [15]",
+   "content": "m5x2 stats and dashboard (4) [15]",
    "due_string": "every day",
    "labels": [
     "0neon",
