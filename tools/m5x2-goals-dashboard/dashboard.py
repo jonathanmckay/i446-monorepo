@@ -186,4 +186,4 @@ def api_goals():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5559, debug=False)
+    app.run(host="0.0.0.0", port=5559, debug=False)  # LAN + Tailscale, like :5558 (JM 2026-11-10: unreachable from Straylight)
