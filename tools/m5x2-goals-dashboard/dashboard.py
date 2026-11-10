@@ -143,7 +143,9 @@ def render(q=None):
     thead = "".join(f"<th>{h}</th>" for h, _ in cols)
     sections_html = []
     for section in data.get("sections", []):
-        rows = "".join(_row(g, roadmap) for g in section.get("goals", []))
+        # P1 before P2 within a section (JM 2026-11-10); stable, so json order breaks ties.
+        goals = sorted(section.get("goals", []), key=lambda g: str(g.get("p", "P9")))
+        rows = "".join(_row(g, roadmap) for g in goals)
         sections_html.append(
             f'<div class="section">'
             f'<h2>{_e(section.get("name"))}</h2>'

@@ -50,3 +50,16 @@ def test_archived_title_and_ampersand_escaped(client):
     html = client.get("/?q=2026q2").get_data(as_text=True)
     assert "<h1>Q2 m5x2 GOALS</h1>" in html
     assert "R203 R&amp;M" in html
+
+
+def test_p1_rows_render_before_p2(monkeypatch, tmp_path):
+    import json
+    data = {"title": "T", "quarter": "Q", "sections": [{"name": "S", "goals": [
+        {"p": "P2", "dri": "a", "goal": "second", "target": "x"},
+        {"p": "P1", "dri": "b", "goal": "first", "target": "y"},
+        {"p": "P2", "dri": "c", "goal": "third", "target": "z"},
+    ]}]}
+    f = tmp_path / "goals.json"; f.write_text(json.dumps(data))
+    monkeypatch.setattr(dashboard, "GOALS_PATH", f)
+    html = dashboard.render()
+    assert html.index("first") < html.index("second") < html.index("third")
