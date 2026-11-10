@@ -684,18 +684,6 @@
     "rent": "850.00"
   },
   {
-    "unit_id": 766,
-    "property_name": "rl21",
-    "unit": "12",
-    "tenant_name": "Long, Corey R.",
-    "status": "Pending",
-    "lease_sign_date": "2025-12-11",
-    "move_in": "2025-12-12",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "850.00"
-  },
-  {
     "unit_id": 818,
     "property_name": "tc34",
     "unit": "B10",
@@ -1036,7 +1024,7 @@
     "property_name": "c313",
     "unit": "36",
     "tenant_name": "Smith, Charles",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2009-11-01",
     "renewal_start_date": null,
@@ -1644,18 +1632,6 @@
     "rent": "931.00"
   },
   {
-    "unit_id": 1042,
-    "property_name": "kn47 K2",
-    "unit": "D103",
-    "tenant_name": "Paier, Lindie A.",
-    "status": "Pending",
-    "lease_sign_date": "2026-03-01",
-    "move_in": "2026-03-02",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "931.00"
-  },
-  {
     "unit_id": 1058,
     "property_name": "kn47 K2",
     "unit": "E103",
@@ -2098,18 +2074,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1699.00"
-  },
-  {
-    "unit_id": 510,
-    "property_name": "h731",
-    "unit": "737 C",
-    "tenant_name": "Gervais, Mark",
-    "status": "Notice Given",
-    "lease_sign_date": null,
-    "move_in": "2023-07-18",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1270.00"
   },
   {
     "unit_id": 690,
@@ -3036,18 +3000,6 @@
     "rent": "1132.00"
   },
   {
-    "unit_id": 873,
-    "property_name": "kn47 K1",
-    "unit": "D203",
-    "tenant_name": "Gonzalez, Arlette S.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-04-17",
-    "move_in": "2025-04-17",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-05-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 898,
     "property_name": "kn47 K1",
     "unit": "F104",
@@ -3141,6 +3093,18 @@
     "move_in": "2026-06-11",
     "renewal_start_date": null,
     "last_lease_renewal": null,
+    "rent": "1089.00"
+  },
+  {
+    "unit_id": 873,
+    "property_name": "kn47 K1",
+    "unit": "D203",
+    "tenant_name": "Gonzalez, Arlette S.",
+    "status": "Eligible",
+    "lease_sign_date": "2025-04-17",
+    "move_in": "2025-04-17",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2026-05-01",
     "rent": "1089.00"
   },
   {

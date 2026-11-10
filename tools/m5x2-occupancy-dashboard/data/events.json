@@ -8908,5 +8908,45 @@
     "unit": "A201",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-10",
+    "effective": "2026-12-02",
+    "kind": "ntv",
+    "unit_id": "1319",
+    "prop": "c702",
+    "unit": "C301",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-10",
+    "effective": "2026-11-30",
+    "kind": "ntv",
+    "unit_id": "510",
+    "prop": "h731",
+    "unit": "737 C",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-10",
+    "effective": "2026-11-09",
+    "kind": "moveout",
+    "unit_id": "1380",
+    "prop": "c702",
+    "unit": "G102",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-10",
+    "effective": "2026-11-30",
+    "kind": "ntv",
+    "unit_id": "766",
+    "prop": "rl21",
+    "unit": "12",
+    "tenant": null,
+    "baseline": false
   }
 ]
