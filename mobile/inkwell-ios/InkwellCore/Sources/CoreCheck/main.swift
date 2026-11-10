@@ -438,4 +438,21 @@ do {
     eq(DtdSort.time.next, .standard, "cycle wraps")
 }
 
+// janus habit strip (2026-11-10): habits.line1/line2 -> Timeline.habits; absent
+// (lite pass, past day) -> []; the lite carry-over keeps the prior strip.
+do {
+    let full = JSON.parse(##"{"rows":[],"tracked_min":0,"points":12,"date":"2026-11-10","is_today":true,"habits":{"line1":[{"text":"hiit","bg":"#f81d78"},{"text":"ص 8","bg":"#aa00ff"}],"line2":[{"text":"hcb -1183","bg":"#f81d78"},{"text":"kcal 650","bg":"#f81d78"}]}}"##)!
+    let t = Parsers.timeline(full)
+    eq(t.habits.count, 2, "two strip lines")
+    eq(t.habits[0].map(\.text), ["hiit", "ص 8"], "line 1 chips")
+    eq(t.habits[1].last, HabitChip(text: "kcal 650", bg: "#f81d78"), "kcal closes the hcb line")
+    let lite = Parsers.timeline(JSON.parse(##"{"rows":[],"tracked_min":0,"points":null,"date":"2026-11-10","is_today":true,"lite":true}"##)!)
+    eq(lite.habits.count, 0, "no habits key -> empty strip")
+    eq(lite.carryingHabits(from: t).habits, t.habits, "lite pass keeps the same day's strip")
+    let other = Parsers.timeline(JSON.parse(##"{"rows":[],"tracked_min":0,"points":null,"date":"2026-11-09","is_today":false}"##)!)
+    eq(other.carryingHabits(from: t).habits.count, 0, "a different day never inherits it")
+    let oneLine = Parsers.timeline(JSON.parse(##"{"rows":[],"tracked_min":0,"date":"2026-11-10","habits":{"line1":[],"line2":[{"text":"kcal 1","bg":"#f81d78"}]}}"##)!)
+    eq(oneLine.habits.count, 1, "an empty line is dropped, not drawn blank")
+}
+
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }

@@ -38,6 +38,11 @@ def jm(tmp_path, monkeypatch):
     # dev box. Tests that need values patch excel.read themselves.
     from neon import excel
     monkeypatch.setattr(excel, "read", lambda *a, **k: {"ok": False})
+    # The habit strip (2026-11-10) adds lookup_row + read_range round trips
+    # on every non-lite today build; stub them too or the suite hits the
+    # live daemon.
+    monkeypatch.setattr(excel, "lookup_row", lambda *a, **k: None)
+    monkeypatch.setattr(excel, "read_range", lambda *a, **k: {"ok": False})
     # log_entry looks the swiped entry up for its HHMM-HHMM range
     # (2026-11-01); no network here — tests that want a range stub their own.
     monkeypatch.setattr(mod.toggl_api, "get_entries", lambda **kw: [])

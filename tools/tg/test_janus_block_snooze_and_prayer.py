@@ -79,15 +79,16 @@ def test_stale_snooze_file_ignored(tmp_path):
     assert "hiit" in _strip_text(mod), "yesterday's snoozes must not hide today"
 
 
-def test_done_habit_unaffected_by_snooze(tmp_path):
-    """A habit with a value renders in the done row regardless of snooze."""
+def test_done_habit_is_off_the_strip_snoozed_or_not(tmp_path):
+    """A habit with a value is done, so it leaves the strip (2026-11-10);
+    a snooze on its card changes nothing either way."""
     mod = _load_tui()
     _setup(mod, tmp_path)
     today = dtm.date.today().isoformat()
     mod.HABIT_CARDS["hiit"] = [("id-hiit", today)]
     mod.STATE.habits_today = [("hiit", 10.0)]
     _write_snooze(mod, {"id-hiit": 23})
-    assert "10" in _strip_text(mod)
+    assert "10" not in _strip_text(mod) and "hiit" not in _strip_text(mod)
 
 
 def test_prayer_counter_chip_labeled_after_ytd_chips(tmp_path):

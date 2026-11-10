@@ -55,6 +55,12 @@ struct JanusView: View {
             .font(Theme.monoSmall).foregroundStyle(Theme.dim)
             .padding(.horizontal, 2)
             .background(Theme.bg)
+            // Habit strip (2026-11-10, "for janus CLI and iOS ... only show the
+            // -1n tasks that are not done ... calories ... on the hcb line"):
+            // the terminal's two chip lines, as the server resolved them.
+            if store.viewingToday, let t = store.timeline, !t.habits.isEmpty {
+                HabitStripView(lines: t.habits)
+            }
             ScrollViewReader { proxy in
             List {
                 ForEach(Array(store.rows.enumerated()), id: \.offset) { _, r in
@@ -403,5 +409,33 @@ struct EditSheet: View {
             if !all.isEmpty { codes = all }
         }
         .sheetLarge()
+    }
+}
+
+
+/// The janus habit strip: one horizontally scrolling line of solid chips per
+/// server line (white mono text on the chip's own fill, like the terminal).
+struct HabitStripView: View {
+    let lines: [[HabitChip]]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(line.enumerated()), id: \.offset) { _, c in
+                            Text(c.text)
+                                .font(Theme.monoSmall).fontWeight(.bold)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color(hex: c.bg, fallback: Color(white: 0.27)))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .background(Theme.bg)
     }
 }

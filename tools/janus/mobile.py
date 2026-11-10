@@ -894,6 +894,70 @@ def _ritual_pts() -> dict[str, int]:
         return dict(_RITUAL_PTS_FALLBACK)
 
 
+_HABIT_HEADER_CACHE: dict[str, list] = {}
+
+
+def _habit_strip(today: _dt.date) -> dict | None:
+    """The janus habit strip for the phone (JM 2026-11-10: "for janus CLI
+    and iOS ... only show the -1n tasks that are not done, as well as ...
+    the total number of calories eaten today on the hcb line"), as two
+    lines of {"text","bg"} chips the web page and the iOS app draw as-is:
+    line 1 = still-pending 0₦ habit names, YTD standings owed, "ص N";
+    line 2 = Daily Dozen categories behind, the hcb standing, "kcal N".
+    Rules live in lib/habit_strip.py (the terminal's own loop is
+    test-pinned; lib/test_habit_strip.py keeps the two in parity).
+
+    Five excel-http round trips (0n row lookup, header once per process,
+    today's row, YTD cells, one hcbi block) plus the hcbi!U kcal read, all
+    on the non-lite today pass only. Any failure drops the whole strip
+    (None) rather than a partial one. Divergence from the terminal, on
+    purpose for v1: no deferred-card / block-snooze hiding of pending names
+    (that needs the dtd task cache's card ids, which this server has no
+    use for otherwise)."""
+    try:
+        from neon import excel
+        import habit_strip as hs
+        ds = f"{today.month}/{today.day}"
+        row = excel.lookup_row("0n", ds)
+        if not row:
+            return None
+        hdr = _HABIT_HEADER_CACHE.get("0n")
+        if hdr is None:
+            r = excel.read_range("0n", "D1:AS1")
+            if not r.get("ok"):
+                return None
+            hdr = (r.get("rows") or [[]])[0]
+            _HABIT_HEADER_CACHE["0n"] = hdr
+        r = excel.read_range("0n", f"D{row}:AS{row}")
+        if not r.get("ok"):
+            return None
+        parsed = hs.parse_habit_row(hdr, (r.get("rows") or [[]])[0])
+        ytd: dict[str, float | None] = {}
+        r = excel.read_range("0n", "AQ375:AS375")
+        if r.get("ok"):
+            for name, v in zip(hs.HABIT_YTD_NAMES, (r.get("rows") or [[]])[0]):
+                ytd[name] = hs._num(v)
+        # One block: annual Daily Dozen rows (384-385, E:O) and the sheet's
+        # combined hcb standing at X388 (row index 4, col index 19).
+        dozen, hcb_total = [], None
+        r = excel.read_range("hcbi", "E384:X388")
+        if r.get("ok"):
+            rows = r.get("rows") or []
+            if len(rows) >= 2:
+                dozen = hs.dozen_behind(rows[0], rows[1])
+            if len(rows) >= 5 and len(rows[4]) >= 20:
+                hcb_total = hs._num(rows[4][19])
+        kcal = None
+        r = excel.read("hcbi", "U", date=ds)
+        if r.get("ok"):
+            kcal = hs.kcal_int(r.get("value"))
+        return hs.strip_chips(parsed, colors=COLORS, ytd=ytd, dozen=dozen,
+                              hcb_total=hcb_total, kcal=kcal)
+    except Exception as e:  # noqa: BLE001 -- the strip is decoration; the timeline must still ship
+        print("WARN habit strip:", e, file=sys.stderr)
+        return None
+
+
 def _block_ritual_scores(now: _dt.datetime) -> dict[str, int]:
     """{branch: -1₦ score} from the build order's -1₲ section: the sum of the
     stamped ritual emojis' points (config/block-rituals.json). Mirrors
@@ -1138,9 +1202,16 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
             row["n1"] = rituals.get(row["block"])
 
     since, since_min = untracked_since(entries, now) if is_today else (None, None)
-    return {"rows": rows, "tracked_min": tracked_min, "points": points,
-            "date": today.isoformat(), "is_today": is_today, "lite": lite,
-            "untracked_since": since, "untracked_min": since_min}
+    payload = {"rows": rows, "tracked_min": tracked_min, "points": points,
+               "date": today.isoformat(), "is_today": is_today, "lite": lite,
+               "untracked_since": since, "untracked_min": since_min}
+    # Habit strip (2026-11-10): today's full pass only -- the lite pass has
+    # no Excel reads, and the strip describes the live day alone.
+    if not lite and is_today:
+        habits = _habit_strip(today)
+        if habits:
+            payload["habits"] = habits
+    return payload
 
 
 UNTRACKED_BANNER_MIN = 30
@@ -2443,6 +2514,13 @@ PAGE = r"""<!doctype html>
   .div .bp b { color:var(--go); }
   .div .n1 { background:#b3261e; color:#fff; font-weight:700; border-radius:4px;
     padding:0 5px; margin-left:6px; }
+  /* Habit strip (2026-11-10): the terminal's two chip lines under the header
+     -- pending habits / YTD owed / prayer, then Daily Dozen behind / hcb / kcal. */
+  #hstrip { display:none; padding:4px 14px 2px; border-bottom:1px solid #242424; }
+  #hstrip.show { display:block; }
+  #hstrip .hs { display:flex; flex-wrap:wrap; gap:3px 4px; margin:2px 0; }
+  #hstrip .hs span { color:#fff; font-weight:700; font-size:12px; line-height:18px;
+    padding:0 6px; border-radius:4px; white-space:nowrap; }
   .tags { font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden;
     text-overflow:ellipsis; max-width:30%; }
   .row { position:relative; overflow:hidden; }
@@ -2513,6 +2591,7 @@ PAGE = r"""<!doctype html>
       autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
   </form>
 </header>
+<div id="hstrip"></div>
 <main id="list"><div class="loading">loading…</div></main>
 
 <div id="dlg">
@@ -2618,7 +2697,26 @@ function apply(d){
   document.getElementById('trk').textContent =
     Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
   untrackedBanner(d.untracked_since, d.untracked_min);
+  // Habit strip rides the full pass only; the lite pass keeps whatever is
+  // up (same rule as the 分 tally above). A past day or a failed read clears it.
+  if(!d.lite) renderStrip(d.habits || null);
   render(d.rows);
+}
+
+function renderStrip(h){
+  const el = document.getElementById('hstrip');
+  el.textContent = '';
+  const lines = h ? [h.line1 || [], h.line2 || []].filter(l => l.length) : [];
+  for(const line of lines){
+    const row = document.createElement('div'); row.className = 'hs';
+    for(const c of line){
+      const sp = document.createElement('span');
+      sp.textContent = c.text; sp.style.background = c.bg || '#444';
+      row.appendChild(sp);
+    }
+    el.appendChild(row);
+  }
+  el.classList.toggle('show', lines.length > 0);
 }
 
 // Two-phase load (2026-10-18, TTFT): a lite pass (Toggl entries + gaps only,

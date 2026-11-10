@@ -33,7 +33,7 @@ def test_domain_row_renders_every_cell_in_sheet_order_with_zeros_and_negatives()
 
 def test_domain_row_is_third_line_of_the_habit_strip():
     m = _load_tui()
-    m.STATE.habits_today = [("0g", 10.0)]
+    m.STATE.habits_today = [("0g", None)]   # a pending name keeps line 1 (done ones are hidden, 2026-11-10)
     m.STATE.habits_ytd = {}
     m.STATE.daily_dozen = [("bn", -2.0)]
     m.STATE.hcbi_behind = {}

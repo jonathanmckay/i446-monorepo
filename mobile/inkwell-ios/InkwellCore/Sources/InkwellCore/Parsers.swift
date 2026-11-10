@@ -71,9 +71,13 @@ public enum Parsers {
             row.calendarId = r.string("calendar_id")
             return row
         }
+        let habits = ["line1", "line2"].map { key in
+            json["habits"].objects(key).map { HabitChip(text: $0.string("text"), bg: $0.string("bg")) }
+        }.filter { !$0.isEmpty }
         return Timeline(rows: rows, trackedMin: json.int("tracked_min"), points: json.intOrNil("points"),
                         date: json.string("date"),
-                        isToday: json.has("is_today") ? json.bool("is_today") : true)
+                        isToday: json.has("is_today") ? json.bool("is_today") : true,
+                        habits: habits)
     }
 
     public static func projectCodes(_ json: JSON) -> [String] { json.strings("codes") }

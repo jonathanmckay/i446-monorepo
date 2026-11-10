@@ -271,6 +271,15 @@ public struct TimelineRow: Equatable, Hashable {
     }
 }
 
+/// One chip of the janus habit strip (2026-11-10): the server resolves the
+/// text and fill, the phone just draws it. Line 1 = pending 0₦ habit names,
+/// YTD standings owed, "ص N"; line 2 = Daily Dozen behind, "hcb ±N", "kcal N".
+public struct HabitChip: Equatable, Hashable {
+    public let text: String
+    public let bg: String        // "#rrggbb"
+    public init(text: String, bg: String) { self.text = text; self.bg = bg }
+}
+
 public struct Timeline: Equatable {
     public let rows: [TimelineRow]
     public let trackedMin: Int
@@ -280,9 +289,21 @@ public struct Timeline: Equatable {
     /// which is read-only. Defaults true so an old cached payload (always
     /// today's) and any non-server construction read as today.
     public let isToday: Bool
-    public init(rows: [TimelineRow], trackedMin: Int, points: Int?, date: String, isToday: Bool = true) {
+    /// The habit strip's non-empty lines (server `habits.line1/line2`), only
+    /// on today's full pass; empty on the lite pass, a past day, or a failed
+    /// Excel read, and the view draws nothing then.
+    public let habits: [[HabitChip]]
+    public init(rows: [TimelineRow], trackedMin: Int, points: Int?, date: String, isToday: Bool = true,
+                habits: [[HabitChip]] = []) {
         self.rows = rows; self.trackedMin = trackedMin; self.points = points
-        self.date = date; self.isToday = isToday
+        self.date = date; self.isToday = isToday; self.habits = habits
+    }
+    /// The lite pass carries no strip; keep the one already on screen for the
+    /// same day so a cold load / day switch doesn't blank it between passes.
+    public func carryingHabits(from prior: Timeline?) -> Timeline {
+        guard habits.isEmpty, let p = prior, p.date == date, !p.habits.isEmpty else { return self }
+        return Timeline(rows: rows, trackedMin: trackedMin, points: points, date: date,
+                        isToday: isToday, habits: p.habits)
     }
 }
 

@@ -597,6 +597,10 @@ class State:
         # {"hcb": v, "hcbp": v} Q<n> running totals (hcbi!X row2/Y), rendered as
         # a "behind" chip only when negative — see HCBI_BEHIND_DOMAINS.
         self.hcbi_behind: dict[str, float] = {}
+        # Today's calories so far (hcbi!U, the sheet's live =SUM over the
+        # seven 地支 band kcal cells), a labeled "kcal N" chip closing the hcb
+        # line (JM 2026-11-10). None until a successful fetch.
+        self.hcbi_kcal: int | None = None
         self.last_toggl_fetch = 0.0
         self.last_gcal_fetch = 0.0
         self.last_current_fetch = 0.0
@@ -2649,6 +2653,13 @@ def _num(s: str) -> float | None:
         return None
 
 
+def _kcal_int(raw: str | None) -> int | None:
+    """hcbi!U as a whole number of kcal; None when unread/blank/not a number
+    (the chip then stays off rather than showing a 0 the sheet doesn't)."""
+    v = _num(raw) if raw is not None else None
+    return int(round(v)) if v is not None else None
+
+
 def _parse_dozen_segment(cur_raw: str, prev_raw: str = "", total_raw: str = "",
                          annual_raw: str = "") -> tuple[list[tuple[str, float]], dict[str, float]]:
     """(daily_dozen, hcbi_behind) from the hcbi segment: the current
@@ -2759,6 +2770,37 @@ def fetch_habits_today():
 {_ytd_applescript_lines()}
     set out to out & "|"
 {_dozen_applescript_lines(q_label, prev_q_label, now.year)}
+    -- Today's kcal (hcbi!U). Emitted as a TAGGED tail ("||kcal=N"), never
+    -- a positional segment: the YTD cells above emit "v|" each, so one blank
+    -- cell already yields "||" and shifts anything indexed by segment.
+    set kv to ""
+    try
+        set wsK to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
+        set kDates to value of range "B2:B500" of wsK
+        set kRow to 0
+        repeat with i from 1 to (count of kDates)
+            set kc to item 1 of (item i of kDates)
+            if kc is not missing value then
+                try
+                    if (month of kc as integer) = targetMonth and (day of kc) = targetDay then
+                        set kRow to i + 1
+                        exit repeat
+                    end if
+                on error
+                    try
+                        if (kc as text) = (targetMonth as text) & "/" & (targetDay as text) then
+                            set kRow to i + 1
+                            exit repeat
+                        end if
+                    end try
+                end try
+            end if
+        end repeat
+        if kRow > 0 then
+            set kv to (value of range ("U" & kRow) of wsK) as text
+        end if
+    end try
+    set out to out & "||kcal=" & kv
     return out
 end tell'''
         proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
@@ -2769,7 +2811,14 @@ end tell'''
             return
         if proc.returncode != 0 or proc.stdout.strip() in ("", "ERR"):
             return
-        segs = proc.stdout.strip().split("||")
+        stdout = proc.stdout.strip()
+        # Tagged kcal tail (2026-11-10): peeled off BEFORE the positional
+        # split so it can never shift the ytd/dozen segment indexes.
+        kcal_raw = None
+        _km = re.search(r"\|\|kcal=([^|]*)$", stdout)
+        if _km:
+            kcal_raw, stdout = _km.group(1), stdout[:_km.start()]
+        segs = stdout.split("||")
         raw = segs[0] if len(segs) > 0 else ""
         ytd_raw = segs[1] if len(segs) > 1 else ""
         dozen_raw = segs[2] if len(segs) > 2 else ""
@@ -2795,6 +2844,7 @@ end tell'''
         dozen, behind = _parse_dozen_segment(dozen_raw, prev_hcb_raw, hcb_total_raw, annual_raw)
         STATE.daily_dozen = dozen
         STATE.hcbi_behind = behind
+        STATE.hcbi_kcal = _kcal_int(kcal_raw)
         habits = []
         prayer: float | None = 0.0  # blank cell = 0 prayers so far, not "unknown"
         for chunk in raw.split("|"):
@@ -2986,9 +3036,10 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
         label = (bo_emojis if bo_emojis is not None else _read_block_emojis()).get(blk[0]) if blk else ""
         if label:
             neon_chip = [(NEON_PTS_STYLE, f"{label}")]
-    done_chips = _pack_number_chips(
-        neon_chip + [(_habit_chip_style(name), f"{v:g}")
-                     for name, v in STATE.habits_today if v is not None])
+    # Done habits no longer render at all (JM 2026-11-10: "only show the -1n
+    # tasks that are not done"): the line is the ritual-score chip, then what
+    # is still open. A habit with a value today simply drops off it.
+    done_chips = _pack_number_chips(neon_chip)
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
     # as the jm dashboard "2026" header cards) on the pending line AFTER the
     # pending 0neon names, each in its own purple (HABIT_YTD_COLORS —
@@ -3031,8 +3082,19 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
     habit_row = _habit_row(habit_line, budget=max(0, WIDTH_HINT - reserve))
     if prayer_chip:
         habit_row.append(prayer_chip)
+    # Today's calories close the hcb line as a labeled chip (JM 2026-11-10).
+    # Its width is reserved like the prayer chip's: appended last and packed
+    # with the rest, a crowded dozen row would drop it first (the 2026-08-30
+    # prayer-chip bug).
+    kcal_chip = None
+    if STATE.hcbi_kcal is not None:
+        kcal_chip = (f"bold bg:{PROJECT_COLORS['hcb']} #ffffff", f"kcal {STATE.hcbi_kcal:d} ")
+    reserve2 = dwidth(kcal_chip[1]) if kcal_chip else 0
+    dozen_row = _habit_row(dozen_chips, budget=max(0, WIDTH_HINT - reserve2))
+    if kcal_chip:
+        dozen_row.append(kcal_chip)
     out: list[tuple[str, str]] = []
-    for chips in (habit_row, _habit_row(dozen_chips), _habit_row(_domain_pts_chips())):
+    for chips in (habit_row, dozen_row, _habit_row(_domain_pts_chips())):
         if chips:
             out.extend(chips)
             out.append(("", "\n"))

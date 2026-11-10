@@ -43,13 +43,13 @@ def test_empty_habits_renders_nothing():
     assert mod.render_habits_today() == []
 
 
-def test_done_row_is_bare_value_no_name_label():
+def test_done_habits_render_nothing_at_all():
+    """JM 2026-11-10: "only show the -1n tasks that are not done". A habit
+    with a value today drops off the strip entirely -- neither its value
+    (the old bare-number done chip) nor its name is drawn."""
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("wake up", 1.0)]
-    frags = mod.render_habits_today()
-    row1 = "".join(t for _, t, *_ in frags).split("\n")[0]
-    assert "765" in row1 and "1" in row1
-    assert "睡觉" not in row1 and "wake up" not in row1
+    assert mod.render_habits_today() == []
 
 
 def test_pending_row_is_the_bare_habit_name():
@@ -61,56 +61,68 @@ def test_pending_row_is_the_bare_habit_name():
     assert "hiit" in lines[0] and "teams" in lines[0]
 
 
-def test_done_and_pending_share_one_line_done_first():
-    """2026-08-07 follow-up: done and pending chips merge onto ONE line, done
-    numbers first, pending names immediately appended right after (no
-    separator) — "right after the '9' would come '2nd hci'"."""
+def test_mixed_day_shows_only_the_pending_names():
+    """2026-08-07 merged done numbers and pending names onto one line;
+    2026-11-10 dropped the done numbers, so a mixed day is just the names
+    still open."""
     mod = _load_tui()
     mod.STATE.habits_today = [("睡觉", 765.0), ("hiit", None)]
     text = "".join(t for _, t, *_ in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
     assert len(lines) == 1
-    assert "765" in lines[0] and "睡觉" not in lines[0] and "hiit" in lines[0]
-    assert lines[0].index("765") < lines[0].index("hiit")
+    assert "hiit" in lines[0] and "765" not in lines[0] and "睡觉" not in lines[0]
 
 
-def test_done_chips_keep_one_space_between_same_color_numbers():
-    """Follow-up (2026-07-20), refined 2026-08-07: adjacent done-row chips
-    that SHARE a color (teams/notes both map to i9) keep exactly one space
-    between them, else the two numbers would visually merge. Was teams/push
-    until push moved from i9 to g245 (2026-09-08, JM), so the two no longer
-    share a color — swapped to teams/notes, which still do."""
+def test_number_chips_keep_one_space_between_same_color_numbers():
+    """Follow-up (2026-07-20), refined 2026-08-07: adjacent number chips
+    that SHARE a color keep exactly one space between them, else the two
+    numbers would visually merge. Done habits no longer render (2026-11-10),
+    so the packer is exercised directly, with the same i9 style twice."""
     mod = _load_tui()
-    mod.STATE.habits_today = [("teams", 3.0), ("notes", 4.0)]
-    row1 = "".join(t for _, t, *_ in mod.render_habits_today()).split("\n")[0]
+    sty = mod._habit_chip_style("teams")
+    row1 = "".join(t for _, t in mod._pack_number_chips([(sty, "3"), (sty, "4")]))
     assert "3 4" in row1, f"exactly one space must separate same-color chips: {row1!r}"
 
 
-def test_done_chips_no_space_between_different_color_numbers():
-    """2026-08-07: adjacent done-row chips that DIFFER in color get no gap
-    at all — the color change itself is the visual separator."""
+def test_number_chips_no_space_between_different_color_numbers():
+    """2026-08-07: adjacent number chips that DIFFER in color get no gap at
+    all — the color change itself is the visual separator."""
     mod = _load_tui()
-    mod.STATE.habits_today = [("teams", 3.0), ("0l", 4.0)]  # i9, g245 — different colors
-    row1 = "".join(t for _, t, *_ in mod.render_habits_today()).split("\n")[0]
+    a, b = mod._habit_chip_style("teams"), mod._habit_chip_style("0l")  # i9, g245
+    row1 = "".join(t for _, t in mod._pack_number_chips([(a, "3"), (b, "4")]))
     assert "34" in row1 and "3 4" not in row1, f"no space between different-color chips: {row1!r}"
 
 
-def test_integer_values_render_without_a_trailing_point_zero():
+def test_kcal_chip_closes_the_hcb_line():
+    """JM 2026-11-10: today's calories (hcbi!U) as a labeled chip on the
+    Daily Dozen / hcb line, after the hcb standing, in the hcb color."""
     mod = _load_tui()
-    mod.STATE.habits_today = [("teams", 3.0)]
-    row1 = "".join(t for _, t, *_ in mod.render_habits_today()).split("\n")[0]
-    assert "3" in row1
-    assert "3.0" not in row1
+    mod.STATE.habits_today = [("hiit", None)]
+    mod.STATE.daily_dozen = [("bn", -2.0)]
+    mod.STATE.hcbi_behind = {"hcb": -1183.0}
+    mod.STATE.hcbi_kcal = 650
+    frags = mod.render_habits_today()
+    lines = "".join(t for _, t in frags).split("\n")
+    assert "hiit" in lines[0]
+    assert "hcb -1183" in lines[1] and "kcal 650" in lines[1]
+    assert lines[1].index("hcb -1183") < lines[1].index("kcal 650")
+    sty = next(s for s, t in frags if "kcal 650" in t)
+    assert f"bg:{mod.PROJECT_COLORS['hcb']}" in sty and "#ffffff" in sty
+    # Unread -> no chip, not a "kcal 0".
+    mod.STATE.hcbi_kcal = None
+    assert "kcal" not in "".join(t for _, t in mod.render_habits_today())
 
 
-def test_done_chip_gets_its_domain_background_color():
+def test_kcal_chip_survives_a_crowded_dozen_row():
+    """Same rule as the prayer chip (2026-08-30): the kcal chip reserves its
+    own width, so a full Daily Dozen line can't silently drop it."""
     mod = _load_tui()
-    mod.STATE.habits_today = [("睡觉", 765.0)]
-    style, text = mod.render_habits_today()[0]
-    assert "765" in text
-    assert style == mod._habit_chip_style("睡觉")
-    assert f"bg:{mod.PROJECT_COLORS['睡觉']}" in style
-    assert "#ffffff" in style, "chip text must default to white"
+    mod.STATE.habits_today = []
+    mod.STATE.daily_dozen = [(f"c{i}", -float(i + 1)) for i in range(mod.WIDTH_HINT)]
+    mod.STATE.hcbi_kcal = 1430
+    text = "".join(t for _, t in mod.render_habits_today())
+    assert "kcal 1430" in text, f"kcal chip must survive a full row: {text!r}"
+    mod.STATE.daily_dozen = []
 
 
 def test_pending_chip_also_gets_its_domain_background_color():
@@ -143,12 +155,12 @@ def test_deferred_habit_hidden_from_pending_row():
     mod.STATE.habits_today = [
         ("xk20", None), ("xk22", None), ("xk26", None), ("hiit", None),
         ("0g", None),                            # no card info → visible
-        ("早餐", 1.0),                            # done → value shows regardless
+        ("早餐", 1.0),                            # done → off the strip (2026-11-10)
     ]
     text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "xk20" not in text and "xk22" not in text
     assert "xk26" in text and "hiit" in text and "0g" in text
-    assert "1" in text  # 早餐's value in the done row
+    assert "早餐" not in text and "1" not in text
     # Past-day view: deferral info doesn't apply.
     mod.STATE.day_offset = -1
     text = "".join(t for _, t, *_ in mod.render_habits_today())
@@ -170,13 +182,13 @@ def test_domain_map_is_the_color_source_not_the_workbook():
 
 
 def test_unmapped_habit_still_gets_a_visible_chip_not_a_crash():
-    """A value with no background at all would read as plain text, breaking
-    the "everything here is a colored chip" scan -- an unmapped habit still
-    gets a neutral chip rather than no styling."""
+    """A name with no background at all would read as plain text, breaking
+    the "everything here is a colored chip" scan -- an unmapped pending habit
+    still gets a neutral chip rather than no styling."""
     mod = _load_tui()
-    mod.STATE.habits_today = [("some totally new column", 1.0)]
+    mod.STATE.habits_today = [("some totally new column", None)]
     style, text = mod.render_habits_today()[0]
-    assert "1" in text
+    assert "some totally new column" in text
     assert "bg:" in style and "#ffffff" in style
 
 
@@ -196,8 +208,8 @@ def test_prayer_chip_survives_a_crowded_row():
     any pending names past the cutoff. The chip must reserve its own budget
     and always render regardless of how full the rest of the row is."""
     mod = _load_tui()
-    # Enough done chips alone to consume the whole row.
-    mod.STATE.habits_today = [(f"habit{i}", float(i + 1)) for i in range(mod.WIDTH_HINT)]
+    # Enough pending names alone to consume the whole row.
+    mod.STATE.habits_today = [(f"habit{i}", None) for i in range(mod.WIDTH_HINT)]
     mod.STATE.prayer_count = 3.0
     text = "".join(t for _, t, *_ in mod.render_habits_today())
     assert "ص 3" in text, f"prayer chip must survive a full row: {text!r}"
@@ -205,10 +217,10 @@ def test_prayer_chip_survives_a_crowded_row():
 
 def test_each_row_drops_overflow_independently():
     mod = _load_tui()
-    mod.STATE.habits_today = [(f"habit{i}", float(i + 1)) for i in range(mod.WIDTH_HINT)]
+    mod.STATE.habits_today = [(f"habit{i}", None) for i in range(mod.WIDTH_HINT)]
     text = "".join(t for _, t, *_ in mod.render_habits_today())
     lines = [l for l in text.split("\n") if l.strip()]
-    assert len(lines) == 1  # all "done" (nonzero) -> only row 1 renders
+    assert len(lines) == 1  # all pending -> only row 1 renders, trimmed to width
     assert len(lines[0]) <= mod.WIDTH_HINT + 1
 
 
@@ -289,3 +301,19 @@ def test_render_all_places_habit_strip_right_after_header():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_fetch_peels_tagged_kcal_even_when_a_blank_ytd_cell_doubles_a_bar(monkeypatch):
+    """2026-11-10: hcbi!U rides as a TAGGED "||kcal=N" tail, never a
+    positional segment -- a blank YTD cell already emits "||" (each cell is
+    "v|"), so anything indexed by segment would land in the wrong slot."""
+    mod = _load_tui()
+    out = ("hiit\t|teams\t2|" "||" "-107.0||-3" "||" "" "||kcal=650.0")
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeProc(out))
+    mod.fetch_habits_today()
+    assert mod.STATE.hcbi_kcal == 650
+    assert ("hiit", None) in mod.STATE.habits_today and ("teams", 2.0) in mod.STATE.habits_today
+    # No tag at all (an older script, or a failed read) -> None, chip off.
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeProc("hiit\t|||"))
+    mod.fetch_habits_today()
+    assert mod.STATE.hcbi_kcal is None

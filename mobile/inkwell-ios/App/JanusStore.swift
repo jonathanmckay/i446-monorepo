@@ -160,7 +160,10 @@ final class JanusStore: ObservableObject {
             let liteQ = ["lite=1", offsetQ].filter { !$0.isEmpty }.joined(separator: "&")
             if case .ok(let j) = await api.get(base + "/api/timeline?" + liteQ) {
                 if seq == loadSeq {
-                    let t = Parsers.timeline(j); timeline = t; rows = overlay(t.rows)
+                    // The lite payload has no habit strip; keep the same day's
+                    // strip (cached full payload) up until the full pass lands.
+                    let t = Parsers.timeline(j).carryingHabits(from: timeline)
+                    timeline = t; rows = overlay(t.rows)
                     publishScrollIfWanted()
                 }
             }
