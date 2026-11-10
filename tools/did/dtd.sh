@@ -1187,10 +1187,6 @@ chmod +x "$DTD_DONE_HIDE"
 # window that's already been shown to matter -- cutting it doesn't prove the
 # race is fully closed, but it's a genuine, measured reduction in it, not a
 # refactor for its own sake.
-# -1g prefill sidecar (2026-11-09): the list generator writes the top open 0₲
-# goal here (empty when none) on every render; the done router reads it so
-# alt-enter on the 😈 -1g card opens the form only when a prefill is on show.
-DTD_PREFILL="/tmp/dtd-$DTD_ID.prefill"
 DTD_DONE_ROUTER="/tmp/dtd-$DTD_ID.done-router.sh"
 cat > "$DTD_DONE_ROUTER" << ROUTEREOF
 #!/bin/zsh
@@ -1243,13 +1239,16 @@ _b64="\${_out#*\$'\\n'}"
 _ex="exclude+"
 [[ "\$_id" == BLOCK:* ]] && _ex=""
 print -- "\$EPOCHREALTIME\trouter-resolved\t\$_t_base" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
-# alt-enter on the 😈 -1g card while a prefill is on show (2026-11-09: "if I
-# hit opt enter, it goes to the screen where I can enter, but the prefill
-# already exists, hit ctrl+s then it saves") opens the -1g form instead of
-# completing: its ghost line 1 is that prefill and ^S accepts it. With no
-# prefill (empty sidecar) the card completes instantly as before. No exclude+:
-# a cancelled form keeps the row; the detached save hides it via the refresh.
-if [[ "\$_t_base" == "😈 -1g" && -s "$DTD_PREFILL" ]]; then
+# alt-enter on the 😈 -1g card opens the -1g form instead of completing
+# (2026-11-09: "if I hit opt enter, it goes to the screen where I can enter,
+# but the prefill already exists, hit ctrl+s then it saves"): line 1 ghosts
+# the top open 0₲ goal when there is one and ^S accepts it. ALWAYS the form,
+# prefill or not (bug 2026-11-10: "-1g doesn't ask me for text to a goal
+# now" -- the route was gated on the .prefill sidecar being non-empty, so
+# before the day's 0g goals were set, alt-enter finished the card instantly
+# with a blank goal and 🎯 credit). No exclude+: a cancelled form keeps the
+# row; the detached save hides it via the refresh.
+if [[ "\$_t_base" == "😈 -1g" ]]; then
   printf 'execute(%s %s %s --detach)' "$DTD_FORM" "\$_id" "$HOME/i446-monorepo/tools/-1g/-1g-form.py"
 else
 case "\$_t_base" in
@@ -2300,9 +2299,9 @@ from blocks import BLOCK_START as _BLOCK_LABEL_HOURS
 _now_hour = _dt.datetime.now().hour
 # -1g prefill (2026-11-09): the top open 0₲ goal for the current block, shown
 # on the 😈 -1g card after a second 😈 and written to the .prefill sidecar
-# next to the cache file so the done router can route alt-enter to the form.
-# One build-order read per render; any failure means no prefill, never a
-# broken list.
+# next to the cache file (informational; the done router no longer gates on
+# it, 2026-11-10). One build-order read per render; any failure means no
+# prefill, never a broken list.
 def _zerog_prefill():
     pf = None
     try:

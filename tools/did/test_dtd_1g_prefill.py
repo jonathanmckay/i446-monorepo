@@ -3,9 +3,9 @@
 
 The list generator shows the top open 0₲ goal on the 😈 -1g ritual card after
 a second 😈 ("so I know it's a prefill") and writes it to the .prefill sidecar
-next to the cache file. The done router (alt-enter) opens the -1g form when
-that sidecar is non-empty ("the prefill already exists, hit ctrl+s then it
-saves") and completes the card instantly, as before, when it is empty.
+next to the cache file. The done router (alt-enter) opens the -1g form on the
+😈 -1g card ("the prefill already exists, hit ctrl+s then it saves") -- always,
+not only when the sidecar is non-empty (bug 2026-11-10 below).
 """
 from __future__ import annotations
 
@@ -109,15 +109,19 @@ def test_missing_build_order_never_breaks_the_list(tmp_path):
     assert sidecar.read_text() == ""
 
 
-def test_router_opens_form_only_with_prefill_on_show():
+def test_router_always_opens_form_on_1g_card_even_without_prefill():
+    """Regression 2026-11-10: "-1g doesn't ask me for text to a goal now". The
+    alt-enter route to the form was gated on `-s $DTD_PREFILL`; before the
+    day's 0₲ goals existed (sidecar empty) the 😈 -1g card completed instantly
+    with a blank goal and a 🎯 stamp. The route must not depend on the
+    sidecar at all."""
     body = _heredoc("DTD_DONE_ROUTER", "ROUTEREOF")
-    i = body.index('if [[ "\\$_t_base" == "😈 -1g" && -s "$DTD_PREFILL" ]]; then')
-    branch = body[i:i + 400]
+    cond = 'if [[ "\\$_t_base" == "😈 -1g" ]]; then'
+    assert cond in body, "alt-enter on 😈 -1g must route to the form unconditionally"
+    assert "DTD_PREFILL" not in body, "the form route must not be gated on the prefill sidecar"
+    branch = body[body.index(cond):body.index(cond) + 400]
     assert "printf 'execute(%s %s %s --detach)' \"$DTD_FORM\" \"\\$_id\"" in branch, branch
     assert "-1g/-1g-form.py" in branch
     assert "exclude" not in branch.split("else")[0], "a cancelled form must keep the row"
     # the plain-completion branches are untouched (one execute, one execute-silent)
     assert body.count("printf '%sexecute(") == 1 and body.count("printf '%sexecute-silent(") == 1
-    # the sidecar path the router reads is the one the generator writes
-    assert 'DTD_PREFILL="/tmp/dtd-$DTD_ID.prefill"' in DTD
-    assert "rsplit('.', 2)[0] + '.prefill'" in _listgen_payload()
