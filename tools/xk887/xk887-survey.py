@@ -260,7 +260,13 @@ def build_applescript(answers: dict, sunday: _dt.date, sheets=None) -> str:
                 continue
             if not val:
                 continue
-            if kind in ("num", "num_auto") and _is_num(val):
+            if kind in ("num", "num_auto"):
+                if not _is_num(val):
+                    # Never put text into a numeric column (xk26 age feeds
+                    # formulas): drop it and say so instead of writing it.
+                    print("  ⚠ %s.%s: %r is not a number, not written" % (sheet, key, val),
+                          file=sys.stderr)
+                    continue
                 L.append('  set value of range ("%s" & weekRow_%s) of ws to %s' % (col, v, float(val)))
             else:
                 L.append('  set value of range ("%s" & weekRow_%s) of ws to %s' % (col, v, _as_applescript(val)))
