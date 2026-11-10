@@ -2,7 +2,7 @@
   "_meta": {
     "source_of_truth": "row 1 of each sheet in ~/OneDrive/vault-excel/Neon分v12.2.xlsx",
     "regenerated_by": "~/i446-monorepo/scripts/regen-neon-cols.py",
-    "last_regen": "2026-08-02",
+    "last_regen": "2026-11-09",
     "note": "Skills MUST read this file at runtime — never hard-code column letters."
   },
   "sheets": {
@@ -93,7 +93,7 @@
         "ibx i9": "W",
         "push": "X",
         "teams": "Y",
-        "slack github": "Z",
+        "slack i9": "Z",
         "slack m5x2": "AA",
         "ibx m5x2": "AB",
         "m5x2 stats": "AC",
@@ -108,7 +108,7 @@
         "xk26": "AL",
         "qft": "AM",
         "xk88": "AN",
-        "NVC + e": "AO",
+        "NVC": "AO",
         "ص": "AP",
         "o314": "AQ",
         "冥想": "AR",
@@ -157,7 +157,6 @@
         "groceries": "W",
         "1 hcme": "X",
         "1 sunset": "Y",
-        "2 hci": "Z",
         "长冥想": "AA",
         "业写": "AB",
         "一起饭": "AC",

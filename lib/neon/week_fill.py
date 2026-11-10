@@ -30,7 +30,7 @@ RANGE = "B5:AL57"
 FIRST_COL = 2  # B
 FIRST_LABEL = "1.1"  # last year's row 12.5 is not last week
 # Not once-a-week obligations: a blank week is normal for these.
-EXEMPT = {"nails", "groceries", "2 hci", "1 kids nature"}
+EXEMPT = {"nails", "groceries", "1 kids nature"}  # 2 hci left the weekly columns 2026-11-09
 MEMO = Path.home() / ".cache/jm/1n-week-fill.json"
 MEMO_TTL = 600
 

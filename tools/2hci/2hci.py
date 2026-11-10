@@ -204,9 +204,49 @@ def completed_hci(start: date, end: date) -> list[dict]:
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
-def mark_done() -> None:
-    """Self-clear the '2 hci' card through the normal /did path."""
+MONTHLY_HEADER_ROW = 61   # 1n+: E61..P61 = 1..12 (month numbers)
+MONTHLY_RANGE = "A61:P90"  # the 2₦ block: A = due day, B = habit, D = target, E:P = months
+
+
+def credit_monthly_cell(month: int, points: int | None = None) -> dict:
+    """Write the month's credit into the 2₦ block row whose B says '2 hci'
+    (row 87 since 2026-11-09, when 2 hci left the weekly columns). Points
+    default to the row's D target. Idempotent: a non-blank cell is left alone.
+    Returns {"ok", "row", "col", "value", "skipped"?}."""
+    sys.path.insert(0, str(MONO / "lib"))
+    from neon import excel
+    rng = excel.read_range("1n+", MONTHLY_RANGE)
+    if not rng.get("ok"):
+        return {"ok": False, "error": rng.get("error", "read_range failed")}
+    first = rng.get("row", MONTHLY_HEADER_ROW)
+    rows = rng["rows"]
+    hdr = rows[MONTHLY_HEADER_ROW - first]
+    col_idx = next((i for i, v in enumerate(hdr) if str(v).strip().rstrip(".0") == str(month)), None)
+    row_idx = next((i for i, r in enumerate(rows) if len(r) > 1 and str(r[1]).strip().lower() == "2 hci"), None)
+    if col_idx is None or row_idx is None:
+        return {"ok": False, "error": f"2 hci monthly row/col not found (row={row_idx}, col={col_idx})"}
+    row = first + row_idx
+    col = chr(ord("A") + col_idx)
+    target = rows[row_idx][3] if len(rows[row_idx]) > 3 else ""
+    pts = points if points is not None else int(float(target or 0))
+    current = rows[row_idx][col_idx] if len(rows[row_idx]) > col_idx else ""
+    if str(current).strip() not in ("", "0", "0.0"):
+        return {"ok": True, "row": row, "col": col, "value": current, "skipped": "already credited"}
+    r = excel.batch_write("1n+", [{"col": col, "value": pts, "mode": "set"}], row=row,
+                          src="2 hci monthly credit", fallback=False)
+    return {"ok": bool(r.get("ok")), "row": row, "col": col, "value": pts, "raw": r}
+
+
+def mark_done(month: int) -> None:
+    """Self-clear the '2 hci' card through the normal /did path (Todoist close
+    + 0分 points), then stamp the month's cell in the 1n+ 2₦ block."""
     subprocess.run([sys.executable, str(MONO / "tools/did/run.py"), "2 hci"], check=False)
+    try:
+        r = credit_monthly_cell(month)
+        tag = f"skipped ({r['skipped']})" if r.get("skipped") else ("ok" if r.get("ok") else f"FAILED {r.get('error')}")
+        print(f"1n+ 2₦ {r.get('col')}{r.get('row')} = {r.get('value')}: {tag}")
+    except Exception as e:  # noqa: BLE001 - the card is already closed; report, don't crash
+        print(f"1n+ 2₦ monthly credit failed: {e}")
     subprocess.run([sys.executable, str(MONO / "tools/did/did-fast.py"), "--refresh-cache"],
                    check=False)
 
@@ -244,7 +284,7 @@ def main() -> None:
         for t in other:
             print(f"    {t['date'][5:]}  [{t['points']}]  {t['content']}")
     if not a.no_mark:
-        mark_done()
+        mark_done(end.month)
 
 
 if __name__ == "__main__":

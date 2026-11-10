@@ -57,3 +57,26 @@ def test_other_hci_excludes_habit_cards_and_defers():
         assert not m.is_other_hci({"content": c, "labels": ["hci"]})
     assert not m.is_other_hci({"content": "deferred: nails", "labels": ["hci", "posthoc"]})
     assert not m.is_other_hci({"content": "gym", "labels": ["hcb"]})
+
+
+# ── monthly 2₦ cell credit (2026-11-09: 2 hci moved from weekly col Z to row 87) ──
+
+def test_credit_monthly_cell_targets_2hci_row_and_month(monkeypatch):
+    import types, sys as _sys
+    rows = [[""] * 16 for _ in range(30)]           # A61:P90
+    rows[0] = ["", "", "", "₹"] + [f"{m}.0" for m in range(1, 13)]   # row 61 header
+    rows[26] = ["26.0", "2 hci", "", "15.0"] + [""] * 12             # row 87
+    writes = []
+    fake = types.SimpleNamespace(
+        read_range=lambda sheet, rng: {"ok": True, "row": 61, "rows": rows},
+        batch_write=lambda sheet, w, **kw: writes.append((sheet, w, kw)) or {"ok": True},
+    )
+    monkeypatch.setitem(_sys.modules, "neon", types.SimpleNamespace(excel=fake))
+    monkeypatch.setitem(_sys.modules, "neon.excel", fake)
+    r = m.credit_monthly_cell(11)
+    assert r["ok"] and r["row"] == 87 and r["col"] == "O" and r["value"] == 15
+    assert writes[0][1] == [{"col": "O", "value": 15, "mode": "set"}] and writes[0][2]["row"] == 87
+    # idempotent: a credited month is not rewritten
+    rows[26][14] = "15.0"
+    r2 = m.credit_monthly_cell(11)
+    assert r2.get("skipped") and len(writes) == 1
