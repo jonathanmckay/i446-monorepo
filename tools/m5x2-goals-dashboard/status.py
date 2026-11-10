@@ -153,6 +153,29 @@ def leasing(week_sunday: dt.date, today: dt.date) -> dict:
     return out
 
 
+def portfolio(today: dt.date) -> dict:
+    """Occupancy now (occupancy_summary totals) and Q4 move flows (tenant_tickler v1)."""
+    occ = report("occupancy_summary", {"as_of_to": today.isoformat()})
+    units = sum(float(r.get("number_of_units") or 0) for r in occ)
+    occupied = sum(float(r.get("occupied") or 0) for r in occ)
+    vhost, user, pw = _creds()
+    auth = base64.b64encode(f"{user}:{pw}".encode()).decode()
+    url = f"https://{vhost}.appfolio.com/api/v1/reports/tenant_tickler.json?from_date=2026-10-01&to_date=2026-12-31"
+    rows: list[dict] = []
+    while url:
+        d = json.load(urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": f"Basic {auth}"}), timeout=120))
+        rows += d.get("results", []); url = d.get("next_page_url")
+        if url and url.startswith("/"):
+            url = f"https://{vhost}.appfolio.com" + url
+    def md(x): return dt.datetime.strptime(x["OccurredDate"], "%m/%d/%Y").date()
+    past = collections.Counter(x["Event"] for x in rows if md(x) <= today)
+    fut = collections.Counter(x["Event"] for x in rows if md(x) > today)
+    return {"units": int(units), "occupied": int(occupied),
+            "pct": round(100 * occupied / units, 1) if units else None,
+            "in_so_far": past.get("Move-in", 0), "out_so_far": past.get("Move-out", 0),
+            "in_sched": fut.get("Move-in", 0), "out_sched": fut.get("Move-out", 0)}
+
+
 # ── RAG ─────────────────────────────────────────────────────────────────────
 # green = at target, yellow = within reach, red = off target, grey = no live number.
 # Lower-is-better: (green_max, yellow_max); higher-is-better: (green_min, yellow_min).
@@ -176,7 +199,7 @@ def rag_manual(due: str | None, today: dt.date) -> str:
 # ── render ──────────────────────────────────────────────────────────────────
 
 def build_rows(today: dt.date, week_sunday: dt.date) -> list[dict]:
-    T = turns(today); R = trs(today); L = leasing(week_sunday, today)
+    T = turns(today); R = trs(today); L = leasing(week_sunday, today); P = portfolio(today)
     wk = L[week_sunday.isoformat()]; prev = L[(week_sunday - dt.timedelta(days=7)).isoformat()]
     def wkfmt(w, k):
         v = w.get(k); return "–" if v is None else (f"{v}%" if k == "tour_rate" else str(v))
@@ -187,6 +210,10 @@ def build_rows(today: dt.date, week_sunday: dt.date) -> list[dict]:
     coh_pct = 100 * R["dec_renewed"] / max(1, R["dec_cohort"])
     M = lambda due: ("manual", None, rag_manual(due, today))   # noqa: E731
     status = {
+        ("Portfolio", "Physical occupancy at quarter end"): (
+            f"{P['pct']}% ({P['occupied']:,} / {P['units']:,})",
+            f"Q4 so far +{P['in_so_far']} in / -{P['out_so_far']} out; scheduled +{P['in_sched']} in / -{P['out_sched']} out",
+            rag_high(P["pct"], 90.0, 88.5)),
         ("r203 Construction / Turns", "Turn backlog cap"): (f"{T['backlog']} not-ready vacant", f"{T['backlog_by_property']}", rag_low(T["backlog"], 60, 75)),
         ("r203 Construction / Turns", "Rent-ready turn days"): (f"proxy: median {T['median_days_vacant']} d vacant, {T['over_60d']} units > 60 d", "true metric needs Meld (Ian)", rag_low(T["median_days_vacant"], 20, 30)),
         ("r203 Construction / Turns", "Backlog past turn target"): (f"{T['past_target']} / {T['backlog']} past target", f"{T['no_target']} with no target date", rag_low(T["past_target"], 29, 45)),

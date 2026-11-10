@@ -219,4 +219,10 @@ def api_goals():
 
 
 if __name__ == "__main__":
+    import sys as _sys
+    if len(_sys.argv) >= 3 and _sys.argv[1] == "--static":
+        # Render once to a file (staging publish to m5x2/appfolio-dashboards-site).
+        with app.test_request_context("/"):
+            Path(_sys.argv[2]).write_text(render(), encoding="utf-8")
+        raise SystemExit(0)
     app.run(host="0.0.0.0", port=5559, debug=False)  # LAN + Tailscale, like :5558 (JM 2026-11-10: unreachable from Straylight)

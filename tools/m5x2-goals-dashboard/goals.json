@@ -4,6 +4,21 @@
   "as_of": "2026-11-03",
   "sections": [
     {
+      "name": "Portfolio",
+      "goals": [
+        {
+          "p": "P1",
+          "dri": "LX / JM",
+          "goal": "Physical occupancy at quarter end",
+          "metric": "AppFolio occupancy_summary: occupied / number_of_units, all active units. Derived 2026-11-10 from the section goals: 110 Q4 leases, turn backlog <= 40, move-outs held to the notice-implied ~40.",
+          "baseline": "88.2% on 10-01 (1,051 / 1,192); 87.3% on 11-10 (1,035 / 1,186)",
+          "target": ">= 90.0% (>= 1,067 / 1,186) by 12-31; >= 88.5% by 11-29. Stretch 92% if backlog hits 40 without ready vacancies piling up",
+          "due": "2026-12-31",
+          "source": "AppFolio occupancy_summary + tenant_tickler"
+        }
+      ]
+    },
+    {
       "name": "r202 Leasing",
       "goals": [
         {
