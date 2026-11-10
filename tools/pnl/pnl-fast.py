@@ -85,9 +85,37 @@ def noi_flag_phrase(actual, budget, units):
 # AppFolio API config
 # ---------------------------------------------------------------------------
 
-VHOST = "mckay"
-API_USER = "74a8e81d16c91110e9985fedf53d7f24"
-API_PASS = "4920d4f8c58a8e9fbcaf22268ec0689a"
+# Credentials live OUTSIDE the repo (the repo is public; the previous literals
+# were exposed 2026-05-31 → 2026-11-10 and are being rotated). Resolution order:
+#   1. env APPFOLIO_VHOST / APPFOLIO_USERNAME / APPFOLIO_PASSWORD
+#   2. ~/.config/m5x2/appfolio.env            (canonical, chmod 600, per machine)
+#   3. tools/m5x2-occupancy-dashboard/.env    (gitignored; same pair, legacy)
+APPFOLIO_ENV_FILES = [
+    Path.home() / ".config/m5x2/appfolio.env",
+    Path(__file__).resolve().parents[1] / "m5x2-occupancy-dashboard" / ".env",
+]
+
+
+def _load_appfolio_creds() -> tuple[str, str, str]:
+    env = {k: os.environ[k] for k in ("APPFOLIO_VHOST", "APPFOLIO_USERNAME", "APPFOLIO_PASSWORD")
+           if os.environ.get(k)}
+    for f in APPFOLIO_ENV_FILES:
+        if len(env) == 3:
+            break
+        if f.exists():
+            for ln in f.read_text().splitlines():
+                if "=" in ln and not ln.lstrip().startswith("#"):
+                    k, v = ln.split("=", 1)
+                    env.setdefault(k.strip(), v.strip())
+    missing = [k for k in ("APPFOLIO_USERNAME", "APPFOLIO_PASSWORD") if not env.get(k)]
+    if missing:
+        sys.exit(f"ERROR: AppFolio credentials missing ({', '.join(missing)}). "
+                 f"Create {APPFOLIO_ENV_FILES[0]} with APPFOLIO_VHOST / APPFOLIO_USERNAME / "
+                 f"APPFOLIO_PASSWORD (chmod 600) or export them.")
+    return env.get("APPFOLIO_VHOST", "mckay"), env["APPFOLIO_USERNAME"], env["APPFOLIO_PASSWORD"]
+
+
+VHOST, API_USER, API_PASS = _load_appfolio_creds()
 BASE_URL = f"https://{VHOST}.appfolio.com/api/v2/reports"
 
 VAULT = Path.home() / "vault"

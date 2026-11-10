@@ -79,6 +79,8 @@ python3 ~/i446-monorepo/tools/pnl/pnl-fast.py <property_code> [--date YYYY-MM]
 
 The script handles: AppFolio API calls, GL mapping, derived metrics, historical T-12, comparisons, and validation. Runs in ~3 seconds.
 
+**Credentials:** `~/.config/m5x2/appfolio.env` (`APPFOLIO_VHOST` / `APPFOLIO_USERNAME` / `APPFOLIO_PASSWORD`, chmod 600, per machine; env vars override). Never in the repo: it is public. Rotated 2026-11-10.
+
 ### Step 2: Generate insights
 
 Read the Comparisons section of the report just written. Produce 2-4 bullet-point insights covering:
