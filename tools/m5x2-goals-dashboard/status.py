@@ -153,6 +153,26 @@ def leasing(week_sunday: dt.date, today: dt.date) -> dict:
     return out
 
 
+# ── RAG ─────────────────────────────────────────────────────────────────────
+# green = at target, yellow = within reach, red = off target, grey = no live number.
+# Lower-is-better: (green_max, yellow_max); higher-is-better: (green_min, yellow_min).
+
+def rag_low(v, green_max, yellow_max):
+    if v is None: return "grey"
+    return "green" if v <= green_max else "yellow" if v <= yellow_max else "red"
+
+
+def rag_high(v, green_min, yellow_min):
+    if v is None: return "grey"
+    return "green" if v >= green_min else "yellow" if v >= yellow_min else "red"
+
+
+def rag_manual(due: str | None, today: dt.date) -> str:
+    """A manual row is grey until its due date passes without a number, then red."""
+    d = _d(due)
+    return "red" if d and d < today else "grey"
+
+
 # ── render ──────────────────────────────────────────────────────────────────
 
 def build_rows(today: dt.date, week_sunday: dt.date) -> list[dict]:
@@ -160,32 +180,38 @@ def build_rows(today: dt.date, week_sunday: dt.date) -> list[dict]:
     wk = L[week_sunday.isoformat()]; prev = L[(week_sunday - dt.timedelta(days=7)).isoformat()]
     def wkfmt(w, k):
         v = w.get(k); return "–" if v is None else (f"{v}%" if k == "tour_rate" else str(v))
+    q4_days = (today - dt.date(2026, 10, 1)).days + 1
+    pace = 110 * q4_days / 92
+    leases = L["q4_new_leases_signed_approx"]
+    dec_pct = 100 * R["dec_resolved"] / max(1, R["dec_total"])
+    coh_pct = 100 * R["dec_renewed"] / max(1, R["dec_cohort"])
+    M = lambda due: ("manual", None, rag_manual(due, today))   # noqa: E731
     status = {
-        ("r203 Construction / Turns", "Turn backlog cap"): (f"{T['backlog']} not-ready vacant", f"{T['backlog_by_property']}"),
-        ("r203 Construction / Turns", "Rent-ready turn days"): (f"proxy: median {T['median_days_vacant']} d vacant, {T['over_60d']} units > 60 d", "true metric needs Meld (Ian)"),
-        ("r203 Construction / Turns", "Backlog past turn target"): (f"{T['past_target']} / {T['backlog']} past target", f"{T['no_target']} with no target date"),
-        ("r203 Construction / Turns", "Idle rent in not-ready units"): (f"${T['idle_rent']/1000:.1f}K/mo", ""),
-        ("r203 Construction / Turns", "Turn spend vs estimate"): ("manual", "LeeRoy turn tracker"),
-        ("r203 Construction / Turns", "P1 projects fully specified"): ("manual", "Lawrence weekly; was due 11-08"),
-        ("r202 TRS", "Dec expirations resolved"): (f"{R['dec_resolved']} / {R['dec_total']}", f"status {R['dec_status']}; {R['dec_notice']} notice, {R['dec_vacated']} vacated, {R['dec_eligible_untouched']} Eligible untouched; was due 11-06"),
-        ("r202 TRS", "Expiry-cohort retention"): (f"{R['dec_renewed']} renewed / {R['dec_cohort']} in cohort ({100*R['dec_renewed']/max(1,R['dec_cohort']):.0f}%)", f"{R['dec_status'].get('Pending',0)} pending"),
-        ("r202 TRS", "Offer-conditional renewal rate (legacy)"): (f"{R['legacy_rate']}% ({R['legacy_renewed']} / {R['legacy_renewed']+R['legacy_dnr']})", "renewal starts next 90 d"),
-        ("r204 Special Projects", "Priority list with NOI"): ("manual", "Ian; was due 11-08"),
-        ("r204 Special Projects", "Tools state chart"): ("manual", "Ian; due 11-15"),
-        ("r204 Special Projects", "Move-out recorded before turn"): ("manual", "needs Meld turn WOs"),
-        ("r204 Special Projects", "Canonical funnel metric live"): ("manual", "Jesus; due 11-15"),
-        ("r202 Leasing", "Tour-scheduled rate"): (f"wk {week_sunday.month}/{week_sunday.day}: {wkfmt(wk,'tour_rate')} ({wk['cards_with_showing']}/{wk['cards']} cards)" + ("" if wk["mature_14d"] else " · immature, <14 d"), f"prev wk {wkfmt(prev,'tour_rate')} ({prev['cards_with_showing']}/{prev['cards']})" + ("" if prev["mature_14d"] else " · immature")),
-        ("r202 Leasing", "Tours scheduled per week"): (f"wk {week_sunday.month}/{week_sunday.day}: {wk['showings']}" + ("" if wk["mature_14d"] else " · immature"), f"prev wk {prev['showings']}"),
-        ("r202 Leasing", "Q4 leases signed"): (f"≈{L['q4_new_leases_signed_approx']} / 110 (AppFolio new leases signed since 10-01)", "Andie's weekly is the source of record"),
+        ("r203 Construction / Turns", "Turn backlog cap"): (f"{T['backlog']} not-ready vacant", f"{T['backlog_by_property']}", rag_low(T["backlog"], 60, 75)),
+        ("r203 Construction / Turns", "Rent-ready turn days"): (f"proxy: median {T['median_days_vacant']} d vacant, {T['over_60d']} units > 60 d", "true metric needs Meld (Ian)", rag_low(T["median_days_vacant"], 20, 30)),
+        ("r203 Construction / Turns", "Backlog past turn target"): (f"{T['past_target']} / {T['backlog']} past target", f"{T['no_target']} with no target date", rag_low(T["past_target"], 29, 45)),
+        ("r203 Construction / Turns", "Idle rent in not-ready units"): (f"${T['idle_rent']/1000:.1f}K/mo", "", rag_low(T["idle_rent"], 60000, 80000)),
+        ("r203 Construction / Turns", "Turn spend vs estimate"): ("manual", "LeeRoy turn tracker", rag_manual("2026-11-29", today)),
+        ("r203 Construction / Turns", "P1 projects fully specified"): ("manual", "Lawrence weekly; was due 11-08", rag_manual("2026-11-08", today)),
+        ("r202 TRS", "Dec expirations resolved"): (f"{R['dec_resolved']} / {R['dec_total']}", f"{R['dec_eligible_untouched']} Eligible untouched, {R['dec_status'].get('Pending',0)} pending; was due 11-06", rag_high(dec_pct, 100, 90)),
+        ("r202 TRS", "Expiry-cohort retention"): (f"{R['dec_renewed']} renewed / {R['dec_cohort']} ({coh_pct:.0f}%)", f"{R['dec_status'].get('Pending',0)} pending", rag_high(coh_pct, 60, 50)),
+        ("r202 TRS", "Offer-conditional renewal rate (legacy)"): (f"{R['legacy_rate']}% ({R['legacy_renewed']} / {R['legacy_renewed']+R['legacy_dnr']})", "renewal starts next 90 d", rag_high(R["legacy_rate"], 85, 80)),
+        ("r204 Special Projects", "Priority list with NOI"): ("manual", "Ian; was due 11-08", rag_manual("2026-11-08", today)),
+        ("r204 Special Projects", "Tools state chart"): ("manual", "Ian; due 11-15", rag_manual("2026-11-15", today)),
+        ("r204 Special Projects", "Move-out recorded before turn"): ("manual", "needs Meld turn WOs", rag_manual("2026-11-29", today)),
+        ("r204 Special Projects", "Canonical funnel metric live"): ("manual", "Jesus; due 11-15", rag_manual("2026-11-15", today)),
+        ("r202 Leasing", "Tour-scheduled rate"): (f"wk {week_sunday.month}/{week_sunday.day}: {wkfmt(wk,'tour_rate')} ({wk['cards_with_showing']}/{wk['cards']} cards)" + ("" if wk["mature_14d"] else " · immature, <14 d"), f"prev wk {wkfmt(prev,'tour_rate')} ({prev['cards_with_showing']}/{prev['cards']})" + ("" if prev["mature_14d"] else " · immature"), rag_high(wk["tour_rate"], 20, 17)),
+        ("r202 Leasing", "Tours scheduled per week"): (f"wk {week_sunday.month}/{week_sunday.day}: {wk['showings']}" + ("" if wk["mature_14d"] else " · immature"), f"prev wk {prev['showings']}", rag_high(wk["showings"], 45, 38)),
+        ("r202 Leasing", "Q4 leases signed"): (f"≈{leases} / 110 (move-ins since 10-01)", f"pace to date {pace:.0f}; Andie's weekly is the source of record", rag_high(leases, pace, 0.8 * pace)),
     }
     data = json.loads(GOALS.read_text())
     rows = []
     for s in data["sections"]:
         for g in sorted(s["goals"], key=lambda g: (g.get("p", "P9"), )):
-            st_, note = status.get((s["name"], g["goal"]), ("?", "no rule"))
+            st_, note, rag = status.get((s["name"], g["goal"]), ("?", "no rule", "grey"))
             rows.append({"section": s["name"], "p": g.get("p"), "goal": g["goal"], "dri": g.get("dri"),
                          "baseline": g.get("baseline"), "target": g.get("target"), "due": g.get("due"),
-                         "status": st_, "note": note})
+                         "status": st_, "note": note or "", "rag": rag})
     return rows
 
 
@@ -213,7 +239,8 @@ def main():
     for r in rows:
         if r["section"] != sec:
             sec = r["section"]; print(f"\n## {sec}\n| P | Goal | Baseline (11-03) | Target | Status now | Note |\n|---|---|---|---|---|---|")
-        print(f"| {r['p']} | {r['goal']} | {str(r['baseline'])[:60]} | {r['target']} | **{r['status']}** | {r['note']} |")
+        dot = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(r["rag"], "⚪")
+        print(f"| {r['p']} | {r['goal']} | {str(r['baseline'])[:60]} | {r['target']} | {dot} **{r['status']}** | {r['note']} |")
 
 
 if __name__ == "__main__":

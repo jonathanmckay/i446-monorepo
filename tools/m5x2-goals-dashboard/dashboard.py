@@ -86,8 +86,12 @@ col.c-actual { width: 120px; }
 col.c-link { width: 72px; }
 col.c-base, col.c-target { width: 15%; }
 col.c-now { width: 17%; }
-.now { font-weight: 600; }
+.now { font-weight: 600; border-left: 4px solid transparent; }
 .now.manual { color: var(--muted); font-weight: 400; }
+.now.rag-green { border-left-color: #2e9e5b; background: rgba(46,158,91,.12); }
+.now.rag-yellow { border-left-color: #e0a800; background: rgba(224,168,0,.14); }
+.now.rag-red { border-left-color: #d50032; background: rgba(213,0,50,.14); }
+.now.rag-grey { border-left-color: #777; }
 col.c-due { width: 92px; }
 col.c-src { width: 14%; }
 .metric { color: var(--muted); font-size: 11px; margin-top: 3px; }
@@ -136,7 +140,8 @@ def _row(g, roadmap, now=None):
             now_cell = '<td class="now na">—</td>'
         else:
             manual = str(now.get("status", "")).startswith("manual")
-            cls = "now manual" if manual else "now"
+            rag = now.get("rag") or ("grey" if manual else "")
+            cls = ("now manual" if manual else "now") + (f" rag-{_e(rag)}" if rag else "")
             now_cell = (f'<td class="{cls}" title="{_e(now.get("note"))}">{_e(now.get("status"))}'
                         + (f'<div class="metric">{_e(now.get("note"))}</div>' if now.get("note") else "") + '</td>')
         cells += [f'<td class="goal">{goal}</td>',

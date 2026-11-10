@@ -49,7 +49,7 @@ Crontabs are per-machine: `crontab -e` on Straylight edits Straylight's, `ssh ix
 | `com.jm.dashboard-personal` | :5558 | Personal dashboard |
 | `com.jm.dashboard-ai` | :5555 | AI stats dashboard |
 | `com.jm.dashboard-m5x2` | :5556 | AI m5x2 dashboard |
-| `com.jm.dashboard-m5x2-goals` | :5559 | m5x2 goals dashboard |
+| `com.jm.dashboard-m5x2-goals` | :5559 | m5x2 goals dashboard (Now column from `status.json`, written hourly at :25 by cron `tools/m5x2-goals-dashboard/status.py --write`, log `/tmp/m5x2-goals-status.log`) |
 
 ## Straylight (laptop, Microsoft auth, iMessage)
 
