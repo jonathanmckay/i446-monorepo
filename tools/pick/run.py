@@ -276,10 +276,11 @@ def pick(cands: list[dict], maxn: int, disabled: dict[str, str]
 # --- second pass: ask, then work once answered (2026-11-09) ---------------------
 def ask(task: dict, item: dict) -> str:
     """Post `😈? <question>` on the task and park it: an agent claim set straight
-    to released, which dtd draws at the top with 🕐 (waiting on JM) for a day
-    with no dtd change. Same claim → released → drop-from-index sequence as
-    closeshell.followup, so a later plain claim(…, ASK_SESSION) can't release
-    every earlier ask. Never touches a task another session holds."""
+    to state "asking", which dtd draws at the top with 😈? for a day (2026-11-10;
+    it was "released"/🕐 for one day and JM never noticed the questions). Same
+    claim → state → drop-from-index sequence as closeshell.followup, so a later
+    plain claim(…, ASK_SESSION) can't release every earlier ask. Never touches a
+    task another session holds."""
     tid = str(task["id"])
     if tid in agent_claims.load():
         picks.log("ask_skipped", tid, reason="claimed")
@@ -289,7 +290,7 @@ def ask(task: dict, item: dict) -> str:
                              "question": item["question"],
                              "desc_hash": picks.desc_hash(task.get("description"))})
     agent_claims.claim(task, picks.ASK_SESSION, also=True)
-    agent_claims.set_state(tid, "released")
+    agent_claims.set_state(tid, "asking")
     agent_claims._set_held(picks.ASK_SESSION,
                            [i for i in agent_claims.held(picks.ASK_SESSION) if i != tid],
                            agent_claims.CLAIMS_DIR)

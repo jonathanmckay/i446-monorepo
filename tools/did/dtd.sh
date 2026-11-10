@@ -2340,6 +2340,7 @@ def _float(tier):
 _agent_ids = set()
 _claim_ids = set()
 _done_ids = set()
+_ask_ids = set()
 _claim_pane = {}
 try:
     _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
@@ -2357,6 +2358,9 @@ try:
     _agent_ids = {i for i, r in _claims.items() if r['working']}
     _claim_ids = set(_claims.keys())
     _done_ids = {i for i, r in _claims.items() if r.get('done')}
+    # an agent pick (tools/pick) waiting on one answer from JM: 😈? on the left
+    # (2026-11-10; the question is a 😈? comment in the details screen)
+    _ask_ids = {i for i, r in _claims.items() if r.get('asking')}
     _claim_pane = {i: str(r['pane']) for i, r in _claims.items() if r.get('pane') is not None}
 except Exception:
     pass
@@ -2741,6 +2745,10 @@ for t in unique:
         # in the claimed tier until JM completes it with ⌥↵. The session's
         # pane number leads it, '6✅', like '6😈' while it worked.
         prefix = _pane + '✅ ' + prefix
+    elif str(t.get('id', '')) in _ask_ids:
+        # Agent pick asking JM one question (2026-11-10): 😈? on the far left,
+        # in the claimed tier; the question is the newest comment (ctrl-o).
+        prefix = '😈? ' + prefix
     elif is_claimed:
         prefix = _pane + '🕐 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so
