@@ -4,6 +4,82 @@
   "as_of": "2026-11-03",
   "sections": [
     {
+      "name": "r202 Leasing",
+      "goals": [
+        {
+          "p": "P1",
+          "dri": "Andie",
+          "goal": "Tour-scheduled rate",
+          "metric": "Unique guest cards (all statuses) received Sun-Sat with >= 1 showing scheduled / unique guest cards received; read at 14 d",
+          "baseline": "15.9% wk 10-25 (8 d old); 6-wk 11.8% per inquiry",
+          "target": ">= 20%",
+          "due": "2026-12-31",
+          "source": "AppFolio guest_card_inquiries",
+          "link": null
+        },
+        {
+          "p": "P2",
+          "dri": "Andie",
+          "goal": "Tours scheduled per week",
+          "metric": "Showings scheduled on cards received that week",
+          "baseline": "52 (wk 10-25); 6-wk mean 36",
+          "target": ">= 45 / wk",
+          "due": "2026-12-31",
+          "source": "AppFolio guest_card_inquiries",
+          "link": null
+        },
+        {
+          "p": "P1",
+          "dri": "Andie",
+          "goal": "Q4 leases signed",
+          "metric": "Countersigned new leases since 10-01",
+          "baseline": "24 / 110 (11-01)",
+          "target": "110",
+          "due": "2026-12-31",
+          "source": "Andie leasing weekly",
+          "link": null
+        }
+      ]
+    },
+    {
+      "name": "r202 TRS",
+      "goals": [
+        {
+          "p": "P1",
+          "dri": "Stefanie",
+          "goal": "Dec expirations resolved",
+          "metric": "Dec-2026 expiring leases with offer pending, notice, or already vacated",
+          "baseline": "25 / 37 (11-03; unchanged since 11-02; 11 Eligible untouched)",
+          "target": "37 / 37",
+          "due": "2026-11-06",
+          "source": "AppFolio lease_expiration_detail (Dec) x renewal_summary",
+          "link": null
+        },
+        {
+          "p": "P1",
+          "dri": "Stefanie",
+          "goal": "Expiry-cohort retention",
+          "metric": "Renewed / leases expiring in month still in place 90 d before expiry",
+          "baseline": "Dec: 0 renewed, 10 pending, 8 notices of 30",
+          "target": "Dec >= 60% (18 / 30)",
+          "due": "2026-12-15",
+          "source": "AppFolio lease_expiration_detail x renewal_summary",
+          "link": null
+        },
+        {
+          "p": "P2",
+          "dri": "Stefanie",
+          "goal": "Offer-conditional renewal rate (legacy)",
+          "metric": "Renewed / (Renewed + Did Not Renew), renewal starts next 90 d",
+          "baseline": "91% (107 / 118)",
+          "target": "Hold >= 85%; report beside cohort retention",
+          "due": "2026-12-31",
+          "source": "AppFolio renewal_summary",
+          "link": null
+        }
+      ]
+    },
+    {
       "name": "r203 Construction / Turns",
       "goals": [
         {
@@ -75,44 +151,6 @@
       ]
     },
     {
-      "name": "r202 TRS",
-      "goals": [
-        {
-          "p": "P1",
-          "dri": "Stefanie",
-          "goal": "Dec expirations resolved",
-          "metric": "Dec-2026 expiring leases with offer pending, notice, or already vacated",
-          "baseline": "25 / 37 (11-03; unchanged since 11-02; 11 Eligible untouched)",
-          "target": "37 / 37",
-          "due": "2026-11-06",
-          "source": "AppFolio lease_expiration_detail (Dec) x renewal_summary",
-          "link": null
-        },
-        {
-          "p": "P1",
-          "dri": "Stefanie",
-          "goal": "Expiry-cohort retention",
-          "metric": "Renewed / leases expiring in month still in place 90 d before expiry",
-          "baseline": "Dec: 0 renewed, 10 pending, 8 notices of 30",
-          "target": "Dec >= 60% (18 / 30)",
-          "due": "2026-12-15",
-          "source": "AppFolio lease_expiration_detail x renewal_summary",
-          "link": null
-        },
-        {
-          "p": "P2",
-          "dri": "Stefanie",
-          "goal": "Offer-conditional renewal rate (legacy)",
-          "metric": "Renewed / (Renewed + Did Not Renew), renewal starts next 90 d",
-          "baseline": "91% (107 / 118)",
-          "target": "Hold >= 85%; report beside cohort retention",
-          "due": "2026-12-31",
-          "source": "AppFolio renewal_summary",
-          "link": null
-        }
-      ]
-    },
-    {
       "name": "r204 Special Projects",
       "goals": [
         {
@@ -157,44 +195,6 @@
           "target": "One definition, frozen at 14 d",
           "due": "2026-11-15",
           "source": "AppFolio guest_card_inquiries (all statuses)",
-          "link": null
-        }
-      ]
-    },
-    {
-      "name": "r202 Leasing",
-      "goals": [
-        {
-          "p": "P1",
-          "dri": "Andie",
-          "goal": "Tour-scheduled rate",
-          "metric": "Unique guest cards (all statuses) received Sun-Sat with >= 1 showing scheduled / unique guest cards received; read at 14 d",
-          "baseline": "15.9% wk 10-25 (8 d old); 6-wk 11.8% per inquiry",
-          "target": ">= 20%",
-          "due": "2026-12-31",
-          "source": "AppFolio guest_card_inquiries",
-          "link": null
-        },
-        {
-          "p": "P2",
-          "dri": "Andie",
-          "goal": "Tours scheduled per week",
-          "metric": "Showings scheduled on cards received that week",
-          "baseline": "52 (wk 10-25); 6-wk mean 36",
-          "target": ">= 45 / wk",
-          "due": "2026-12-31",
-          "source": "AppFolio guest_card_inquiries",
-          "link": null
-        },
-        {
-          "p": "P1",
-          "dri": "Andie",
-          "goal": "Q4 leases signed",
-          "metric": "Countersigned new leases since 10-01",
-          "baseline": "24 / 110 (11-01)",
-          "target": "110",
-          "due": "2026-12-31",
-          "source": "Andie leasing weekly",
           "link": null
         }
       ]
