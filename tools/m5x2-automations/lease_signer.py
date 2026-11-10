@@ -200,12 +200,33 @@ def _accept_signature(page) -> bool:
     return False
 
 
+_SIGNED_ON_RE = re.compile(r"signed on\s+\d{1,2}/\d{1,2}/\d{4}", re.I)
+_LOGIN_HOSTS = ("account.appfolio.com",)
+
+
+def _success_from_text(text: str, url: str) -> bool:
+    """A countersign is done only when the lease page itself says so.
+
+    2026-11-09: the old check matched generic words ("complete", "confirmed",
+    "signed") anywhere on the page, which a Keycloak login page also contains,
+    so a logged-out run could be logged "Signed successfully". Now: the page
+    must be on the tenant subdomain (not account.appfolio.com) and show the
+    lease status AppFolio renders after countersigning ("Lease Status: Fully
+    Executed" / "Signed on 11/09/2026 ...")."""
+    host = re.sub(r"^https?://", "", url or "").split("/")[0].lower()
+    if not host.endswith("appfolio.com") or host in _LOGIN_HOSTS:
+        return False
+    low = (text or "").lower()
+    return "fully executed" in low or bool(_SIGNED_ON_RE.search(low))
+
+
 def _check_success(page) -> bool:
-    """Check if the page shows a success/completion state."""
-    indicators = ["signed", "complete", "thank you", "successfully", "confirmed"]
-    text = page.text_content("body").lower()
-    title = page.title().lower()
-    return any(w in text or w in title for w in indicators)
+    """Check if the lease page shows the countersigned state."""
+    try:
+        text = (page.text_content("body") or "") + " " + (page.title() or "")
+    except Exception:
+        return False
+    return _success_from_text(text, page.url)
 
 
 def _launch_context(pw, headless: bool):
@@ -290,10 +311,23 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
                 result = {"status": "success", "url": page.url}
             else:
                 time.sleep(3)
+                if not _check_success(page):
+                    # The post-sign view may be a modal; the lease document
+                    # page itself carries "Lease Status: Fully Executed".
+                    try:
+                        page.goto(page.url.split("#")[0], wait_until="domcontentloaded", timeout=30_000)
+                        _wait(page, 4000)
+                    except Exception:
+                        pass
                 if _check_success(page):
                     result = {"status": "success", "url": page.url}
                 else:
-                    result = {"status": "failed", "error": "clicked accept but no confirmation seen", "url": page.url}
+                    try:
+                        page.screenshot(path="/tmp/autosign_debug.png")
+                    except Exception:
+                        pass
+                    result = {"status": "failed", "url": page.url,
+                              "error": "clicked accept but the lease page never showed Fully Executed"}
         else:
             try:
                 page.screenshot(path="/tmp/autosign_debug.png")
@@ -310,8 +344,12 @@ def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
 
 _APPFOLIO_URL_RE = re.compile(r'https?://(?:sg\.appfolio\.com/ls/click\?[^\s>\"]+|[a-z]+\.appfolio\.com/[^\s>\"]+)', re.I)
 _COUNTERSIGN_SUBJECT_RE = re.compile(r'countersign', re.I)
-_UNIT_RE = re.compile(r'for\s+([\w\d]+\s+[\w\d]+\s+-\s+[\w\d]+)', re.I)
-_TENANT_RE = re.compile(r'Tenants?\s+([\w ,]+)', re.I)
+# The unit is whatever follows "countersigned for" in AppFolio's subject:
+# "kn47 K1 - L102", "rl16 - C09", "k104- LeFevre - 512-3" (2026-11-09: the old
+# pattern needed exactly two words before the dash and left most rows blank).
+_UNIT_SUBJECT_RE = re.compile(r'countersigned\s+for\s+(.+?)\s*$', re.I | re.M)
+_UNIT_BODY_RE = re.compile(r'\bUnit:?\s+(.+?)\s*(?:\r?\n|View and|$)', re.I)
+_TENANT_RE = re.compile(r'Tenants?:?\s+([\w .,\'-]+?)\s*(?:\r?\n|Unit\b|$)', re.I)
 
 
 def extract_appfolio_url(body: str) -> Optional[str]:
@@ -346,9 +384,11 @@ def parse_email_metadata(item: dict) -> dict:
     body    = item.get("body", "")
     text    = subject + " " + body
 
-    unit    = (_UNIT_RE.search(text) or [None, ""])[1].strip()
-    tenants = (_TENANT_RE.search(body) or [None, ""])[1].strip()
-    property_ = unit.split()[0] if unit else ""
+    m = _UNIT_SUBJECT_RE.search(subject.splitlines()[0] if subject else "") or _UNIT_BODY_RE.search(body)
+    unit = " ".join(m.group(1).split()) if m else ""
+    tenants = " ".join((_TENANT_RE.search(body) or [None, ""])[1].split())
+    # property code = first token, minus a dash glued on ("k104-" → "k104")
+    property_ = unit.split()[0].rstrip("-") if unit else ""
     lease_type = "renewal" if "renewal" in text.lower() else "new"
 
     return {
