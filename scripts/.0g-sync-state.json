@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-10T12:00:04.324803-08:00"
+  "tasks": {
+    "scale with staff and with agents": {
+      "todoist_id": "6hxWJ2XrhV7mqF62",
+      "minutes": 40
+    },
+    "hiit": {
+      "todoist_id": "6hxWJ57JqJCcJR2P",
+      "minutes": 30
+    },
+    "full points day 1600": {
+      "todoist_id": "6hxWJ58Hr8hfJJVc",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-11-10T14:00:03.807466-08:00"
 }
