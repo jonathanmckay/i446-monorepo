@@ -16,7 +16,7 @@ Statuses
 
 Every run appends one JSON line to ~/.local/state/jm/1st-hci-selfie.jsonl.
 
-Usage: selfie_check.py [--hours 2] [--apply] [--points 5] [--date M/D]
+Usage: selfie_check.py [--hours 2] [--apply] [--points 5] [--date M/D] [--at HH:MM]
                        [--db PATH] [--live-days 7] [--dock-when-stale]
 """
 from __future__ import annotations
@@ -65,26 +65,27 @@ def _snapshot(db: Path, tmpdir: str) -> Path:
 
 def query(db: Path, since: dt.datetime, now: dt.datetime | None = None) -> dict:
     """Return {newest_added, newest_created, candidates:[{created, lens, faces, filename}]}
-    for photos (ZKIND=0, not trashed/hidden) created at or after `since`."""
+    for photos (ZKIND=0, not trashed/hidden) created in [since, now]."""
     now = now or dt.datetime.now().astimezone()
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
     try:
         newest_added, newest_created = con.execute(
             "select max(ZADDEDDATE), max(ZDATECREATED) from ZASSET").fetchone()
         since_apple = since.timestamp() - APPLE_EPOCH
+        until_apple = now.timestamp() - APPLE_EPOCH
         rows = con.execute(
             """
             select a.ZDATECREATED, e.ZLENSMODEL, a.ZFILENAME,
                    (select count(*) from ZDETECTEDFACE f where f.ZASSETFORFACE = a.Z_PK)
             from ZASSET a
             left join ZEXTENDEDATTRIBUTES e on e.Z_PK = a.ZEXTENDEDATTRIBUTES
-            where a.ZDATECREATED >= ?
+            where a.ZDATECREATED >= ? and a.ZDATECREATED <= ?
               and a.ZKIND = 0
               and coalesce(a.ZTRASHEDSTATE, 0) = 0
               and coalesce(a.ZHIDDEN, 0) = 0
             order by a.ZDATECREATED desc
             """,
-            (since_apple,),
+            (since_apple, until_apple),
         ).fetchall()
     finally:
         con.close()
@@ -100,12 +101,10 @@ def query(db: Path, since: dt.datetime, now: dt.datetime | None = None) -> dict:
 
 
 def is_selfie(c: dict) -> bool:
-    """A face photo; front-camera lens is the strong signal, unknown lens is
-    accepted (iCloud-synced assets often lack EXIF until downloaded)."""
-    if not c.get("faces"):
-        return False
-    lens = (c.get("lens") or "").lower()
-    return "front" in lens or lens == "" or "back" not in lens
+    """Any photo Photos detected a face in. The lens is logged but does not
+    disqualify: JM's 2026-11-09 proof photo was a back-camera face shot, and
+    iCloud-synced assets often lack EXIF until downloaded."""
+    return bool(c.get("faces"))
 
 
 def decide(q: dict, now: dt.datetime, live_days: int) -> tuple[str, dict | None]:
@@ -134,6 +133,8 @@ def main(argv=None) -> int:
     ap.add_argument("--apply", action="store_true", help="append -points to 0分!个 when status is none")
     ap.add_argument("--points", type=int, default=5)
     ap.add_argument("--date", help="M/D row (default today)")
+    ap.add_argument("--at", help="HH:MM the habit was closed; the window ends there "
+                                 "instead of now (use with --date for a past day)")
     ap.add_argument("--db", default=str(default_db()))
     ap.add_argument("--live-days", type=int, default=7,
                     help="library counts as live if any asset was added within this many days")
@@ -143,6 +144,11 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     now = dt.datetime.now().astimezone()
+    if a.date or a.at:
+        # Anchor the window to when the card was closed on the target day.
+        m, d = (int(x) for x in (a.date or f"{now.month}/{now.day}").split("/"))
+        hh, mm = (int(x) for x in (a.at or now.strftime("%H:%M")).split(":"))
+        now = now.replace(month=m, day=d, hour=hh, minute=mm, second=0, microsecond=0)
     since = now - dt.timedelta(hours=a.hours)
     date_md = a.date or f"{now.month}/{now.day}"
     rec = {"ts": now.isoformat(timespec="seconds"), "date": date_md, "hours": a.hours,

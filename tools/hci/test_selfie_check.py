@@ -98,3 +98,21 @@ def test_no_source_when_library_stale(tmp_path, monkeypatch):
 def test_missing_db_logs_error(tmp_path):
     rc, rec = _run(tmp_path / "nope.sqlite", tmp_path)
     assert rc == 1 and rec["status"] == "error" and "FileNotFoundError" in rec["error"]
+
+
+def test_back_camera_face_counts_as_proof(tmp_path, monkeypatch):
+    """JM's 2026-11-09 proof photo was a back-camera face shot."""
+    recent = NOW - dt.timedelta(minutes=30)
+    db = make_db(tmp_path / "p.sqlite", [(recent, recent, 0, 0, "iPhone back triple camera", 1)])
+    rc, rec = _run(db, tmp_path, "--apply")
+    assert rec["status"] == "selfie"
+
+
+def test_at_anchors_window_to_close_time(tmp_path, monkeypatch):
+    """--date/--at: a photo at 09:22 counts for a card closed 09:23 on that day."""
+    day = NOW.replace(hour=9, minute=22)
+    db = make_db(tmp_path / "p.sqlite", [(day, NOW, 0, 0, "", 1)])
+    rc, rec = _run(db, tmp_path, "--date", "11/9", "--at", "09:23")
+    assert rec["status"] == "selfie" and rec["date"] == "11/9"
+    rc, rec = _run(db, tmp_path, "--date", "11/9", "--at", "07:00")
+    assert rec["status"] == "none"
