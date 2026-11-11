@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-11T12:00:01.045785-08:00"
+  "tasks": {
+    "bedtime of 2130": {
+      "todoist_id": "6hxp8V9wVFMPJC7R",
+      "minutes": 40
+    },
+    "keep moving tasks and points down": {
+      "todoist_id": "6hxp8V9fpRr37PM6",
+      "minutes": 50
+    }
+  },
+  "last_sync": "2026-11-11T14:00:09.722865-08:00"
 }
