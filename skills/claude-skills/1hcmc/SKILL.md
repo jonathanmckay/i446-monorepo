@@ -1,6 +1,6 @@
 ---
 name: "1hcmc"
-description: "Weekly media review (the 1 hcmc card). Reports which books were started and finished during the target week (same Wed-Tue week convention as /1s897), audits media-tag credits, then asks what you learned about media consumption this week and how to do better next week, writes the answer to Neon 1分+1s!AO and closes the card. Usage: /1hcmc [M.W or YYYY-MM-DD]"
+description: "Weekly media review (the 1 hcmc card). Reports which books were started and finished during the target week (same Wed-Tue week convention as /1s897), audits media-tag credits, asks whether anything else was read or consumed that week (each book named goes through /book: started, finished, or both), then asks what you learned about media consumption this week and how to do better next week, writes the answer to Neon 1分+1s!AO and closes the card. Usage: /1hcmc [M.W or YYYY-MM-DD]"
 user-invocable: true
 ---
 
@@ -82,6 +82,29 @@ python3 ~/i446-monorepo/tools/hcmc/hcmc-survey.py --book-note <id> --from-text "
 
 A book JM skips stays unreviewed; write nothing for it. Run without flags, the
 script asks these itself before the media question.
+
+### Step 2c2: Anything else? (2026-11-12)
+
+The Step 2 report only knows what went through `/book` during the week. Before
+the media question, ask in chat:
+
+> **Did I read or consume anything else this week?**
+
+Wait for the answer. For every book JM names, run the `/book` skill's paths
+(same routing as `/book`, one book per call; never hand-write a review stub):
+
+- a bare title, or "started X" → Add path: `python3 ~/i446-monorepo/tools/hcmc/book-add.py <title> [--author X]`
+- "finished X" → Finish path: `python3 ~/i446-monorepo/tools/hcmc/book-finish.py <title>`,
+  which bumps the week's books-read counter itself, then the Goodreads shelf
+  step from `/book`
+- read start to finish this week → Add, then Finish
+- `EXISTS:` from book-add means it is already in the database: say so, do not
+  duplicate; if JM said it is finished, run the Finish path on it
+
+Anything that is not a book (films, podcasts, articles, shows) is not a
+`/book` item: carry it into the media note in Step 2d as a line of its own,
+so the week's record still shows it. Then rerun Step 2 so the report reflects
+the additions before Step 3. A "no" or "nothing" moves straight on.
 
 ### Step 2d: Media survey (the card's manual part, 2026-10-17)
 
