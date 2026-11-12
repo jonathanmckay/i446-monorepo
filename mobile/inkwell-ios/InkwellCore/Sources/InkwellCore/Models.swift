@@ -186,6 +186,14 @@ public struct DelayOptions: Equatable {
 public struct TimelineRow: Equatable, Hashable {
     public var type: String
     public var label: String = ""        // divider
+    /// Divider 分 (2026-11-12: JM "blocks should show points for block and
+    /// -1n points per block"): the block's Σ分 from 0分 (`pts`), the ledger
+    /// view of the same (`lpts`), and the -1₦ ritual score (`n1`). All nil on
+    /// the lite pass, a failed Excel read, or a 0-分 block (the server omits
+    /// zero blocks); the view draws nothing for a nil.
+    public var blockPts: Int? = nil
+    public var blockLedgerPts: Int? = nil
+    public var blockN1: Int? = nil
     public var start: String = ""        // HH:MM (entry/gap/event)
     public var end: String = ""          // HH:MM or "now" for the running entry
     public var minutes: Int = 0
@@ -225,6 +233,15 @@ public struct TimelineRow: Equatable, Hashable {
     public var isGap: Bool { type == "gap" }
     public var isEvent: Bool { type == "event" }
     public var isDivider: Bool { type == "divider" }
+
+    /// The 分 a divider shows: Excel's block Σ, else the ledger view when the
+    /// Excel read came back empty (the web page prefers `pts` the same way).
+    public var displayBlockPts: Int? { blockPts ?? blockLedgerPts }
+
+    /// The colour to draw this row in: the server's, else the local palette
+    /// for its project (2026-11-12, ProjectColors) — a pending / offline /
+    /// lite row never has to wait for the server to be coloured.
+    public var resolvedColor: String { color.isEmpty ? ProjectColors.hex(for: project) : color }
 
     /// Right-swipe (commit) allowed? Mirrors the web: an already-logged entry
     /// is inert so a reload never invites a re-swipe; dividers do nothing.
@@ -293,18 +310,43 @@ public struct Timeline: Equatable {
     /// on today's full pass; empty on the lite pass, a past day, or a failed
     /// Excel read, and the view draws nothing then.
     public let habits: [[HabitChip]]
+    /// One-line neon habit status (server `habits.summary`, 2026-11-12: JM
+    /// "the second line of janus should show the status of neon habits"),
+    /// e.g. "0₦ 12/17 · 0l 0t notes". "" when the server (older, lite pass,
+    /// past day) didn't send one; the header then falls back to its old text.
+    public let habitSummary: String
     public init(rows: [TimelineRow], trackedMin: Int, points: Int?, date: String, isToday: Bool = true,
-                habits: [[HabitChip]] = []) {
+                habits: [[HabitChip]] = [], habitSummary: String = "") {
         self.rows = rows; self.trackedMin = trackedMin; self.points = points
-        self.date = date; self.isToday = isToday; self.habits = habits
+        self.date = date; self.isToday = isToday; self.habits = habits; self.habitSummary = habitSummary
     }
-    /// The lite pass carries no strip; keep the one already on screen for the
-    /// same day so a cold load / day switch doesn't blank it between passes.
-    public func carryingHabits(from prior: Timeline?) -> Timeline {
-        guard habits.isEmpty, let p = prior, p.date == date, !p.habits.isEmpty else { return self }
-        return Timeline(rows: rows, trackedMin: trackedMin, points: points, date: date,
-                        isToday: isToday, habits: p.habits)
+
+    /// Fill what this payload lacks from the one already on screen for the
+    /// same day (2026-11-12). The lite pass (and a full pass whose Excel
+    /// reads failed) carries none of the Neon-derived fields — Σ分, habit
+    /// strip, habit summary, per-divider pts/lpts/n1 — and rows are replaced
+    /// wholesale, so without this every 60 s poll would blank them. Only nil
+    /// / empty fields are filled; a value the new payload does carry always
+    /// wins. Dividers pair by label (the block name, unique within a day).
+    /// A different date never inherits anything (midnight rollover).
+    public func carrying(from prior: Timeline?) -> Timeline {
+        guard let p = prior, p.date == date else { return self }
+        let priorDividers = Dictionary(p.rows.filter { $0.isDivider }.map { ($0.label, $0) },
+                                       uniquingKeysWith: { a, _ in a })
+        let rows = self.rows.map { r -> TimelineRow in
+            guard r.isDivider, let q = priorDividers[r.label] else { return r }
+            var y = r
+            if y.blockPts == nil { y.blockPts = q.blockPts }
+            if y.blockLedgerPts == nil { y.blockLedgerPts = q.blockLedgerPts }
+            if y.blockN1 == nil { y.blockN1 = q.blockN1 }
+            return y
+        }
+        return Timeline(rows: rows, trackedMin: trackedMin, points: points ?? p.points, date: date,
+                        isToday: isToday, habits: habits.isEmpty ? p.habits : habits,
+                        habitSummary: habitSummary.isEmpty ? p.habitSummary : habitSummary)
     }
+    /// Pre-2026-11-12 name; the strip is one of the fields `carrying` fills.
+    public func carryingHabits(from prior: Timeline?) -> Timeline { carrying(from: prior) }
 }
 
 /// A survey card's form (round 3 #1, 2026-10-22: "survey tasks doable in dtd

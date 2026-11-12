@@ -48,6 +48,10 @@ public enum Parsers {
             // Dividers read as the CLI's "卯:00" (the server sends the block name).
             let block = r.string("block")
             row.label = block.isEmpty ? r.string("label") : block + ":00"
+            // Divider 分 / -1₦ (2026-11-12): absent on the lite pass → nil.
+            row.blockPts = r.intOrNil("pts")
+            row.blockLedgerPts = r.intOrNil("lpts")
+            row.blockN1 = r.intOrNil("n1")
             row.start = r.string("start")
             row.end = r.string("end")
             row.minutes = r.int("minutes")
@@ -77,7 +81,9 @@ public enum Parsers {
         return Timeline(rows: rows, trackedMin: json.int("tracked_min"), points: json.intOrNil("points"),
                         date: json.string("date"),
                         isToday: json.has("is_today") ? json.bool("is_today") : true,
-                        habits: habits)
+                        habits: habits,
+                        // Optional string: an older server has no summary (2026-11-12).
+                        habitSummary: json["habits"].string("summary").trimmingCharacters(in: .whitespaces))
     }
 
     public static func projectCodes(_ json: JSON) -> [String] { json.strings("codes") }

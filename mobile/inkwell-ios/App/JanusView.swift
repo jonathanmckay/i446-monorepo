@@ -70,7 +70,9 @@ struct JanusView: View {
                     } else {
                         TimelineRowView(row: r)
                             .listRowBackground(Theme.bg)
-                            .listRowSeparatorTint(Color(white: 0.15))
+                            // No rule between rows (2026-11-12: JM "remove the
+                            // lines between entries"); the dividers already hide theirs.
+                            .listRowSeparator(.hidden)
                             // Swipe right all the way = did (2026-10-22 janus note #2 + round 3
                             // #2): log / stop+log / convert / fill fire on a full swipe, the
                             // label shows the 分 it will credit, and a success haptic lands

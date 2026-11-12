@@ -37,9 +37,12 @@ public enum Bodies {
         ["id": id, "desc": desc, "start": start, "end": end, "project": project]
     }
     public static func split(id: String, mode: String) -> [String: Any] { ["id": id, "mode": mode] }
-    /// /api/delete-event: Google-hosted → deleted from the calendar; Outlook → hidden.
+    /// /api/delete-event. `hide_only: true` (2026-11-12: JM "swipe left should
+    /// hide from janis only"): the server never touches Google Calendar for
+    /// this request, it only hides the event from janus — Google-hosted or
+    /// Outlook alike. The ids still ride along so the server can key the hide.
     public static func deleteEvent(_ r: TimelineRow) -> [String: Any] {
         ["title": r.rawTitle.isEmpty ? r.title : r.rawTitle, "start_iso": r.startIso, "end_iso": r.endIso,
-         "event_id": r.eventId, "calendar_id": r.calendarId]
+         "event_id": r.eventId, "calendar_id": r.calendarId, "hide_only": true]
     }
 }

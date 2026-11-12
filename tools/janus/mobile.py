@@ -751,17 +751,24 @@ def _hide_event_key(key: tuple) -> None:
 
 
 def delete_calendar_event(title: str, start_iso: str, end_iso: str,
-                          event_id: str = "", calendar_id: str = "") -> dict:
+                          event_id: str = "", calendar_id: str = "",
+                          hide_only: bool = False) -> dict:
     """Swipe-left delete on an event row. Google-hosted events (an id and a
     calendar that isn't the read-only Outlook ICS import) are deleted from the
     calendar via the API, sendUpdates='none' like the terminal's ^X; Outlook
     rows can't be deleted from here, so they're hidden from janus only. Either
     way the hide key is written, so the row leaves at once even while the
-    calendar fetch is cached and a mirrored copy can't resurface it."""
+    calendar fetch is cached and a mirrored copy can't resurface it.
+
+    hide_only=True (2026-11-12: JM "swipe left should hide from janis only")
+    is the iOS swipe: never touches the calendar, just writes the hide key
+    and reports mode "hidden" even for a Google-hosted event. The terminal
+    janus and the web page keep the default (real delete)."""
     if not title or not start_iso or not end_iso:
         return {"ok": False, "error": "title, start_iso, end_iso required"}
     mode = "hidden"
-    if event_id and calendar_id and not calendar_id.endswith("@import.calendar.google.com") \
+    if not hide_only and event_id and calendar_id \
+            and not calendar_id.endswith("@import.calendar.google.com") \
             and gcal_client is not None:
         try:
             gcal_client.delete_event(calendar_id, event_id)
@@ -951,11 +958,32 @@ def _habit_strip(today: _dt.date) -> dict | None:
         r = excel.read("hcbi", "U", date=ds)
         if r.get("ok"):
             kcal = hs.kcal_int(r.get("value"))
-        return hs.strip_chips(parsed, colors=COLORS, ytd=ytd, dozen=dozen,
-                              hcb_total=hcb_total, kcal=kcal)
+        strip = hs.strip_chips(parsed, colors=COLORS, ytd=ytd, dozen=dozen,
+                               hcb_total=hcb_total, kcal=kcal)
+        # One-line plain-text digest for the iOS second line (2026-11-12: JM
+        # "the second line of janus should show the status of neon habits"):
+        # "0₦ done/total · pending names" from the same parsed row, pending in
+        # line1's order. Wrapped on its own: a bad summary must not drop the
+        # chips, which already shipped before it existed.
+        try:
+            strip["summary"] = _habit_summary(parsed)
+        except Exception as e:  # noqa: BLE001 -- summary is a sub-decoration
+            print("WARN habit summary:", e, file=sys.stderr)
+        return strip
     except Exception as e:  # noqa: BLE001 -- the strip is decoration; the timeline must still ship
         print("WARN habit strip:", e, file=sys.stderr)
         return None
+
+
+def _habit_summary(parsed: dict) -> str:
+    """`0₦ {done}/{total} · {pending names}` (total = done + pending, pending
+    space-separated in row order); `0₦ {done}/{total} · all done` when nothing
+    is pending. Pure; the input is hs.parse_habit_row's dict."""
+    pending = [str(n) for n in parsed.get("pending", [])]
+    done = len(parsed.get("done", []))
+    total = done + len(pending)
+    tail = " ".join(pending) if pending else "all done"
+    return f"0₦ {done}/{total} · {tail}"
 
 
 def _block_ritual_scores(now: _dt.datetime) -> dict[str, int]:
@@ -2407,9 +2435,12 @@ def api_edit():
 @app.route("/api/delete-event", methods=["POST"])
 def api_delete_event():
     b = request.get_json(force=True, silent=True) or {}
+    # hide_only (2026-11-12: JM "swipe left should hide from janis only"):
+    # any truthy JSON value hides without deleting; absent/false = old delete.
     r = delete_calendar_event((b.get("title") or "").strip(), b.get("start_iso") or "",
                               b.get("end_iso") or "", str(b.get("event_id") or ""),
-                              str(b.get("calendar_id") or ""))
+                              str(b.get("calendar_id") or ""),
+                              hide_only=bool(b.get("hide_only")))
     return jsonify(r), (200 if r.get("ok") else 400)
 
 

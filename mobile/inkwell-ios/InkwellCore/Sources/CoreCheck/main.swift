@@ -139,7 +139,7 @@ do {
 
 let timelineJson = """
 {"ok": true, "date": "2026-09-24", "tracked_min": 512, "points": 497, "rows": [
-  {"type": "divider", "label": "巳 08:00"},
+  {"type": "divider", "label": "巳 08:00", "block": "巳", "pts": 42, "lpts": 40, "n1": 3},
   {"type": "gap", "start": "08:00", "end": "08:20", "minutes": 20},
   {"type": "entry", "id": 4565255703, "desc": "0g", "project": "g245", "color": "#c3fc0d",
    "tags": [], "start": "14:48", "end": "14:50", "minutes": 2, "running": false, "logged": true, "points": null},
@@ -171,6 +171,13 @@ do {
     eq(running.displayMeta, "14:52", "running meta: start only")
     eq(running.rightMeta, "40m", "running right meta: duration only, as the CLI")
     check(!tl.rows[0].canSwipeRight, "divider inert")
+    // Divider 分 / -1₦ (2026-11-12: "blocks should show points for block and -1n points per block")
+    eq(tl.rows[0].label, "巳:00", "divider label from block")
+    eq(tl.rows[0].blockPts, 42, "divider pts")
+    eq(tl.rows[0].blockLedgerPts, 40, "divider lpts")
+    eq(tl.rows[0].blockN1, 3, "divider n1")
+    eq(tl.rows[0].displayBlockPts, 42, "pts preferred over lpts")
+    check(tl.rows[1].blockPts == nil && tl.rows[1].blockN1 == nil, "non-divider rows carry no block 分")
     check(!tl.rows[1].canSwipeLeft, "gaps: right-swipe only")
     eq(tl.rows[1].rightLabel, "fill", "gap label")
     eq(tl.rows[4].rightLabel, "log 分 (30m)", "past event label")
@@ -219,7 +226,12 @@ do {
     eq(Bodies.fill(desc: "nap", start: "13:00", end: "")["end"] as? String, "", "fill open end")
     check(Bodies.fill(desc: "nap", start: "13:00", end: "")["project"] == nil, "fill omits empty project")
     eq(Bodies.fill(desc: "nap", start: "13:00", end: "", project: "hcb")["project"] as? String, "hcb", "fill carries project")
-    for b in [log, ev, Bodies.done(Parsers.tasks(JSON.parse(tasksJson)!)[0])] {
+    // Event delete hides from janus only (2026-11-12: "swipe left should hide from janis only").
+    let del = Bodies.deleteEvent(tl.rows[4])
+    eq(del["hide_only"] as? Bool, true, "delete-event body carries hide_only")
+    eq(del["title"] as? String, "LX/JM", "delete-event falls back to title when raw_title absent")
+    eq(del["start_iso"] as? String, "2026-09-24T12:30:00-07:00", "delete-event start_iso")
+    for b in [log, ev, del, Bodies.done(Parsers.tasks(JSON.parse(tasksJson)!)[0])] {
         check(JSONSerialization.isValidJSONObject(b), "body serializes")
     }
 }
