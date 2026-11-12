@@ -106,3 +106,25 @@ def test_legacy_string_entries_tolerated(tmp_path):
     p.write_text(json.dumps({"abcd1234": "old short"}))
     assert es.load(p) == {"abcd1234": {"raw": None, "short": "old short"}}
     assert es.raw_for("old short", p) is None   # no raw known → no mapping
+
+
+def test_haiku_shorten_retries_once_on_overshoot_then_fits(monkeypatch):
+    asked = []
+    answers = {33: "United Airlines flight 1334 to San Francisco", 29: "UA 1334 to SFO (CH31F1)"}
+    monkeypatch.setattr(es, "_ask", lambda raw, cols: asked.append(cols) or answers[cols])
+    assert es.haiku_shorten("United Airlines flight 1334 to San Francisco (CH31F1)", 33) == "UA 1334 to SFO (CH31F1)"
+    assert asked == [33, 29]
+
+
+def test_haiku_shorten_fits_when_the_retry_also_overshoots(monkeypatch):
+    monkeypatch.setattr(es, "_ask", lambda raw, cols: "one two three four five six seven eight nine ten eleven")
+    out = es.haiku_shorten("x" * 50, 33)
+    assert out and es.dwidth(out) <= 33 and not out.endswith(" ")
+
+
+def test_haiku_shorten_swallows_api_errors(monkeypatch, capsys):
+    def boom(raw, cols):
+        raise RuntimeError("TypeError: unexpected kwarg output_config")
+    monkeypatch.setattr(es, "_ask", boom)
+    assert es.haiku_shorten("x" * 50, 33) is None
+    assert "WARN event_shorts" in capsys.readouterr().err

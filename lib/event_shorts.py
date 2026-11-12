@@ -133,30 +133,46 @@ def _fit(short: str, cols: int) -> str:
     return re.sub(r"(?:\s+(?:with|and|of|for|to|the|a|an|in|on|&|\||/|-))+$", "", short, flags=re.I).strip()
 
 
+def _ask(raw: str, cols: int) -> str | None:
+    """One Messages call; the first text line, or None. Module attribute so
+    tests stub the network and still exercise the retry/fit logic."""
+    import anthropic
+    k = _api_key()
+    client = anthropic.Anthropic(api_key=k) if k else anthropic.Anthropic()
+    # Haiku 5.5: thinking off is allowed at effort ≤ high; a ≤60-token rewrite
+    # needs neither (verified live 2026-11-12: 0.9 s, 13 output tokens).
+    resp = client.messages.create(
+        model=MODEL, max_tokens=60,
+        thinking={"type": "disabled"}, output_config={"effort": "low"},
+        messages=[{"role": "user", "content": _prompt(raw, cols)}],
+    )
+    if resp.stop_reason == "refusal":
+        return None
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    return re.sub(r"\s+", " ", line).strip().strip('"“”').strip() or None
+
+
 def haiku_shorten(raw: str, cols: int = DEFAULT_COLS) -> str | None:
-    """One Haiku round-trip (≈1 s). None on any failure, logged to stderr so a
-    bad kwarg or a dead key never fails silently (the TUI's old version swallowed
-    everything). Module attribute on purpose: tests stub it."""
+    """Haiku short name within `cols` display columns. An overshoot gets ONE
+    retry at a tighter budget before the word-boundary trim (`_fit`), because a
+    trimmed overshoot reads badly — the first live run produced "United
+    Airlines flight 1334 to San" where the retry gives "UA 1334 to SFO".
+    None on any failure, logged to stderr so a bad kwarg or a dead key never
+    fails silently (the TUI's old version swallowed everything). Module
+    attribute on purpose: tests stub it."""
     try:
-        import anthropic
+        import anthropic  # noqa: F401
     except ImportError:
         print("WARN event_shorts: anthropic SDK missing", file=sys.stderr)
         return None
     try:
-        k = _api_key()
-        client = anthropic.Anthropic(api_key=k) if k else anthropic.Anthropic()
-        # Haiku 5.5: thinking off is allowed at effort ≤ high; a ≤60-token rewrite
-        # needs neither (verified live 2026-11-12: 0.9 s, 13 output tokens).
-        resp = client.messages.create(
-            model=MODEL, max_tokens=60,
-            thinking={"type": "disabled"}, output_config={"effort": "low"},
-            messages=[{"role": "user", "content": _prompt(raw, cols)}],
-        )
-        if resp.stop_reason == "refusal":
-            return None
-        text = next((b.text for b in resp.content if b.type == "text"), "")
-        short = _fit(text.splitlines()[0] if text.strip() else "", cols)
-        return short or None
+        short = _ask(raw, cols)
+        if short and dwidth(short) > cols:
+            again = _ask(raw, max(8, cols - 4))
+            if again and dwidth(again) <= cols:
+                short = again
+        return _fit(short, cols) or None if short else None
     except Exception as e:  # noqa: BLE001
         print(f"WARN event_shorts: {type(e).__name__}: {e}", file=sys.stderr)
         return None
