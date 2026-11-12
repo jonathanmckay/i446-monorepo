@@ -6357,6 +6357,10 @@ def _did_summary(stdout_text: str) -> str:
         lines = stdout_text.strip().splitlines()
         return lines[-1] if lines else "(no output)"
     bits = []
+    # A failed sheet write (did-fast exit 2) means the 分 in the per-result
+    # 0fen block were computed but never landed; say so instead of ✓ +N分
+    # (2026-11-12: a lost 0分 write flashed "✓ Jon/Sarah connect +100分").
+    failures = janus_done.write_failures(data)
     for r in data.get("results", []):
         name = r.get("name", "?")
         if r.get("step") == "refused":  # inferred 分 over janus_done.MAX_INFERRED_POINTS
@@ -6369,10 +6373,14 @@ def _did_summary(stdout_text: str) -> str:
         # A per-block split segment (did-fast split_results_by_block): say
         # which block its share landed in.
         blk = f" →{r['block']}" if r.get("split") and r.get("block") else ""
-        if pts:
+        if pts and failures:
+            bits.append(f"✗ {name} +{pts}分 NOT credited{blk}{closed}")
+        elif pts:
             bits.append(f"✓ {name} +{pts}分{blk}{closed}")
         else:
             bits.append(f"✓ {name}{blk}{closed}")
+    for f in failures:
+        bits.append(f"✗ {f}")
     for a in data.get("agent_needed", []):
         bits.append(f"⚠ {a.get('name', '?')}: {a.get('reason', 'needs agent')}")
     for fs in data.get("future_skipped", []):
@@ -7932,8 +7940,11 @@ def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
         res, data = await asyncio.to_thread(run_did_fast_data, cmd, flags)
         if _did_may_have_credited(res, data):
             _mark_cmd_done_today(key)
+        # No local 分 record when a sheet write failed: did-fast itself skips
+        # _record_entry_points then, and the row would otherwise show [100]
+        # for points that never landed (2026-11-12).
         if day is not None and data and not res.startswith("err") \
-                and not janus_done.refusal(data):
+                and not janus_done.refusal(data) and not janus_done.write_failures(data):
             _entry_pts_add(day, janus_done.entry_points_by_id(data, entry_ids or []))
         flash(res, 8.0)
         app.invalidate()

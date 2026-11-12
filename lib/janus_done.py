@@ -122,6 +122,20 @@ def refusal(did_fast_output: dict | None) -> str | None:
     return None
 
 
+def write_failures(did_fast_output: dict | None) -> list[str]:
+    """'<key>: <error>' for every *_write block did-fast reported with ok
+    False (0fen_write, hcbi_write, 0n_write, …) — the same rule as did-fast's
+    own _write_failures, for the clients. A run with any of these exited 2
+    and credited nothing to that sheet, however many ✓ its results carry
+    (2026-11-12: "Jon/Sarah connect [100]" flashed ✓ +100分 while the 0分
+    write never reached the daemon)."""
+    out = []
+    for k, v in (did_fast_output or {}).items():
+        if k.endswith("_write") and isinstance(v, dict) and v.get("ok") is False:
+            out.append(f"{k}: {v.get('error') or 'failed'}")
+    return out
+
+
 def classify(*, task_points: int | None, time_based: bool, crossed_off: bool) -> str:
     if task_points is not None:
         return TASK

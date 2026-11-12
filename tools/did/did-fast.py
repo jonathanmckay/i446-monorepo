@@ -2483,6 +2483,16 @@ def _idem_key(tag: str, r, target_date: str, col: str) -> Optional[str]:
     return f"{tag}:{tid}@{target_date}:{col}" if tid else None
 
 
+def _batch_landed(result) -> bool:
+    """A batch CompletedProcess means "written" only on rc 0 AND no ERROR
+    echo: append_0fen_batch returns rc 0 with stdout "ERROR: date … not
+    found" for a missing day row (the old AppleScript shape), so rc alone
+    reported that miss as a success. None (no batch) counts as landed."""
+    if result is None:
+        return True
+    return result.returncode == 0 and not (result.stdout or "").lstrip().startswith("ERROR")
+
+
 def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
                       src_names: list[str], tag: str,
                       idem: Optional[list] = None) -> subprocess.CompletedProcess:
@@ -4821,6 +4831,18 @@ def main():
             # segment under the same name.
             completed_points[r.item.name] = (completed_points.get(r.item.name, 0)
                                              + r.fen_points + sum(p for _, p in r.fen_extra))
+    # Points whose 0分/hcbi batch did NOT land are not credited: recording
+    # them here made janus show "logged 100" for a write the daemon never
+    # received (2026-11-12, "Jon/Sarah connect [100]": Excel write lost in
+    # transit, completed-today said 100, 巳 showed 98). Names stay recorded —
+    # the Todoist task did close — only the 分 claim is dropped.
+    fen_ok = _batch_landed(fen_result)
+    hcbi_ok = _batch_landed(hcbi_result)
+    uncredited = set(fen_names) if not fen_ok else set()
+    if not hcbi_ok:
+        uncredited |= {r.item.name for r in fast
+                       if _hcbi_domain_col(r.fen_col) or r.item.name.lower() in HCBI_HABITS}
+    completed_points = {k: v for k, v in completed_points.items() if k not in uncredited}
     # Record the Todoist id of every task we actually closed, so dtd hides by id
     # (collision-proof) and a completed task can't suppress a different open task
     # sharing its annotation-stripped name.
@@ -5020,18 +5042,20 @@ def main():
             output["0n_write"]["error"] = on_verr
     if fen_result:
         output["0fen_write"] = {
-            "ok": fen_result.returncode == 0,
+            "ok": fen_ok,
             "output": fen_result.stdout.strip(),
         }
-        if fen_result.returncode != 0:
-            output["0fen_write"]["error"] = fen_result.stderr.strip() or f"ix-osa exit {fen_result.returncode}"
+        if not fen_ok:
+            output["0fen_write"]["error"] = (fen_result.stderr.strip() or fen_result.stdout.strip()
+                                             or f"ix-osa exit {fen_result.returncode}")
     if hcbi_result:
         output["hcbi_write"] = {
-            "ok": hcbi_result.returncode == 0,
+            "ok": hcbi_ok,
             "output": hcbi_result.stdout.strip(),
         }
-        if hcbi_result.returncode != 0:
-            output["hcbi_write"]["error"] = hcbi_result.stderr.strip() or f"ix-osa exit {hcbi_result.returncode}"
+        if not hcbi_ok:
+            output["hcbi_write"]["error"] = (hcbi_result.stderr.strip() or hcbi_result.stdout.strip()
+                                             or f"ix-osa exit {hcbi_result.returncode}")
 
     # Fire-and-forget: invalidate personal-dashboard's 300s API cache so the
     # neon-fed cache cards (其他人, ص, o314, 冥想, hcbp, hcbc, xk88) reflect
