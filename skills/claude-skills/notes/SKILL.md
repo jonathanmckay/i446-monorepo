@@ -186,6 +186,7 @@ Use the Todoist MCP `add-tasks` tool. For each task:
 - `dueString`: the inferred due date in natural language (e.g., "tomorrow", "Friday")
 - `duration`: from `(N)` time estimate (e.g., `(30)` → `"30m"`). Always set when `(N)` is present.
 - Assign to the appropriate Todoist project using the label/domain code
+- `description`: any URL or source doc the task depends on goes here (markdown `[title](url)`), never in a comment — dtd reads links from name + description only. See `~/vault/g245/task-style-guide.md`.
 
 ### Step 8: Archive stale z_ibx files
 
