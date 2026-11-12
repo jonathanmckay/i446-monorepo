@@ -25,8 +25,7 @@ struct RefreshableTextEditor: UIViewRepresentable {
         tv.layoutManager.allowsNonContiguousLayout = false
         tv.delegate = context.coordinator
         tv.backgroundColor = .clear
-        let size = UIFont.preferredFont(forTextStyle: .body).pointSize
-        tv.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: size, weight: .regular))
+        tv.font = Self.mono()
         tv.adjustsFontForContentSizeCategory = true
         tv.textColor = UIColor(Theme.fg)
         tv.tintColor = UIColor(Theme.accent)
@@ -62,18 +61,20 @@ struct RefreshableTextEditor: UIViewRepresentable {
     /// every keystroke jumped the view to another line (2026-10-29).
     static func restyle(_ tv: UITextView, lines: NSRange? = nil) {
         guard tv.markedTextRange == nil else { return }
-        let size = UIFont.preferredFont(forTextStyle: .body).pointSize
-        func mono(_ scale: CGFloat, _ weight: UIFont.Weight) -> UIFont {
-            UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: (size * scale).rounded(), weight: weight))
-        }
-        let fg = UIColor(Theme.fg), dim = UIColor(Theme.dim)
-        let base: [NSAttributedString.Key: Any] = [.font: mono(1, .regular), .foregroundColor: fg]
+        let dim = UIColor(Theme.dim)
         let ts = tv.textStorage, ns = ts.string as NSString
         let selection = tv.selectedRange
         var span = NSRange(location: 0, length: ns.length)
         if let lines {
-            let loc = min(lines.location, ns.length)
-            span = ns.paragraphRange(for: NSRange(location: loc, length: min(lines.length, ns.length - loc)))
+            // One character back as well: a return typed at the end of a
+            // heading arrives in the heading font (typing attributes follow
+            // the caret's paragraph since 2026-11-12) and belongs to the
+            // paragraph above the caret; it must drop back to body like every
+            // other line terminator, or TextKit 1 may size an empty trailing
+            // line from it.
+            let loc = min(max(lines.location - 1, 0), ns.length)
+            let end = min(NSMaxRange(lines), ns.length)
+            span = ns.paragraphRange(for: NSRange(location: loc, length: max(end - loc, 0)))
         }
         ts.beginEditing()
         ts.setAttributes(base, range: span)
@@ -81,7 +82,7 @@ struct RefreshableTextEditor: UIViewRepresentable {
             guard let line else { return }
             if let level = MarkdownLine.headingLevel(line) {
                 // h1 28 · h2 22 · h3 20 · h4+ bold body, matching MarkdownView
-                ts.addAttribute(.font, value: mono([1.65, 1.3, 1.18][safe: level - 1] ?? 1, .bold), range: r)
+                ts.addAttribute(.font, value: headingFont(level), range: r)
                 let hashes = ns.range(of: String(repeating: "#", count: level), range: r)
                 if hashes.location != NSNotFound { ts.addAttribute(.foregroundColor, value: dim, range: hashes) }
             } else if MarkdownLine.isTableSeparator(line) {
@@ -96,7 +97,41 @@ struct RefreshableTextEditor: UIViewRepresentable {
         }
         ts.endEditing()
         if tv.selectedRange != selection { tv.selectedRange = selection }
-        tv.typingAttributes = base   // the next keystroke restyles its own line
+        syncTypingAttributes(tv)   // the next keystroke still restyles its own line
+    }
+
+    /// Body-scaled monospace at `scale` x the body size; `headingFont` is the
+    /// h1 28 / h2 22 / h3 20 / h4+ bold-body ladder shared with MarkdownView.
+    static func mono(_ scale: CGFloat = 1, _ weight: UIFont.Weight = .regular) -> UIFont {
+        let size = UIFont.preferredFont(forTextStyle: .body).pointSize
+        return UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: (size * scale).rounded(), weight: weight))
+    }
+    static func headingFont(_ level: Int) -> UIFont { mono([1.65, 1.3, 1.18][safe: level - 1] ?? 1, .bold) }
+    static var base: [NSAttributedString.Key: Any] { [.font: mono(), .foregroundColor: UIColor(Theme.fg)] }
+
+    /// Typing attributes follow the paragraph the caret is in: heading font
+    /// on a `#` line, body elsewhere (2026-11-12: JM 2026-11-09 "cursor shows
+    /// on wrong line of inkwell when on the bottom right"). UIKit sizes the
+    /// insertion caret from `typingAttributes`, and restyle used to pin them
+    /// to the body font after every keystroke, so on an h1 line the caret
+    /// shrank to body height and sat on the baseline of a 1.65x-tall line,
+    /// a line too low to the eye, until the next tap let UIKit re-derive
+    /// them. Called after every restyle and on every selection change, so
+    /// the caret always has the height of the line it is on. The next
+    /// keystroke's restyle still re-fonts the whole edited paragraph, so the
+    /// font the typed character arrives in does not matter. Skipped mid-IME:
+    /// UIKit owns the attributes under marked text.
+    static func syncTypingAttributes(_ tv: UITextView) {
+        guard tv.markedTextRange == nil else { return }
+        let ns = tv.textStorage.string as NSString
+        let loc = min(tv.selectedRange.location, ns.length)
+        var start = 0, contentsEnd = 0   // the line without its terminator, as restyle sees it
+        ns.getLineStart(&start, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: loc, length: 0))
+        var attrs = base
+        if let level = MarkdownLine.headingLevel(ns.substring(with: NSRange(location: start, length: contentsEnd - start))) {
+            attrs[.font] = headingFont(level)
+        }
+        tv.typingAttributes = attrs
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
@@ -138,6 +173,12 @@ struct RefreshableTextEditor: UIViewRepresentable {
                 edited = nil
             }
             parent.text = tv.text
+        }
+        /// UIKit clears `typingAttributes` on every selection change; put the
+        /// caret's paragraph font back so a tap onto a heading line gets a
+        /// heading-height caret (see `syncTypingAttributes`).
+        func textViewDidChangeSelection(_ tv: UITextView) {
+            RefreshableTextEditor.syncTypingAttributes(tv)
         }
 
         /// Obsidian-style list autofill: on return, continue the current list

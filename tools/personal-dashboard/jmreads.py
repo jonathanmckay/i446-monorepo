@@ -768,7 +768,7 @@ function cover(b, cls) {
   const label = `<div class="cover ${cls||''} serif">${esc(b.title)}</div>`;
   if (!b.cover) return label;
   // Open Library returns 404 (default=false) when it has no image: swap in the text cover.
-  return `<img class="cover ${cls||''}" loading="lazy" src="${esc(b.cover)}" alt="${esc(b.title)}"
+  return `<img class="cover ${cls||''}" loading="lazy" src="${PREFIX}${esc(b.cover)}" alt="${esc(b.title)}"
            onerror="this.outerHTML=${esc(JSON.stringify(label))}">`;
 }
 function stars(n) {
@@ -804,7 +804,7 @@ function saveDraft() {
   if (!text) { closeDraft(); return; }
   const btn = document.getElementById('draftSave');
   btn.disabled = true; btn.textContent = 'Saving…';
-  fetch('/jmreads/draft/' + encodeURIComponent(draftId), {method: 'POST',
+  fetch(PREFIX + '/jmreads/draft/' + encodeURIComponent(draftId), {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text})})
     .then(r => r.json()).then(j => {
       if (j.ok) { btn.textContent = 'Saved ✓'; setTimeout(closeDraft, 500); }
@@ -831,7 +831,7 @@ function openView(id) {
   document.getElementById('viewMeta').innerHTML = '';
   document.getElementById('viewBody').innerHTML = '';
   dlg.classList.add('show');
-  fetch('/jmreads/view/' + encodeURIComponent(id)).then(r => r.json()).then(j => {
+  fetch(PREFIX + '/jmreads/view/' + encodeURIComponent(id)).then(r => r.json()).then(j => {
     if (!j.ok) { document.getElementById('viewTitle').textContent = 'Failed: ' + (j.error || ''); return; }
     document.getElementById('viewTitle').textContent = j.title;
     document.getElementById('viewMeta').innerHTML = [j.author ? 'by ' + esc(j.author) : '', stars(j.score),
@@ -844,7 +844,7 @@ function closeView() { document.getElementById('viewDlg').classList.remove('show
 document.getElementById('viewDlg').addEventListener('click', ev => { if (ev.target.id === 'viewDlg') closeView(); });
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeView(); });
 
-fetch('/api/reads').then(r => r.json()).then(d => {
+cachedJSON('/api/reads').then(d => {   // offline-capable, mount-prefix aware (dashboard.py shared head, 2026-11-12)
   // Currently reading
   document.getElementById('reading').innerHTML = d.reading.length ? d.reading.map(b => `
     <div class="book-row">${cover(b)}
@@ -906,7 +906,7 @@ fetch('/api/reads').then(r => r.json()).then(d => {
     const rv = ev.target.closest('.review-btn');
     if (rv && !rv.disabled) {
       rv.disabled = true; rv.textContent = 'Seeding new-notes…';
-      fetch('/jmreads/review/' + encodeURIComponent(rv.dataset.id), {method: 'POST'})
+      fetch(PREFIX + '/jmreads/review/' + encodeURIComponent(rv.dataset.id), {method: 'POST'})
         .then(r => r.json()).then(j => {
           if (j.ok) { rv.textContent = 'Opened new-notes'; window.location.href = j.where; }
           else { rv.textContent = 'Failed'; rv.title = j.error || ''; rv.disabled = false; }
@@ -922,7 +922,7 @@ fetch('/api/reads').then(r => r.json()).then(d => {
     const del = ev.target.closest('.del-link');
     if (del) {
       if (!confirm('Delete "' + del.dataset.title + '" from the library? The review file is removed from the vault.')) return;
-      fetch('/jmreads/delete/' + encodeURIComponent(del.dataset.id), {method: 'POST'})
+      fetch(PREFIX + '/jmreads/delete/' + encodeURIComponent(del.dataset.id), {method: 'POST'})
         .then(r => r.json()).then(j => {
           if (j.ok) location.reload();   // delete invalidated the cache server-side
           else alert('Delete failed: ' + (j.error || ''));

@@ -34,6 +34,12 @@ final class JanusStore: ObservableObject {
     /// CLI): neither a task with [N] nor a time-based habit/category, so the
     /// view asks for a total ("40") or a rate (".5/m") and re-sends.
     @Published var pointsAsk: PointsAsk? = nil
+    /// A sheet / confirm / alert is up (the view sets it): the background
+    /// poll waits, so rows don't shift under a half-finished edit or fill.
+    @Published var interacting = false
+    /// Scene is foreground-active (the view mirrors scenePhase into it).
+    var sceneActive = true
+    private var pollTask: Task<Void, Never>? = nil
     private var loadedAt: Date? = nil
     private var cachedAt: Date? = nil
     private var loadSeq = 0
@@ -46,16 +52,31 @@ final class JanusStore: ObservableObject {
     /// another device didn't appear for ages). Writes still invalidate at once
     /// via `act` → `load`; this only bounds *passive* staleness.
     static let cacheTTL: TimeInterval = 60
+    /// Period of the lite background poll while the app is up (2026-11-12).
+    static let pollInterval: TimeInterval = 60
 
     init() {
         // Only today's cached timeline is worth painting (2026-10-20 "should be
         // today": yesterday's rows showed until the fetch landed).
         if let (j, at) = PayloadCache.load("janus") {
             let t = Parsers.timeline(j)
-            if t.date == PayloadCache.todayISO() { timeline = t; rows = overlay(t.rows); cachedAt = at }
+            if t.date == PayloadCache.todayISO() { show(t); cachedAt = at }
         }
         pending = outbox.count
     }
+
+    /// Put a parsed payload on screen, and remember its project → colour
+    /// pairs so a row the client invents next (pending timer, offline timer)
+    /// is coloured at once from the server's current palette (2026-11-12).
+    private func show(_ t: Timeline) {
+        timeline = t
+        rows = overlay(t.rows)
+        ProjectColors.learn(from: t.rows)
+    }
+
+    /// Stable ForEach ids for `rows` (TimelineRow.listKeys): a 60 s refresh
+    /// that inserts a row must not shift the rows below it under an open swipe.
+    var rowKeys: [String] { TimelineRow.listKeys(rows) }
 
     /// The live Toggl entry, if any (the top card + what the command bar acts on).
     var running: TimelineRow? { rows.first { $0.running } }
@@ -109,19 +130,67 @@ final class JanusStore: ObservableObject {
         let tracked = timeline.map { String(format: "%d:%02d", $0.trackedMin / 60, $0.trackedMin % 60) } ?? "0:00"
         return "\(pts) · janus · \(tracked) tracked" + (pending > 0 ? " · ⇡\(pending)" : "")
     }
+    /// Second header line: the last error (tap retries) > "cached … refreshing"
+    /// before the first good load > today's neon habit status (2026-11-12: JM
+    /// "the second line of janus should show the status of neon habits"; the
+    /// server's one-liner, carried across lite reloads) > nothing.
     var status: String {
         if let e = lastError { return "⚠ " + e }
         if !loadedOnce, let at = cachedAt { return "cached \(PayloadCache.clock(at)) · refreshing…" }
+        if viewingToday, let s = timeline?.habitSummary, !s.isEmpty { return s }
         return ""
     }
 
     func reload() { wantsDefaultScroll = true; Task { await load() } }
-    /// Same rule as DtdStore: a failed or never-done load retries at once on
-    /// foreground; a good one only when stale.
+    /// On every foreground (2026-11-12: JM "any way to keep janus more up to
+    /// date in the background?"): a failed or never-done load retries in full
+    /// at once; otherwise a lite reload (Toggl only, ~0.3 s) always fires, and
+    /// the full pass (calendar subprocesses + ~15 Excel reads server-side)
+    /// follows only when the last full load is older than cacheTTL. Neither
+    /// moves the list (no requestDefaultScroll).
     func refreshIfStale() {
         if lastError != nil || !loadedOnce { Task { await load() }; return }
-        guard let at = loadedAt, Date().timeIntervalSince(at) > Self.cacheTTL else { return }
-        Task { await load() }
+        let stale = loadedAt.map { Date().timeIntervalSince($0) > Self.cacheTTL } ?? true
+        Task {
+            await refreshLite()
+            if stale { await load() }
+        }
+    }
+
+    /// Lite-only refresh: the Toggl rows, with everything the lite payload
+    /// lacks (events, Σ分, divider 分, habit strip + summary) carried from the
+    /// payload on screen. Never bumps scrollTick, loadedAt, loadedOnce or
+    /// lastError — it is a passive repaint, not a load. A load() that starts
+    /// meanwhile bumps loadSeq and this result is dropped.
+    func refreshLite() async {
+        guard !loading else { return }
+        loadSeq += 1
+        let seq = loadSeq
+        let q = ["lite=1", dayOffset != 0 ? "offset=\(dayOffset)" : ""].filter { !$0.isEmpty }.joined(separator: "&")
+        if case .ok(let j) = await api.get(base + "/api/timeline?" + q), seq == loadSeq, !loading {
+            show(Parsers.timeline(j).carrying(from: timeline))
+        }
+    }
+
+    /// Periodic lite poll while the app is active (2026-11-12). Skips a tick
+    /// when viewing a past day, before the first load, while an action or
+    /// load is in flight, while a sheet / alert is up, or offline. Lite only:
+    /// the full pass is too costly server-side to run every minute.
+    func startPolling() {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.pollInterval))
+                guard !Task.isCancelled, let self else { return }
+                await self.pollTick()
+            }
+        }
+    }
+    func stopPolling() { pollTask?.cancel(); pollTask = nil }
+    private func pollTick() async {
+        guard sceneActive, viewingToday, loadedOnce, !busy, !loading, !interacting, pointsAsk == nil,
+              NetWatch.shared.online else { return }
+        await refreshLite()
     }
 
     /// Replay offline writes, then reload if any landed. Called on foreground,
@@ -160,10 +229,10 @@ final class JanusStore: ObservableObject {
             let liteQ = ["lite=1", offsetQ].filter { !$0.isEmpty }.joined(separator: "&")
             if case .ok(let j) = await api.get(base + "/api/timeline?" + liteQ) {
                 if seq == loadSeq {
-                    // The lite payload has no habit strip; keep the same day's
-                    // strip (cached full payload) up until the full pass lands.
-                    let t = Parsers.timeline(j).carryingHabits(from: timeline)
-                    timeline = t; rows = overlay(t.rows)
+                    // The lite payload has no events, Neon 分 or habit strip;
+                    // keep the same day's (cached full payload) until the full
+                    // pass lands (Timeline.carrying, 2026-11-12).
+                    show(Parsers.timeline(j).carrying(from: timeline))
                     publishScrollIfWanted()
                 }
             }
@@ -173,8 +242,13 @@ final class JanusStore: ObservableObject {
         case .ok(let j):
             guard seq == loadSeq else { loading = false; return }
             loadedOnce = true; lastError = nil; loadedAt = Date()
-            let t = Parsers.timeline(j)
-            timeline = t; rows = overlay(t.rows)
+            var t = Parsers.timeline(j)
+            // Σ分 null = the server's Excel reads failed (every divider's pts
+            // and the habit strip go with it): keep the last good values
+            // rather than blank the day (2026-11-12). A full pass that did
+            // read Excel is taken as is — a nil there is a real 0-分 block.
+            if t.points == nil { t = t.carrying(from: timeline) }
+            show(t)
             publishScrollIfWanted(); wantsDefaultScroll = false
             // Only today's payload is restored on next launch (see init); never
             // cache a past-day view under the "janus" key.
@@ -415,7 +489,9 @@ final class JanusStore: ObservableObject {
         }
         var r = TimelineRow(type: "entry")
         r.id = "pending-" + UUID().uuidString; r.desc = desc; r.project = project
-        r.color = rows.last { $0.isEntry && $0.project == project && !$0.color.isEmpty }?.color ?? ""
+        // Local palette, not a scan of today's rows (2026-11-12: JM "janus
+        // color should be a local hashmap lookup and instantaneous").
+        r.color = ProjectColors.hex(for: project)
         r.start = now; r.end = "now"; r.running = true
         out.append(r)
         rows = out
@@ -546,6 +622,7 @@ extension JanusStore {
         for lt in locals {
             var r = TimelineRow(type: "entry")
             r.id = lt.id; r.desc = "⇡ " + lt.desc; r.project = lt.project
+            r.color = ProjectColors.hex(for: lt.project)   // offline row: local palette (2026-11-12)
             r.start = Self.hhmm(lt.start)
             r.end = lt.end.map(Self.hhmm) ?? "now"
             r.running = lt.end == nil

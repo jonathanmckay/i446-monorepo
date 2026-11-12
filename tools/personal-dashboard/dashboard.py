@@ -2416,6 +2416,80 @@ _SHARED_STYLE = """
 <meta charset="utf-8">
 <link rel="icon" type="image/png" href="/favicon.png">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+// Offline + mount-prefix shim, shared by every page (2026-11-12: JM "jm dash
+// should work offline"). Two jobs:
+//  1. PREFIX. The phone loads https://ix.tail9c51d5.ts.net/personal/ and
+//     tailscale serve strips /personal before proxying to :5558, so the pages'
+//     absolute '/api/...' URLs 404 at the tailnet root (verified 2026-11-12:
+//     the iOS shell rendered with no data). PREFIX is the mount path ('' at
+//     http://ix:5558/, '/personal' at /personal, /personal/ or /personal/slice);
+//     cachedJSON prepends it and, on DOMContentLoaded, so do the page's own
+//     root-relative links, iframe, images and icon.
+//  2. cachedJSON(url). Fetch JSON and mirror the body into localStorage keyed
+//     by URL; on a network error / non-2xx (or 10 s with a copy on hand) serve
+//     the stored copy and show "offline · data from HH:MM" (oldest copy in
+//     use). The iOS app (DashboardView.swift) saves the rendered page as a web
+//     archive, which carries the HTML, Chart.js from the CDN and the cover
+//     images but never fetch() bodies — this shim carries the data, so
+//     Chart.js is NOT vendored (205 KB saved; the archive is the offline copy).
+// The archive serialises the already-rendered DOM and its scripts run again on
+// load, so pages clear each container before filling it and the rewrites here
+// are idempotent. Chart missing (archive without the CDN script): a stub keeps
+// the badges filling with blank canvases instead of a thrown render.
+const PREFIX = (location.pathname.match(/^(.*?)\\/?(?:slice|more|1s|jmreads|f695)?\\/?$/) || ['', ''])[1];
+if (typeof Chart === 'undefined') { window.Chart = function () {}; Chart.prototype.destroy = function () {}; }
+const _stale = new Map();   // url -> epoch ms of the stored copy being shown
+function _offlineBadge() {
+  let el = document.getElementById('offlineBadge');
+  if (!el && document.body) {
+    el = document.createElement('div'); el.id = 'offlineBadge'; el.className = 'badge';
+    el.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:9;opacity:.9;';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function _paintStale() {
+  const el = _offlineBadge();
+  if (!el) return;
+  if (!_stale.size || window !== window.top) { el.style.display = 'none'; return; }   // embedded /slice: the parent shows it
+  const t = new Date(Math.min(..._stale.values())), now = new Date();
+  const hm = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+  const day = t.toDateString() === now.toDateString() ? '' : `${t.getMonth() + 1}/${t.getDate()} `;
+  el.textContent = `offline · data from ${day}${hm}`;
+  el.style.display = '';
+}
+function cachedJSON(url) {
+  const key = 'jmdash:' + url;
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(key)); } catch (e) {}
+  const ctl = stored && window.AbortController ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), 10000) : null;
+  return fetch(PREFIX + url, ctl ? { signal: ctl.signal } : {})
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(d => {
+      try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), d })); } catch (e) {}
+      _stale.delete(url); _paintStale();
+      return d;
+    })
+    .catch(err => {
+      if (!stored || !('d' in stored)) throw err;
+      _stale.set(url, stored.t); _paintStale();
+      return stored.d;
+    })
+    .finally(() => { if (timer) clearTimeout(timer); });
+}
+document.addEventListener('DOMContentLoaded', () => {
+  _paintStale();
+  if (!PREFIX) return;
+  const fix = (el, attr) => {
+    const v = el.getAttribute(attr);
+    if (v && v[0] === '/' && v[1] !== '/' && v !== PREFIX && !v.startsWith(PREFIX + '/') && !v.startsWith(PREFIX + '?')) el.setAttribute(attr, PREFIX + v);
+  };
+  document.querySelectorAll('a[href^="/"], link[href^="/"]').forEach(el => fix(el, 'href'));
+  document.querySelectorAll('iframe[src^="/"], img[src^="/"]').forEach(el => fix(el, 'src'));
+});
+</script>
 <style>
 :root {
   --bg: #111; --card: #1a1a1a; --text: #eee;
@@ -2470,6 +2544,22 @@ h2 { font-size: 13px; color: var(--h2); margin-bottom: 12px; letter-spacing: 1px
 .cache-value.neg { color: #ff5252; }
 .cache-value.pos { color: #00e676; }
 .cache-value.zero { color: var(--badge-text); }
+/* 媒 reads card on / (2026-11-12: JM "jm dash should have a good hcmc (ie jm
+   reads"): the hcmc Deep Sea colour as the card itself, whole card → /jmreads. */
+.reads-card { display: block; background: #0d3b66; color: #eee; text-decoration: none; }
+.reads-card h2 { color: #9db4cc; }
+.reads-card h2 .chal { float: right; text-transform: none; letter-spacing: 0; color: #cfe0f0; font-variant-numeric: tabular-nums; }
+.reads-bar { height: 4px; background: rgba(255,255,255,.15); border-radius: 2px; overflow: hidden; margin-bottom: 14px; }
+.reads-bar div { height: 100%; width: 0; background: #cfe0f0; border-radius: 2px; }
+.reads-now { display: flex; flex-wrap: wrap; gap: 12px 28px; }
+.reads-book { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 220px; }
+.reads-book img, .reads-book .nocover { width: 30px; height: 45px; object-fit: cover; border-radius: 2px; background: rgba(255,255,255,.12); flex: none; }
+.reads-book .t { font-size: 13px; line-height: 1.25; }
+.reads-book .a { font-size: 11px; color: #9db4cc; margin-top: 2px; }
+.reads-last { margin-top: 14px; font-size: 12px; color: #9db4cc; }
+.reads-last b { color: #eee; font-weight: 500; }
+.reads-last .stars { color: #ffd166; letter-spacing: 1px; }
+.reads-last .stars .off { opacity: .3; }
 </style>
 """
 
@@ -2510,6 +2600,7 @@ HTML = """<!DOCTYPE html>
   <div style="display:flex;align-items:baseline;gap:16px;">
     <div id="ptsToday" style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">分 <span id="ptsTodayVal" style="color:var(--text);font-weight:600;">…</span></div>
     <div style="font-size:14px;color:var(--h1);letter-spacing:1px;font-variant-numeric:tabular-nums;">Oct 2 '27: <span id="daysLeftVal" style="color:var(--text);font-weight:600;"></span><script>document.getElementById('daysLeftVal').textContent=Math.ceil((new Date('2027-10-02')-new Date())/864e5)+'d';</script></div>
+    <span id="offlineBadge" class="badge" style="display:none"></span>
     <a class="nav-link" href="/jmreads">READS</a>
     <a class="nav-link" href="/slice">SLICE</a>
     <a class="nav-link" href="/more">MORE →</a>
@@ -2520,6 +2611,12 @@ HTML = """<!DOCTYPE html>
     <h2>Cache · Q2</h2>
     <div id="cacheBars" class="cache-bars"></div>
   </div>
+  <a class="card reads-card" id="readsCard" href="/jmreads">
+    <h2>媒 · Reading<span class="chal" id="readsChallenge"></span></h2>
+    <div class="reads-bar"><div id="readsBarFill"></div></div>
+    <div class="reads-now" id="readsNow"></div>
+    <div class="reads-last" id="readsLast"></div>
+  </a>
   <div class="card">
     <h2>Project Bocking — Comms Response Time<span class="pager"><button data-dir="-1">‹</button><button data-dir="1" disabled>›</button></span></h2>
     <div class="chart-wrap sm"><canvas id="emailChart"></canvas></div>
@@ -2567,7 +2664,7 @@ window.addEventListener('message', e => {
 """ + _SHARED_JS_HEAD + """
 // Live #points-today poller (0分 col D)
 function pollPointsToday() {
-  fetch('/api/points-today').then(r => r.json()).then(d => {
+  cachedJSON('/api/points-today').then(d => {
     const el = document.getElementById('ptsTodayVal');
     if (!el) return;
     el.textContent = (d && d.value != null) ? Math.round(d.value) : '—';
@@ -2575,6 +2672,31 @@ function pollPointsToday() {
 }
 pollPointsToday();
 setInterval(pollPointsToday, 30000);
+
+// 媒 reads card: /api/reads (jmreads.py, cached 600 s server-side) through the
+// offline helper. Up to three books on the go, the year's challenge, the last
+// book finished. Containers are replaced, not appended (archive re-run).
+cachedJSON('/api/reads').then(d => {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const c = d.challenge || {};
+  const diff = c.ahead || 0;
+  document.getElementById('readsChallenge').textContent =
+    `${c.read}/${c.goal} · ${diff >= 0 ? 'ahead +' + diff : 'behind −' + Math.abs(diff)}`;
+  document.getElementById('readsBarFill').style.width = Math.max(0, Math.min(100, c.pct || 0)) + '%';
+  const now = (d.reading || []).slice(0, 3);
+  document.getElementById('readsNow').innerHTML = now.length ? now.map(b => `
+    <div class="reads-book">${b.cover ? `<img src="${PREFIX}${esc(b.cover)}" alt="" onerror="this.style.visibility='hidden'">` : '<div class="nocover"></div>'}
+      <div style="min-width:0"><div class="t">${esc(b.title)}</div><div class="a">${esc(b.author)}</div></div>
+    </div>`).join('') : '<div class="reads-book"><div class="a">nothing on the go</div></div>';
+  const last = (d.read || [])[0];
+  const stars = n => n ? ` <span class="stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(5 - n)}</span></span>` : '';
+  const when = b => String(b.finished || b.date || '').replace(/-/g, '.');
+  document.getElementById('readsLast').innerHTML = last
+    ? `last finished · <b>${esc(last.title)}</b> · ${esc(when(last))}${stars(last.score)}`
+    : 'nothing finished yet this year';
+}).catch(() => {
+  document.getElementById('readsLast').textContent = 'reads unavailable';
+});
 
 // Task/Entries/Time/Points charts — shared renderer for daily/weekly/monthly.
 // Daily granularity reuses the /api/data payload already on the page (cached
@@ -2728,7 +2850,7 @@ function loadGranularity(g) {
   }
   const key = `${g}:${off}`;
   if (_granularCache[key]) { renderWindow(_granularCache[key], g); return; }
-  fetch(`/api/chart-granular?granularity=${g}&offset=${off}`).then(r => r.json()).then(d => {
+  cachedJSON(`/api/chart-granular?granularity=${g}&offset=${off}`).then(d => {
     _granularCache[key] = d;
     if (windowOffset === off && document.getElementById('granularitySelect').value === g) renderWindow(d, g);
   });
@@ -2745,7 +2867,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') shiftWindow(1);
 });
 
-fetch('/api/data').then(r => r.json()).then(data => {
+cachedJSON('/api/data').then(data => {
   dailyPayload = data;
   const labels = data.dates;
 
@@ -2755,6 +2877,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
   const cache = data.cache || [];
   const maxAbs = 200;
   const cbEl = document.getElementById('cacheBars');
+  cbEl.innerHTML = '';   // the offline web archive re-runs this on an already-filled DOM
   cache.forEach(c => {
     const row = document.createElement('div');
     row.className = 'cache-row';
@@ -2979,7 +3102,7 @@ function chips(el, key, values, colors) {
 async function load() {
   const q = new URLSearchParams({metric: state.metric, group_by: state.group_by, grain: state.grain, days: state.days,
     project: [...state.project].join(','), source: [...state.source].join(',')});
-  const d = await (await fetch('/api/slice?' + q)).json();
+  const d = await cachedJSON('/api/slice?' + q);
   chips(document.getElementById('projectChips'), 'project', d.dims.project, d.colors);
   chips(document.getElementById('sourceChips'), 'source', d.dims.source, d.colors);
   document.getElementById('sumUnit').textContent = '· ' + d.unit;
@@ -3052,7 +3175,7 @@ MORE_HTML = """<!DOCTYPE html>
 
 <script>
 """ + _SHARED_JS_HEAD + """
-fetch('/api/data').then(r => r.json()).then(data => {
+cachedJSON('/api/data').then(data => {
   const labels = data.dates;
 
   // Ratio chart (line)
@@ -3239,7 +3362,7 @@ function renderWeekCharts(d) {
 function loadWeekWindow() {
   const off = weekOffset;
   if (_weeklyCache[off]) { renderWeekCharts(_weeklyCache[off]); return; }
-  fetch(`/api/weekly?offset=${off}`).then(r => r.json()).then(d => {
+  cachedJSON(`/api/weekly?offset=${off}`).then(d => {
     _weeklyCache[off] = d;
     if (weekOffset === off) renderWeekCharts(d);
   });
@@ -3253,7 +3376,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight' && weekOffset > 0) { weekOffset -= 1; loadWeekWindow(); }
 });
 
-fetch('/api/weekly').then(r => r.json()).then(d => {
+cachedJSON('/api/weekly').then(d => {
   _weeklyCache[0] = d;
   renderWeekCharts(d);
 

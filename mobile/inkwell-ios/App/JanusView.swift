@@ -18,13 +18,30 @@ struct JanusView: View {
 
     @State private var cmd = ""
     @FocusState private var cmdFocused: Bool
+    @Environment(\.scenePhase) private var phase
+
+    /// A sheet / confirm / alert is up → the store's background poll waits.
+    private var interacting: Bool {
+        fillTarget != nil || editTarget != nil || deleteTarget != nil || store.pointsAsk != nil
+    }
+
+    private var deleteTitle: String {
+        deleteTarget?.isEvent == true ? "hide this calendar event?" : "delete this Toggl entry?"
+    }
+    /// Every event is hidden from janus only (2026-11-12, hide_only): Google
+    /// Calendar is never touched from the phone.
+    static func deleteMessage(_ r: TimelineRow) -> String {
+        "\(r.start)–\(r.end) " + (r.isEvent ? r.title + " · hidden from janus only" : r.desc)
+    }
 
     private func scrollToDefault(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard let i = store.defaultScrollIndex else { return }
+        let keys = store.rowKeys
+        guard let i = store.defaultScrollIndex, i < keys.count else { return }
+        let key = keys[i]
         // Next runloop: the List must have laid out the just-published rows.
         DispatchQueue.main.async {
-            if animated { withAnimation { proxy.scrollTo(i, anchor: .center) } }
-            else { proxy.scrollTo(i, anchor: .center) }
+            if animated { withAnimation { proxy.scrollTo(key, anchor: .center) } }
+            else { proxy.scrollTo(key, anchor: .center) }
         }
     }
 
@@ -63,9 +80,11 @@ struct JanusView: View {
             }
             ScrollViewReader { proxy in
             List {
-                ForEach(Array(store.rows.enumerated()), id: \.offset) { _, r in
+                // Rows keyed by TimelineRow.listKeys (2026-11-12), not position:
+                // the 60 s background refresh may insert a row above an open swipe.
+                ForEach(Array(zip(store.rowKeys, store.rows)), id: \.0) { _, r in
                     if r.isDivider {
-                        Text(r.label).font(Theme.monoSmall).foregroundStyle(Theme.dim)
+                        DividerRowView(row: r)
                             .listRowBackground(Theme.bg).listRowSeparator(.hidden)
                     } else {
                         TimelineRowView(row: r)
@@ -97,8 +116,10 @@ struct JanusView: View {
                             // role animates the row away before the confirm.
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 if r.isEvent {
-                                    // Calendar event (2026-10-25): delete only.
-                                    Button { deleteTarget = r } label: { Label("delete", systemImage: "trash") }
+                                    // Calendar event: hide from janus only (2026-11-12: JM
+                                    // "swipe left should hide from janis only"); the
+                                    // calendar itself is never touched from here.
+                                    Button { deleteTarget = r } label: { Label("hide", systemImage: "eye.slash") }
                                         .tint(.red)
                                 } else if r.canSwipeLeft && !r.isLocal && !r.isPending {
                                     if !r.running {
@@ -154,23 +175,27 @@ struct JanusView: View {
         }
         .task {
             if !store.loadedOnce { await store.load() }
+            // Lite poll every 60 s while this screen is up (2026-11-12: JM "any
+            // way to keep janus more up to date in the background?"); the
+            // store gates each tick (today, idle, no sheet, online).
+            store.startPolling()
             // "open with the text box" (2026-10-19): the command bar takes focus on launch.
             try? await Task.sleep(for: .milliseconds(350))
             cmdFocused = true
         }
+        .onDisappear { store.stopPolling() }
+        .onChange(of: phase) { _, p in store.sceneActive = (p == .active) }
+        .onChange(of: interacting) { _, v in store.interacting = v }
         .sheet(item: $fillTarget) { t in
             FillSheet(gap: t.gap) { desc, start, end, project in
                 store.fill(desc: desc, start: start, end: end, project: project) }
         }
-        .confirmationDialog(deleteTarget?.isEvent == true ? "delete this calendar event?" : "delete this Toggl entry?",
-                            isPresented: isPresented($deleteTarget),
+        .confirmationDialog(deleteTitle, isPresented: isPresented($deleteTarget),
                             titleVisibility: .visible, presenting: deleteTarget) { r in
-            Button("delete", role: .destructive) { store.delete(r) }
+            Button(r.isEvent ? "hide" : "delete", role: .destructive) { store.delete(r) }
             Button("cancel", role: .cancel) {}
         } message: { r in
-            Text("\(r.start)–\(r.end) " + (r.isEvent ? r.title + (r.eventId.isEmpty || r.calendarId.hasSuffix("@import.calendar.google.com")
-                                                          ? " · Outlook: hidden from janus only" : " · removed from Google Calendar")
-                                               : r.desc))
+            Text(Self.deleteMessage(r))
         }
         .sheet(item: $editTarget) { r in
             EditSheet(row: r, loadCodes: { await store.projectCodes() },
@@ -206,7 +231,7 @@ struct CurrentTimerCard: View {
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("▶ " + r.desc + (r.tags.isEmpty ? "" : "  #" + r.tags.joined(separator: " #")))
-                                .font(Theme.mono).foregroundStyle(Color(hex: r.color)).lineLimit(2)
+                                .font(Theme.mono).foregroundStyle(Color(hex: r.resolvedColor)).lineLimit(2)
                             Text([r.project.isEmpty ? nil : "@" + r.project, "since " + r.start,
                                   CurrentTimerCard.elapsed(since: r.start, now: ctx.date),
                                   r.points.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " · "))
@@ -271,10 +296,35 @@ extension View {
     }
 }
 
+/// A 地支 divider: block label left, same size as the rows (2026-11-12: JM
+/// "block titles should be same size as regular text"), then right-aligned
+/// the block's 分 and its -1₦ ritual score as a red chip, like the web page
+/// (.div .bp / .n1) and the terminal (2026-11-12: JM "blocks should show
+/// points for block and -1n points per block"). Nothing when both are nil.
+struct DividerRowView: View {
+    let row: TimelineRow
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(row.label).font(Theme.mono).foregroundStyle(Theme.dim)
+            Spacer(minLength: 8)
+            if let p = row.displayBlockPts {
+                Text("\(p)分").font(Theme.mono).foregroundStyle(Theme.fg)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            if let n = row.blockN1 {
+                Text("\(n)").font(Theme.monoSmall).fontWeight(.bold).foregroundStyle(.white)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Color(hex: "#b3261e"))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+        }
+    }
+}
+
 struct TimelineRowView: View {
     let row: TimelineRow
     var body: some View {
-        let color: Color = row.isGap ? Theme.dim : Color(hex: row.color)
+        let color: Color = row.isGap ? Theme.dim : Color(hex: row.resolvedColor)
         // start · title … duration · 分 (2026-10-22 janus notes #3/#4: start
         // time only on the left, time and points right-justified).
         HStack(spacing: 10) {

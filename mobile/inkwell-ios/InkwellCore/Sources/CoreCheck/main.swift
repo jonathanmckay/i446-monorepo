@@ -467,4 +467,99 @@ do {
     eq(oneLine.habits.count, 1, "an empty line is dropped, not drawn blank")
 }
 
+// Lite after full keeps what the lite pass lacks (2026-11-12): divider
+// pts/lpts/n1 by block, the habit strip + summary, Σ分, and the calendar
+// events — gaps carved around them and the event slotted after its block's
+// divider — so the 60 s background poll never blanks the screen.
+do {
+    let full = Parsers.timeline(JSON.parse(##"""
+      {"ok":true,"date":"2026-11-12","is_today":true,"tracked_min":300,"points":123,
+      "rows":[
+        {"type":"divider","label":"未 12:00","block":"未","pts":30,"lpts":28,"n1":2},
+        {"type":"entry","id":4565301001,"desc":"lunch","project":"xk87","color":"#fd6c1d","start":"12:00","end":"13:50","minutes":110,"running":false,"logged":false},
+        {"type":"divider","label":"申 14:00","block":"申","pts":null,"lpts":12,"n1":null},
+        {"type":"gap","start":"13:50","end":"14:30","minutes":40},
+        {"type":"event","title":"LX/JM","project":"m5x2","color":"#d50032","start":"14:30","end":"15:00","minutes":30,"is_past":false,"started":false,"start_iso":"2026-11-12T14:30:00-08:00","end_iso":"2026-11-12T15:00:00-08:00","event_id":"ev1","calendar_id":"c@g"},
+        {"type":"gap","start":"15:00","end":"15:20","minutes":20}
+      ],
+      "habits":{"summary":"0₦ 12/17 · 0l 0t notes","line1":[{"text":"0l","bg":"#aa00ff"}],"line2":[]}}
+      """##)!)
+    eq(full.habitSummary, "0₦ 12/17 · 0l 0t notes", "habits.summary parsed")
+    eq(full.rows[2].displayBlockPts, 12, "lpts fills in when pts is null")
+    // The lite payload: Toggl entries + gaps only, no Neon, no events — the
+    // gap runs straight through the event's window.
+    let lite = Parsers.timeline(JSON.parse(##"""
+      {"ok":true,"date":"2026-11-12","is_today":true,"tracked_min":305,"points":null,"lite":true,
+      "rows":[
+        {"type":"divider","label":"未 12:00","block":"未"},
+        {"type":"entry","id":4565301001,"desc":"lunch","project":"xk87","color":"#fd6c1d","start":"12:00","end":"13:50","minutes":110,"running":false,"logged":false},
+        {"type":"divider","label":"申 14:00","block":"申"},
+        {"type":"gap","start":"13:50","end":"15:20","minutes":90},
+        {"type":"entry","id":2,"desc":"coffee","project":"epcn","color":"","start":"15:20","end":"now","minutes":5,"running":true,"logged":false}
+      ]}
+      """##)!)
+    check(lite.rows[0].blockPts == nil && lite.habitSummary.isEmpty && lite.points == nil, "lite carries nothing Neon-derived")
+    let c = lite.carrying(from: full)
+    eq(c.points, 123, "Σ分 carried")
+    eq(c.trackedMin, 305, "lite's own tracked minutes win")
+    eq(c.habitSummary, "0₦ 12/17 · 0l 0t notes", "summary carried")
+    eq(c.habits, full.habits, "strip carried")
+    eq(c.rows[0].blockPts, 30, "未 pts carried")
+    eq(c.rows[0].blockN1, 2, "未 n1 carried")
+    eq(c.rows[2].blockLedgerPts, 12, "申 lpts carried")
+    check(c.rows[2].blockPts == nil, "a nil the full pass also had stays nil")
+    eq(c.rows.map(\.type), ["divider", "entry", "divider", "gap", "event", "gap", "entry"], "event re-slotted, gap carved around it")
+    eq(c.rows[3].start + "-" + c.rows[3].end, "13:50-14:30", "gap before the event")
+    eq(c.rows[3].minutes, 40, "carved gap minutes")
+    eq(c.rows[4].eventId, "ev1", "the carried event")
+    eq(c.rows[5].start + "-" + c.rows[5].end, "15:00-15:20", "gap after the event")
+    eq(c.rows[6].resolvedColor, "#00bfa5", "empty server colour → local palette (epcn)")
+    eq(c.rows[1].resolvedColor, "#fd6c1d", "server colour wins when present")
+    // A full pass with values present is never overwritten by the carry.
+    let again = full.carrying(from: c)
+    eq(again.rows[0].blockPts, 30, "present value kept")
+    eq(again.rows.count, full.rows.count, "a payload with events gets none added")
+    // A FULL pass with no events (hidden / converted) and failed Excel reads
+    // keeps its 分 carry but never resurrects the events.
+    let noEvents = Parsers.timeline(JSON.parse(##"{"ok":true,"date":"2026-11-12","is_today":true,"tracked_min":1,"points":null,"rows":[{"type":"divider","label":"未 12:00","block":"未"},{"type":"gap","start":"13:50","end":"15:20","minutes":90}]}"##)!)
+    let ne = noEvents.carrying(from: c)
+    check(!noEvents.isLite && !ne.rows.contains(where: \.isEvent), "full pass without events inherits none")
+    eq(ne.rows[0].blockPts, 30, "…but still carries the divider 分")
+    // Different day: nothing crosses midnight.
+    let tomorrow = Parsers.timeline(JSON.parse(##"{"ok":true,"date":"2026-11-13","is_today":true,"tracked_min":0,"points":null,"lite":true,"rows":[{"type":"gap","start":"00:00","end":"00:10","minutes":10}]}"##)!)
+    let t2 = tomorrow.carrying(from: c)
+    check(t2.points == nil && t2.habitSummary.isEmpty && t2.rows.count == 1, "a new day inherits nothing")
+    // Tiny leftovers under MIN_GAP_MIN vanish, like the server's leaf gaps.
+    var ev = TimelineRow(type: "event"); ev.start = "14:02"; ev.end = "14:28"; ev.title = "x"
+    var g = TimelineRow(type: "gap"); g.start = "14:00"; g.end = "14:30"; g.minutes = 30
+    eq(Timeline.merging(events: [ev], into: [g]).map(\.type), ["event"], "2-minute slivers dropped")
+    // Stable List keys (offset ids shifted under an open swipe).
+    let keys = TimelineRow.listKeys(c.rows)
+    eq(keys[0], "d:未:00", "divider key")
+    eq(keys[1], "e:4565301001", "entry key")
+    eq(keys[3], "g:13:50", "gap key")
+    eq(keys[4], "v:ev1", "event key")
+    eq(Set(keys).count, keys.count, "keys unique")
+    eq(TimelineRow.listKeys([g, g]), ["g:14:00", "g:14:00#2"], "duplicates disambiguated")
+}
+
+// Local project palette (2026-11-12: "janus color should be a local hashmap
+// lookup and instantaneous"): the static map is mobile.py COLORS; a learned
+// server colour wins over it; unknown / blank → DEFAULT_COLOR.
+do {
+    ProjectColors.forgetLearned()
+    eq(ProjectColors.hex(for: "i9"), "#2979ff", "i9 from the static map")
+    eq(ProjectColors.hex(for: "家"), "#00b8d4", "家 from the static map")
+    eq(ProjectColors.hex(for: "zz-unknown"), ProjectColors.defaultHex, "unknown → default")
+    eq(ProjectColors.hex(for: ""), ProjectColors.defaultHex, "no project → default")
+    eq(ProjectColors.defaultHex, "#bdbdbd", "DEFAULT_COLOR")
+    var r = TimelineRow(type: "entry"); r.project = "i9"; r.color = "#123456"
+    var bad = TimelineRow(type: "entry"); bad.project = "hcb"; bad.color = "red"
+    ProjectColors.learn(from: [r, bad])
+    eq(ProjectColors.hex(for: "i9"), "#123456", "server palette learned over the static map")
+    eq(ProjectColors.hex(for: "hcb"), "#f81d78", "non-hex colour not learned")
+    ProjectColors.forgetLearned()
+    eq(ProjectColors.hex(for: "i9"), "#2979ff", "forget restores the static map")
+}
+
 if failures == 0 { print("CoreCheck: all checks passed") } else { print("CoreCheck: \(failures) failure(s)"); exit(1) }

@@ -83,7 +83,8 @@ public enum Parsers {
                         isToday: json.has("is_today") ? json.bool("is_today") : true,
                         habits: habits,
                         // Optional string: an older server has no summary (2026-11-12).
-                        habitSummary: json["habits"].string("summary").trimmingCharacters(in: .whitespaces))
+                        habitSummary: json["habits"].string("summary").trimmingCharacters(in: .whitespaces),
+                        isLite: json.bool("lite"))
     }
 
     public static func projectCodes(_ json: JSON) -> [String] { json.strings("codes") }

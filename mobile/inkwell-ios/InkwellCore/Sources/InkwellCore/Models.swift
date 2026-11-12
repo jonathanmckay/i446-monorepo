@@ -315,10 +315,13 @@ public struct Timeline: Equatable {
     /// e.g. "0₦ 12/17 · 0l 0t notes". "" when the server (older, lite pass,
     /// past day) didn't send one; the header then falls back to its old text.
     public let habitSummary: String
+    /// Server `lite: true`: the Toggl-only pass (no calendar, no Neon).
+    public let isLite: Bool
     public init(rows: [TimelineRow], trackedMin: Int, points: Int?, date: String, isToday: Bool = true,
-                habits: [[HabitChip]] = [], habitSummary: String = "") {
+                habits: [[HabitChip]] = [], habitSummary: String = "", isLite: Bool = false) {
         self.rows = rows; self.trackedMin = trackedMin; self.points = points
         self.date = date; self.isToday = isToday; self.habits = habits; self.habitSummary = habitSummary
+        self.isLite = isLite
     }
 
     /// Fill what this payload lacks from the one already on screen for the
@@ -333,7 +336,7 @@ public struct Timeline: Equatable {
         guard let p = prior, p.date == date else { return self }
         let priorDividers = Dictionary(p.rows.filter { $0.isDivider }.map { ($0.label, $0) },
                                        uniquingKeysWith: { a, _ in a })
-        let rows = self.rows.map { r -> TimelineRow in
+        var rows = self.rows.map { r -> TimelineRow in
             guard r.isDivider, let q = priorDividers[r.label] else { return r }
             var y = r
             if y.blockPts == nil { y.blockPts = q.blockPts }
@@ -341,12 +344,113 @@ public struct Timeline: Equatable {
             if y.blockN1 == nil { y.blockN1 = q.blockN1 }
             return y
         }
+        // The lite pass skips the calendar subprocesses too (`events = []`), so
+        // a lite poll would blank every 📅 row until the next full load. Keep
+        // the prior payload's events, merged the way the server does (gaps
+        // carved around each event's window, then time order). Only onto a
+        // lite payload: a full pass with no events means they are gone
+        // (hidden / converted), even when its Excel reads failed.
+        if isLite, !rows.contains(where: { $0.isEvent }) {
+            let events = p.rows.filter { $0.isEvent }
+            if !events.isEmpty { rows = Timeline.merging(events: events, into: rows) }
+        }
         return Timeline(rows: rows, trackedMin: trackedMin, points: points ?? p.points, date: date,
                         isToday: isToday, habits: habits.isEmpty ? p.habits : habits,
-                        habitSummary: habitSummary.isEmpty ? p.habitSummary : habitSummary)
+                        habitSummary: habitSummary.isEmpty ? p.habitSummary : habitSummary, isLite: isLite)
     }
     /// Pre-2026-11-12 name; the strip is one of the fields `carrying` fills.
     public func carryingHabits(from prior: Timeline?) -> Timeline { carrying(from: prior) }
+
+    // ── event carry-over (2026-11-12), the client half of build_timeline's
+    // steps 2–4 in tools/janus/mobile.py ──────────────────────────────────
+
+    /// Gaps shorter than this are not shown (mobile.py MIN_GAP_MIN).
+    public static let minGapMin = 5
+    /// 地支 block → start hour (mobile.py BLOCKS). 子 has 22:00.
+    public static let blockHours: [String: Int] = [
+        "卯": 4, "辰": 6, "巳": 8, "午": 10, "未": 12, "申": 14, "酉": 16, "戌": 18, "亥": 20, "子": 22,
+    ]
+
+    /// "14:30" → 870; "now" / anything else → nil.
+    public static func minutes(_ hhmm: String) -> Int? {
+        let p = hhmm.split(separator: ":")
+        guard p.count == 2, let h = Int(p[0]), let m = Int(p[1]), h < 24, m < 60 else { return nil }
+        return h * 60 + m
+    }
+    static func hhmm(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
+
+    /// Where a row sits on the day's clock, in minutes: a divider at its
+    /// block's hour (label "申:00" or the older "申 14:00"), everything else
+    /// at its start. nil for a row with no parsable time (sorts in place).
+    static func clockMinutes(_ r: TimelineRow) -> Int? {
+        if r.isDivider {
+            if let h = r.label.first.flatMap({ blockHours[String($0)] }) { return h * 60 }
+            return r.label.split(separator: " ").last.flatMap { minutes(String($0)) }
+        }
+        return minutes(r.start)
+    }
+
+    /// Carve each event's [start, end) out of every gap it overlaps (dropping
+    /// pieces under `minGapMin`), then slot the events in by start time: an
+    /// event goes before the first row that starts later than it, so a
+    /// divider or entry at the same minute stays ahead of it, as the server's
+    /// stable sort over gaps → entries → events does.
+    public static func merging(events: [TimelineRow], into rows: [TimelineRow]) -> [TimelineRow] {
+        let windows = events.compactMap { e -> (Int, Int)? in
+            guard let s = minutes(e.start), let n = minutes(e.end), n > s else { return nil }
+            return (s, n)
+        }
+        var out: [TimelineRow] = []
+        for r in rows {
+            guard r.isGap, let gs = minutes(r.start), let ge = minutes(r.end), ge > gs else { out.append(r); continue }
+            var segments = [(gs, ge)]
+            for (es, ee) in windows {
+                var next: [(Int, Int)] = []
+                for (s, e) in segments {
+                    let cs = max(es, s), ce = min(ee, e)
+                    if cs >= ce { next.append((s, e)); continue }
+                    if cs > s { next.append((s, cs)) }
+                    if ce < e { next.append((ce, e)) }
+                }
+                segments = next
+            }
+            for (s, e) in segments where e - s >= minGapMin {
+                var g = r; g.start = hhmm(s); g.end = hhmm(e); g.minutes = e - s
+                out.append(g)
+            }
+        }
+        for ev in events.sorted(by: { (minutes($0.start) ?? 0) < (minutes($1.start) ?? 0) }) {
+            let at = minutes(ev.start) ?? 0
+            let i = out.firstIndex { r in (clockMinutes(r) ?? Int.min) > at } ?? out.count
+            out.insert(ev, at: i)
+        }
+        return out
+    }
+}
+
+extension TimelineRow {
+    /// Stable List identity (2026-11-12): with a 60 s background refresh
+    /// replacing the rows, positional ids (`\.offset`) would let an inserted
+    /// row (a block boundary crossed, a timer stopped on the desktop) shift
+    /// every row below it under an open swipe. Entries by Toggl id, gaps by
+    /// start, dividers by label, events by Google id (else start + title).
+    public var listKey: String {
+        if isDivider { return "d:" + label }
+        if isEntry { return "e:" + id }
+        if isGap { return "g:" + start }
+        return "v:" + (eventId.isEmpty ? startIso + "|" + title : eventId)
+    }
+    /// `listKey` per row, made unique in order (a repeat gets "#2", "#3", …)
+    /// so ForEach never sees two rows with one id.
+    public static func listKeys(_ rows: [TimelineRow]) -> [String] {
+        var seen: [String: Int] = [:]
+        return rows.map { r in
+            let k = r.listKey
+            let n = (seen[k] ?? 0) + 1
+            seen[k] = n
+            return n == 1 ? k : k + "#\(n)"
+        }
+    }
 }
 
 /// A survey card's form (round 3 #1, 2026-10-22: "survey tasks doable in dtd
