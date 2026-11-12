@@ -888,7 +888,7 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         flipped = flip_checkbox(content)
 
     _append_completed(content[:50], best["id"],
-                      _completed_points("0分", split_pts + points_sq + points_cu, target_date))
+                      _completed_points("0分", split_pts + (points_sq or 0) + (points_cu or 0), target_date))
     _fire_refresh()
     msg = f"  ✓ {content!r} (overlap={best_score:.2f})"
     if fen_writes:

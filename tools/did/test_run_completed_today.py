@@ -105,3 +105,25 @@ def test_append_completed_body_has_no_unguarded_file_write():
         "use mc.append_names (locked + atomic) instead"
     )
     assert "mc.append_names" in body_src
+
+
+def test_one_off_without_curly_points_does_not_crash_after_close():
+    """Regression 2026-11-12: a one-off task with [N] but no {N} made
+    run_one_off raise TypeError (int + None) AFTER the 0分 append and the
+    Todoist close, so the completion was never recorded in completed-today
+    and no refresh fired (seen when /done's fallback matched "1g MCP from
+    excel (30) [40]"). points_sq / points_cu may each be None."""
+    task = {"id": "T1", "content": "mock WAU tree (30) [40]", "labels": ["i9"]}
+    recorded = {}
+    with patch.object(run.todoist, "find_tasks", return_value=[task]), \
+         patch.object(run.todoist, "close_task") as close, \
+         patch.object(run.excel, "append") as append, \
+         patch.object(run, "_drop_from_queue"), \
+         patch.object(run, "_fire_refresh"), \
+         patch.object(run, "_completed_points", side_effect=lambda col, pts, d: pts), \
+         patch.object(run, "_append_completed", side_effect=lambda n, i, p: recorded.update(n=n, i=i, p=p)):
+        rc = run.run_one_off("mock WAU tree", "11/12", "mock WAU tree")
+    assert rc == 0
+    close.assert_called_once_with("T1")
+    append.assert_called_once()
+    assert recorded == {"n": "mock WAU tree (30) [40]", "i": "T1", "p": 40}
