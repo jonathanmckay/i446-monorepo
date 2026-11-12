@@ -50,6 +50,7 @@ LIB = Path.home() / "i446-monorepo" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 import neon_blocks as nb  # noqa: E402
+import dtd_hide  # noqa: E402  optimistic dtd row-hide (DTD_TASK_ID / DTD_HIDE_IDS_FILE)
 
 DID_FAST = Path.home() / "i446-monorepo" / "tools" / "did" / "did-fast.py"
 ZEROG_SYNC = Path.home() / "i446-monorepo" / "scripts" / "0g-sync.py"
@@ -171,6 +172,14 @@ def detach(lines: list[str], block: str, daily: bool = False) -> None:
     getting back to dtd was a bit too slow"). The child reports into dtd's
     header via DTD_HDR_FILE and logs to LOG; dtd's cache watcher hides the
     card once the refresh lands."""
+    # The child WILL close the card (did-fast --ritual -1g / 0g) whenever a
+    # goal was entered, so drop the row from dtd's list now, BEFORE the fork:
+    # the child's unhide-on-failure must never run ahead of this hide
+    # (2026-11-12: "I see the task at the top of the list flash before it
+    # disappears"). Todos-only input closes nothing, so it hides nothing.
+    _closes = bool(plan_daily(lines) if daily else plan(lines, block)["goals"])
+    if _closes:
+        dtd_hide.hide_card()
     tmp = Path(tempfile.mkstemp(prefix="1g-form-", suffix=".json")[1])
     tmp.write_text(json.dumps({"goals": lines}, ensure_ascii=False))
     LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +189,28 @@ def detach(lines: list[str], block: str, daily: bool = False) -> None:
                          stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
     n = sum(1 for l in lines if l.strip())
     _hdr(f"⏳ 0g: saving {n} goal(s)…" if daily else f"⏳ -1g → {block}: saving {n} goal(s)…")
+
+
+def _run_did_fast(args: list[str], msgs: list[str], *, closes_card: bool) -> None:
+    """Run did-fast; when this call is the one that closes the dtd card,
+    anything short of a CONFIRMED close (nonzero rc, timeout, exception,
+    rc 0 but todoist.closed false) unhides the row detach() hid, so a card
+    Todoist still shows open never stays hidden for the whole dtd session."""
+    closed = False
+    try:
+        r = subprocess.run([sys.executable, str(DID_FAST), *args],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            msgs.append(f"did-fast {' '.join(args)} FAILED rc={r.returncode}: "
+                        f"{(r.stderr or r.stdout).strip()[-160:]}")
+        elif closes_card:
+            closed = dtd_hide.did_fast_closed(r.stdout)
+            if not closed:
+                msgs.append(f"did-fast {' '.join(args)}: card not closed")
+    except (subprocess.TimeoutExpired, OSError) as e:
+        msgs.append(f"did-fast {' '.join(args)} FAILED: {type(e).__name__}")
+    if closes_card and not closed:
+        dtd_hide.unhide_card()
 
 
 def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
@@ -204,6 +235,7 @@ def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
             msg = f"✗ -1g FAILED: build-order write ({e}); goals saved to {rec}"
             print(msg, file=out)
             _hdr(msg)
+            dtd_hide.unhide_card()   # the card was never closed; detach() hid it
             return 1
         # Todoist only for goals the build-order didn't already hold, so an
         # Esc reflex / resubmit never duplicates tasks.
@@ -223,11 +255,7 @@ def save(lines: list[str], *, block: str | None = None, dry_run: bool = False,
     # --ritual -1g closes the card AND refreshes the task cache itself (one
     # blocking refresh, not two); todos-only just needs the refresh.
     args = ["--ritual", "-1g"] if p["goals"] else ["--refresh-cache"]
-    r = subprocess.run([sys.executable, str(DID_FAST), *args], capture_output=True, text=True,
-                       timeout=120)
-    if r.returncode != 0:
-        msgs.append(f"did-fast {' '.join(args)} FAILED rc={r.returncode}: "
-                    f"{(r.stderr or r.stdout).strip()[-160:]}")
+    _run_did_fast(args, msgs, closes_card=bool(p["goals"]))
     failed = any("FAILED" in m for m in msgs)
     summary = f"-1g → {block}: {len(added)} goals, {len(p['todos'])} todos · " + " · ".join(msgs)
     print(summary, file=out)
@@ -275,6 +303,7 @@ def save_daily(lines: list[str], *, dry_run: bool = False, out=sys.stdout) -> in
         msg = f"✗ 0g FAILED: build-order write ({e}); goals saved to {rec}"
         print(msg, file=out)
         _hdr(msg)
+        dtd_hide.unhide_card()   # the card was never closed; detach() hid it
         return 1
     # Set-time archive: goals must reach 0g-log.md the moment they're set so
     # they survive the 04:00 reset / 0₲→以后的目标 move (regression 2026-06-26).
@@ -296,11 +325,7 @@ def save_daily(lines: list[str], *, dry_run: bool = False, out=sys.stdout) -> in
     # Plain "0g" marks the 0₦ habit and closes the card but (unlike --ritual)
     # does not refresh the task cache itself, so refresh separately.
     for args in (["0g"], ["--refresh-cache"]):
-        r = subprocess.run([sys.executable, str(DID_FAST), *args],
-                           capture_output=True, text=True, timeout=120)
-        if r.returncode != 0:
-            msgs.append(f"did-fast {' '.join(args)} FAILED rc={r.returncode}: "
-                        f"{(r.stderr or r.stdout).strip()[-160:]}")
+        _run_did_fast(args, msgs, closes_card=(args == ["0g"]))
     failed = any("FAILED" in m for m in msgs)
     summary = f"0g: {len(added)} goals · " + " · ".join(msgs)
     print(summary, file=out)

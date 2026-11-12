@@ -225,7 +225,7 @@ def test_marked_done_requires_actual_write_success():
     src = pathlib.Path(__file__).with_name("0s.py").read_text()
     main_src = src[src.index("def main()"):]
     block_start = main_src.index('points_checked")')
-    block = main_src[block_start:block_start + 2000]
+    block = main_src[block_start:block_start + 3200]
     assert "0n_write" in block, "must inspect did-fast's 0n_write result, not just catch exceptions"
     assert '.get("ok")' in block
     marked_done_idx = block.index('"0l marked done"') if '"0l marked done"' in block else block.index("0l marked done")
@@ -313,3 +313,59 @@ def test_detach_spawns_a_background_child_and_tells_dtd(monkeypatch, tmp_path):
 def test_dtd_opens_0s_with_detach():
     src = (Path(__file__).parent.parent / "did" / "dtd.sh").read_text()
     assert 'tools/0s/0s.py --detach"' in src
+
+
+# --- optimistic dtd row-hide (2026-11-12: "0l ... flash before it disappears") ---
+
+def _hide_env(monkeypatch, tmp_path):
+    f = tmp_path / "removed.ids"
+    monkeypatch.setenv("DTD_TASK_ID", "CARD0L")
+    monkeypatch.setenv("DTD_HIDE_IDS_FILE", str(f))
+    return f
+
+
+def test_detach_hides_0l_card_before_forking_when_points_checked(monkeypatch, tmp_path):
+    f = _hide_env(monkeypatch, tmp_path)
+    seen = {}
+
+    class P:
+        def __init__(self, cmd, **kw):
+            # the hide must already be on disk when the child is forked
+            seen["at_fork"] = f.read_text() if f.exists() else None
+            seen["cmd"] = cmd
+    monkeypatch.setattr(z, "LOG", tmp_path / "0s.log")
+    monkeypatch.setattr(z.subprocess, "Popen", P)
+    z.detach({"title": "t", "points_checked": "1"}, dt.date(2026, 11, 11))
+    assert seen["at_fork"] == "CARD0L\n"
+    Path(seen["cmd"][seen["cmd"].index("--from-json") + 1]).unlink()
+
+
+def test_detach_leaves_0l_card_when_points_unchecked(monkeypatch, tmp_path):
+    f = _hide_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(z, "LOG", tmp_path / "0s.log")
+    spawned = {}
+    monkeypatch.setattr(z.subprocess, "Popen", lambda cmd, **kw: spawned.setdefault("cmd", cmd))
+    z.detach({"title": "t", "points_checked": ""}, dt.date(2026, 11, 11))
+    assert not f.exists(), "an unchecked 0l closes no card, so nothing may be hidden"
+    Path(spawned["cmd"][spawned["cmd"].index("--from-json") + 1]).unlink()
+
+
+def test_mark_0l_unhides_on_timeout_and_on_unclosed_card(monkeypatch, tmp_path):
+    """run_bounded raises TimeoutExpired (the historical 0l failure) -- the
+    RuntimeError branch never runs, so the unhide must sit in the except path
+    too. And rc 0 with todoist.closed false means the card is still open."""
+    import json as _j
+    import subprocess as _sp
+    f = _hide_env(monkeypatch, tmp_path)
+    src = Path(__file__).with_name("0s.py").read_text()
+    main_src = src[src.index("def main()"):]
+    block = main_src[main_src.index('points_checked")'):][:3200]
+    assert "except BaseException:" in block and block.count("dtd_hide.unhide_card()") >= 3
+    assert "did_fast_closed(proc.stdout)" in block
+    # behavioural check of the helper the block relies on
+    import dtd_hide
+    f.write_text("CARD0L\n")
+    assert dtd_hide.did_fast_closed(_j.dumps({"results": [{"todoist": {"closed": False}}]})) is False
+    assert dtd_hide.did_fast_closed(_j.dumps({"results": [{"todoist": {"closed": True}}]})) is True
+    assert dtd_hide.unhide_card() is True and f.read_text() == ""
+    assert isinstance(_sp.TimeoutExpired("x", 1), BaseException)

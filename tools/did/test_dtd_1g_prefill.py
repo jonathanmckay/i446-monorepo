@@ -120,8 +120,15 @@ def test_router_always_opens_form_on_1g_card_even_without_prefill():
     assert cond in body, "alt-enter on 😈 -1g must route to the form unconditionally"
     assert "DTD_PREFILL" not in body, "the form route must not be gated on the prefill sidecar"
     branch = body[body.index(cond):body.index(cond) + 400]
-    assert "printf 'execute(%s %s %s --detach)' \"$DTD_FORM\" \"\\$_id\"" in branch, branch
+    assert "printf 'execute(%s %s %s --detach)+transform(" in branch, branch
+    assert '"$DTD_FORM" "\\$_id"' in branch
     assert "-1g/-1g-form.py" in branch
-    assert "exclude" not in branch.split("else")[0], "a cancelled form must keep the row"
+    # No UNCONDITIONAL exclude (the \$_ex prefix the completion branches use):
+    # a cancelled form must keep the row. The conditional transform (2026-11-12)
+    # only drops it when the form itself recorded the id in $REMOVED.ids.
+    form_branch = branch.split("else")[0]
+    assert "%sexecute" not in form_branch and "\\$_ex" not in form_branch, "a cancelled form must keep the row"
+    assert "grep -qxF -- %s %s 2>/dev/null && echo exclude" in form_branch
+    assert '"$DTD_REMOVED.ids"' in form_branch
     # the plain-completion branches are untouched (one execute, one execute-silent)
     assert body.count("printf '%sexecute(") == 1 and body.count("printf '%sexecute-silent(") == 1

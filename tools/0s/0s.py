@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
+import dtd_hide  # noqa: E402  optimistic dtd row-hide (DTD_TASK_ID / DTD_HIDE_IDS_FILE)
 from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
@@ -375,6 +376,12 @@ def detach(answers: dict, target: _dt.date) -> None:
     this script with --from-json; a failed write still lands in RECOVERY_DIR
     and the header says so."""
     import tempfile
+    # points_checked=1 means the child will run did-fast 0l and close the 0l
+    # card: hide its dtd row NOW, before the fork, so the list that comes back
+    # after the form never shows it (2026-11-12 flash report). Unchecked
+    # leaves the card open, so nothing is hidden.
+    if (answers.get("points_checked") or "").strip() == "1":
+        dtd_hide.hide_card()
     fd, name = tempfile.mkstemp(prefix="0s-answers-", suffix=".json")
     os.close(fd)
     Path(name).write_text(json.dumps(answers, ensure_ascii=False))
@@ -455,8 +462,19 @@ def main() -> int:
             # that internal ceiling still cut 0l off before it finished, so
             # stdout came back empty. Override it to match this call's budget.
             env = dict(os.environ, DIDFAST_WATCHDOG_SECS="110")
-            proc = run_bounded(["/usr/bin/python3", str(DID_FAST), "0l"],
-                               timeout=120, env=env)
+            try:
+                proc = run_bounded(["/usr/bin/python3", str(DID_FAST), "0l"],
+                                   timeout=120, env=env)
+            except BaseException:
+                # Timeout (run_bounded raises TimeoutExpired -- the historical
+                # 0l failure, 2026-08-04/11) or any other blow-up: the card is
+                # still open, so put its dtd row back before re-raising.
+                dtd_hide.unhide_card()
+                raise
+            if not dtd_hide.did_fast_closed(proc.stdout):
+                # 0n may still have been written (checked below); the Todoist
+                # card was not closed, so it must come back in dtd.
+                dtd_hide.unhide_card()
             # did-fast always exits 0 and reports per-write ok/error in its
             # JSON stdout — a clean subprocess return does NOT mean the 0n
             # write actually succeeded, so it must be checked explicitly
@@ -472,6 +490,7 @@ def main() -> int:
                 if args.report_hdr:
                     _hdr("0s → 0l ✓ · saving answers …")
                 return "0l marked done"
+            dtd_hide.unhide_card()
             raise RuntimeError(fail_reason)
 
         _writer.queue(_mark_0l, tag="0l")

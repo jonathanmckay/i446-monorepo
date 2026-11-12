@@ -325,3 +325,99 @@ def test_form_accepting_prefill_records_nothing(form, monkeypatch, tmp_path):
     assert _drive(form, monkeypatch, tmp_path, "\x13") == ["- Good interviews, then rest", "", ""]
     assert _drive(form, monkeypatch, tmp_path, "Good interviews, then rest\x13")[0] == "Good interviews, then rest"
     assert not rej.exists()
+
+
+# --- optimistic dtd row-hide (2026-11-12: "-1g ... flash before it disappears") ---
+
+def _hide_env(monkeypatch, tmp_path):
+    f = tmp_path / "removed.ids"
+    monkeypatch.setenv("DTD_TASK_ID", "CARD1G")
+    monkeypatch.setenv("DTD_HIDE_IDS_FILE", str(f))
+    return f
+
+
+def test_detach_hides_card_before_fork_only_when_a_goal_closes_it(form, monkeypatch, tmp_path):
+    f = _hide_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(form, "LOG", tmp_path / "log")
+    seen = []
+    monkeypatch.setattr(form.subprocess, "Popen",
+                        lambda cmd, **kw: seen.append(f.read_text() if f.exists() else None))
+    # todos-only input closes no card: nothing hidden
+    form.detach(["@i9 fix janus [5]", "", ""], "巳")
+    assert form.plan(["@i9 fix janus [5]"], "巳")["goals"] == []
+    assert seen == [None]
+    # a goal -> --ritual -1g will close the card: hidden BEFORE Popen
+    form.detach(["ship the thing", "", ""], "巳")
+    assert seen[-1] == "CARD1G\n"
+    # 0g daily mode likewise
+    f.unlink()
+    form.detach(["daily goal", "", ""], "巳", daily=True)
+    assert seen[-1] == "CARD1G\n"
+
+
+def test_save_unhides_when_did_fast_does_not_confirm_the_close(form, monkeypatch, tmp_path):
+    import io
+    import json as _j
+    import subprocess as _sp
+    f = _hide_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(form, "_append_on_ix", lambda b, g: g)
+
+    class T:
+        @staticmethod
+        def create_task(content, **kw):
+            return {"id": "x"}
+    monkeypatch.setitem(sys.modules, "todoist", T)
+
+    def run_with(stdout=None, rc=0, raise_timeout=False):
+        def _run(cmd, **kw):
+            if raise_timeout:
+                raise _sp.TimeoutExpired(cmd, 120)
+            r = _RC(rc)
+            r.stdout = stdout or ""
+            return r
+        monkeypatch.setattr(form.subprocess, "run", _run)
+
+    # confirmed close: the hide stays
+    f.write_text("CARD1G\n")
+    run_with(_j.dumps({"todoist": {"closed": True}}))
+    assert form.save(["a goal", "", ""], block="巳", out=io.StringIO()) == 0
+    assert f.read_text() == "CARD1G\n"
+    # rc 0 but no card matched: unhide, and say so, without failing the save
+    f.write_text("CARD1G\n")
+    run_with(_j.dumps({"todoist": {"closed": False, "note": "no open -1neon task matched"}}))
+    out = io.StringIO()
+    assert form.save(["a goal", "", ""], block="巳", out=out) == 0
+    assert f.read_text() == "" and "card not closed" in out.getvalue()
+    # timeout: unhide and report FAILED
+    f.write_text("CARD1G\n")
+    run_with(raise_timeout=True)
+    out = io.StringIO()
+    assert form.save(["a goal", "", ""], block="巳", out=out) == 1
+    assert f.read_text() == "" and "FAILED" in out.getvalue()
+    # build-order write failure returns before did-fast runs: unhide there too
+    f.write_text("CARD1G\n")
+    monkeypatch.setattr(form, "_append_on_ix", lambda b, g: (_ for _ in ()).throw(RuntimeError("ssh")))
+    monkeypatch.setattr(form, "_dump_recovery", lambda *a: tmp_path / "rec")
+    assert form.save(["a goal", "", ""], block="巳", out=io.StringIO()) == 1
+    assert f.read_text() == ""
+
+
+def test_save_daily_checks_the_0g_close_not_the_refresh(form, monkeypatch, tmp_path):
+    import io
+    import json as _j
+    f = _hide_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(form, "_append_on_ix", lambda b, g, daily=False: g)
+    monkeypatch.setattr(form, "_zerog_sync", lambda: _RC(0))
+    calls = []
+
+    def _run(cmd, **kw):
+        calls.append(cmd[2:])
+        r = _RC(0)
+        if cmd[2:] == ["0g"]:
+            r.stdout = _j.dumps({"results": [{"todoist": {"closed": True}}]})
+        return r
+    monkeypatch.setattr(form.subprocess, "run", _run)
+    f.write_text("CARD1G\n")
+    assert form.save_daily(["daily goal"], out=io.StringIO()) == 0
+    assert ["0g"] in calls and ["--refresh-cache"] in calls
+    assert f.read_text() == "CARD1G\n", "a confirmed 0g close keeps the hide; the refresh's empty stdout must not unhide"

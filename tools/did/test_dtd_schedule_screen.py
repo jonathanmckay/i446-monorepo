@@ -449,7 +449,7 @@ def _gen_with_cache(tmp, rows):
     import json
     cache = tmp / "cache.json"
     cache.write_text(json.dumps({"updated": "x", "today": rows}, ensure_ascii=False))
-    extra = f'DTD_CACHE_FILE="{cache}"; DTD_FORM="{tmp}/form-stub"; HOME="/h"'
+    extra = f'DTD_CACHE_FILE="{cache}"; DTD_FORM="{tmp}/form-stub"; DTD_REMOVED="{tmp}/removed"; HOME="/h"'
     return _gen(tmp, "DTD_PICKENTER", "PICKENTEREOF", extra=extra)
 
 
@@ -471,7 +471,11 @@ def test_pickenter_survey_cards_emit_execute_of_their_form():
         for rid, form in want.items():
             log.write_text("")
             out = _run(s, rid, "")
-            assert out == f"execute({tmp}/form-stub {rid} {form})", (rid, out)
+            # 2026-11-12: the trailing transform drops the row client-side iff the
+            # form recorded its id in $REMOVED.ids (lib/dtd_hide.py); a cancelled
+            # form leaves the file untouched, so the grep fails and the row stays.
+            hide = f"+transform(grep -qxF -- {rid} {tmp}/removed.ids 2>/dev/null && echo exclude)"
+            assert out == f"execute({tmp}/form-stub {rid} {form}){hide}", (rid, out)
             assert _calls(log) == [], "the router must not start the timer itself (the wrapper does)"
         # a plain task still just starts its timer, printing nothing
         log.write_text("")

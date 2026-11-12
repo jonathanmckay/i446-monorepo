@@ -869,6 +869,15 @@ _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}
 id="\$1"; form="\$2"; shift 2
 HDR="$DTD_HDR"
 export DTD_HDR_FILE="\$HDR"   # forms that finish in the background report here
+# Optimistic row-hide for detached forms (2026-11-12: "-1g, 0l ... I see the
+# task at the top of the list flash before it disappears"): -1g/0g/0l save in
+# a detached child, so at reload time the card was still open in the cache.
+# lib/dtd_hide.py lets the form append this card's id to \$REMOVED.ids the
+# moment it knows the child WILL close it (and strip it again if the close
+# fails); the list builder's removed_ids check then drops the row on the very
+# reload that follows this wrapper. Both unset = form run outside dtd = no-op.
+export DTD_TASK_ID="\$id"
+export DTD_HIDE_IDS_FILE="$DTD_REMOVED.ids"
 stty sane susp undef < /dev/tty 2>/dev/null
 printf "\033[2J\033[H⏳ \${form:t}…" > /dev/tty
 # Timer start runs in the BACKGROUND (2026-10-18: "flashes through a bunch of
@@ -1254,10 +1263,13 @@ print -- "\$EPOCHREALTIME\trouter-resolved\t\$_t_base" >> "${DTD_TIMING:-/dev/nu
 # prefill or not (bug 2026-11-10: "-1g doesn't ask me for text to a goal
 # now" -- the route was gated on the .prefill sidecar being non-empty, so
 # before the day's 0g goals were set, alt-enter finished the card instantly
-# with a blank goal and 🎯 credit). No exclude+: a cancelled form keeps the
-# row; the detached save hides it via the refresh.
+# with a blank goal and 🎯 credit). No unconditional exclude+: a cancelled
+# form keeps the row. The form itself hides the row (lib/dtd_hide.py appends
+# the id to \$REMOVED.ids, exported as DTD_HIDE_IDS_FILE by the wrapper) once
+# it knows the detached save will close the card; the trailing transform
+# then drops it client-side as well (2026-11-12 flash fix, same as Enter).
 if [[ "\$_t_base" == "😈 -1g" ]]; then
-  printf 'execute(%s %s %s --detach)' "$DTD_FORM" "\$_id" "$HOME/i446-monorepo/tools/-1g/-1g-form.py"
+  printf 'execute(%s %s %s --detach)+transform(grep -qxF -- %s %s 2>/dev/null && echo exclude)' "$DTD_FORM" "\$_id" "$HOME/i446-monorepo/tools/-1g/-1g-form.py" "\$_id" "$DTD_REMOVED.ids"
 else
 case "\$_t_base" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
@@ -1743,7 +1755,11 @@ elif [[ -n "\$id" ]]; then
     0g)                               _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --daily --detach" ;;
   esac
   if [[ -n "\$_form" ]]; then
-    print -rn -- "execute($DTD_FORM \$id \$_form)"
+    # Trailing transform: if the form hid its card (id now in \$REMOVED.ids,
+    # see DTD_HIDE_IDS_FILE in the wrapper) drop the row client-side too, so
+    # not even fzf's post-execute repaint shows it before the reload lands.
+    # A cancelled form wrote nothing, so the grep fails and the row stays.
+    print -rn -- "execute($DTD_FORM \$id \$_form)+transform(grep -qxF -- \$id $DTD_REMOVED.ids 2>/dev/null && echo exclude)"
   else
     "$DTD_ENTER" "\$id" >/dev/null 2>&1
   fi
