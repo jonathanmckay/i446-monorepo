@@ -102,52 +102,166 @@ def _load_two_n():
 _two_n = _load_two_n()
 
 
-# ── First-zero-of-day auto-/ibx0 ──────────────────────────────────────────────
-_IBX0_AUTODONE_STATE = Path.home() / ".claude/skills/ibx0/.last-autodone-date"
+# ── Per-habit pending counts + auto-close (2026-11-12) ───────────────────────
+# Replaces the first-inbox-zero-of-the-day batch close of all six inbox habits.
+# Each fetcher records whether its channel(s) answered; after every completed
+# fetch cycle the TUI writes a snapshot of what is still pending per habit to
+# the synced vault (dtd badges the cards from it, ``ibx i9 (4) [20] ✉3``) and
+# closes only the habits whose channels all answered and came back empty.
+# Rules from the rubber-duck review: the queue is windowed to the previous 地支
+# block, so a bare zero means "nothing in the last few hours", not "inbox
+# empty" — therefore
+#   * headless --counts never closes anything (a 00:05 cron tick would have
+#     credited every habit for the new day),
+#   * timer-driven wrapper re-runs (IBX_AUTORUN=1) never close anything,
+#   * nothing closes before the 卯 block (04:00),
+#   * a channel counts as answered only when its fetcher returned inside the
+#     cycle timeout AND reported success (Outlook/Teams return [] on a dead
+#     Agency binary, so they carry an explicit last_fetch_ok sentinel).
+import inbox_counts as _ic
+
 _DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
-_IBX0_HABITS = "ibx - s897, ibx i9, slack github, slack m5x2, ibx m5x2, teams"
+_AUTODONE_JSON = Path.home() / ".claude/skills/ibx0/.autodone.json"
+_LEGACY_AUTODONE = Path.home() / ".claude/skills/ibx0/.last-autodone-date"  # /ibx0 skill: all done today
+_AUTOCLOSE_EARLIEST_HOUR = 4  # 卯 block start
+
+# channel -> True/False, written by the fetchers (each thread its own keys).
+_chan_flags: dict = {}
+# {"ok": {channel: True/False/None}} for the most recent COMPLETED cycle;
+# replaced wholesale (one dict assignment) so readers never see a half-built map.
+_latest_cycle = {"ok": {}}
+_snap_dirty = threading.Event()
 
 
-def _mark_ibx0_habits_if_first_today():
-    """The first time we hit inbox zero today, run /ibx0's habit-batch via
-    did-fast.py so the user doesn't have to do it manually. Idempotent
-    within a day via a tiny date-stamp state file."""
-    today = datetime.now().date().isoformat()
+def _slack_workspaces():
     try:
-        if _IBX0_AUTODONE_STATE.exists():
-            if _IBX0_AUTODONE_STATE.read_text().strip() == today:
-                return
+        with open(_slack.CONFIG_FILE) as f:
+            return list(json.load(f).keys())
+    except Exception:
+        return []
+
+
+def _source_channels(source):
+    if source == "email":
+        return [f"gmail:{a['name']}" for a in _ibx.ACCOUNTS]
+    if source == "slack":
+        return [f"slack:{ws}" for ws in _slack_workspaces()]
+    return [source]  # imsg / outlook / teams
+
+
+def _cycle_channel_ok(returned_sources):
+    """channel_ok for one fetch cycle: only sources whose future returned in
+    time contribute; a channel whose fetcher never set a flag stays None.
+    A fetcher that finishes AFTER its timeout still writes _chan_flags, but
+    its source is not in returned_sources, so that late True is never read."""
+    ok = {}
+    for src in returned_sources:
+        for ch in _source_channels(src):
+            ok[ch] = _chan_flags.get(ch)
+    return ok
+
+
+def _autoclose_allowed(now=None):
+    """Only an interactive, user-initiated run after the 卯 block may close."""
+    if os.environ.get("IBX_AUTORUN") == "1" or os.environ.get("IBX_NO_AUTOCLOSE") == "1":
+        return False
+    try:
+        if not sys.stdin.isatty():
+            return False
+    except Exception:
+        return False
+    return (now or datetime.now()).hour >= _AUTOCLOSE_EARLIEST_HOUR
+
+
+def _autodone_today():
+    today = datetime.now().date().isoformat()
+    done = set()
+    try:
+        if _LEGACY_AUTODONE.read_text().strip() == today:
+            done.update(_ic.HABIT_CHANNELS)
+    except OSError:
+        pass
+    try:
+        d = json.loads(_AUTODONE_JSON.read_text())
+        if d.get("date") == today:
+            done.update(d.get("habits", []))
+    except Exception:
+        pass
+    return done
+
+
+def _write_autodone(habits):
+    try:
+        _AUTODONE_JSON.parent.mkdir(parents=True, exist_ok=True)
+        _AUTODONE_JSON.write_text(json.dumps(
+            {"date": datetime.now().date().isoformat(), "habits": sorted(habits)}))
     except OSError:
         pass
 
-    try:
-        proc = subprocess.run(
-            ["python3", str(_DID_FAST), _IBX0_HABITS],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        console.print(f"[dim]auto-/ibx0 skipped: {e}[/dim]")
-        return
 
-    if proc.returncode == 0:
-        console.print("[dim]✓ auto-/ibx0: marked inbox habits done[/dim]")
+def _autoclose_habits(snapshot):
+    """Close (via did-fast) every habit the snapshot proves empty and that is
+    not yet closed today. Claims them in the state file first so a cycle two
+    seconds later cannot double-run did-fast; releases them again on failure
+    so a later cycle retries. did-fast runs off the main thread so the TUI
+    never waits on an Excel write. Returns the habits it set out to close."""
+    if not _autoclose_allowed():
+        return []
+    done = _autodone_today()
+    todo = [h for h in _ic.zero_habits(snapshot) if h not in done]
+    if not todo:
+        return []
+    _write_autodone(done | set(todo))
+
+    def _run():
         try:
-            _IBX0_AUTODONE_STATE.parent.mkdir(parents=True, exist_ok=True)
-            _IBX0_AUTODONE_STATE.write_text(today)
-        except OSError:
-            pass
-        # Refresh the did-fast cache in the background so subsequent
-        # /next / /did calls see the closed Todoist tasks.
-        try:
-            subprocess.Popen(
-                ["python3", str(_DID_FAST), "--refresh-cache"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            proc = subprocess.run(
+                ["python3", str(_DID_FAST), ", ".join(todo)],
+                capture_output=True, text=True, timeout=90,
             )
-        except OSError:
-            pass
-    else:
-        err = (proc.stderr or proc.stdout or "").strip()[:200]
-        console.print(f"[dim]auto-/ibx0 failed: {err}[/dim]")
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            _write_autodone(_autodone_today() - set(todo))
+            console.print(f"[dim]auto-close skipped: {e}[/dim]")
+            return
+        if proc.returncode == 0:
+            console.print(f"[dim]✓ auto-closed (inbox empty): {', '.join(todo)}[/dim]")
+            try:
+                subprocess.Popen(["python3", str(_DID_FAST), "--refresh-cache"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                pass
+        else:
+            _write_autodone(_autodone_today() - set(todo))
+            err = (proc.stderr or proc.stdout or "").strip()[:200]
+            console.print(f"[dim]auto-close failed for {', '.join(todo)}: {err}[/dim]")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return todo
+
+
+def _publish_snapshot(pending_items, allow_close=True):
+    """Once per completed fetch cycle: write the per-habit snapshot for dtd
+    from what is STILL pending in the live queue (not from the raw fetch, so
+    an item that fell out of the block window while still on screen keeps
+    counting), then auto-close the habits the snapshot proves empty."""
+    if not _snap_dirty.is_set():
+        return None
+    _snap_dirty.clear()
+    seen, items = set(), []
+    for it in pending_items:
+        uid = _item_uid(it)
+        if uid in seen:
+            continue
+        seen.add(uid)
+        items.append(it)
+    snap = _ic.build_snapshot(items, dict(_latest_cycle["ok"]))
+    try:
+        _ic.write_snapshot(snap)
+    except Exception as e:
+        console.print(f"[dim]inbox-counts write failed: {e}[/dim]")
+    if allow_close:
+        _autoclose_habits(snap)
+    return snap
 
 
 def _render_block_status():
@@ -871,17 +985,31 @@ ACCOUNT_DISPLAY = {
 # User's own email addresses — skip messages sent by these
 MY_EMAILS = {"mckay@m5c7.com", "mckay@m5x2.com", "jonathan.b.mckay@gmail.com"}
 
+def _gmail_token_refreshable(tokens_file):
+    try:
+        data = json.loads((_ibx.CONFIG_DIR / tokens_file).read_text())
+        return bool(data.get("refresh_token"))
+    except Exception:
+        return False
+
+
 def fetch_emails(skip_triage=False):
     items = []
     per_account = {}  # display_name -> count
     _update_status("Gmail", "...")
     services = {}
     for acct in _ibx.ACCOUNTS:
+        # Headless (--counts under launchd): never fall into the interactive
+        # OAuth flow — a missing/unrefreshable token just marks the channel down.
+        if os.environ.get("IBX_HEADLESS") == "1" and not _gmail_token_refreshable(acct["tokens"]):
+            _chan_flags[f"gmail:{acct['name']}"] = False
+            continue
         try:
             svc = _ibx.get_gmail_service(acct["tokens"], acct["creds"])
             services[acct["name"]] = svc
             _ibx._gmail_services[acct["name"]] = svc
         except Exception as e:
+            _chan_flags[f"gmail:{acct['name']}"] = False
             console.print(f"  [yellow]Gmail ✗ {acct['name']}: {e}[/yellow]")
 
     if not services:
@@ -896,7 +1024,13 @@ def fetch_emails(skip_triage=False):
     # Fetch remaining (cross-account dedup by RFC Message-ID)
     seen_message_ids = set()
     for name, svc in services.items():
-        msgs = _ibx.fetch_inbox(svc, unread_only=False, dedup_threads=True)
+        try:
+            msgs = _ibx.fetch_inbox(svc, unread_only=False, dedup_threads=True)
+        except Exception as e:
+            _chan_flags[f"gmail:{name}"] = False
+            console.print(f"  [yellow]Gmail ✗ {name}: {e}[/yellow]")
+            continue
+        _chan_flags[f"gmail:{name}"] = True
         count = 0
         for m in msgs:
             item = normalize_email(m, svc, name)
@@ -921,6 +1055,7 @@ def fetch_imsgs():
     _update_status("iMsg", "...")
     if not _imsg.CHAT_DB.exists():
         _update_status("iMsg", "✗ no db")
+        _chan_flags["imsg"] = False
         return items
 
     _imsg._contacts = _imsg.build_contact_cache()
@@ -930,11 +1065,13 @@ def fetch_imsgs():
         conn = _imsg.snapshot_db()
     except Exception as e:
         _update_status("iMsg", "✗")
+        _chan_flags["imsg"] = False
         return items
 
     raw_threads = _imsg.fetch_unread_threads(conn, processed)
     if not raw_threads:
         _update_status("iMsg", "✓ 0")
+        _chan_flags["imsg"] = True
         conn.close()
         return items
     threads_to_review, auto_handled = _imsg.triage_threads(raw_threads)
@@ -953,6 +1090,7 @@ def fetch_imsgs():
 
     conn.close()
     _update_status("iMsg", f"✓ {len(items)}")
+    _chan_flags["imsg"] = True
     return items
 
 def fetch_slack():
@@ -978,8 +1116,10 @@ def fetch_slack():
                         count += 1
                 except Exception as e:
                     console.print(f"  [yellow]channel error: {e}[/yellow]")
+            _chan_flags[f"slack:{workspace}"] = True
             _update_status("Slack", f"✓ {len(items)}")
         except Exception as e:
+            _chan_flags[f"slack:{workspace}"] = False
             console.print(f"  [yellow]Slack ✗ {workspace}: {e}[/yellow]")
 
     if "Slack" not in _fetch_status or not _fetch_status["Slack"].startswith("✓"):
@@ -993,11 +1133,14 @@ def fetch_outlook():
     _update_status("Outlook", "...")
     try:
         items = _outlook.fetch_outlook_items()
+        # [] is also what a dead Agency binary returns: trust the sentinel only.
+        _chan_flags["outlook"] = getattr(_outlook, "last_fetch_ok", None) is True
         for item in items:
             item["received_at"] = _parse_received_at(item)
-        _update_status("Outlook", f"✓ {len(items)}")
+        _update_status("Outlook", f"✓ {len(items)}" if _chan_flags["outlook"] else "✗")
         return items
     except Exception as e:
+        _chan_flags["outlook"] = False
         _update_status("Outlook", "✗")
         return []
 
@@ -1008,11 +1151,13 @@ def fetch_teams():
     _update_status("Teams", "...")
     try:
         items = _teams.fetch_teams_items()
+        _chan_flags["teams"] = getattr(_teams, "last_fetch_ok", None) is True
         for item in items:
             item["received_at"] = _parse_received_at(item)
-        _update_status("Teams", f"✓ {len(items)}")
+        _update_status("Teams", f"✓ {len(items)}" if _chan_flags["teams"] else "✗")
         return items
     except Exception as e:
+        _chan_flags["teams"] = False
         _update_status("Teams", "✗")
         return []
 
@@ -1258,6 +1403,33 @@ def check_resolved_now(items_snapshot, resolved):
     return newly
 
 
+def _fetch_cycle(skip_triage=True, timeout=30):
+    """Run every available fetcher once, in parallel. Returns (items, returned)
+    where returned is the set of source names whose future finished inside
+    the timeout — the only sources whose channel flags this cycle may trust."""
+    from concurrent.futures import ThreadPoolExecutor
+    fetchers = [
+        ("email", lambda: fetch_emails(skip_triage=skip_triage)),
+        ("imsg", fetch_imsgs),
+        ("slack", fetch_slack),
+    ]
+    if _outlook_active():
+        fetchers.append(("outlook", fetch_outlook))
+    if _teams_active():
+        fetchers.append(("teams", fetch_teams))
+    new_items, returned = [], set()
+    with ThreadPoolExecutor(max_workers=len(fetchers)) as pool:
+        futs = {pool.submit(fn): name for name, fn in fetchers}
+        for fut, name in futs.items():
+            try:
+                r = fut.result(timeout=timeout)
+            except Exception:
+                continue
+            new_items.extend(r[0] if isinstance(r, tuple) else r)
+            returned.add(name)
+    return new_items, returned
+
+
 def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_done_event, interval=120):
     """Background thread: periodically fetch new items from all sources.
     Items are staged in bg_injected for the main loop to pick up.
@@ -1285,33 +1457,17 @@ def _bg_continuous_fetch(resolved, bg_injected, bg_lock, stop_event, drainer_don
             mod.console = quiet
 
         try:
-            from concurrent.futures import ThreadPoolExecutor
-            fetchers = [
-                ("email", lambda: fetch_emails(skip_triage=True)),
-                ("imsg", fetch_imsgs),
-                ("slack", fetch_slack),
-            ]
-            if _outlook_active():
-                fetchers.append(("outlook", fetch_outlook))
-            if _teams_active():
-                fetchers.append(("teams", fetch_teams))
-
-            new_items = []
-            with ThreadPoolExecutor(max_workers=len(fetchers)) as pool:
-                futs = {pool.submit(fn): name for name, fn in fetchers}
-                for fut in futs:
-                    try:
-                        r = fut.result(timeout=30)
-                        items = r[0] if isinstance(r, tuple) else r
-                        new_items.extend(items)
-                    except Exception:
-                        pass
+            new_items, returned = _fetch_cycle(skip_triage=True)
 
             with bg_lock:
                 for it in _drop_outside_block(new_items):
                     uid = _item_uid(it)
                     if uid and uid not in resolved:
                         bg_injected.append(it)
+            # Cycle complete: the main thread publishes the per-habit snapshot
+            # (and auto-closes) on its next tick, from the live queue.
+            _latest_cycle["ok"] = _cycle_channel_ok(returned)
+            _snap_dirty.set()
         except Exception:
             pass
         finally:
@@ -1339,6 +1495,7 @@ def main():
     _incoming = queue.Queue()       # items land here as each source finishes
     _source_counts = {}             # source -> count (for status line)
     _per_account = {}               # email account breakdown
+    _returned_init = set()          # sources whose initial fetch returned
     _fetch_done = threading.Event() # set when ALL sources have reported
 
     # Initialize status line
@@ -1357,6 +1514,7 @@ def main():
                 items = result
             items = _drop_outside_block(items)
             _source_counts[name] = len(items)
+            _returned_init.add(name)
             for it in items:
                 _incoming.put(it)
         except Exception as e:
@@ -1438,13 +1596,21 @@ def main():
                 if uid not in seen_uids:
                     _bg_injected.append(it)
                     seen_uids.add(uid)
+        # Initial cycle complete and fully drained: publish on the next tick.
+        # (Set here, not in _bg_wait_all, so a publish can never run between
+        # the futures finishing and the last items leaving _incoming.)
+        _latest_cycle["ok"] = _cycle_channel_ok(_returned_init)
+        _snap_dirty.set()
         _drainer_done.set()
     threading.Thread(target=_bg_drainer, daemon=True).start()
 
     # Mark fetch done when all futures complete (non-blocking)
     def _bg_wait_all():
         for f in futures:
-            f.result(timeout=180)
+            try:
+                f.result(timeout=180)
+            except Exception:
+                pass  # a hung source must not leave _fetch_done unset forever
         _fetch_done.set()
     threading.Thread(target=_bg_wait_all, daemon=True).start()
 
@@ -1491,8 +1657,12 @@ def main():
             break
     status_line = _build_status()
 
+    def _peek_pending(resolved_set):
+        """Background arrivals not yet shown and not resolved — read-only."""
+        with _bg_lock:
+            return [it for it in _bg_injected if _item_uid(it) not in resolved_set]
+
     if not all_items:
-        _mark_ibx0_habits_if_first_today()
         set_term_color("black")
         _render_block_status()
         console.print(f"\n[dim]Inbox zero — watching for new items... (q to quit)[/dim]  {status_line}")
@@ -1514,14 +1684,17 @@ def main():
                     _bg_injected.clear()
                 else:
                     staged = []
+            fresh = []
             if staged:
                 fresh = [it for it in _drop_suppressed(staged)
                          if _item_uid(it) not in resolved]
-                if fresh:
-                    all_items = fresh
-                    set_term_color("red")
-                    console.print(f"[green]  + {len(fresh)} new item(s)[/green]")
-                    break
+            # Per-habit snapshot + auto-close, from exactly what is pending now.
+            _publish_snapshot(fresh)
+            if fresh:
+                all_items = fresh
+                set_term_color("red")
+                console.print(f"[green]  + {len(fresh)} new item(s)[/green]")
+                break
 
             try:
                 ready, _, _ = select.select([sys.stdin], [], [], 2.0)
@@ -1586,6 +1759,10 @@ def main():
             if index > len(all_items):
                 index = len(all_items)
 
+        # Per-habit snapshot from the live queue: cards not yet handled, the
+        # day's skipped ones, and background arrivals not yet shown.
+        _publish_snapshot(all_items[index:] + skipped + _peek_pending(resolved))
+
         if index >= len(all_items):
             # Day-skipped items don't cycle back in-session: 's' means "not
             # today". Only skipped imsg threads with NEWER activity than
@@ -1599,7 +1776,6 @@ def main():
                 index = 0
             else:
                 # Inbox zero — go blue immediately, let background polling find new items
-                _mark_ibx0_habits_if_first_today()
                 set_term_color("black")
                 _render_block_status()
                 console.print("[dim]Inbox zero — watching for new items... (q to quit)[/dim]")
@@ -1617,12 +1793,17 @@ def main():
                         existing_uids_now.update(resolved)
                         fresh = [it for it in _drop_suppressed(staged)
                                  if _item_uid(it) not in existing_uids_now]
-                        if fresh:
-                            all_items = fresh
-                            index = 0
-                            set_term_color("red")
-                            console.print(f"[green]  + {len(fresh)} new item(s)[/green]")
-                            break
+                    else:
+                        fresh = []
+                    # Queue is empty here; whatever just arrived is all that
+                    # is pending. Publish + auto-close from that.
+                    _publish_snapshot(fresh)
+                    if fresh:
+                        all_items = fresh
+                        index = 0
+                        set_term_color("red")
+                        console.print(f"[green]  + {len(fresh)} new item(s)[/green]")
+                        break
 
                     # Wait up to 2s, check for user quit/reload
                     try:
@@ -1933,5 +2114,36 @@ def main():
                 if message:
                     console.print(f"[dim]{message}[/dim]")
 
+def headless_counts(timeout=60):
+    """--counts: one quiet fetch cycle, write the per-habit snapshot for dtd,
+    never close anything (see the auto-close rules above). Meant for launchd
+    on ix so the badges stay fresh while no ibx tab is open."""
+    import io
+    import signal
+    os.environ["IBX_HEADLESS"] = "1"
+    signal.signal(signal.SIGALRM, lambda *_: os._exit(3))
+    signal.alarm(timeout * 4)  # never hang a launchd slot on a stuck source
+    quiet = Console(file=io.StringIO())
+    mods = [_ibx, _imsg, _slack]
+    if _outlook_active():
+        mods.append(_outlook)
+    if _teams_active():
+        mods.append(_teams)
+    for mod in mods:
+        if hasattr(mod, "console"):
+            mod.console = quiet
+    global console
+    console = quiet
+    items, returned = _fetch_cycle(skip_triage=True, timeout=timeout)
+    items = _drop_day_skipped(_drop_outside_block(items))
+    snap = _ic.build_snapshot(items, _cycle_channel_ok(returned))
+    path = _ic.write_snapshot(snap)
+    print(json.dumps({"path": str(path), "returned": sorted(returned),
+                      "habits": snap["habits"]}, ensure_ascii=False))
+
+
 if __name__ == "__main__":
-    main()
+    if "--counts" in sys.argv[1:]:
+        headless_counts()
+    else:
+        main()
