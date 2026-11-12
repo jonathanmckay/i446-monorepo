@@ -80,13 +80,14 @@ import outlook_client  # noqa: E402
 from blocks import is_future_block, BLOCK_SCHEDULE  # noqa: E402  shared future-block gate
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 
-# dtd's Haiku title shortener, reused for long calendar event titles. Optional:
-# janus must still boot if the did tooling (or lib/state_paths) is broken.
+# Haiku short names for long calendar event titles: lib/event_shorts.py, the
+# one implementation shared with the phone/web server (2026-11-12, JM: "this
+# should happen serverside so it's common across CLI and iOS"). Optional:
+# janus must still boot if lib/state_paths is broken.
 try:
-    sys.path.insert(0, str(Path("~/i446-monorepo/tools/did").expanduser()))
-    import shorten as _dtd_shorten  # noqa: E402
+    import event_shorts  # noqa: E402
 except Exception:
-    _dtd_shorten = None
+    event_shorts = None
 
 def _tz() -> ZoneInfo:
     """The active timezone for every 'now'/'today' computation in this file.
@@ -156,7 +157,9 @@ NO_TIMER_FLASH_DELAY = 15  # s with no running timer before the idle nag starts
 # timer running between stop and the next start, and the whole-screen invert
 # firing instantly during that beat felt like the UI panicking over a normal
 # transition rather than an actual "you forgot to start a timer" nag).
-EVENT_SHORTS = Path("~/.cache/janus/event-shortnames.json").expanduser()
+# Sidecar shared with mobile.py on the same host (lib/state_paths.EVENT_SHORTNAMES);
+# the old ~/.cache/janus/event-shortnames.json held task-prompt shorts and is abandoned.
+EVENT_SHORTS = event_shorts.PATH if event_shorts else Path("~/.local/state/jm/event-shortnames.json").expanduser()
 # Earthly branch blocks (name, start_hour, end_hour inclusive). Local table:
 # carries end-hours and the 子 sleep block for layout. Canonical start schedule
 # + the future-block gate live in lib/blocks.py (is_future_block).
@@ -1212,7 +1215,6 @@ def fetch_gcal(force=False):
 
 # ── Event title shortening (dtd's Haiku shortener, sidecar-cached) ──────────
 
-_event_shorts_lock = threading.Lock()
 _event_shorts_failed: set[str] = set()  # titles Haiku failed on; skip until restart
 
 
@@ -1718,70 +1720,30 @@ def _norm_hhmm(text: str) -> str | None:
 
 
 def _load_event_shorts() -> dict:
-    try:
-        return json.loads(EVENT_SHORTS.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return event_shorts.load(EVENT_SHORTS) if event_shorts else {}
 
 
 def _shorten_events(events: list[dict]) -> None:
     """Attach 'short' to events whose title is too wide for a detail row.
 
-    Cached names (sidecar JSON, keyed by title hash so recurring events hit
-    forever) apply synchronously; misses go to a daemon thread because each is
-    a Haiku round-trip — both fetch_gcal entry points (refresh ticker thread,
-    ctrl-r to_thread) must return without waiting on the network."""
-    if _dtd_shorten is None:
+    Cached names apply synchronously (lib/event_shorts.apply_cached); misses go
+    to a daemon thread because each is a Haiku round-trip — both fetch_gcal
+    entry points (refresh ticker thread, ctrl-r to_thread) must return without
+    waiting on the network."""
+    if event_shorts is None:
         return
-    by_hash: dict[str, list[dict]] = {}
-    for ev in events:
-        title = ev.get("title") or ""
-        if dwidth(title) > EVENT_SHORT_COLS and title not in _event_shorts_failed:
-            h = hashlib.sha1(title.encode("utf-8")).hexdigest()[:8]
-            by_hash.setdefault(h, []).append(ev)
-    if not by_hash:
-        return
-    cache = _load_event_shorts()
-    misses = {}
-    for h, evs in by_hash.items():
-        if h in cache:
-            for ev in evs:
-                ev["short"] = cache[h]
-        else:
-            misses[h] = evs
+    misses = event_shorts.apply_cached(events, EVENT_SHORT_COLS, EVENT_SHORTS,
+                                       failed_titles=_event_shorts_failed)
     if misses:
-        threading.Thread(
-            target=_fill_event_shorts, args=(misses,), daemon=True
-        ).start()
+        threading.Thread(target=_fill_event_shorts, args=(misses,), daemon=True).start()
 
 
 def _fill_event_shorts(by_hash: dict[str, list[dict]], max_new: int = 6) -> None:
-    """Haiku-shorten up to max_new uncached titles, persist, repaint. The lock
-    serializes the sidecar read-modify-write across concurrent refreshes."""
-    with _event_shorts_lock:
-        cache = _load_event_shorts()
-        dirty = False
-        for h, evs in list(by_hash.items())[:max_new]:
-            title = evs[0].get("title") or ""
-            short = cache.get(h)
-            if short is None:
-                short = _dtd_shorten._haiku_shorten(title)
-                if short:
-                    cache[h] = short
-                    dirty = True
-                else:
-                    _event_shorts_failed.add(title)
-                    continue
-            for ev in evs:
-                ev["short"] = short
-        if dirty:
-            try:
-                EVENT_SHORTS.parent.mkdir(parents=True, exist_ok=True)
-                tmp = EVENT_SHORTS.with_suffix(".json.tmp")
-                tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2))
-                tmp.replace(EVENT_SHORTS)
-            except OSError:
-                pass
+    """Haiku-shorten up to max_new uncached titles, persist, repaint."""
+    if event_shorts is None:
+        return
+    event_shorts.fill(by_hash, EVENT_SHORT_COLS, EVENT_SHORTS, max_new=max_new,
+                      failed_titles=_event_shorts_failed)
     try:
         app.invalidate()
     except Exception:

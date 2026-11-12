@@ -211,6 +211,24 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import state_paths  # noqa: E402
 import fen_split  # noqa: E402  "[N] @code [N] @code" totals, shared with janus.py
 import entry_points  # noqa: E402  分 per entry, shared across clients and hosts
+import event_shorts  # noqa: E402  Haiku short names for event titles, shared with the TUI (2026-11-12)
+
+# Event titles wider than this get a Haiku short name (lib/event_shorts.py), the
+# same budget as the TUI's narrow pane; the phone row has about the same room.
+EVENT_SHORT_COLS = event_shorts.DEFAULT_COLS
+
+
+def _shorten_events(events: list[dict]) -> None:
+    """Attach ev["short"] to wide-titled events (2026-11-12, JM: "make it so that
+    haiku will shorten the event titles ... serverside so it's common across CLI
+    and iOS"). Cached shorts apply now; misses fill on a daemon thread so this
+    request never waits on Haiku — the phone polls every 60 s and the web page
+    refreshes, so they show up on the next pass. Keyed on raw_title, exactly
+    what the TUI hashes, so both surfaces agree."""
+    try:
+        event_shorts.shorten_async(events, EVENT_SHORT_COLS, title_key="raw_title")
+    except Exception as e:  # noqa: BLE001 -- decoration; the timeline must still ship
+        print("WARN event shorts:", e, file=sys.stderr)
 TASK_QUEUE = state_paths.TASK_QUEUE
 _POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
 
@@ -1062,6 +1080,7 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
         events = []
     else:
         events = _fetch_events_today(entries) if is_today else _fetch_events_today(entries, today)
+        _shorten_events(events)
     logged, logged_pts = _logged_view(today)
     # A task closed in dtd marks the timer entry it was closed in as logged
     # (one completion = one entry; another same-name session can still be
@@ -1192,7 +1211,10 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
         else:  # event
             ev = it["data"]
             mins = int(round((ev["end_dt"] - ev["start_dt"]).total_seconds() / 60))
-            rows.append({"type": "event", "title": ev["title"], "project": ev["code"],
+            # Display title = the Haiku short when one is cached; raw_title below
+            # stays the real one (hide key, convert, "already tracked" matching).
+            rows.append({"type": "event", "title": _safe_title(ev.get("short") or ev["title"]),
+                         "project": ev["code"],
                          "color": ev["color"], "start": hhmm(ev["start_dt"]),
                          "end": hhmm(ev["end_dt"]), "minutes": mins,
                          "is_past": ev["is_past"], "started": ev["started"],
@@ -1920,6 +1942,12 @@ def convert_event(title: str, start_iso: str, end_iso: str, code: str, is_past: 
     # this is a public POST endpoint, not guaranteed to only ever receive a
     # title this server already cleaned.
     title = _safe_title(title)
+    # A client echoes the title it SAW, which since 2026-11-12 may be the Haiku
+    # short; map it back so the Toggl description, _event_tracked and the
+    # speedy-meeting title match all keep working on the raw title.
+    raw = event_shorts.raw_for(title)
+    if raw:
+        title = _safe_title(raw)
     key = f"event:{title}|{start_iso}|{end_iso}"
     if key in _INFLIGHT:
         return {"ok": False, "error": "already converting"}
@@ -2965,8 +2993,8 @@ async function commitConvert(line, r){
   try {
     const resp = await fetch('/api/convert-event', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({title:r.title, start_iso:r.start_iso, end_iso:r.end_iso,
-        code:r.project, is_past:r.is_past})});
+      body: JSON.stringify({title:r.raw_title || r.title, start_iso:r.start_iso, end_iso:r.end_iso,
+        code:r.project, is_past:r.is_past})});  // raw_title: r.title may be the Haiku short (2026-11-12)
     const d = await resp.json();
     if(!d.ok){
       line.classList.remove('converting');

@@ -23,8 +23,12 @@ public enum Bodies {
     public static func doneCurrent(_ r: TimelineRow) -> [String: Any] {
         ["id": r.id, "desc": r.desc, "project": r.project]
     }
+    /// /api/convert-event. The raw title, not the displayed one: since 2026-11-12
+    /// `title` may be the server's Haiku short, and the Toggl description, the
+    /// "already tracked" match and the speedy-meeting credit all key on the raw.
     public static func convertEvent(_ r: TimelineRow) -> [String: Any] {
-        ["title": r.title, "start_iso": r.startIso, "end_iso": r.endIso, "code": r.project, "is_past": r.isPast]
+        ["title": r.rawTitle.isEmpty ? r.title : r.rawTitle, "start_iso": r.startIso, "end_iso": r.endIso,
+         "code": r.project, "is_past": r.isPast]
     }
     /// `project` is optional: the server also honours a trailing `@code` in
     /// the description, exactly like /tg.

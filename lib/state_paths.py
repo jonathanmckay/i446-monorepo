@@ -20,4 +20,5 @@ COMPLETED_TODAY = STATE_DIR / "completed-today.json"   # today's completed names
 DTD_SKIPPED     = STATE_DIR / "dtd-skipped-today.txt"  # dtd.sh skip list (+ .date)
 SKIPPED_TODAY   = STATE_DIR / "skipped-today.json"     # next-task skip ids
 TASK_SHORTNAMES = STATE_DIR / "task-shortnames.json"   # Haiku short-name sidecar
+EVENT_SHORTNAMES = STATE_DIR / "event-shortnames.json"  # Haiku calendar-title shorts (lib/event_shorts.py)
 D357_STATE      = STATE_DIR / "d357-state.json"         # active recording state

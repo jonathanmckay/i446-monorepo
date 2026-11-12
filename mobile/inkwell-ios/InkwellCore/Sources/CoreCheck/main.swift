@@ -222,6 +222,10 @@ do {
     eq(ev["code"] as? String, "m5x2", "event code")
     eq(ev["is_past"] as? Bool, true, "event is_past")
     eq(ev["start_iso"] as? String, "2026-09-24T12:30:00-07:00", "event start_iso")
+    eq(ev["title"] as? String, "LX/JM", "convert-event falls back to title when raw_title absent")
+    // Haiku short titles (2026-11-12): convert must send the raw title the server keys on.
+    var shortRow = tl.rows[4]; shortRow.title = "LX/JM short"; shortRow.rawTitle = "LX / JM weekly real-estate sync [in-person]"
+    eq(Bodies.convertEvent(shortRow)["title"] as? String, "LX / JM weekly real-estate sync [in-person]", "convert-event sends raw_title over the displayed short")
     eq(Bodies.split(id: "1", mode: "bottom")["mode"] as? String, "bottom", "split mode")
     eq(Bodies.fill(desc: "nap", start: "13:00", end: "")["end"] as? String, "", "fill open end")
     check(Bodies.fill(desc: "nap", start: "13:00", end: "")["project"] == nil, "fill omits empty project")
