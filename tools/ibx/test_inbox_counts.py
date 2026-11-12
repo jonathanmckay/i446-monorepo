@@ -108,3 +108,18 @@ def test_host_slug_matches_dtd_rule():
     assert ic.host_slug("ix.local") == "ix-local"
     assert ic.host_slug("Straylight-Refit.local") == "straylight-refit-local"
     assert len(ic.host_slug("a" * 40)) == 24
+
+
+def test_prefer_host_beats_a_newer_foreign_snapshot(tmp_path):
+    now = 20_000.0
+    mine = ic.build_snapshot([_email("m5c7")], {"gmail:m5c7": True}, host="ix-local", now=now - 120)
+    theirs = ic.build_snapshot([], {"gmail:m5c7": True, "outlook": True}, host="straylight", now=now - 10)
+    ic.write_snapshot(mine, tmp_path); ic.write_snapshot(theirs, tmp_path)
+    b = ic.read_badges(tmp_path, now=now, prefer_host="ix-local")
+    assert b["ibx m5x2"]["host"] == "ix-local" and b["ibx m5x2"]["count"] == 1
+    # a habit my host never reports still comes from the other host
+    assert b["ibx i9"]["host"] == "straylight"
+    # a STALE own snapshot does not win
+    stale = ic.build_snapshot([], {"gmail:m5c7": True}, host="ix-local", now=now - ic.MAX_AGE_S - 5)
+    ic.write_snapshot(stale, tmp_path)
+    assert ic.read_badges(tmp_path, now=now, prefer_host="ix-local")["ibx m5x2"]["host"] == "straylight"

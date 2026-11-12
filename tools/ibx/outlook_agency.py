@@ -18,6 +18,11 @@ from rich.console import Console
 
 console = Console()
 
+# True once the most recent fetch_*_items() call actually reached the API
+# (even if it then found nothing). ibx0's per-habit auto-close reads this:
+# an empty list alone cannot distinguish "inbox empty" from "Agency down".
+last_fetch_ok = False
+
 PROCESSED_FILE = Path.home() / ".config" / "outlook" / "processed.json"
 DELETED_FILE = Path.home() / ".config" / "outlook" / "deleted.json"
 RESPONSE_DB = Path.home() / ".config" / "outlook" / "response_times.db"
@@ -156,6 +161,8 @@ _inbox_folder_id_cache = None
 
 def fetch_outlook_items():
     """Fetch recent unread Outlook emails via Agency mail MCP."""
+    global last_fetch_ok
+    last_fetch_ok = False
     items = []
     already_deleted = _load_deleted()
     console.print("\n[bold]Outlook[/bold] — querying mail API...", style="dim")
@@ -175,6 +182,7 @@ def fetch_outlook_items():
     if raw is None:
         console.print("  [dim]mail API unavailable[/dim]")
         return items
+    last_fetch_ok = True
 
     messages = _parse_graph_messages(raw)
     if not messages:

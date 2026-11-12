@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mckay.ibx-counts</string>
+
+    <!-- Per-habit pending inbox counts for the dtd badges (2026-11-12).
+         Badge-only: never closes a habit (see ibx0.py auto-close rules).
+         Install on ix:
+           cp ~/i446-monorepo/tools/ibx/com.mckay.ibx-counts.plist ~/Library/LaunchAgents/
+           launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mckay.ibx-counts.plist -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/mckay/i446-monorepo/tools/ibx/ibx0.py</string>
+        <string>--counts</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mckay/Library/Logs/ibx-counts.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mckay/Library/Logs/ibx-counts.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

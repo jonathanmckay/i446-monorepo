@@ -493,105 +493,184 @@ def test_poll_resolved_checks_slack():
     )
 
 
-# --- Auto-/ibx0 on first inbox-zero-of-day -----------------------------------
+# --- Per-habit inbox counts + auto-close (2026-11-12) -------------------------
+# Replaces the first-inbox-zero-of-day batch close. JM: badge each inbox card in
+# dtd with its pending count and close it only after a SUCCESSFUL ping returned
+# zero. Rubber-duck rules: the queue is windowed to the previous block, so a
+# bare zero at 00:05 is meaningless -> headless/timer runs never close.
 
-def test_first_zero_of_day_runs_ibx0_habits(tmp_path, monkeypatch):
-    """When ibx0.main() reaches inbox-zero for the first time today,
-    /ibx0's habit batch should run automatically (one less manual call).
-    Subsequent same-day zero-states must NOT re-run the batch."""
-    import importlib.util
-    import sys
-    import os
-
-    # Load ibx0 module by spec so we can monkey-patch its subprocess + state path.
-    spec = importlib.util.spec_from_file_location("ibx0_mod", IBX_ALL_PY)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["ibx0_mod"] = mod
-    # Need to ensure the dirname is importable (ibx0 imports ibx, imsg, slack).
-    monkeypatch.syspath_prepend(str(IBX_ALL_PY.parent))
-    # Skip executing the full module — we only need the helper. Read source,
-    # extract just the function we're testing, and exec it in a fresh namespace.
-    src = IBX_ALL_PY.read_text()
-
+def _exec_autoclose_ns(tmp_path, calls, hour=10, tty=True, env=None):
+    """Extract the auto-close helpers from ibx0.py and exec them with stubs."""
     import ast as _ast
+    src = IBX_ALL_PY.read_text()
     tree = _ast.parse(src)
-    target_names = {
-        "_mark_ibx0_habits_if_first_today",
-        "_IBX0_AUTODONE_STATE",
-        "_DID_FAST",
-        "_IBX0_HABITS",
-    }
-    nodes_to_keep = []
-    for node in tree.body:
-        if isinstance(node, _ast.FunctionDef) and node.name in target_names:
-            nodes_to_keep.append(node)
-        elif isinstance(node, _ast.Assign):
-            if any(isinstance(t, _ast.Name) and t.id in target_names for t in node.targets):
-                nodes_to_keep.append(node)
+    keep = {"_autoclose_allowed", "_autodone_today", "_write_autodone",
+            "_autoclose_habits", "_publish_snapshot", "_AUTOCLOSE_EARLIEST_HOUR"}
+    nodes = [n for n in tree.body
+             if (isinstance(n, _ast.FunctionDef) and n.name in keep)
+             or (isinstance(n, _ast.Assign)
+                 and any(isinstance(t, _ast.Name) and t.id in keep for t in n.targets))]
+    assert {getattr(n, "name", "") for n in nodes} >= keep - {"_AUTOCLOSE_EARLIEST_HOUR"}
+    code = compile(_ast.Module(body=nodes, type_ignores=[]), str(IBX_ALL_PY), "exec")
 
-    assert any(getattr(n, "name", "") == "_mark_ibx0_habits_if_first_today"
-               for n in nodes_to_keep), (
-        "ibx0.py must define _mark_ibx0_habits_if_first_today() to auto-run "
-        "/ibx0 habits on the first inbox-zero of the day"
-    )
+    import inbox_counts as ic
+    import json, threading, datetime as _dt
 
-    extracted = _ast.Module(body=nodes_to_keep, type_ignores=[])
-    code = compile(extracted, str(IBX_ALL_PY), "exec")
+    class _Proc:
+        returncode = 0; stdout = "ok"; stderr = ""
 
-    # Build a namespace with stubs for module dependencies.
-    calls = []
-
-    class _StubProc:
-        def __init__(self, returncode=0, stdout="ok", stderr=""):
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    class _StubSubprocess:
+    class _Sub:
         DEVNULL = -3
-
         @staticmethod
-        def run(cmd, capture_output=False, text=False, timeout=None):
-            calls.append(("run", tuple(cmd)))
-            return _StubProc()
-
+        def run(cmd, **kw):
+            calls.append(("run", tuple(cmd))); return _Proc()
         @staticmethod
-        def Popen(cmd, stdout=None, stderr=None):
+        def Popen(cmd, **kw):
             calls.append(("popen", tuple(cmd)))
-            return None
 
-    class _StubConsole:
-        def print(self, *a, **kw):
-            pass
+    class _Thread:  # run synchronously so tests can assert right away
+        def __init__(self, target=None, daemon=None): self._t = target
+        def start(self): self._t()
 
-    state_file = tmp_path / "last-autodone-date"
+    class _Stdin:
+        def isatty(self): return tty
+
+    class _Now:
+        @staticmethod
+        def now():
+            return _dt.datetime(2026, 11, 12, hour, 5)
+
     ns = {
-        "Path": __import__("pathlib").Path,
-        "datetime": __import__("datetime").datetime,
-        "subprocess": _StubSubprocess,
-        "console": _StubConsole(),
-        "OSError": OSError,
-        "FileNotFoundError": FileNotFoundError,
+        "Path": Path, "datetime": _Now, "json": json, "os": type("os", (), {"environ": env or {}}),
+        "sys": type("sys", (), {"stdin": _Stdin()}), "subprocess": _Sub,
+        "threading": type("th", (), {"Thread": _Thread, "Event": threading.Event}),
+        "console": type("c", (), {"print": staticmethod(lambda *a, **k: None)})(),
+        "_ic": ic, "OSError": OSError, "FileNotFoundError": FileNotFoundError,
+        "_item_uid": lambda it: it.get("uid"),
+        "_latest_cycle": {"ok": {}}, "_snap_dirty": threading.Event(),
     }
     exec(code, ns)
-    # Override the constants to use tmp paths.
-    ns["_IBX0_AUTODONE_STATE"] = state_file
     ns["_DID_FAST"] = tmp_path / "did-fast.py"
+    ns["_AUTODONE_JSON"] = tmp_path / ".autodone.json"
+    ns["_LEGACY_AUTODONE"] = tmp_path / ".last-autodone-date"
+    return ns
 
-    # First call: state file missing → should run did-fast and write state.
-    ns["_mark_ibx0_habits_if_first_today"]()
-    assert state_file.exists(), "state file must be written after first run"
-    assert any(c[0] == "run" for c in calls), (
-        "did-fast.py must be invoked the first time inbox-zero is reached"
-    )
-    n_runs_first = sum(1 for c in calls if c[0] == "run")
 
-    # Second call same day: should be a no-op.
+def _snap(**habits):
+    return {"habits": {h: {"count": c, "ok": ok} for h, (c, ok) in habits.items()}}
+
+
+def test_autoclose_closes_only_ok_and_empty_habits_once(tmp_path):
+    calls = []
+    ns = _exec_autoclose_ns(tmp_path, calls)
+    todo = ns["_autoclose_habits"](_snap(**{
+        "ibx m5x2": (0, True), "slack m5x2": (0, True),
+        "ibx i9": (0, False),      # ping failed: never closed
+        "ibx s897": (2, True),     # still pending
+    }))
+    assert sorted(todo) == ["ibx m5x2", "slack m5x2"]
+    runs = [c for c in calls if c[0] == "run"]
+    assert len(runs) == 1 and runs[0][1][-1] == "ibx m5x2, slack m5x2"
+    assert any(c[0] == "popen" and "--refresh-cache" in c[1] for c in calls)
+    # same day, same zero: no second did-fast
     calls.clear()
-    ns["_mark_ibx0_habits_if_first_today"]()
-    assert not any(c[0] == "run" for c in calls), (
-        "did-fast.py must NOT be re-invoked when state already records today"
-    )
+    assert ns["_autoclose_habits"](_snap(**{"ibx m5x2": (0, True)})) == []
+    assert not calls
+
+
+def test_legacy_ibx0_date_file_means_all_done(tmp_path):
+    calls = []
+    ns = _exec_autoclose_ns(tmp_path, calls)
+    ns["_LEGACY_AUTODONE"].write_text("2026-11-12\n")
+    assert ns["_autoclose_habits"](_snap(**{"ibx m5x2": (0, True)})) == []
+    assert not calls
+
+
+def test_failed_did_fast_releases_the_claim_for_a_retry(tmp_path):
+    calls = []
+    ns = _exec_autoclose_ns(tmp_path, calls)
+    class _Bad:
+        returncode = 1; stdout = ""; stderr = "boom"
+    ns["subprocess"].run = staticmethod(lambda cmd, **kw: (calls.append(("run", tuple(cmd))), _Bad())[1])
+    ns["_autoclose_habits"](_snap(**{"ibx m5x2": (0, True)}))
+    assert "ibx m5x2" not in ns["_autodone_today"]()
+
+
+def test_no_autoclose_for_timer_reruns_headless_or_before_mao(tmp_path):
+    for kw in ({"env": {"IBX_AUTORUN": "1"}}, {"tty": False}, {"hour": 2}):
+        calls = []
+        ns = _exec_autoclose_ns(tmp_path, calls, **kw)
+        assert ns["_autoclose_habits"](_snap(**{"ibx m5x2": (0, True)})) == [], kw
+        assert not calls, kw
+    assert _exec_autoclose_ns(tmp_path, [], hour=4)["_autoclose_allowed"]()
+
+
+def test_publish_snapshot_counts_live_queue_once_per_cycle(tmp_path, monkeypatch):
+    import inbox_counts as ic
+    monkeypatch.setattr(ic, "Z_IBX", tmp_path / "z_ibx")
+    calls = []
+    ns = _exec_autoclose_ns(tmp_path, calls)
+    ns["_latest_cycle"]["ok"] = {"gmail:m5c7": True, "gmail:gmail": True, "imsg": True}
+    pending = [{"uid": 1, "type": "email", "_data": {"email": {"_account": "m5c7"}}},
+               {"uid": 1, "type": "email", "_data": {"email": {"_account": "m5c7"}}}]  # dup uid
+    assert ns["_publish_snapshot"](pending) is None            # nothing new fetched yet
+    ns["_snap_dirty"].set()
+    snap = ns["_publish_snapshot"](pending)
+    assert snap["habits"]["ibx m5x2"] == {"count": 1, "ok": True}
+    assert snap["habits"]["ibx s897"] == {"count": 0, "ok": True}
+    assert list((tmp_path / "z_ibx").glob("inbox-counts-*.json"))
+    # ibx s897 was proven empty -> closed; ibx m5x2 still pending -> not
+    runs = [c for c in calls if c[0] == "run"]
+    assert runs and runs[0][1][-1] == "ibx s897"
+    assert not ns["_snap_dirty"].is_set()                        # consumed
+
+
+def test_old_batch_close_is_gone_and_counts_mode_never_closes():
+    src = IBX_ALL_PY.read_text()
+    assert "_mark_ibx0_habits_if_first_today" not in src
+    assert "_IBX0_HABITS" not in src
+    i = src.index("def headless_counts(")
+    body = src[i:src.index('if __name__ == "__main__":', i)]
+    assert "_autoclose_habits" not in body and "_publish_snapshot" not in body
+    assert "write_snapshot" in body and 'os.environ["IBX_HEADLESS"] = "1"' in body
+
+
+def test_fetchers_report_per_channel_success():
+    src = IBX_ALL_PY.read_text()
+    def body(name):
+        i = src.index(f"def {name}(")
+        return src[i:src.index("\ndef ", i + 1)]
+    em = body("fetch_emails")
+    assert '_chan_flags[f"gmail:{name}"] = True' in em and '_chan_flags[f"gmail:{name}"] = False' in em
+    im = body("fetch_imsgs")
+    assert '_chan_flags["imsg"] = True' in im and '_chan_flags["imsg"] = False' in im
+    sl = body("fetch_slack")
+    assert '_chan_flags[f"slack:{workspace}"] = True' in sl and '_chan_flags[f"slack:{workspace}"] = False' in sl
+    # Outlook/Teams: [] is also the dead-Agency answer, so only the sentinel counts
+    assert 'getattr(_outlook, "last_fetch_ok", None) is True' in body("fetch_outlook")
+    assert 'getattr(_teams, "last_fetch_ok", None) is True' in body("fetch_teams")
+    for mod in ("outlook_agency.py", "teams_agency.py"):
+        m = (IBX_ALL_PY.parent / mod).read_text()
+        assert "last_fetch_ok = False" in m and "    last_fetch_ok = True" in m
+
+
+def test_cycle_trusts_only_sources_that_returned_in_time():
+    src = IBX_ALL_PY.read_text()
+    i = src.index("def _fetch_cycle(")
+    body = src[i:src.index("\ndef ", i + 1)]
+    assert "returned.add(name)" in body and "fut.result(timeout=timeout)" in body
+    j = src.index("def _cycle_channel_ok(")
+    cb = src[j:src.index("\ndef ", j + 1)]
+    assert "for src in returned_sources:" in cb and "_chan_flags.get(ch)" in cb
+    # the background loop and the initial drainer both hand the cycle to the main thread
+    assert src.count("_snap_dirty.set()") >= 2
+    assert "_latest_cycle[\"ok\"] = _cycle_channel_ok(_returned_init)" in src
+
+
+def test_wrapper_marks_timer_reruns():
+    w = (IBX_ALL_PY.parent / "ibx0_wrapper.sh").read_text()
+    assert 'IBX_AUTORUN="$AUTORUN" python3 "$SCRIPT"' in w
+    assert "AUTORUN=1" in w and 'AUTORUN=""' in w
 
 
 # ── Regression: archived iMessage threads must not be re-injected by the ──

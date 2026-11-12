@@ -11,9 +11,15 @@ ERR_FILE=$(mktemp /tmp/ibx_all_error.XXXXXX)
 cleanup() { rm -f "$ERR_FILE"; }
 trap cleanup EXIT
 
+# IBX_AUTORUN=1 marks a re-run the 60s timer started rather than JM (Enter or
+# the first launch): ibx0 then only refreshes the per-habit counts for dtd and
+# never auto-closes an inbox habit (2026-11-12, rubber-duck: a TUI left open
+# overnight would otherwise credit every habit at 04:00).
+AUTORUN=""
+
 while true; do
     for attempt in $(seq 1 $MAX_RETRIES); do
-        python3 "$SCRIPT" 2>"$ERR_FILE"
+        IBX_AUTORUN="$AUTORUN" python3 "$SCRIPT" 2>"$ERR_FILE"
         EXIT_CODE=$?
 
         [[ $EXIT_CODE -eq 0 || $EXIT_CODE -eq 2 ]] && break
@@ -47,5 +53,10 @@ $ERROR" --allowedTools "Read,Edit,Grep"
 
     echo ""
     echo "── Inbox zero — checking again in ${POLL_INTERVAL}s  (Enter to refresh, Ctrl+C to quit) ──"
-    read -t "$POLL_INTERVAL" -s -n 1 && echo "  ↻ Refreshing now..."
+    if read -t "$POLL_INTERVAL" -s -n 1; then
+        echo "  ↻ Refreshing now..."
+        AUTORUN=""
+    else
+        AUTORUN=1
+    fi
 done

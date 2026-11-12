@@ -19,6 +19,11 @@ from rich.console import Console
 
 console = Console()
 
+# True once the most recent fetch_*_items() call actually reached the API
+# (even if it then found nothing). ibx0's per-habit auto-close reads this:
+# an empty list alone cannot distinguish "inbox empty" from "Agency down".
+last_fetch_ok = False
+
 PROCESSED_FILE = Path.home() / ".config" / "teams" / "processed.json"
 MARKED_READ_FILE = Path.home() / ".config" / "teams" / "marked_read.json"
 RESPONSE_DB = Path.home() / ".config" / "teams" / "response_times.db"
@@ -220,6 +225,8 @@ def _teams_call(tool, args, timeout=30):
 
 def fetch_teams_items():
     """Fetch recent Teams DMs via Agency Teams MCP (Graph API search)."""
+    global last_fetch_ok
+    last_fetch_ok = False
     global _retry_read_chats
     _retry_read_chats = set()  # reset per fetch cycle
     items = []
@@ -234,6 +241,7 @@ def fetch_teams_items():
     if raw is None:
         console.print("  [dim]teams API unavailable[/dim]")
         return items
+    last_fetch_ok = True
 
     try:
         outer = json.loads(raw)

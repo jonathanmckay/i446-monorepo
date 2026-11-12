@@ -2336,6 +2336,19 @@ def _zerog_prefill():
         pass
     return pf
 _PREFILL = _zerog_prefill()
+# Inbox badges (2026-11-12): pending-message count per daily inbox habit
+# ('ibx i9 (4) [20] \u2709 3'), read from the per-host snapshots ibx0 writes to
+# ~/vault/z_ibx after every fetch cycle (tools/ibx/inbox_counts.py). This
+# host's own fresh snapshot wins so the badge matches what opening ibx here
+# would show; another host fills the gaps (ix has no Outlook, so ibx i9 comes
+# from Straylight). A stale or failed ping shows nothing, never a misleading 0.
+_ibx_badges = {}
+try:
+    _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/ibx'))
+    import inbox_counts as _ic
+    _ibx_badges = _ic.read_badges(prefer_host=_ic.host_slug())
+except Exception:
+    _ibx_badges = {}
 # Woken (2026-10-05): a task whose delay or block label has passed TODAY
 # floats to the top of its tier, so 'hide until 酉' means 'and then put it
 # first'. Snooze entries expire by value but stay in the file for the day,
@@ -2654,6 +2667,14 @@ for t in unique:
     # append keeps the row layout.
     if is_ritual and _PREFILL and clean.replace('\U0001F608', '').strip() == '-1g':
         display = raw + ' \U0001F608 ' + _PREFILL
+    # Inbox habit badge: the count goes AHEAD of the trailing estimates so
+    # rjust_est still finds them and strip_ann/done routing never see it.
+    # Plain U+2709 (no VS16) so _dwidth counts one cell.
+    _bd = _ibx_badges.get(re.sub(r'\s+', ' ', clean.replace(' - ', ' '))) if _ibx_badges else None
+    if _bd and _bd.get('ok') and not is_ritual:
+        _em0 = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
+        _cut0 = _em0.start() if _em0 else len(display)
+        display = display[:_cut0].rstrip() + ' \u2709' + str(_bd['count']) + display[_cut0:]
 
     # Markdown links (/todo stores URLs as '[(link)](https://…)') collapse to
     # their visible text for layout; the first one becomes an OSC 8 terminal
@@ -4046,6 +4067,14 @@ TALLY_PID=$!
     # re-greys / un-greys. (Not `touch $CACHE`: that would make a stale task
     # cache look fresh to did-fast.)
     ac_reload=""
+    # Inbox badges (2026-11-12): ibx0 rewrites z_ibx/inbox-counts-<host>.json
+    # after every fetch cycle (here, or on another host via Syncthing); force a
+    # re-render so the ✉N on the inbox cards tracks it. Not `touch $CACHE`.
+    cur_ic=$(stat -f %m "$HOME"/vault/z_ibx/inbox-counts-*.json 2>/dev/null | sort -rn | head -1)
+    if [[ -n "$cur_ic" && "$cur_ic" != "${last_ic:-}" ]]; then
+      [[ -n "${last_ic:-}" ]] && ac_reload=1
+      last_ic="$cur_ic"
+    fi
     cur_ac=$(stat -f %Fm "$HOME"/vault/z_ibx/agent-claims{,/remote/*(N/)} 2>/dev/null)
     if [[ -n "$cur_ac" && "$cur_ac" != "${last_ac:-}" ]]; then
       [[ -n "${last_ac:-}" ]] && ac_reload=1

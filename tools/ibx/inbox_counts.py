@@ -121,12 +121,16 @@ def write_snapshot(snap: dict, z_ibx: Path | None = None) -> Path:
 
 
 def read_badges(z_ibx: Path | None = None, now: float | None = None,
-                max_age: float = MAX_AGE_S) -> dict[str, dict]:
-    """Newest fresh entry per habit across every host's file.
+                max_age: float = MAX_AGE_S, prefer_host: str | None = None) -> dict[str, dict]:
+    """One fresh entry per habit across every host's file.
 
     Returns {habit: {"count", "ok", "ts", "host"}}. Stale files (older than
     ``max_age``) and unparsable ones are ignored. Two hosts may both report a
-    habit (Straylight and ix both read Gmail); the newer timestamp wins.
+    habit (Straylight and ix both read Gmail) and they legitimately disagree:
+    day-skips, the iMessage processed map and Gmail triage are per host. A
+    fresh entry from ``prefer_host`` (dtd passes its own host) therefore wins
+    outright, so the badge matches what opening ibx on this machine would
+    show; otherwise the newest timestamp wins.
     """
     now = time.time() if now is None else now
     out: dict[str, dict] = {}
@@ -146,10 +150,12 @@ def read_badges(z_ibx: Path | None = None, now: float | None = None,
             if not isinstance(rec, dict) or "count" not in rec:
                 continue
             key = norm(habit)
+            host = snap.get("host", "")
             cur = out.get(key)
-            if cur is None or ts > cur["ts"]:
+            mine, cur_mine = host == prefer_host, bool(cur) and cur["host"] == prefer_host
+            if cur is None or (mine and not cur_mine) or (mine == cur_mine and ts > cur["ts"]):
                 out[key] = {"count": int(rec["count"]), "ok": bool(rec.get("ok")),
-                            "ts": ts, "host": snap.get("host", "")}
+                            "ts": ts, "host": host}
     return out
 
 
