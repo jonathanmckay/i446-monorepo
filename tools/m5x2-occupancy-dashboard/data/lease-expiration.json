@@ -460,7 +460,7 @@
     "property_name": "rl16",
     "unit": "C20",
     "tenant_name": "Valero, Love H.",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2026-10-23",
     "move_in": "2026-10-28",
     "renewal_start_date": null,
@@ -682,18 +682,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "850.00"
-  },
-  {
-    "unit_id": 818,
-    "property_name": "tc34",
-    "unit": "B10",
-    "tenant_name": "Anderson, Helen",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2025-03-05",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-12-01",
-    "rent": "933.00"
   },
   {
     "unit_id": 1172,
@@ -952,7 +940,7 @@
     "property_name": "rl21",
     "unit": "5",
     "tenant_name": "Garza, Izak  E.",
-    "status": "Pending",
+    "status": "Eligible",
     "lease_sign_date": "2026-01-06",
     "move_in": "2026-01-07",
     "renewal_start_date": null,
@@ -1548,18 +1536,6 @@
     "rent": "931.00"
   },
   {
-    "unit_id": 874,
-    "property_name": "kn47 K1",
-    "unit": "D204",
-    "tenant_name": "Huizar, Sierra",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2018-01-03",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-03-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 876,
     "property_name": "kn47 K1",
     "unit": "D206",
@@ -1594,6 +1570,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1304.00"
+  },
+  {
+    "unit_id": 874,
+    "property_name": "kn47 K1",
+    "unit": "D204",
+    "tenant_name": "Huizar, Sierra",
+    "status": "Eligible",
+    "lease_sign_date": null,
+    "move_in": "2018-01-03",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2026-03-01",
+    "rent": "1089.00"
   },
   {
     "unit_id": 1009,
@@ -1678,18 +1666,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-03-01",
     "rent": "900.00"
-  },
-  {
-    "unit_id": 258,
-    "property_name": "m405",
-    "unit": "12",
-    "tenant_name": "Hovde , Savannah  L.",
-    "status": "Pending",
-    "lease_sign_date": "2026-03-06",
-    "move_in": "2026-03-07",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "950.00"
   },
   {
     "unit_id": 1132,
@@ -2062,18 +2038,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1499.00"
-  },
-  {
-    "unit_id": 1428,
-    "property_name": "c702",
-    "unit": "J206",
-    "tenant_name": "Kelly, Erica",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2025-04-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1699.00"
   },
   {
     "unit_id": 690,
@@ -4738,6 +4702,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-06-01",
     "rent": "966.00"
+  },
+  {
+    "unit_id": 818,
+    "property_name": "tc34",
+    "unit": "B10",
+    "tenant_name": "Anderson, Helen",
+    "status": "Renewed",
+    "lease_sign_date": null,
+    "move_in": "2025-03-05",
+    "renewal_start_date": "2026-12-01",
+    "last_lease_renewal": "2026-12-01",
+    "rent": "933.00"
   },
   {
     "unit_id": 1189,
