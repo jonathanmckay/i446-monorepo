@@ -575,12 +575,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         agent_ids = {i for i, r in _claims.items() if r["working"]}
         # agent thinks it's finished (2026-10-22) → ✅ on the left
         agent_done = {i for i, r in _claims.items() if r.get("done")}
-        # an agent pick waiting on one answer from JM (2026-11-10) → 😈? on the left
-        agent_ask = {i for i, r in _claims.items() if r.get("asking")}
         # the claiming session's cmux number, drawn before 😈 (2026-10-21)
         agent_pane = {i: str(r["pane"]) for i, r in _claims.items() if r.get("pane") is not None}
     except Exception:
-        agent_ids, agent_pane, agent_done, agent_ask = set(), {}, set(), set()
+        agent_ids, agent_pane, agent_done = set(), {}, set()
 
     # Running timer (2026-10-20, phone: "status icon when I'm working on
     # something"): the task whose Toggl timer is live, read the way terminal
@@ -660,7 +658,6 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "agent": tid is not None and str(tid) in agent_ids,
             "agentPane": agent_pane.get(str(tid), "") if tid is not None else "",
             "agentDone": tid is not None and str(tid) in agent_done,
-            "agentAsk": tid is not None and str(tid) in agent_ask,
             "running": is_running,
             # Survey card (2026-10-22): the form Enter opens in terminal dtd
             # (dtd_forms.CARD_FORMS), "" for a plain task; the phone opens
@@ -1934,7 +1931,7 @@ function makeRow(t){
   line.style.color = t.color;
   const ttl = document.createElement('span');
   ttl.className = 'ttl';
-  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agentAsk?'😈? ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.recurring?'↻ ':'') + t.title;
+  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.recurring?'↻ ':'') + t.title;
   const est = document.createElement('span');
   est.className = 'est';
   est.textContent = t.est || '';

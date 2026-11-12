@@ -86,18 +86,3 @@ def test_dtd_ignores_a_repeating_cards_claim_from_before_today():
     assert "_midnight = time.mktime(time.strptime(today, '%Y-%m-%d'))" in block
     assert "if not (i in _recur_ids and r.get('state_ts', 0) < _midnight)" in block
     assert block.index("_recur_ids") < block.index("_agent_ids = ")   # filtered before any set is built
-
-
-def test_asking_state_flags_and_expires(tmp_path):
-    """tools/pick parks a question as state 'asking' (2026-11-10): load() flags
-    it, gives it no pane, and prunes it after RELEASED_TTL like a release."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("ac_ask", Path(__file__).with_name("agent_claims.py"))
-    ac = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ac)
-    root = tmp_path / "claims"
-    ac.claim({"id": "q", "content": "q"}, "pick-ask", root, now=1000, also=True)
-    ac.set_state("q", "asking", 1000, root)
-    rec = ac.load(root, now=1500)["q"]
-    assert rec["asking"] and not rec["working"] and not rec["done"] and rec["pane"] is None
-    assert "q" not in ac.load(root, now=1000 + ac.RELEASED_TTL + 5)

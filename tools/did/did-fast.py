@@ -4840,18 +4840,6 @@ def main():
                 _ac.clear_task(str(_tid))
     except Exception:
         pass
-    # Closing a task with a ready agent receipt is JM's accept (2026-11-08,
-    # tools/pick): log it for calibration; a code branch merges detached.
-    try:
-        _pks = importlib.util.spec_from_file_location(
-            "picks_for_close", Path(__file__).resolve().parent.parent / "pick" / "picks.py")
-        _picks = importlib.util.module_from_spec(_pks)
-        _pks.loader.exec_module(_picks)
-        for _tid, (_ok, _err) in close_results.items():
-            if _ok:
-                _picks.on_close(str(_tid))
-    except Exception:
-        pass
     # A past-day write is not a TODAY completion: recording it here would
     # hide today's same-named dtd card and block today's real close.
     if completed_names and not past_target:

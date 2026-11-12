@@ -2371,7 +2371,6 @@ def _float(tier):
 _agent_ids = set()
 _claim_ids = set()
 _done_ids = set()
-_ask_ids = set()
 _claim_pane = {}
 try:
     _sys.path.insert(0, _os.path.expanduser('~/i446-monorepo/tools/did'))
@@ -2389,9 +2388,6 @@ try:
     _agent_ids = {i for i, r in _claims.items() if r['working']}
     _claim_ids = set(_claims.keys())
     _done_ids = {i for i, r in _claims.items() if r.get('done')}
-    # an agent pick (tools/pick) waiting on one answer from JM: 😈? on the left
-    # (2026-11-10; the question is a 😈? comment in the details screen)
-    _ask_ids = {i for i, r in _claims.items() if r.get('asking')}
     _claim_pane = {i: str(r['pane']) for i, r in _claims.items() if r.get('pane') is not None}
 except Exception:
     pass
@@ -2784,10 +2780,6 @@ for t in unique:
         # in the claimed tier until JM completes it with ⌥↵. The session's
         # pane number leads it, '6✅', like '6😈' while it worked.
         prefix = _pane + '✅ ' + prefix
-    elif str(t.get('id', '')) in _ask_ids:
-        # Agent pick asking JM one question (2026-11-10): 😈? on the far left,
-        # in the claimed tier; the question is the newest comment (ctrl-o).
-        prefix = '😈? ' + prefix
     elif is_claimed:
         prefix = _pane + '🕐 ' + prefix
     # Build the full visible row, then right-justify its trailing estimates so
@@ -3843,7 +3835,7 @@ fzf --id-nth=2 --filter=x </dev/null >/dev/null 2>&1; (( $? == 2 )) && DTD_FZF_I
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) or new task if no match + [N] | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | alt-n: reject ✅ | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) or new task if no match + [N] | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -4288,8 +4280,6 @@ while true; do
       --bind "ctrl-r:execute-silent($DTD_REFRESH)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-l:execute-silent(python3 $DTD_OPEN_LINK {2} $DTD_CACHE_FILE $DTD_HDR)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-t:execute-silent($DTD_VIEWTOGGLE)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
-      $( : "alt-n rejects an agent pick (2026-11-08, tools/pick): asks a one-line note, drops the ✅ and the agent label; the task stays open. ⌥⏎ on a ✅ card is the accept." ) \
-      --bind "alt-n:execute(zsh $HOME/i446-monorepo/tools/pick/reject-tty.sh {2})+clear-screen+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       2>>"$DTD_FZF_ERR")
 
   _fzf_rc=$?

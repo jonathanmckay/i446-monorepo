@@ -8,7 +8,6 @@ line shows a spinner; when the turn ends the task looks normal again.
 Store: ~/vault/z_ibx/agent-claims/ (Syncthing carries it to Ix, where dtd runs)
   <task_id>.json          {task_id, task, session, host, cwd, claimed_at}
   <task_id>.state         "working <epoch>" | "idle <epoch>" | "released <epoch>" | "done <epoch>"
-                          | "asking <epoch>" (tools/pick posted a 😈? question; dtd draws 😈?)
   by-session/<session>    the task_id(s) this session holds, one per line (a
                           plain claim holds one; `claim --also` adds more,
                           2026-10-22, for work fanned out to subagents)
@@ -154,18 +153,6 @@ def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
     return existed
 
 
-RECEIPTS_DIR = Path.home() / "vault" / "z_ibx" / "agent-picks" / "receipts"
-
-
-def _receipt_ready(tid: str) -> bool:
-    """An agent pick (tools/pick) whose receipt waits on JM keeps its ✅ past
-    RELEASED_TTL: a Friday pick reviewed on Monday must still show (2026-11-08)."""
-    try:
-        return (RECEIPTS_DIR / str(tid) / "status").read_text().strip() == "ready"
-    except OSError:
-        return False
-
-
 def _forget(tid: str, root: Path) -> None:
     for p in (root / f"{tid}.json", root / f"{tid}.state"):
         try:
@@ -230,7 +217,7 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
             state, ts = s, int(t)
         except (OSError, ValueError):
             pass
-        if state in ("released", "done", "asking") and now - ts > RELEASED_TTL and not _receipt_ready(tid):
+        if state in ("released", "done") and now - ts > RELEASED_TTL:
             _forget(tid, here)   # kept its top slot for a day; JM never closed it
             continue
         if tid in out and out[tid]["state_ts"] >= ts:
@@ -242,11 +229,7 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
         # done one keeps it while its session is still numbered, so dtd draws
         # "6✅" and JM can see which tab finished it (2026-10-22).
         rec["done"] = state == "done"
-        # An agent pick (tools/pick) that needs one fact from JM before it can
-        # work: dtd draws 😈? on the left (2026-11-10, "the emoji should be
-        # demon-question, not clock"); the question is a 😈? comment on the card.
-        rec["asking"] = state == "asking"
-        rec["pane"] = None if state in ("released", "asking") else panes.get(str(rec.get("session", "")))
+        rec["pane"] = None if state == "released" else panes.get(str(rec.get("session", "")))
         out[tid] = rec
     return out
 

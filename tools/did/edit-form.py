@@ -1181,15 +1181,6 @@ def main() -> int:
     if not task:
         print(f"no task {task_id} in cache", file=sys.stderr)
         return 3
-    try:   # opening an agent pick's details starts its review clock (tools/pick, 2026-11-08)
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "picks_for_view", Path(__file__).resolve().parent.parent / "pick" / "picks.py")
-        picks = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(picks)
-        picks.on_viewed(task_id)
-    except Exception:  # noqa: BLE001
-        pass
     bundle = load_bundle(task_id)
     desc = ((bundle.get("task") or {}).get("description") or "") if bundle else None
     pre = prefill(task, desc)
