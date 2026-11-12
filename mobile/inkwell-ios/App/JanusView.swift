@@ -34,6 +34,9 @@ struct JanusView: View {
         "\(r.start)–\(r.end) " + (r.isEvent ? r.title + " · hidden from janus only" : r.desc)
     }
 
+    /// One text line per row with a hairline of air (2026-11-12 density request).
+    static let rowInsets = EdgeInsets(top: 2, leading: 14, bottom: 2, trailing: 14)
+
     private func scrollToDefault(_ proxy: ScrollViewProxy, animated: Bool) {
         let keys = store.rowKeys
         guard let i = store.defaultScrollIndex, i < keys.count else { return }
@@ -86,9 +89,11 @@ struct JanusView: View {
                     if r.isDivider {
                         DividerRowView(row: r)
                             .listRowBackground(Theme.bg).listRowSeparator(.hidden)
+                            .listRowInsets(JanusView.rowInsets)
                     } else {
                         TimelineRowView(row: r)
                             .listRowBackground(Theme.bg)
+                            .listRowInsets(JanusView.rowInsets)
                             // No rule between rows (2026-11-12: JM "remove the
                             // lines between entries"); the dividers already hide theirs.
                             .listRowSeparator(.hidden)
@@ -143,6 +148,10 @@ struct JanusView: View {
                 }
             }
             .listStyle(.plain)
+            // Dense rows (2026-11-12: JM "collapse the line of whitespace between
+            // entries so it is more information dense"): the List's 44 pt minimum
+            // row height, not the row's own padding, was the gap.
+            .environment(\.defaultMinListRowHeight, 1)
             .scrollContentBackground(.hidden)
             .background(Theme.bg)
             .refreshable { store.requestDefaultScroll(); await store.load() }
@@ -336,7 +345,6 @@ struct TimelineRowView: View {
             Text(row.rightMeta).font(Theme.mono).foregroundStyle(Theme.dim)
                 .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.vertical, 4)
     }
 }
 
