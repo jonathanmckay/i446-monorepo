@@ -23,6 +23,10 @@ Checks (v1, 2026-09-27):
                  jetsam / panic / Chrome hang reports, Chrome restarts, extra Chrome
                  instances (non-default user-data-dir), Chrome footprint and swap
                  peaks (added 2026-11-03 after the 10-29 23.6 GB Chrome jetsam)
+  lease-signer   the AppFolio lease countersigner on Ix (tools/m5x2-automations):
+                 daemon alive, no open 2FA alert, and a proof the AppFolio
+                 session works (sign / auto-relogin / daily probe) under 2 days
+                 old (added 2026-11-12 after the session sat expired for two weeks)
   skill-claims   skills whose name matches a recurring Todoist card but that
                  aren't linked to dtd (agent_claims.SKILL_CLAIMS) or recorded
                  as declined (SKILL_NO_CLAIM) (added 2026-10-11)
@@ -724,6 +728,59 @@ def check_ix_cron() -> Finding:
     return Finding("ix-cron", "ok", f"{len(have)} jobs match config/ix.crontab")
 
 
+LEASE_SESSION_MAX_AGE = dt.timedelta(days=2)
+# One ssh round trip: process state, alert flag, and the session_ok JSON that
+# lease_signerd writes on every sign / relogin / daily probe. pgrep rather than
+# `launchctl list`: the Saturday cron on Ix doesn't see the gui domain's agents.
+LEASE_PROBE_CMD = ("pgrep -f lease_signerd.py >/dev/null && echo RUNNING || echo STOPPED; "
+                   "test -e ~/.config/m5x2/lease_auth_alert_sent && echo ALERT; "
+                   "echo SESSION; cat ~/.config/m5x2/appfolio_session_ok 2>/dev/null; echo")
+
+
+def lease_signer_finding(out: str, now: dt.datetime) -> Finding:
+    """Pure part of check_lease_signer: `out` is LEASE_PROBE_CMD's stdout."""
+    if out.startswith("ERROR") or "SESSION" not in out:
+        return Finding("lease-signer", "warn", f"could not reach Ix: {out.strip()[:100]}", review=True)
+    head, _, session = out.partition("SESSION")
+    running = "RUNNING" in head
+    alert = "ALERT" in head
+    age = None; source = "?"
+    try:
+        rec = json.loads(session.strip() or "{}")
+        ts = dt.datetime.fromisoformat(rec["ts"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=TZ)
+        age = now - ts; source = rec.get("source", "?")
+    except (ValueError, KeyError, TypeError):
+        pass
+    detail = []
+    if not running:
+        detail.append("lease_signerd.py is not running on Ix — launchctl kickstart -k gui/$(id -u)/com.jm.lease-signerd")
+    if alert:
+        detail.append("AppFolio 2FA session expired and auto-relogin has not succeeded (~/.config/m5x2/lease_auth_alert_sent) — "
+                      "run: ssh ix zsh ~/i446-monorepo/tools/m5x2-automations/relogin.sh")
+    if detail:
+        return Finding("lease-signer", "fail", "lease countersigner down: " + ("not running" if not running else "2FA session expired"),
+                       detail, review=True)
+    if age is None:
+        return Finding("lease-signer", "warn", "no appfolio_session_ok record on Ix — daemon never probed the session",
+                       ["expected ~/.config/m5x2/appfolio_session_ok written by lease_signerd (sign / relogin / daily probe)"], review=True)
+    if age > LEASE_SESSION_MAX_AGE:
+        return Finding("lease-signer", "warn", f"AppFolio session last confirmed {age.days}d ago (via {source}); the daily probe should keep this under 1d",
+                       [f"check ~/Library/Logs/lease-signerd.log on Ix for 'Session probe'"], review=True)
+    hours = int(age.total_seconds() // 3600)
+    return Finding("lease-signer", "ok", f"daemon running; AppFolio session confirmed {hours}h ago via {source}")
+
+
+def check_lease_signer(now: dt.datetime) -> Finding:
+    """The lease countersigner (tools/m5x2-automations/lease_signerd.py) on Ix
+    is alive and its AppFolio 2FA session works. 2026-11-12: the session had
+    been expired since late October and a lease sat unsigned for two weeks
+    before the Todoist card was noticed; the daemon now relogins itself, and
+    this is the weekly backstop that the self-healing is actually working."""
+    return lease_signer_finding(ix(LEASE_PROBE_CMD), now)
+
+
 IX_MEM = "$HOME/i446-monorepo/tools/vault/ix_mem_sample.py"   # expanded by the shell on Ix
 CHROME_PEAK_MB = 6000
 SWAP_PEAK_PCT = 90
@@ -956,7 +1013,7 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, lambda: check_ix_memory(now), check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
+               check_ix_cron, lambda: check_ix_memory(now), lambda: check_lease_signer(now), check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
                check_duplicates):
         try:
             out.append(fn())
@@ -984,6 +1041,7 @@ CHECK_WHAT = {
     "time-machine": "A Time Machine destination is configured and the latest backup is at most 2 days old (Ix; Straylight is exempt).",
     "ix-cron": "Ix's live crontab matches the committed config/ix.crontab.",
     "ix-memory": "Ix over 7 days: reboots, jetsam/panic/Chrome hang reports, Chrome restarts or extra instances, Chrome over 6 GB, swap over 90%.",
+    "lease-signer": "The AppFolio lease countersigner on Ix: daemon running, no open 2FA-expired alert, and the session proven to work (sign, auto-relogin or daily probe) within 2 days.",
     "skill-claims": "Skills named like a recurring Todoist card but neither linked to dtd (SKILL_CLAIMS) nor declined (SKILL_NO_CLAIM).",
     "alerts": "Tool alerts in z_ibx/alerts.jsonl over 7 days, grouped by tool and reason, minus ones dismissed in 1-i446-dismissed.json.",
     "neon-rules": "The nightly Neon rule-engine parallel run is under 2 days old, and which 0分 columns the ledger derives differently from Excel.",
@@ -995,7 +1053,7 @@ def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
              f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, "
-             "skills backup, perm sync, OneDrive Neon, Time Machine, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
+             "skills backup, perm sync, OneDrive Neon, Time Machine, Ix cron, Ix memory, lease signer, skill claims, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed | What it checks |", "|---|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.

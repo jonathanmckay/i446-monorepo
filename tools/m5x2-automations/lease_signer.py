@@ -261,6 +261,41 @@ def setup_login():
     print("Session saved. Future sign_lease calls will reuse this session.")
 
 
+def check_session(headless: bool = True) -> dict:
+    """Probe whether the saved AppFolio session still gets us past login.
+
+    Opens the account home in the persistent profile, lets _login_if_needed
+    re-submit the password if the session cookie lapsed (device trust makes
+    that succeed without 2FA), then looks for the 2FA UI itself — the method
+    picker or code box — rather than "login" in the URL, which the passkey
+    nag page also contains. Returns {"ok": bool, "url": str, "error": str}.
+    Caller must own the profile (no other Chromium on it): lease_signerd runs
+    this once a day between polls (2026-11-12).
+    """
+    if not _BROWSER_STATE.exists():
+        return {"ok": False, "url": "", "error": "no browser session — run: python3 lease_signer.py --login"}
+    with sync_playwright() as p:
+        ctx = _launch_context(p, headless=headless)
+        page = ctx.new_page()
+        try:
+            page.goto(f"https://{APPFOLIO_SUBDOMAIN}.appfolio.com", wait_until="domcontentloaded", timeout=30_000)
+            _wait(page, 3000)
+            _login_if_needed(page)
+            _wait(page, 3000)
+            _skip_passkey_prompt(page)
+            if page.locator('input[name="twoFactorMethod"], input[name="code"]').count() > 0:
+                return {"ok": False, "url": page.url, "error": "2FA session expired — device trust lapsed"}
+            try:
+                email_visible = page.locator('input[type="email"], input[name="email"], input[name="user[email]"], #user_email').first.is_visible(timeout=1000)
+            except Exception:
+                email_visible = False
+            if email_visible:
+                return {"ok": False, "url": page.url, "error": "still on the login form after submitting credentials"}
+            return {"ok": True, "url": page.url, "error": ""}
+        finally:
+            ctx.close()
+
+
 def sign_lease(appfolio_url: str, headless: bool = True) -> dict:
     """
     Navigate to appfolio_url and countersign the lease via Playwright.

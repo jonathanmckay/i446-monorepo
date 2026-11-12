@@ -4,6 +4,16 @@
 Polls Gmail every POLL_INTERVAL seconds for AppFolio countersign emails
 from approved senders, signs them via Playwright, archives, and logs.
 
+Self-healing (2026-11-12): when a sign hits AppFolio's 2FA wall, or the daily
+session probe finds the device trust lapsed, the daemon re-logs-in itself —
+relogin.relogin() with the SMS code read out of Ix's Messages over ssh — at
+most once an hour (each attempt texts JM a code), and only then falls back to
+the email + "do 2fa with Ix" Todoist card. State files in ~/.config/m5x2:
+  appfolio_session_ok       {"ts", "source": sign|relogin|probe} — last proof the
+                            session works; /1-i446's lease-signer check reads it
+  lease_auto_relogin_last   throttle stamp, written BEFORE the SMS is requested
+  lease_auth_alert_sent     operator alert state (pre-existing)
+
 Runs on Ix via launchd (com.jm.lease-signerd).
 
 Usage:
@@ -34,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import ibx as _ibx
 import lease_signer as _signer
+import relogin as _relogin
 import automations_db as _autodb
 import todoist as _todoist
 from config import AUTOSIGN_SENDERS, DB_PATH
@@ -62,6 +73,14 @@ _AUTH_ALERT_INTERVAL = datetime.timedelta(hours=24)
 # `python3 lease_signer.py --login` there, complete AppFolio's 2FA in the
 # Chromium it opens, press Enter. The [10] is the task's 分 value.
 AUTH_ALERT_TASK = "do 2fa with Ix to refresh appfolio cookie [10]"
+
+# Self-healing relogin (2026-11-12). The throttle stamp is written before the
+# SMS is requested so a crash mid-relogin + KeepAlive restart can't text JM a
+# code every minute. The session_ok file is the health signal /1-i446 reads.
+_AUTO_RELOGIN_LAST_PATH = Path.home() / ".config/m5x2/lease_auto_relogin_last"
+_AUTO_RELOGIN_INTERVAL = datetime.timedelta(hours=1)
+SESSION_OK_PATH = Path.home() / ".config/m5x2/appfolio_session_ok"
+_PROBE_INTERVAL = datetime.timedelta(hours=24)
 
 # Gmail label applied to emails that failed for non-auth reasons (so they're
 # flagged for manual review instead of archived into oblivion or retried forever).
@@ -189,12 +208,14 @@ def _read_auth_alert_state() -> dict | None:
         return None  # corrupt/legacy ("sent") flag — treat as no prior alert
 
 
-def maybe_send_auth_alert(service):
+def maybe_send_auth_alert(service, auto_detail: str = ""):
     """Alert the operator when the 2FA session expires: email + a Todoist
     task, re-firing once per _AUTH_ALERT_INTERVAL while still broken (not
     just once-ever) so a multi-day outage can't go silent like 2026-07-07's
     did. The Todoist task is the durable nag — closed automatically on the
-    next successful sign (see process_email)."""
+    next successful sign or auto-relogin (see _clear_auth_alert callers).
+    Since 2026-11-12 this only fires after try_auto_relogin() has failed or
+    is throttled; auto_detail says why."""
     state = _read_auth_alert_state()
     if state:
         alerted_at = datetime.datetime.fromisoformat(state["alerted_at"])
@@ -206,10 +227,11 @@ def maybe_send_auth_alert(service):
             "The lease auto-signer's AppFolio 2FA session has expired.\n"
             "Countersign requests are NOT being signed; they're being held\n"
             "(left unread in the inbox) until you re-authenticate.\n\n"
-            "Fix — on the Mac running the daemon:\n"
-            "    cd ~/i446-monorepo/tools/m5x2-automations\n"
-            "    python3 lease_signer.py --login\n"
-            "Then complete 2FA in the browser window that opens.\n"
+            f"Automatic re-login: {auto_detail or 'not attempted'}\n\n"
+            "Fix — from anywhere (reads the SMS code off Ix itself):\n"
+            "    ssh ix zsh ~/i446-monorepo/tools/m5x2-automations/relogin.sh\n"
+            "or on Ix: python3 lease_signer.py --login and complete 2FA in the\n"
+            "browser window that opens.\n"
         )
         msg = email.mime.text.MIMEText(body)
         msg["To"] = NOTIFY_TO
@@ -252,6 +274,88 @@ def _clear_auth_alert():
         except Exception as e:
             log.warning(f"Failed to close Todoist auth alert task: {e}")
     _AUTH_ALERT_PATH.unlink(missing_ok=True)
+
+
+def _mark_session_ok(source: str):
+    """Record proof that the AppFolio session works (a sign, a relogin, or the
+    daily probe). /1-i446 warns when this is over 2 days old."""
+    try:
+        SESSION_OK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SESSION_OK_PATH.write_text(json.dumps({
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"), "source": source}))
+    except OSError as e:
+        log.warning(f"Failed to write {SESSION_OK_PATH}: {e}")
+
+
+def _session_ok_age() -> datetime.timedelta | None:
+    try:
+        ts = json.loads(SESSION_OK_PATH.read_text())["ts"]
+        return datetime.datetime.now() - datetime.datetime.fromisoformat(ts)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _relogin_throttled() -> bool:
+    try:
+        last = datetime.datetime.fromisoformat(_AUTO_RELOGIN_LAST_PATH.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    return datetime.datetime.now() - last < _AUTO_RELOGIN_INTERVAL
+
+
+def try_auto_relogin(service, reason: str = "") -> bool:
+    """Re-authenticate the AppFolio session without JM: the single owner of the
+    expired→healthy transition. Stamps the 1h throttle BEFORE requesting the
+    SMS (a crash + KeepAlive restart must not text a code a minute), runs
+    relogin.relogin() with the code read from Ix's Messages, and on success
+    records session_ok and clears any open operator alert. On throttle,
+    failure or exception it raises the operator alert instead. Never throws."""
+    if _relogin_throttled():
+        log.warning("Auto-relogin throttled (last attempt < 1h ago); alerting operator.")
+        maybe_send_auth_alert(service, auto_detail="throttled — an attempt within the last hour failed")
+        return False
+    try:
+        _AUTO_RELOGIN_LAST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _AUTO_RELOGIN_LAST_PATH.write_text(datetime.datetime.now().isoformat(timespec="seconds"))
+    except OSError as e:
+        log.warning(f"Failed to write relogin throttle stamp: {e}")
+    log.info(f"Auto-relogin: AppFolio session expired ({reason or 'unknown'}); requesting SMS code...")
+    try:
+        res = _relogin.relogin(get_code=_relogin.sms_code_provider(log=log.warning), headless=True)
+    except Exception as e:  # noqa: BLE001 — Playwright/ssh failures must not kill the daemon
+        res = {"ok": False, "detail": f"exception: {e}"}
+    if res.get("ok"):
+        how = "code submitted, device trusted 30d" if res.get("code_submitted") else "password only"
+        log.info(f"Auto-relogin OK ({how}) → {res.get('url', '')}")
+        _mark_session_ok("relogin")
+        _clear_auth_alert()
+        return True
+    log.warning(f"Auto-relogin FAILED: {res.get('detail', '')[:300]}")
+    maybe_send_auth_alert(service, auto_detail=f"FAILED — {res.get('detail', '')[:200]}")
+    return False
+
+
+def maybe_probe_session(service):
+    """Once a day (or when there's no record at all) open AppFolio to prove the
+    session still works, so a lapsed device trust is caught within 24h rather
+    than when the next lease arrives — and so /1-i446 has a fresh signal in
+    weeks with no leases. Runs between polls, in-process, so it never shares
+    the Chromium profile with a sign. Never throws."""
+    age = _session_ok_age()
+    if age is not None and age < _PROBE_INTERVAL:
+        return
+    log.info("Probing AppFolio session (no proof in the last 24h)...")
+    try:
+        res = _signer.check_session(headless=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"Session probe crashed (will retry next cycle): {e}")
+        return
+    if res.get("ok"):
+        log.info(f"Session probe OK → {res.get('url', '')}")
+        _mark_session_ok("probe")
+        return
+    log.warning(f"Session probe: {res.get('error', 'failed')}")
+    try_auto_relogin(service, reason=f"probe: {res.get('error', '')}")
 
 
 def send_review_alert(service, item: dict, meta: dict, url: str, error: str):
@@ -377,6 +481,7 @@ def process_email(service, item: dict) -> str:
         log.info(f"Signed successfully: {meta.get('unit', '')}")
         # We're healthy again — clear any prior auth-expired alert.
         _clear_auth_alert()
+        _mark_session_ok("sign")
         remaining = _notify_remaining()
         if remaining > 0:
             count = _autodb.count_successful(DB_PATH)
@@ -426,6 +531,7 @@ def poll_once(service) -> int:
         return 0
 
     processed = 0
+    relogin_done = False   # at most one auto-relogin per cycle
     for msg in messages:
         item = normalize(msg, service)
         if not item:
@@ -445,12 +551,28 @@ def poll_once(service) -> int:
             continue
         processed += 1
         if status == "auth_failed":
+            # First auth failure of the cycle: fix the session ourselves and
+            # retry this very email (sign_lease has closed its Chromium, so
+            # relogin owns the profile). A second auth failure in the same
+            # cycle — the retry, or a later email — never relogins again:
+            # alert and hold everything unread for the next cycle.
+            if not relogin_done:
+                relogin_done = True
+                if try_auto_relogin(service, reason="sign hit the login page"):
+                    try:
+                        status = process_email(service, item)
+                    except Exception as e:
+                        log.error(f"Unexpected error re-processing email after relogin: {e}")
+                        continue
+                    if status != "auth_failed":
+                        continue
+                    maybe_send_auth_alert(service, auto_detail="succeeded, but signing still landed on the login page")
+            else:
+                maybe_send_auth_alert(service, auto_detail="already attempted this cycle")
             # Every remaining email would fail identically. Stop this cycle so
-            # we don't launch a browser per email, alert the operator once, and
-            # leave all pending leases unread for retry after re-login.
-            maybe_send_auth_alert(service)
-            log.warning("2FA session expired — pausing cycle until re-login "
-                        "(python3 lease_signer.py --login). Pending leases held unread.")
+            # we don't launch a browser per email, and leave all pending leases
+            # unread for retry after re-login.
+            log.warning("2FA session expired — pausing cycle until re-login. Pending leases held unread.")
             break
 
     return processed
@@ -473,6 +595,8 @@ def main():
         n = poll_once(service)
         if n:
             log.info(f"Processed {n} email(s) this cycle")
+        if not _shutdown:
+            maybe_probe_session(service)
 
         if once:
             break

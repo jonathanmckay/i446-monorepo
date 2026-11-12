@@ -52,4 +52,4 @@ def test_skip_passkey_prompt_noop_without_nag():
 
 def test_relogin_dismisses_passkey_before_success_check():
     src = (Path(__file__).parent / "relogin.py").read_text()
-    assert src.index("_skip_passkey_prompt") < src.index('ok = "login" not in page.url')
+    assert src.index("ls._skip_passkey_prompt(page)") < src.index('ok = ("login" not in page.url')

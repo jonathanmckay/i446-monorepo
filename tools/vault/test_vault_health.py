@@ -261,3 +261,22 @@ def test_perm_sync_warns_on_one_way_syncthing_lag(tmp_path, monkeypatch):
     _perm_state(tmp_path, "straylight", t - 1200, {"ix": t - 5 * 86400})  # never sees Ix's new state
     f = vh.check_perm_sync(now)
     assert f.status == "warn" and "straylight last merged ix's state" in f.summary
+
+
+def test_lease_signer_finding_states():
+    vh = _load()
+    now = dt.datetime(2026, 11, 14, 4, 40, tzinfo=vh.TZ)
+    ok = "RUNNING\nSESSION\n{\"ts\": \"2026-11-13T07:13:35\", \"source\": \"sign\"}\n"
+    f = vh.lease_signer_finding(ok, now)
+    assert f.status == "ok" and not f.review and "via sign" in f.summary
+    f = vh.lease_signer_finding("STOPPED\nSESSION\n" + ok.split("SESSION\n")[1], now)
+    assert f.status == "fail" and f.review and "kickstart" in f.detail[0]
+    f = vh.lease_signer_finding("RUNNING\nALERT\nSESSION\n" + ok.split("SESSION\n")[1], now)
+    assert f.status == "fail" and "relogin.sh" in f.detail[0]
+    stale = "RUNNING\nSESSION\n{\"ts\": \"2026-11-09T07:00:00\", \"source\": \"probe\"}\n"
+    f = vh.lease_signer_finding(stale, now)
+    assert f.status == "warn" and f.review and "4d ago" in f.summary
+    f = vh.lease_signer_finding("RUNNING\nSESSION\n\n", now)
+    assert f.status == "warn" and "never probed" in f.summary
+    f = vh.lease_signer_finding("ERROR: ssh timed out", now)
+    assert f.status == "warn" and "could not reach Ix" in f.summary
