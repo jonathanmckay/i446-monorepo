@@ -1362,7 +1362,7 @@ def _compute_summary() -> dict:
         from neon import view as nview
         lv = nview.day_view(iso)
         if lv and lv.get("total") is not None:
-            ledger_points = int(round(lv["total"]))
+            ledger_points = int(float(lv["total"]))  # truncate, like the Excel path
             nview.log_reader_diff("dtd", iso, points, ledger_points)
             points = nview.pick(points, ledger_points)
     except Exception as e:

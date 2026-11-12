@@ -1205,7 +1205,7 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
             from neon import view as nview
             lv = nview.day_view(today.isoformat())
             if lv and lv.get("total") is not None:
-                ledger_points = int(round(lv["total"]))
+                ledger_points = int(float(lv["total"]))  # truncate, like the Excel path
                 ledger_blocks = {k: int(round(v)) for k, v in (lv.get("blocks") or {}).items()}
                 nview.log_reader_diff("janus", today.isoformat(), points, ledger_points)
                 points = nview.pick(points, ledger_points)
