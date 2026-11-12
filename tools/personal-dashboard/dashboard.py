@@ -2438,7 +2438,7 @@ _SHARED_STYLE = """
 // are idempotent. Chart missing (archive without the CDN script): a stub keeps
 // the badges filling with blank canvases instead of a thrown render.
 const PREFIX = (location.pathname.match(/^(.*?)\\/?(?:slice|more|1s|jmreads|f695)?\\/?$/) || ['', ''])[1];
-if (typeof Chart === 'undefined') { window.Chart = function () {}; Chart.prototype.destroy = function () {}; }
+if (typeof Chart === 'undefined') { window.Chart = function () {}; window.Chart.prototype.destroy = function () {}; }
 const _stale = new Map();   // url -> epoch ms of the stored copy being shown
 function _offlineBadge() {
   let el = document.getElementById('offlineBadge');
