@@ -1353,6 +1353,21 @@ def _compute_summary() -> dict:
     except Exception as e:
         print("WARN day_summary points:", e, file=sys.stderr)
 
+    # Ledger view alongside Excel (Neon off Excel step 4a, 2026-11-11): the
+    # same Σ derived from the ledger alone. Shown as ledger_points; it only
+    # replaces `points` under NEON_READ_SOURCE=ledger. Disagreements go to
+    # ~/.cache/neon-rules/reader-diff.jsonl (deduped). Never fails the summary.
+    ledger_points = None
+    try:
+        from neon import view as nview
+        lv = nview.day_view(iso)
+        if lv and lv.get("total") is not None:
+            ledger_points = int(round(lv["total"]))
+            nview.log_reader_diff("dtd", iso, points, ledger_points)
+            points = nview.pick(points, ledger_points)
+    except Exception as e:
+        print("WARN day_summary ledger:", e, file=sys.stderr)
+
     # tasks completed today = Todoist-completed (non-recurring tasks/rituals/goals)
     # + daily habits whose due date advanced past today (recurring completions
     # Todoist hides). Matches the felt count; independent of which machine did it.
@@ -1370,6 +1385,8 @@ def _compute_summary() -> dict:
         print("WARN day_summary advanced:", e, file=sys.stderr)
 
     val = {"points": points, "done": done}
+    if ledger_points is not None:
+        val["ledger_points"] = ledger_points
     _SUMMARY.update(at=time.time(), val=val)
     return val
 

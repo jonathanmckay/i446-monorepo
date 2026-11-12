@@ -59,6 +59,11 @@
 5 4 * * * $HOME/bin/run_neon_rules_diff.sh
 # same-day ledger drift card (Neon off Excel): strict check on TODAY after a fresh snapshot, one dtd card with fixes
 30 22 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/sameday.py >> $HOME/.cache/neon-rules/sameday.log 2>&1
+# neon shadow apply (Neon off Excel step 4, shadow phase, 2026-11-11): ledger-derived 0分 row vs live Excel,
+# 10 min before each lock-and-mark fire (clear of its Excel health probe). No writes. Log + shadow-summary.json in ~/.cache/neon-rules/shadow-apply/
+50 3,5,7,9,11,13,15,17,19,21 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/shadow_apply.py >> $HOME/.cache/neon-rules/shadow-apply.log 2>&1
+# neon ledger DB nightly copy (Durability): VACUUM INTO ~/files/i447/neon-backups, keep 14
+20 4 * * * $HOME/bin/neon_db_backup.sh
 # OneDrive (personal) cloud→disk copy onto the Ix Backup SSD; Time Machine only sees what is downloaded
 30 1 * * * bash $HOME/i446-monorepo/bin/onedrive-backup.sh >/dev/null 2>&1
 

@@ -1193,16 +1193,37 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     # Per-block Σ分 and -1₦ ritual score on each divider (user request
     # 2026-10-04: "show both sum of points and -1 sum for every block").
     block_pts = {} if lite else _block_points(today, points)
+
+    # Ledger view alongside Excel (Neon off Excel step 4a, 2026-11-11): Σ and
+    # per-block 分 derived from the ledger alone (blocks = daemon lock
+    # snapshots + live residual). Carried as ledger_points / ledger_blocks and
+    # on each divider as lpts; they replace the Excel values only under
+    # NEON_READ_SOURCE=ledger. Disagreements → ~/.cache/neon-rules/reader-diff.jsonl.
+    ledger_points, ledger_blocks = None, {}
+    if not lite:
+        try:
+            from neon import view as nview
+            lv = nview.day_view(today.isoformat())
+            if lv and lv.get("total") is not None:
+                ledger_points = int(round(lv["total"]))
+                ledger_blocks = {k: int(round(v)) for k, v in (lv.get("blocks") or {}).items()}
+                nview.log_reader_diff("janus", today.isoformat(), points, ledger_points)
+                points = nview.pick(points, ledger_points)
+                block_pts = nview.pick(block_pts, ledger_blocks)
+        except Exception as e:
+            print("WARN ledger view:", e, file=sys.stderr)
     # The -1₲ ritual stamps in the build order are today's only — a past-day
     # view would misattribute them, so it just shows none.
     rituals = _block_ritual_scores(now) if is_today else {}
     for row in rows:
         if row["type"] == "divider":
             row["pts"] = block_pts.get(row["block"])
+            row["lpts"] = ledger_blocks.get(row["block"])
             row["n1"] = rituals.get(row["block"])
 
     since, since_min = untracked_since(entries, now) if is_today else (None, None)
     payload = {"rows": rows, "tracked_min": tracked_min, "points": points,
+               "ledger_points": ledger_points, "ledger_blocks": ledger_blocks,
                "date": today.isoformat(), "is_today": is_today, "lite": lite,
                "untracked_since": since, "untracked_min": since_min}
     # Habit strip (2026-11-10): today's full pass only -- the lite pass has
@@ -2580,7 +2601,7 @@ PAGE = r"""<!doctype html>
   <div id="untracked"></div>
   <div class="brand">jan<b>u</b>s</div>
   <span id="dayBadge"></span>
-  <div class="tally"><b id="pts">–</b> 分 · <span id="trk">0:00</span></div>
+  <div class="tally"><b id="pts">–</b> 分<span id="lpts" style="opacity:.6"></span> · <span id="trk">0:00</span></div>
   <div class="hbtns">
     <button class="navb" id="dprev" title="previous day">‹</button>
     <button class="navb" id="dnext" title="next day" disabled>›</button>
@@ -2694,6 +2715,11 @@ function apply(d){
   // lite pass has no Neon read — keep the dash rather than flashing it empty
   if(!d.lite || d.points != null)
     document.getElementById('pts').textContent = (d.points==null?'–':d.points);
+  // Ledger Σ shown only when it disagrees with what's displayed (step 4a shadow).
+  if(!d.lite){
+    var lp=document.getElementById('lpts');
+    if(lp) lp.textContent=(d.ledger_points==null||d.ledger_points==d.points)?'':' ⌁'+d.ledger_points;
+  }
   document.getElementById('trk').textContent =
     Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');
   untrackedBanner(d.untracked_since, d.untracked_min);
