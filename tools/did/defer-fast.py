@@ -21,7 +21,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import date, timedelta
@@ -208,6 +210,49 @@ def resolve_target(arg: str | None) -> str:
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+def _transient_before_send(e: Exception) -> bool:
+    """True when the request provably never reached Todoist.
+
+    urllib wraps connect-phase OSErrors (DNS failure, connection refused,
+    network unreachable, connect timeout) in a plain URLError; an HTTPError
+    means a status came back, and a bare socket.timeout / ConnectionReset
+    means the body had already gone out and the server may have acted on it.
+    """
+    return (isinstance(e, urllib.error.URLError)
+            and not isinstance(e, urllib.error.HTTPError))
+
+
+def _open(req: urllib.request.Request, timeout: float, retries: int = 2,
+          backoff: tuple[float, ...] = (1.0, 2.0), sleep=time.sleep):
+    """urlopen with a retry for failures that are safe to repeat.
+
+    Any method is retried when the connection was never made (see
+    _transient_before_send). A GET is also retried on a read timeout, 429 or
+    5xx. A POST is NOT: handle_recurring's create-posthoc / close / advance-
+    parent sequence is not idempotent, and a retried POST that had actually
+    landed would duplicate the posthoc or push the series a day too far (the
+    same double-close did-fast guards against since 2026-10-15).
+
+    Why (2026-11-12): six ctrl-d defers on Straylight failed in ten minutes
+    while did-fast closes from the same machine, same minute, went through:
+    that machine's internet was dropping (its tailscale watchdog logged
+    "internet down" 06:27-06:52) and did-fast retries transient errors once;
+    this script gave up on the first URLError.
+    """
+    get = req.get_method() == "GET"
+    for attempt in range(retries + 1):
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except Exception as e:
+            retry = _transient_before_send(e) or (get and (
+                isinstance(e, socket.timeout)
+                or (isinstance(e, urllib.error.HTTPError)
+                    and (e.code >= 500 or e.code == 429))))
+            if not retry or attempt >= retries:
+                raise
+            sleep(backoff[min(attempt, len(backoff) - 1)])
+
+
 def _api(method: str, path: str, body: dict | None = None,
          timeout: float = 15.0) -> dict | None:
     """Make a Todoist API request. Returns parsed JSON or None for 204."""
@@ -220,7 +265,7 @@ def _api(method: str, path: str, body: dict | None = None,
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with _open(req, timeout) as resp:
         raw = resp.read()
         if not raw:
             return None
@@ -238,7 +283,7 @@ def _fetch_tasks(filt: str) -> list[dict]:
         req = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {TODOIST_TOKEN}",
         })
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _open(req, 15) as resp:
             raw = json.loads(resp.read())
         batch = raw if isinstance(raw, list) else raw.get("results", [])
         tasks.extend(batch)

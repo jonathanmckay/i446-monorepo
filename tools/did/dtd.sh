@@ -12,6 +12,14 @@
 # latency to fzf startup.
 ( bash "$HOME/i446-monorepo/scripts/term-color.sh" reset 2>/dev/null ) &
 
+# cmux resume binding (2026-11-12, "CMUX on restart"): tell cmux to re-run the
+# `dtd` launcher in this tab after a Straylight restart (cmux restores the
+# layout, not the process; the ix-tui launcher then picks ix or local afresh).
+# Only reaches cmux when dtd itself is the pane's local process (local mode);
+# in ix mode this runs on ix, where the helper is a silent no-op, and
+# scripts/winsize-guard.py registers the binding from the Straylight side.
+( bash "$HOME/i446-monorepo/scripts/cmux-resume-bind.sh" set dtd 'zsh -ic dtd' >/dev/null 2>&1 & )
+
 # UTF-8 locale guard (bug 2026-10-13): dtd runs on ix inside a tmux server
 # whose environment has no LANG, so zsh treated input as bytes and the edit
 # screen's vared showed a typed 中 as "\xe4<0088><0086>". Exported, so every
@@ -1269,6 +1277,10 @@ cat > "$DTD_DEFER" << DEFEREOF
 [[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
 _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}defer\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
 DEFER_FAST="\$HOME/i446-monorepo/tools/did/defer-fast.py"
+DEFER_OUTCOME="\$HOME/i446-monorepo/tools/did/dtd_defer_outcome.py"
+# defer-fast's stderr goes next to the worker's (/tmp/dtd-<id>.log.err), /dev/null
+# only when dtd's log path is unset (the heredoc-expansion tests).
+ERRLOG="${DTD_LOG:+$DTD_LOG.err}"; ERRLOG="\${ERRLOG:-/dev/null}"
 HDR="$DTD_HDR"
 REMOVED="$DTD_REMOVED"
 zmodload zsh/datetime 2>/dev/null
@@ -1413,17 +1425,24 @@ for i in {1..\${#ids[@]}}; do
   echo "⏳ deferring (\$defer_label): \$clean" > "\$HDR"
   echo "x" >> "$DTD_PUSHED"
   (
-    result=\$(python3 "\$DEFER_FAST" --id "\$tid" "\$days" 2>/dev/null)
-    ok=\$(echo "\$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'→ {d[\"target_date\"]} [{d[\"claimed_points\"]}] today / [{d[\"remaining_points\"]}] later')" 2>/dev/null)
-    if [[ -n "\$ok" ]]; then
+    # Keep defer-fast's stderr and SAY WHY on failure (2026-11-12: six defers
+    # in ten minutes ended in a bare "? defer failed"; stderr went to
+    # /dev/null and the {"error": ...} defer-fast prints on stdout was never
+    # parsed, so the cause, that machine's internet dropping, took cross-host
+    # log archaeology to find). dtd_defer_outcome.py turns the stdout into the
+    # ⏭ line (exit 0) or a one-line reason (exit 1) and appends a kind=defer
+    # record to the synced record log either way, next to the pick record.
+    result=\$(python3 "\$DEFER_FAST" --id "\$tid" "\$days" 2>>"\$ERRLOG"); rc=\$?
+    out=\$(print -r -- "\$result" | python3 "\$DEFER_OUTCOME" "\$rc" "\$tid" "$DTD_RECLOG" "$DTD_HOSTSLUG" "$DTD_ID" 2>>"\$ERRLOG"); vrc=\$?
+    if (( vrc == 0 )); then
       # Journal for ctrl-z undo
       echo "\$result" | python3 "$UNDO_FAST" --journal-defer "$DTD_JOURNAL" "\$clean" 2>/dev/null
-      echo "⏭ \$clean \$ok" > "\$HDR"
+      echo "⏭ \$clean \$out" > "\$HDR"
     else
       # Roll back the optimistic hide so the task reappears on next reload
       grep -v -x -F -- "\$tid" "\$REMOVED.ids" > "\$REMOVED.ids.tmp" 2>/dev/null
       mv "\$REMOVED.ids.tmp" "\$REMOVED.ids"
-      echo "? defer failed: \$clean (restored to list)" > "\$HDR"
+      echo "? defer failed: \$clean (restored to list)\${out:+ — \$out}" > "\$HDR"
     fi
     echo "x" >> "$DTD_PROCESSED"
   ) >/dev/null 2>&1 &!

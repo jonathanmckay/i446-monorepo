@@ -396,3 +396,118 @@ def test_dtd_defer_binding_passes_id_not_name():
     # Since 2026-07-23 the defer script loops over a {+2} batch; each worker
     # still resolves by id (\$tid, one loop element), never by name.
     assert r'"\$DEFER_FAST" --id "\$tid"' in dtd
+
+
+# ── _open: retry rule (2026-11-12) ─────────────────────────────────────────
+# Six ctrl-d defers failed in ten minutes on a machine whose internet was
+# dropping while did-fast, which retries transient errors, kept working.
+# _api/_fetch_tasks now go through _open: a request that never reached Todoist
+# is retried for any method; a GET is also retried on read timeout / 5xx; a
+# POST never is (the create-posthoc / close / advance-parent sequence is not
+# idempotent, so a retried POST that had landed would double-advance).
+
+import socket
+import urllib.error
+import urllib.request
+
+
+class _Resp:
+    def __init__(self, body=b"{}"):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def _seq(monkeypatch, df, outcomes):
+    """urlopen stub that yields each outcome in turn; returns the method log."""
+    calls = []
+
+    def fake(req, timeout=None):
+        calls.append(req.get_method())
+        o = outcomes[len(calls) - 1]
+        if isinstance(o, Exception):
+            raise o
+        return o
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(df.time, "sleep", lambda s: None)
+    return calls
+
+
+def _req(method):
+    return urllib.request.Request("https://api.todoist.com/api/v1/tasks/x",
+                                  data=b"{}" if method == "POST" else None,
+                                  method=method)
+
+
+def _http(code):
+    return urllib.error.HTTPError("https://api.todoist.com/x", code, "err", {}, None)
+
+
+def test_open_retries_get_after_connection_failure(df, monkeypatch):
+    ok = _Resp()
+    calls = _seq(monkeypatch, df, [urllib.error.URLError(socket.gaierror(8, "nodename nor servname")), ok])
+    assert df._open(_req("GET"), 15) is ok
+    assert calls == ["GET", "GET"]
+
+
+def test_open_retries_post_when_connection_never_made(df, monkeypatch):
+    ok = _Resp()
+    calls = _seq(monkeypatch, df, [urllib.error.URLError(ConnectionRefusedError(61, "refused")), ok])
+    assert df._open(_req("POST"), 15) is ok
+    assert calls == ["POST", "POST"]
+
+
+def test_open_does_not_retry_post_on_read_timeout(df, monkeypatch):
+    calls = _seq(monkeypatch, df, [socket.timeout("timed out"), _Resp()])
+    with pytest.raises(socket.timeout):
+        df._open(_req("POST"), 15)
+    assert calls == ["POST"]
+
+
+def test_open_does_not_retry_post_on_5xx(df, monkeypatch):
+    calls = _seq(monkeypatch, df, [_http(502), _Resp()])
+    with pytest.raises(urllib.error.HTTPError):
+        df._open(_req("POST"), 15)
+    assert calls == ["POST"]
+
+
+def test_open_retries_get_on_read_timeout_and_5xx(df, monkeypatch):
+    ok = _Resp()
+    calls = _seq(monkeypatch, df, [socket.timeout("timed out"), _http(503), ok])
+    assert df._open(_req("GET"), 15) is ok
+    assert calls == ["GET", "GET", "GET"]
+
+
+def test_open_never_retries_4xx(df, monkeypatch):
+    calls = _seq(monkeypatch, df, [_http(404), _Resp()])
+    with pytest.raises(urllib.error.HTTPError):
+        df._open(_req("GET"), 15)
+    assert calls == ["GET"]
+
+
+def test_open_gives_up_after_two_retries(df, monkeypatch):
+    err = urllib.error.URLError(OSError(51, "Network is unreachable"))
+    calls = _seq(monkeypatch, df, [err, err, err, _Resp()])
+    with pytest.raises(urllib.error.URLError):
+        df._open(_req("GET"), 15)
+    assert calls == ["GET", "GET", "GET"]
+
+
+def test_api_and_fetch_tasks_go_through_open(df, monkeypatch):
+    seen = []
+
+    def fake_open(req, timeout, **kw):
+        seen.append((req.get_method(), req.full_url))
+        return _Resp(b'{"results": [{"id": "t1"}], "next_cursor": null}')
+    monkeypatch.setattr(df, "_open", fake_open)
+    assert df._api("GET", "/tasks/t1") == {"results": [{"id": "t1"}], "next_cursor": None}
+    assert df._fetch_tasks("today") == [{"id": "t1"}]
+    assert [m for m, _ in seen] == ["GET", "GET"]
+    assert "tasks/filter?query=today" in seen[1][1]
