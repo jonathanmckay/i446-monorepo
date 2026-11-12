@@ -3996,6 +3996,19 @@ def main():
             result["cache_refreshed"] = True
         except Exception as e:  # noqa: BLE001 — never fail the ritual on a refresh
             result["cache_refresh_error"] = str(e)
+        # Stop the ritual's own timer, as the ⌥⏎ done path does (ritual-only
+        # branch, same refresh-then-stop order). dtd.sh's form launcher starts the card's
+        # timer before the -1g/0g form and the save closes the card HERE, so
+        # "-1g @g245" kept running and dtd showed -1g as the active row after
+        # every save (2026-11-12; 28m of "-1g" the day before).
+        if "error" not in result:
+            try:
+                stopped = stop_matching_toggl([sys.argv[2]])
+            except Exception as e:  # noqa: BLE001 — never fail the ritual on Toggl
+                stopped = None
+                result["toggl_stop_error"] = str(e)
+            if stopped:
+                result["toggl_stopped"] = stopped
         print(json.dumps(result, ensure_ascii=False, indent=2))
         # Regression (2026-07-19): p_credit_error (e.g. ix unreachable over ssh)
         # was recorded in the result dict but this handler always exited 0, and
