@@ -132,6 +132,7 @@ def _handoff(ct, monkeypatch, ix_out, local_ts=None, rc=0):
     monkeypatch.setenv('CC_DRY', '1')
     monkeypatch.delenv('CC_HOST', raising=False)
     monkeypatch.setattr(ct.sys, 'argv', ['cc'])
+    monkeypatch.setattr('socket.gethostname', lambda: 'straylight')   # ix_handoff never hops when run ON ix
     calls = []
 
     def run(cmd, **kw):
@@ -183,3 +184,51 @@ def test_handoff_skipped_for_flags_and_forced_local(ct, monkeypatch):
 def test_cc_r_never_resumes_a_session_open_here(ct):
     import inspect
     assert "'--latest', '--not-live'" in inspect.getsource(ct.resume_args)
+
+
+# ── cmux resume bindings / `cc --reattach` (2026-11-12, "CMUX on restart") ──────────────────
+
+def test_reattach_target_parses_both_forms(ct):
+    assert ct.reattach_target(['--reattach', 'cc-taxes']) == 'cc-taxes'
+    assert ct.reattach_target(['--reattach=cc-091533']) == 'cc-091533'
+    assert ct.reattach_target(['taxes', 'pdf']) is None
+    assert ct.reattach_target(['--reattach']) is None
+
+
+def test_reattach_shell_only_attaches(ct):
+    """The bound command must be the attach-only path, never `cc <title>`: with ix unreachable at
+    restart the title (or a dtd agent's whole prompt) would replay as a fresh conversation."""
+    sh = ct.reattach_shell("cc-fix the thing")
+    assert sh.endswith("--reattach 'cc-fix the thing'")
+    assert sh.startswith(str(ct.CC_PATH))
+    assert 'fix the thing' not in sh.replace("'cc-fix the thing'", '')
+
+
+def test_cmux_resume_noop_outside_surface(ct, monkeypatch):
+    monkeypatch.delenv('CMUX_SURFACE_ID', raising=False)
+    calls = []
+    monkeypatch.setattr(ct.subprocess, 'run', lambda *a, **k: calls.append(a))
+    ct.cmux_resume_bind('cc-x')
+    ct.cmux_resume_clear('cc-x')
+    assert calls == []
+
+
+def test_cmux_resume_bind_calls_helper_inside_surface(ct, monkeypatch):
+    monkeypatch.setenv('CMUX_SURFACE_ID', '00000000-0000-0000-0000-000000000000')
+    monkeypatch.setattr(ct, 'RESUME_HELPER', Path(__file__))   # exists() must be true
+    calls = []
+    monkeypatch.setattr(ct.subprocess, 'run', lambda argv, **k: calls.append(argv))
+    ct.cmux_resume_bind('cc-taxes')
+    assert calls and calls[0][2:4] == ['set', 'cc-taxes'] and calls[0][4] == ct.reattach_shell('cc-taxes')
+    ct.cmux_resume_clear('')
+    assert len(calls) == 1          # empty checkpoint: nothing to clear
+
+
+def test_local_tmux_inner_exports_checkpoint(ct, monkeypatch, capsys):
+    """release_tab clears the binding by CC_RESUME_CHECKPOINT, so the inner cc must receive it."""
+    monkeypatch.setenv('CC_DRY', '1')
+    monkeypatch.delenv('CMUX_SURFACE_ID', raising=False)
+    monkeypatch.setattr(ct, 'live_attach_probe', lambda args: '')
+    ct.exec_in_local_tmux(['taxes', 'pdf'])
+    out = capsys.readouterr().out
+    assert 'CC_RESUME_CHECKPOINT=cc-taxes-pdf' in out

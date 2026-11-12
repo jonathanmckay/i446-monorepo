@@ -6515,6 +6515,20 @@ input_buffer = Buffer(multiline=False, on_text_changed=_fullwidth_points)
 # raw mode, so Ctrl+S/Ctrl+Q are real key events here, not XOFF/XON flow control.
 
 
+def _cmux_resume_bind() -> None:
+    """cmux resume binding for this tab (2026-11-12, "CMUX on restart"): after a Straylight
+    restart cmux restores the layout but not the process, and re-runs an approved binding in
+    the tab instead. `zsh -ic janus` goes back through the ix-tui launcher, which picks ix or
+    local afresh. Only reaches cmux when janus is the pane's local process (local mode); on ix
+    the helper is a silent no-op and scripts/winsize-guard.py registers it from Straylight."""
+    helper = Path.home() / "i446-monorepo" / "scripts" / "cmux-resume-bind.sh"
+    try:
+        subprocess.Popen(["bash", str(helper), "set", "janus", "zsh -ic janus"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
 def _boot_grace_active(window: float = 2.0) -> bool:
     """True while janus is still booting. The tty can hold queued text from
     the spawning terminal (cmux respawn-pane types the launch command into the
@@ -8775,6 +8789,7 @@ async def main():
 
     # Arm the boot grace from the moment the app actually takes the tty
     STATE.boot_time = time.monotonic()
+    _cmux_resume_bind()
 
     app.create_background_task(_initial_slow_fetches(app))
     app.create_background_task(ticker_current(app))

@@ -72,3 +72,17 @@ def test_unusable_start_size_falls_back(tmp_path):
     finally:
         os.kill(pid, signal.SIGTERM)
         os.waitpid(pid, 0)
+
+
+def test_resume_name_from_wrapped_tmux_command():
+    """Ix mode: the guard fronts `mosh ix -- ... tmux new -A -s dtd|janus`; it is the pane's only
+    local process, so it is the one that registers the cmux resume binding (2026-11-12)."""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("wg", Path(__file__).with_name("winsize-guard.py"))
+    wg = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wg)
+    assert wg.resume_name(["mosh", "ix", "--", "zsh", "-lc", "tmux new -A -s dtd zsh -lic dtd"]) == "dtd"
+    assert wg.resume_name(["ssh", "-t", "ix", "--", "tmux", "new", "-A", "-s", "janus"]) == "janus"
+    assert wg.resume_name(["mosh", "ix", "--", "tmux", "new", "-A", "-s", "cc-taxes"]) is None
+    assert wg.resume_name(["python3", "janus.py"]) is None

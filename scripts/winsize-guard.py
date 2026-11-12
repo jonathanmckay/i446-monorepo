@@ -17,6 +17,8 @@ import errno
 import fcntl
 import os
 import pty
+import re
+import subprocess
 import select
 import signal
 import struct
@@ -55,6 +57,33 @@ def usable(size) -> bool:
     return size[0] > 0 and size[1] > 0
 
 
+RESUME_RE = re.compile(r"\btmux\s+new\b.*?\s-s\s+(dtd|janus)\b")
+RESUME_HELPER = Path.home() / "i446-monorepo" / "scripts" / "cmux-resume-bind.sh"
+
+
+def resume_name(argv):
+    """Which ix-tui launcher this guard is fronting: 'dtd' or 'janus' when the wrapped mosh/ssh
+    command attaches `tmux new -A -s dtd|janus` on ix, else None."""
+    m = RESUME_RE.search(" ".join(argv))
+    return m.group(1) if m else None
+
+
+def register_resume(argv) -> None:
+    """cmux resume binding for this tab (2026-11-12, "CMUX on restart"). In ix mode this guard is
+    the only local process in the cmux pane (dtd/janus themselves run on ix, where there is no
+    cmux), so it is the one that can tell cmux what to re-run after a Straylight restart: the
+    same `dtd` / `janus` launcher function from ~/.config/zsh/ix-tui.zsh, which picks ix or
+    local afresh. The helper is a silent no-op outside a cmux surface."""
+    name = resume_name(argv)
+    if not name:
+        return
+    try:
+        subprocess.Popen(["bash", str(RESUME_HELPER), "set", name, f"zsh -ic {name}"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        log(f"resume binding for {name} not registered: {e}")
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: winsize-guard.py <cmd> [args...]", file=sys.stderr)
@@ -64,6 +93,8 @@ def main() -> int:
     good = start if usable(start) else FALLBACK
     if not usable(start):
         log(f"start size {start[0]}x{start[1]} unusable, using {good[0]}x{good[1]}")
+
+    register_resume(sys.argv[1:])
 
     pid, master = pty.fork()
     if pid == 0:
