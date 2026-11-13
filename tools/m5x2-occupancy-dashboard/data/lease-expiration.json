@@ -460,11 +460,11 @@
     "property_name": "rl16",
     "unit": "C20",
     "tenant_name": "Valero, Love H.",
-    "status": "Pending",
+    "status": "Renewed",
     "lease_sign_date": "2026-10-23",
     "move_in": "2026-10-28",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-11-07",
+    "renewal_start_date": "2026-12-01",
+    "last_lease_renewal": "2026-12-01",
     "rent": "1195.00"
   },
   {
@@ -672,18 +672,6 @@
     "rent": "1089.00"
   },
   {
-    "unit_id": 761,
-    "property_name": "rl21",
-    "unit": "7",
-    "tenant_name": "Willis , Stephen  P.",
-    "status": "Pending",
-    "lease_sign_date": "2025-12-30",
-    "move_in": "2025-12-30",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "850.00"
-  },
-  {
     "unit_id": 1172,
     "property_name": "tc68",
     "unit": "A23",
@@ -813,18 +801,6 @@
     "move_in": "2025-12-10",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "1089.00"
-  },
-  {
-    "unit_id": 996,
-    "property_name": "kn47 K2",
-    "unit": "A105",
-    "tenant_name": "Swan, Gabriel",
-    "status": null,
-    "lease_sign_date": null,
-    "move_in": "2013-08-08",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-07-01",
     "rent": "1089.00"
   },
   {
@@ -988,7 +964,7 @@
     "property_name": "c313",
     "unit": "23",
     "tenant_name": "Hedge, Aaron",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2022-08-19",
     "renewal_start_date": null,
@@ -4630,6 +4606,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-06-01",
     "rent": "1424.00"
+  },
+  {
+    "unit_id": 761,
+    "property_name": "rl21",
+    "unit": "7",
+    "tenant_name": "Willis , Stephen  P.",
+    "status": "Renewed",
+    "lease_sign_date": "2025-12-30",
+    "move_in": "2025-12-30",
+    "renewal_start_date": "2026-12-01",
+    "last_lease_renewal": "2026-12-01",
+    "rent": "850.00"
   },
   {
     "unit_id": 661,
