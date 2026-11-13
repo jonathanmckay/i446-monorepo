@@ -93,13 +93,38 @@ def test_auto_sleep_host_gate(monkeypatch):
 KNOWN = {"i9", "m5x2", "hcmc", "hcmc2", "xk87", "xk88", "睡觉", "g245", "qz12", "hcb"}
 
 
-def test_fix_project_codes_corrects_near_misses_and_reports_unfixable():
+def test_fix_project_codes_corrects_near_misses(monkeypatch):
+    monkeypatch.setattr(MOD, "_guess_project_code", lambda raw: "")
     out, fixes, bad = MOD._fix_project_codes("0640-0648 vibing @9", KNOWN)
     assert out == "0640-0648 vibing @i9" and fixes == [("9", "i9")] and bad == []
     out, fixes, bad = MOD._fix_project_codes("1055-1105 call HZ @m5x", KNOWN)
     assert out.endswith("@m5x2") and fixes == [("m5x", "m5x2")]
+
+
+def test_fix_project_codes_guesses_from_description_when_nothing_matches(monkeypatch):
+    # JM 2026-11-12: "make your best guess rather than rejecting the input".
+    seen = []
+    def _guess(raw):
+        seen.append(raw)
+        return "xk88"
+    monkeypatch.setattr(MOD, "_guess_project_code", _guess)
+    out, fixes, bad = MOD._fix_project_codes("coffee with L @zzzz", KNOWN)
+    assert out == "coffee with L @xk88" and fixes == [("zzzz", "xk88")] and bad == []
+    assert seen and "@" not in seen[0], "the guesser must see the text with the bad token stripped"
+
+
+def test_fix_project_codes_drops_token_when_no_guess_either(monkeypatch):
+    # No closest-string fallback: on 2-4 char codes it is noise and ties
+    # over a set are nondeterministic. The token goes, downstream inference
+    # (tg-fast/did-fast) picks the project from the description.
+    monkeypatch.setattr(MOD, "_guess_project_code", lambda raw: "")
+    out, fixes, bad = MOD._fix_project_codes("coffee @zzzz 0900-0930", KNOWN)
+    assert out == "coffee 0900-0930" and fixes == [("zzzz", "")] and bad == []
+    # a guess outside the code table is not trusted either
+    monkeypatch.setattr(MOD, "_guess_project_code", lambda raw: "notacode")
     out, fixes, bad = MOD._fix_project_codes("coffee @zzzz", KNOWN)
-    assert out == "coffee @zzzz" and fixes == [] and bad == ["zzzz"]
+    assert out == "coffee" and fixes == [("zzzz", "")]
+    assert MOD._fix_note([("9", "i9"), ("zzzz", "")]) == "  (@9→@i9, @zzzz→(dropped))"
 
 
 def test_fix_project_codes_leaves_known_codes_and_emails_alone():

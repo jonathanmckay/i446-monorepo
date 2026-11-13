@@ -415,15 +415,33 @@ def test_enter_with_armed_edit_and_empty_text_cancels():
     assert "cancelled" in mod.STATE.flash
 
 
-def test_enter_with_armed_edit_and_unknown_code_flashes_and_drops_target():
+def test_enter_with_armed_edit_and_unknown_code_guesses_and_drops_target(monkeypatch):
+    # 2026-11-12: an unmatched @code is guessed from the description (or
+    # dropped), never rejected; the flash shows the substitution.
     mod = _load_tui()
     today = _midnight()
+    known = next(iter(mod._known_project_codes()), None) or "i9"
+    monkeypatch.setattr(mod, "_guess_project_code", lambda raw: known)
     mod.STATE.edit_target = {"ids": [7], "date": today.date()}
     mod.input_buffer.text = "renamed thing @notarealcode"
     _binding(mod, "enter").handler(_FakeEvent())
     assert mod.STATE.edit_target is None, \
         "the target is consumed unconditionally at the top -- an error must not resurrect it"
-    assert "unknown project code" in mod.STATE.flash
+    assert "unknown project code" not in mod.STATE.flash
+    assert f"@notarealcode→@{known}" in mod.STATE.flash
+
+
+def test_enter_with_armed_edit_and_unguessable_code_drops_the_code_only(monkeypatch):
+    mod = _load_tui()
+    today = _midnight()
+    monkeypatch.setattr(mod, "_guess_project_code", lambda raw: "")
+    mod.STATE.edit_target = {"ids": [7], "date": today.date()}
+    mod.input_buffer.text = "renamed thing @notarealcode"
+    _binding(mod, "enter").handler(_FakeEvent())
+    assert mod.STATE.edit_target is None
+    assert "unknown project code" not in mod.STATE.flash
+    assert "@notarealcode→(dropped)" in mod.STATE.flash
+    assert "renamed thing" in mod.STATE.flash, "the description edit still goes through"
 
 
 def test_enter_with_armed_edit_and_valid_text_flashes_edit_command():

@@ -5436,16 +5436,25 @@ def _fix_project_codes(part: str, known: set | None = None) -> tuple[str, list, 
     """Rewrite near-miss `@code` tokens to the project code they meant.
     Returns (text, [(typed, fixed), ...], [unfixable, ...]). A typed code is
     fixed when difflib finds a close match (≥0.6) or it is a substring of
-    exactly one known code; otherwise it is reported as unfixable. Known
-    codes pass through untouched; with no code table at all nothing is
-    touched (never block a command on a missing config)."""
+    exactly one known code. Otherwise (JM 2026-11-12: "make your best guess
+    rather than rejecting the input") the code is GUESSED from the rest of
+    the text via _guess_project_code (shortcodes, task queue, history); when
+    even that has nothing, the token is dropped — recorded as (typed, "") —
+    so tg-fast/did-fast infer the project from the description downstream.
+    A closest-string fallback was rejected on review: on 2-4 char codes it
+    is noise, and ties over a set are nondeterministic. The third list is
+    only ever non-empty when the fixer is bypassed; callers keep it as a
+    guard. Known codes pass through untouched; with no code table at all
+    nothing is touched (never block a command on a missing config)."""
     known = _known_project_codes() if known is None else known
     if not known:
         return part, [], []
     fixes: list = []
     bad: list = []
+    dropped = False
 
     def _sub(m):
+        nonlocal dropped
         code = m.group(1)
         if code in known:
             return m.group(0)
@@ -5453,13 +5462,31 @@ def _fix_project_codes(part: str, known: set | None = None) -> tuple[str, list, 
         if not cands:
             subs = [k for k in known if code in k]
             cands = subs if len(subs) == 1 else []
+        if not cands:
+            # Guess from the description alone: every @token stripped so the
+            # explicit-code tier of the guesser can't trip on this one.
+            rest = re.sub(r"(?<!\S)@\S+", " ", part)
+            guess = _guess_project_code(rest)
+            cands = [guess] if guess and guess in known else []
         if cands:
             fixes.append((code, cands[0]))
             return "@" + cands[0]
-        bad.append(code)
-        return m.group(0)
+        fixes.append((code, ""))
+        dropped = True
+        return ""
 
-    return re.sub(r"(?<!\S)@(\S+)", _sub, part), fixes, bad
+    out = re.sub(r"(?<!\S)@(\S+)", _sub, part)
+    if dropped:
+        out = re.sub(r"[ \t]{2,}", " ", out).strip()
+    return out, fixes, bad
+
+
+def _fix_note(code_fixes: list) -> str:
+    """"  (@9→@i9, @zzzz→(dropped))" for a flash; "" when nothing changed."""
+    if not code_fixes:
+        return ""
+    return "  (" + ", ".join(f"@{b}→" + (f"@{g}" if g else "(dropped)")
+                             for b, g in code_fixes) + ")"
 
 
 # ── Bonus-points note (2026-10-17) ─────────────────────────────────────────
@@ -7212,6 +7239,16 @@ def _on_enter(event):
                 new_total = points
             points = None
         desc, code, time_range, tags = _parse_edit_text(text)
+        code_note = ""
+        if code and code.lower() not in _known_project_codes():
+            # Typo guard with the row's description for context (a bare
+            # "@zzzz" edit has nothing else to guess from). A dropped code
+            # means no project change; the rest of the edit still applies.
+            ctx = desc or (_find_entry(ids) or {}).get("desc") or ""
+            _fixed, _fixes, _bad = _fix_project_codes(f"{ctx} @{code}".strip())
+            if _fixes:
+                code = _fixes[0][1] or None
+                code_note = _fix_note(_fixes)
         if code and code.lower() in (globals().get("SUBPROJECTS") or {}):
             # @xk20 → Toggl xk87 + tag xk20; code stays xk20 for the 分 route.
             code = code.lower()
@@ -7235,11 +7272,6 @@ def _on_enter(event):
             flash(f"{msg} — target cleared, press enter again to log this as new", 6.0)
             input_buffer.text = text
             input_buffer.cursor_position = len(text)
-        if code and pid is None:
-            _fixed, _fixes, _bad = _fix_project_codes(f"@{code}")
-            if _fixes:
-                code = _fixes[0][1]
-                pid = PROJECT_MAP.get(code)
         if code and pid is None:
             _reject(f"unknown project code: {code}")
             return
@@ -7333,7 +7365,7 @@ def _on_enter(event):
             else:
                 fields["description"] = f"{base_desc} [{points}]".strip()
         if not fields:
-            flash("nothing to update", 4.0)
+            flash("nothing to update" + code_note, 4.0)
             return
         open_ended = bool(time_range and time_range[1] is None)
         parts = [desc or "(desc unchanged)"]
@@ -7348,7 +7380,7 @@ def _on_enter(event):
             parts.append(f"[{shown}] kept (running again)" if open_ended else f"[{shown}]→[{new_total}]")
             if open_ended:
                 new_total = None
-        flash("$ edit " + " ".join(parts))
+        flash("$ edit " + " ".join(parts) + code_note)
 
         async def _apply_edit_and_refresh():
             try:
@@ -7512,15 +7544,15 @@ def _on_enter(event):
 
     # Project-code typo guard (2026-10-17: "@9" cost a Toggl 400 and a
     # retry, "@m5x" went through with no project at all). A near miss is
-    # corrected in place and shown in the flash; a code nothing matches
-    # hands the text back instead of running it.
+    # corrected in place and shown in the flash; a code nothing matches is
+    # guessed from the description or dropped (2026-11-12), never a reject.
     text, code_fixes, bad_codes = _fix_project_codes(text)
-    if bad_codes:
+    if bad_codes:  # unreachable with a code table; kept as a guard
         flash(f"unknown project @{bad_codes[0]} — not run; fix it and ⏎", 6.0)
         input_buffer.text = text
         input_buffer.cursor_position = len(text)
         return
-    fix_note = ("  (" + ", ".join(f"@{b}→@{g}" for b, g in code_fixes) + ")") if code_fixes else ""
+    fix_note = _fix_note(code_fixes)
 
     d_cmd = parse_d_command(text)
     if d_cmd:
