@@ -80,6 +80,14 @@ def test_stale_branch_uses_ansi_red_matching_the_rest_of_dtd():
 
 # ── Functional: run the real hdrgen body against fake mtimes ──────────────
 
+def script_path_router(tmp_path):
+    r = tmp_path / "done-router.sh"
+    if not r.exists():
+        r.write_text("#!/bin/zsh\n")
+        r.chmod(0o755)
+    return r
+
+
 def _run_hdrgen(tmp_path, self_mtime, live_mtime, dtd_hdr="", dtd_tally="",
                 args=(), env_extra=None):
     fake_self = tmp_path / "dtd.sh"
@@ -102,6 +110,11 @@ def _run_hdrgen(tmp_path, self_mtime, live_mtime, dtd_hdr="", dtd_tally="",
     script = re.sub(r"\$DTD_SRC_MTIME\b", str(int(self_mtime)), script)
     script = script.replace('"$DTD_HDR"', f'"{hdr}"')
     script = script.replace('"$DTD_TALLY"', f'"{tally}"')
+    # 2026-11-14: hdrgen also checks the baked done-router still exists (the
+    # /tmp cleaner case, see test_dtd_tmp_cleaner_keepalive.py); point it at a
+    # present executable unless a test overrides it via env_extra["ROUTER"].
+    router = (env_extra or {}).pop("ROUTER", None) or str(script_path_router(tmp_path))
+    script = script.replace('"$DTD_DONE_ROUTER"', f'"{router}"')
     # Everything else (\$tally, \$ws, \$DTD_KEYS, \$(stat ...), \${...}) is
     # escaped in the SOURCE only so the outer heredoc doesn't touch it at
     # write time -- real dtd.sh strips that backslash when it writes the

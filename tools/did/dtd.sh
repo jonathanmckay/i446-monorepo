@@ -3866,7 +3866,15 @@ cat > "$DTD_HDRGEN" <<HDRGENEOF
 zmodload zsh/stat 2>/dev/null
 zstat -A _st +mtime "$DTD_SELF" 2>/dev/null; live_mtime=\${_st[1]:-0}   # builtin stat (was an exec)
 if (( live_mtime > $DTD_SRC_MTIME + 1 )); then
-  printf '\033[1;91m⚠ RESTART DTD — code updated on disk\033[0m'
+  printf '\033[1;91m⚠ RESTART DTD — code updated on disk (esc to quit, then relaunch; reconnecting only re-attaches)\033[0m'
+  exit 0
+fi
+# Runtime files gone (2026-11-14): macOS's 3-day /tmp cleaner removed this
+# session's baked action scripts, so every keybinding silently does nothing.
+# The watcher's hourly touch -a prevents it from now on; this names it when
+# it has already happened (the symptom is otherwise just "nothing happens").
+if [[ ! -x "$DTD_DONE_ROUTER" ]]; then
+  printf '\033[1;91m⚠ RESTART DTD — runtime files were cleaned from /tmp (esc to quit, then relaunch)\033[0m'
   exit 0
 fi
 zmodload zsh/datetime 2>/dev/null
@@ -4025,6 +4033,20 @@ TALLY_PID=$!
       ( "$HOME/i446-monorepo/scripts/agent-claims-pull.sh" </dev/null >/dev/null 2>&1 & )
     fi
     _dtd_tz_refresh
+    # Keep the baked runtime files alive (2026-11-14: "I can't complete tasks
+    # on dtd?"). macOS removes anything under /tmp whose atime, mtime AND ctime
+    # are all older than 3 days. A dtd left open for 5 days on Ix (attached
+    # from the phone, no keystrokes here since Nov 11) lost done.sh, the done
+    # router, enter.sh, form.sh, $DTD_HDR and the hide files, while the files
+    # every repaint reads or rewrites (list.sh, hdrgen, cache) survived -- so
+    # every binding's execute()/transform() pointed at a missing path and did
+    # nothing, silently. Refresh atime only (-a) once an hour: that alone
+    # defeats the cleaner, and mtime-keyed logic (.formexit's 10s window, the
+    # cache watch below) is left untouched. (N) = no error when none match.
+    if (( EPOCHSECONDS - ${last_keepalive:-0} >= 3600 )); then
+      last_keepalive=$EPOCHSECONDS
+      touch -a /tmp/dtd-$DTD_ID.*(N) 2>/dev/null
+    fi
     watch_today="$(date +%Y-%m-%d)"
     # Day rollover while dtd sits open: reset the per-day overlays (mirrors the
     # UI-loop rollover, which can't run behind the blocking fzf) and pull today's
