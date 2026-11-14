@@ -1269,7 +1269,7 @@ print -- "\$EPOCHREALTIME\trouter-resolved\t\$_t_base" >> "${DTD_TIMING:-/dev/nu
 # it knows the detached save will close the card; the trailing transform
 # then drops it client-side as well (2026-11-12 flash fix, same as Enter).
 if [[ "\$_t_base" == "😈 -1g" ]]; then
-  printf 'execute(%s %s %s --detach)+transform(grep -qxF -- %s %s 2>/dev/null && echo exclude)' "$DTD_FORM" "\$_id" "$HOME/i446-monorepo/tools/-1g/-1g-form.py" "\$_id" "$DTD_REMOVED.ids"
+  printf 'execute(%s %s %s --detach)+transform(if grep -qxF -- %s %s 2>/dev/null; then echo exclude; fi)' "$DTD_FORM" "\$_id" "$HOME/i446-monorepo/tools/-1g/-1g-form.py" "\$_id" "$DTD_REMOVED.ids"
 else
 case "\$_t_base" in
   cpap|xk20|xk22|xk26|i444|hiit|新闻|"evening hcmc"|"night hcmc"|${DTD_VAR1N_PAT})
@@ -1759,7 +1759,7 @@ elif [[ -n "\$id" ]]; then
     # see DTD_HIDE_IDS_FILE in the wrapper) drop the row client-side too, so
     # not even fzf's post-execute repaint shows it before the reload lands.
     # A cancelled form wrote nothing, so the grep fails and the row stays.
-    print -rn -- "execute($DTD_FORM \$id \$_form)+transform(grep -qxF -- \$id $DTD_REMOVED.ids 2>/dev/null && echo exclude)"
+    print -rn -- "execute($DTD_FORM \$id \$_form)+transform(if grep -qxF -- \$id $DTD_REMOVED.ids 2>/dev/null; then echo exclude; fi)"
   else
     "$DTD_ENTER" "\$id" >/dev/null 2>&1
   fi

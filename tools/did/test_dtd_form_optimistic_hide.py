@@ -40,9 +40,9 @@ def test_form_wrapper_exports_hide_contract_before_running_the_form():
 def test_both_form_routes_chain_a_conditional_exclude():
     enter = _heredoc("DTD_PICKENTER", "PICKENTEREOF")
     assert ('print -rn -- "execute($DTD_FORM \\$id \\$_form)+transform('
-            'grep -qxF -- \\$id $DTD_REMOVED.ids 2>/dev/null && echo exclude)"') in enter
+            'if grep -qxF -- \\$id $DTD_REMOVED.ids 2>/dev/null; then echo exclude; fi)"') in enter
     done = _heredoc("DTD_DONE_ROUTER", "ROUTEREOF")
-    m = re.search(r"printf 'execute\(%s %s %s --detach\)\+transform\(grep -qxF -- %s %s 2>/dev/null && echo exclude\)' (.*)", done)
+    m = re.search(r"printf 'execute\(%s %s %s --detach\)\+transform\(if grep -qxF -- %s %s 2>/dev/null; then echo exclude; fi\)' (.*)", done)
     assert m, "alt-enter's -1g form route must carry the same conditional exclude"
     assert m.group(1).rstrip().endswith('"\\$_id" "$DTD_REMOVED.ids"')
 

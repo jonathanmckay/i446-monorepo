@@ -93,7 +93,10 @@ def test_prompt_branch_is_unchanged_still_fully_synchronous():
     body = _router_body()
     # 2026-10-02: the action may be prefixed by fzf's instant-hide 'exclude+'
     # via a %s printf slot; the execute(...) itself must stay unchanged.
-    m = re.search(r'printf \'(?:%s)?execute\(([^\']*)\)\'', body)
+    # 2026-11-12: the 😈 -1g form branch earlier in the router also prints an
+    # execute(...)+transform(...) chain; anchor on the '%s' exclude slot that
+    # only the prompt branch carries so this keeps testing the prompt branch.
+    m = re.search(r'printf \'%sexecute\(([^\']*)\)\'', body)
     assert m, "prompt branch must still emit a plain execute(...) action"
     action = m.group(1)
     assert "&" not in action, \

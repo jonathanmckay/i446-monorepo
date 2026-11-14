@@ -474,7 +474,7 @@ def test_pickenter_survey_cards_emit_execute_of_their_form():
             # 2026-11-12: the trailing transform drops the row client-side iff the
             # form recorded its id in $REMOVED.ids (lib/dtd_hide.py); a cancelled
             # form leaves the file untouched, so the grep fails and the row stays.
-            hide = f"+transform(grep -qxF -- {rid} {tmp}/removed.ids 2>/dev/null && echo exclude)"
+            hide = f"+transform(if grep -qxF -- {rid} {tmp}/removed.ids 2>/dev/null; then echo exclude; fi)"
             assert out == f"execute({tmp}/form-stub {rid} {form}){hide}", (rid, out)
             assert _calls(log) == [], "the router must not start the timer itself (the wrapper does)"
         # a plain task still just starts its timer, printing nothing

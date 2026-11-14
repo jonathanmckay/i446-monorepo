@@ -128,7 +128,7 @@ def test_router_always_opens_form_on_1g_card_even_without_prefill():
     # only drops it when the form itself recorded the id in $REMOVED.ids.
     form_branch = branch.split("else")[0]
     assert "%sexecute" not in form_branch and "\\$_ex" not in form_branch, "a cancelled form must keep the row"
-    assert "grep -qxF -- %s %s 2>/dev/null && echo exclude" in form_branch
+    assert "if grep -qxF -- %s %s 2>/dev/null; then echo exclude; fi" in form_branch
     assert '"$DTD_REMOVED.ids"' in form_branch
     # the plain-completion branches are untouched (one execute, one execute-silent)
     assert body.count("printf '%sexecute(") == 1 and body.count("printf '%sexecute-silent(") == 1
