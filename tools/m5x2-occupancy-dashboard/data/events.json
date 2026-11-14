@@ -9068,5 +9068,65 @@
     "unit": "A105",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-14",
+    "effective": "2026-11-25",
+    "kind": "leased",
+    "unit_id": "1152",
+    "prop": "tc68",
+    "unit": "A03",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-14",
+    "effective": "2026-11-27",
+    "kind": "leased",
+    "unit_id": "1372",
+    "prop": "c702",
+    "unit": "F204",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-14",
+    "effective": "2026-11-30",
+    "kind": "leased",
+    "unit_id": "432",
+    "prop": "m221",
+    "unit": "33",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-14",
+    "effective": "2026-11-13",
+    "kind": "moveout",
+    "unit_id": "1303",
+    "prop": "c702",
+    "unit": "C101",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-14",
+    "effective": "2026-11-30",
+    "kind": "leased",
+    "unit_id": "1313",
+    "prop": "c702",
+    "unit": "C203",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-14",
+    "effective": "2026-11-23",
+    "kind": "leased",
+    "unit_id": "1312",
+    "prop": "c702",
+    "unit": "C202",
+    "tenant": null,
+    "baseline": false
   }
 ]
