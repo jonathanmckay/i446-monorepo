@@ -36,7 +36,9 @@ def _stale_mod():
 
 # ── keep-alive in the watcher ────────────────────────────────────────────────
 
-KEEPALIVE = "touch -a /tmp/dtd-$DTD_ID.*(N) 2>/dev/null"
+# the array form: a bare `touch -a glob(N)` with no match runs touch with no
+# args and exits 1 (caught by the functional test below)
+KEEPALIVE = '_ka=(/tmp/dtd-$DTD_ID.*(N)); (( ${#_ka} )) && touch -a "${_ka[@]}" 2>/dev/null'
 
 
 def test_watcher_touches_runtime_files_hourly_access_time_only():
@@ -46,7 +48,7 @@ def test_watcher_touches_runtime_files_hourly_access_time_only():
     assert loop < ka, "the keep-alive must run inside the watcher's main loop"
     gate = DTD[DTD.rindex("if ((", 0, ka):ka]
     assert "last_keepalive" in gate and "3600" in gate, "hourly gate, not every 0.5s tick"
-    assert "touch /tmp/dtd-$DTD_ID" not in DTD, (
+    assert "touch \"${_ka[@]}\"" not in DTD and "touch /tmp/dtd-$DTD_ID" not in DTD, (
         "must be touch -a: bumping mtime would trip mtime-keyed logic (.formexit 10s window)")
 
 
@@ -65,9 +67,12 @@ def test_keepalive_command_advances_atime_and_leaves_mtime(tmp_path):
         st = f.stat()
         assert st.st_atime > time.time() - 60, f
         assert abs(st.st_mtime - old) < 2, f"mtime must be untouched: {f}"
-    # (N): no match is not an error (fresh session before the first file lands)
-    subprocess.run(["zsh", "-c", KEEPALIVE.replace("/tmp/dtd-$DTD_ID.", f"{tmp_path}/none.")],
-                   check=True, timeout=10)
+    # (N) + the array gate: no match prints nothing and creates nothing (a bare
+    # `touch -a glob(N)` would run touch with no args and print its usage).
+    # The `(( 0 )) &&` short-circuit leaves status 1, which the watcher ignores.
+    r = subprocess.run(["zsh", "-c", KEEPALIVE.replace("/tmp/dtd-$DTD_ID.", f"{tmp_path}/none.")],
+                       capture_output=True, text=True, timeout=10)
+    assert r.stderr == "" and not list(tmp_path.glob("none.*"))
 
 
 # ── hdrgen names the cleaned state and the real restart recipe ───────────────

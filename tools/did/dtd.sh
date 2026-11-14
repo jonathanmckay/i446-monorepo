@@ -4045,7 +4045,7 @@ TALLY_PID=$!
     # cache watch below) is left untouched. (N) = no error when none match.
     if (( EPOCHSECONDS - ${last_keepalive:-0} >= 3600 )); then
       last_keepalive=$EPOCHSECONDS
-      touch -a /tmp/dtd-$DTD_ID.*(N) 2>/dev/null
+      _ka=(/tmp/dtd-$DTD_ID.*(N)); (( ${#_ka} )) && touch -a "${_ka[@]}" 2>/dev/null
     fi
     watch_today="$(date +%Y-%m-%d)"
     # Day rollover while dtd sits open: reset the per-day overlays (mirrors the
