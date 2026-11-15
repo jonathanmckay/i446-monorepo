@@ -212,16 +212,145 @@ def build_thread(token, channel, self_id):
         "unread_count": int(channel.get("unread_count", 1)),
     }
 
+# ── Channel mentions (2026-11-15) ─────────────────────────────────────────────
+# Unread @mentions in public channels become ibx cards shaped exactly like a DM
+# thread, so archive / resolve-polling / open-in-browser need no special case
+# and the dtd badge (a count of queue items) includes them. Limits: private
+# channels need groups:read; a mention inside a thread reply is invisible to
+# conversations.history and is missed.
+
+MENTION_SCAN_BUDGET_S = 20
+_member_cache: dict = {}  # token -> (fetched_at, channels)
+
+
+def fetch_member_channels(token, ttl=900):
+    """Public channels JM is a member of, cached per process for ttl seconds.
+    A token without channels:read yields [] (DMs still work), not an error."""
+    hit = _member_cache.get(token)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    out, cursor = [], None
+    try:
+        while True:
+            kwargs = {"types": "public_channel", "exclude_archived": "true", "limit": 200}
+            if cursor:
+                kwargs["cursor"] = cursor
+            data = slack_get(token, "users.conversations", **kwargs)
+            out.extend(data.get("channels", []))
+            cursor = data.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+    except RuntimeError as e:
+        if "missing_scope" not in str(e):
+            raise
+        out = []
+    _member_cache[token] = (time.time(), out)
+    return out
+
+
+def is_mention(msg, self_id):
+    """A message from someone else that notifies JM: @him, or @channel/@here."""
+    if msg.get("type") != "message" or msg.get("user") == self_id:
+        return False
+    if msg.get("subtype") in ("channel_join", "channel_leave"):
+        return False
+    text = msg.get("text", "")
+    return (f"<@{self_id}>" in text
+            or any(k in text for k in ("<!channel>", "<!here>", "<!everyone>")))
+
+
+def build_mention_thread(token, channel, self_id, oldest):
+    """Unread mentions in one channel since `oldest` (epoch), as a thread dict
+    of the shape build_thread returns, or None. History first: most channels
+    have no candidate, so last_read costs a second call only when one does."""
+    import re
+    hist = slack_get(token, "conversations.history", channel=channel["id"],
+                     oldest=f"{float(oldest):.6f}", limit=100)
+    cands = [m for m in hist.get("messages", []) if is_mention(m, self_id)]
+    if not cands:
+        return None
+    info = slack_get(token, "conversations.info", channel=channel["id"])
+    last_read = float(info.get("channel", {}).get("last_read") or 0)
+    cands = [m for m in cands if float(m.get("ts", 0)) > last_read]
+    if not cands:
+        return None
+    formatted = []
+    for m in reversed(cands[:10]):  # API is newest-first
+        ts = float(m.get("ts", 0))
+        text = m.get("text", "").strip() or "[no text]"
+        text = re.sub(r"<@(U[A-Z0-9]+)>",
+                      lambda mt: "@" + get_username(token, mt.group(1)), text)
+        formatted.append({
+            "sender": get_username(token, m.get("user", "")),
+            "time": datetime.fromtimestamp(ts).strftime("%b %d %I:%M%p").lower().lstrip("0"),
+            "text": text, "ts": m.get("ts", "0"),
+        })
+    newest = cands[0]
+    return {
+        "channel_id": channel["id"],
+        "display_name": "#" + channel.get("name", channel["id"]),
+        "is_im": False,
+        "is_mention": True,
+        "messages": formatted,
+        "latest_ts": newest.get("ts", "0"),
+        "reply_thread_ts": newest.get("thread_ts") or newest.get("ts"),
+        "unread_count": len(cands),
+    }
+
+
+def fetch_mention_threads(token, self_id, oldest, budget=MENTION_SCAN_BUDGET_S):
+    """Mention threads across every member channel, scanned in parallel.
+    Raises TimeoutError past `budget` seconds so the caller reports the
+    workspace as not answered instead of publishing an undercount."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+    channels = fetch_member_channels(token)
+    if not channels:
+        return []
+    pool = ThreadPoolExecutor(max_workers=6)
+    try:
+        futs = [pool.submit(build_mention_thread, token, ch, self_id, oldest)
+                for ch in channels]
+        done, pending = wait(futs, timeout=budget)
+        if pending:
+            raise TimeoutError(f"mention scan over {budget}s budget")
+        out = []
+        for f in futs:
+            try:
+                th = f.result()
+            except Exception as e:
+                console.print(f"  [yellow]channel error: {e}[/yellow]")
+                continue
+            if th:
+                out.append(th)
+        return out
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 # ── Actions ───────────────────────────────────────────────────────────────────
 
 def mark_read(token, channel_id, ts):
+    """Mark the channel read up to ts. Forward only: conversations.mark takes
+    any ts, so posting a card's (older) ts after JM read further in the Slack
+    app would turn those messages unread again."""
     try:
+        try:
+            info = slack_get(token, "conversations.info", channel=channel_id)
+            if float(info.get("channel", {}).get("last_read") or 0) >= float(ts):
+                return
+        except Exception:
+            pass
         slack_post(token, "conversations.mark", channel=channel_id, ts=ts)
     except Exception as e:
         console.print(f"[yellow]mark_read failed: {e}[/yellow]")
 
-def send_reply(token, channel_id, text):
-    slack_post(token, "chat.postMessage", channel=channel_id, text=text)
+def send_reply(token, channel_id, text, thread_ts=None):
+    """thread_ts: reply inside that thread (channel-mention cards) instead of
+    posting a new top-level message."""
+    payload = {"channel": channel_id, "text": text}
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    slack_post(token, "chat.postMessage", **payload)
 
 # ── Display ───────────────────────────────────────────────────────────────────
 

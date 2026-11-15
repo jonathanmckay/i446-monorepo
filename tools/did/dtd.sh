@@ -2691,6 +2691,16 @@ for t in unique:
         _em0 = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
         _cut0 = _em0.start() if _em0 else len(display)
         display = display[:_cut0].rstrip() + ' \u2709' + str(_bd['count']) + display[_cut0:]
+    # -1ibx ritual card (2026-11-15): Slack total across the inbox habits
+    # (inbox_counts.card_badge; all comms later). Ritual cards carry no
+    # estimates, so a plain append, like the -1g prefill above.
+    elif is_ritual and _ibx_badges and '-1ibx' in clean.replace('\U0001F608', ' ').split():
+        try:
+            _rb = _ic.card_badge('-1ibx', _ibx_badges)
+        except Exception:
+            _rb = ''
+        if _rb:
+            display = display + ' ' + _rb
 
     # Markdown links (/todo stores URLs as '[(link)](https://…)') collapse to
     # their visible text for layout; the first one becomes an OSC 8 terminal

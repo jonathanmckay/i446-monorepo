@@ -808,7 +808,10 @@ def do_reply(item, reply_text):
         _imsg.reply_imessage(item["_data"]["thread"], reply_text)
     elif t == "slack":
         d = item["_data"]
-        _slack.send_reply(d["token"], d["thread"]["channel_id"], reply_text)
+        # A channel-mention card replies in the mention's thread, never as
+        # a new top-level channel post.
+        _slack.send_reply(d["token"], d["thread"]["channel_id"], reply_text,
+                          thread_ts=d["thread"].get("reply_thread_ts"))
     elif t == "teams":
         chat_id = item["_data"].get("chat_id", "")
         if chat_id and hasattr(_teams, 'reply'):
@@ -837,6 +840,11 @@ def _notify_sent():
 
 def update_last_contact(item):
     """Update d359 last_contact for the sender. Runs in a background thread."""
+    # A channel-mention card's "from" is "#channel": the slug match below
+    # would stamp whichever person file contains that word.
+    if item.get("_data", {}).get("thread", {}).get("is_mention"):
+        return
+
     def _update():
         try:
             sender = item.get("sender", "") or item.get("from", "")
@@ -940,6 +948,8 @@ def do_open(item):
 def ask_claude(item, user_input):
     t = item["type"]
     type_label = {"email": "email", "imsg": "iMessage", "slack": "Slack DM", "outlook": "Outlook email", "teams": "Teams DM"}[t]
+    if t == "slack" and item.get("_data", {}).get("thread", {}).get("is_mention"):
+        type_label = "Slack @mention in a public channel (a reply posts publicly, in that message's thread)"
     prompt = f"""You are a personal assistant for Jonathan McKay.
 Given an inbound {type_label} and a user instruction, respond with JSON only.
 
@@ -1116,6 +1126,12 @@ def fetch_slack():
                         count += 1
                 except Exception as e:
                     console.print(f"  [yellow]channel error: {e}[/yellow]")
+            # Unread channel @mentions (2026-11-15), as ordinary slack cards.
+            # Only the window the queue keeps anyway (_drop_outside_block).
+            oldest = max(_block_window_start() or 0.0, time.time() - 7 * 86400)
+            for thread in _slack.fetch_mention_threads(token, self_id, oldest):
+                items.append(normalize_slack(thread, token, workspace))
+                count += 1
             _chan_flags[f"slack:{workspace}"] = True
             _update_status("Slack", f"✓ {len(items)}")
         except Exception as e:

@@ -646,12 +646,12 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         title = strip_ann(display) or raw
         est, pts = card_points(raw, t.get("labels", []), _ritual_cfg)
         # Inbox badge (2026-11-15): pending-message count on the daily inbox
-        # habits, same snapshots terminal dtd reads. A field of its own: title
+        # habits and the Slack total on the -1ibx ritual card, from the same
+        # snapshots terminal dtd reads. A field of its own: title
         # and raw go back to did-fast and the edit box and must stay clean.
         badge = ""
         if ibx_badges:
-            badge = _inbox_counts.badge_text(
-                ibx_badges.get(_inbox_counts.norm(strip_ann(raw))))
+            badge = _inbox_counts.card_badge(strip_ann(raw), ibx_badges)
         color, dom = color_of(t.get("labels", []), raw)
         out.append({
             "id": tid,

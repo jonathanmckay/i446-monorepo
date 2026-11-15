@@ -123,3 +123,29 @@ def test_prefer_host_beats_a_newer_foreign_snapshot(tmp_path):
     stale = ic.build_snapshot([], {"gmail:m5c7": True}, host="ix-local", now=now - ic.MAX_AGE_S - 5)
     ic.write_snapshot(stale, tmp_path)
     assert ic.read_badges(tmp_path, now=now, prefer_host="ix-local")["ibx m5x2"]["host"] == "straylight"
+
+
+# ── card_badge: habit cards + the -1ibx ritual total (2026-11-15) ────────────
+
+def _b(count, ok=True):
+    return {"count": count, "ok": ok, "ts": 0, "host": "ix"}
+
+
+def test_card_badge_habit_shows_zero():
+    assert ic.card_badge("slack m5x2", {"slack m5x2": _b(0)}) == "\u27090"
+    assert ic.card_badge("Slack - M5x2", {"slack m5x2": _b(3)}) == "\u27093"
+    assert ic.card_badge("slack m5x2", {"slack m5x2": _b(3, ok=False)}) == ""
+    assert ic.card_badge("groceries", {"slack m5x2": _b(3)}) == ""
+
+
+def test_card_badge_ritual_sums_reported_slack_habits():
+    badges = {"slack m5x2": _b(2), "slack i9": _b(1), "ibx m5x2": _b(50)}
+    assert ic.card_badge("\U0001F608 -1ibx", badges) == "\u27093"
+    # a habit no host reports (ix has no github Slack) is left out
+    assert ic.card_badge("\U0001F608 -1ibx", {"slack m5x2": _b(0)}) == "\u27090"
+
+
+def test_card_badge_ritual_blank_on_failed_ping_or_no_slack():
+    assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "slack i9": _b(0, ok=False)}) == ""
+    assert ic.card_badge("-1ibx", {"ibx m5x2": _b(50)}) == ""
+    assert ic.card_badge("-1ibx", {}) == ""
