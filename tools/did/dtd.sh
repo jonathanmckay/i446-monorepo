@@ -3969,14 +3969,39 @@ print -- "\$EPOCHREALTIME\thdr-start\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/nul
 # Builtin reads + expansion (was cat|tr twice = 4 execs; this script runs on
 # every keystroke's result event, so under a Defender exec stall it cost
 # 0.8-1.6s per keypress -- measured 2026-10-03).
-# "footer" mode (2026-10-12): the top line is a plain header,
-# "dtd   N done   N left". done = today's count from the Ix tally
-# ("<pts> 分 · <N> done"), left = every row in the list (not the filtered
-# match count, so typing a query doesn't change it).
+# "footer" mode: the top line (2026-11-15, JM):
+#   "XX tasks ──── dtd ──── XX done, XXXm [XXX]"
+# tasks = every row in the list (not the filtered match count, so typing a
+# query doesn't change it); done / points = today's Ix tally; m = minutes
+# tracked today outside 睡觉. The tally file is "points<TAB>done<TAB>minutes",
+# "-" for a field the server could not work out. Dashes fill the pane; fzf
+# gives the footer FZF_COLUMNS - 3 cells and cuts an over-wide line on the
+# RIGHT, which would eat the points first, so a narrow pane drops the dashes,
+# then " tasks", then the minutes instead. Builtins only.
 if [[ "\$1" == footer ]]; then
   tally=""; [[ -r "$DTD_TALLY" ]] && tally="\$(<"$DTD_TALLY")"
-  done_n="\${\${tally##*· }%% done*}"; [[ "\$done_n" == <-> ]] || done_n="…"
-  printf '\033[1mdtd\033[0m   %s done   %s left' "\$done_n" "\${FZF_TOTAL_COUNT:-0}"
+  parts=("\${(@ps:\t:)tally}")
+  pts="\${parts[1]:-}"; done_n="\${parts[2]:-}"; mins="\${parts[3]:-}"
+  [[ "\$done_n" == <-> ]] || done_n="…"
+  n="\${FZF_TOTAL_COUNT:-0}"
+  left="\$n tasks"
+  tail=""; [[ "\$pts" == <-> ]] && tail=" [\$pts]"
+  right="\$done_n done"; [[ "\$mins" == <-> ]] && right+=", \${mins}m"
+  right+="\$tail"
+  w=\$(( \${FZF_COLUMNS:-\${COLUMNS:-80}} - 3 ))
+  fill=\$(( w - \${#left} - \${#right} - 7 ))   # 7 = two spaces + " dtd "
+  if (( fill >= 2 )); then
+    l=\$(( fill / 2 )); r=\$(( fill - l ))
+    printf '%s %s \033[1mdtd\033[0m %s %s' "\$left" "\${(l:\$l::─:):-}" "\${(l:\$r::─:):-}" "\$right"
+  elif (( \${#left} + \${#right} + 5 <= w )); then
+    printf '%s \033[1mdtd\033[0m %s' "\$left" "\$right"
+  elif (( \${#n} + \${#right} + 5 <= w )); then
+    printf '%s \033[1mdtd\033[0m %s' "\$n" "\$right"
+  elif (( \${#n} + \${#right} + 1 <= w )); then
+    printf '%s %s' "\$n" "\$right"
+  else
+    printf '%s %s done%s' "\$n" "\$done_n" "\$tail"
+  fi
   exit 0
 fi
 ws=""; [[ -r "$DTD_HDR" ]] && ws="\$(<"$DTD_HDR")"; ws="\${ws//\$'\n'/ }"
@@ -4022,11 +4047,12 @@ export TOGGL_MAX_429_DELAY=1
 rm -f "$DTD_PORT"
 # The ticker (dtd-ticker.py: live ▶ timer + active-task lines in the footer) is
 # retired (2026-10-12, "forget about the line at the top"): the footer is the
-# static "dtd   N done   N left" header from $DTD_HDRGEN footer.
+# static "N tasks ── dtd ── N done, Nm [N]" header from $DTD_HDRGEN footer.
 TICKER_PID=""
 
-# Day-tally refresher: pull the single Ix computation (points 分 + tasks done)
-# every 15s into $DTD_TALLY so the header shows today's real totals. It reads
+# Day-tally refresher: pull the single Ix computation (points 分, tasks done,
+# minutes tracked) every 15s into $DTD_TALLY as "points<TAB>done<TAB>minutes"
+# so the header shows today's real totals. It reads
 # from the always-on Ix mobile server (ix:5560/api/summary) rather than
 # recomputing here — the Excel daemon is on Ix and this machine's cache lags.
 # Best-effort; self-exits when the session sentinel is gone.
@@ -4040,7 +4066,9 @@ TICKER_PID=""
         | python3 -c 'import sys,json
 try:
     d=json.load(sys.stdin)
-    if d.get("ok"): print("%s 分 · %s done" % (d.get("points",0), d.get("done",0)))
+    if d.get("ok"):
+        m=d.get("minutes")
+        print("%s\t%s\t%s" % (d.get("points",0), d.get("done",0), "-" if m is None else m))
 except Exception: pass' 2>/dev/null)
     if [[ -n "$t" && "$t" != "$(<"$DTD_TALLY")" ]]; then
       printf '%s' "$t" > "$DTD_TALLY"

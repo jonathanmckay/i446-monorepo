@@ -1346,6 +1346,43 @@ def _todoist_completed_today() -> int:
 
 _summary_lock = threading.Lock()
 
+# Minutes tracked today for the terminal dtd top line (2026-11-15). Read from
+# the day cache the always-on Ix janus rewrites on every Toggl fetch, never
+# from Toggl itself: a live read here would run on every summary recompute
+# (up to ~80/hr on the /me bucket janus shares) and a 429 backoff would hold
+# the summary lock, stalling points and done behind it.
+JANUS_DAY_CACHE = Path.home() / ".cache" / "janus-day-entries.json"
+SLEEP_PROJECT_ID = 108358083   # 睡觉: time asleep is not time worked
+TRACKED_MAX_AGE = 15 * 60      # an older cache means janus is not polling
+
+
+def tracked_minutes(iso: str, now: float | None = None,
+                    path: Path = JANUS_DAY_CACHE) -> int | None:
+    """Minutes on Toggl entries that started on `iso`, outside 睡觉; a running
+    entry counts up to now. None when the cache is missing, stale or has no
+    such day, so the caller shows nothing instead of an old number."""
+    now = time.time() if now is None else now
+    try:
+        if now - path.stat().st_mtime > TRACKED_MAX_AGE:
+            return None
+        entries = json.loads(path.read_text()).get(iso)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    secs = 0.0
+    for e in entries:
+        try:
+            if e.get("project_id") == SLEEP_PROJECT_ID:
+                continue
+            start = _dt.datetime.fromisoformat(e["start_dt"]).timestamp()
+            end = now if e.get("running") else _dt.datetime.fromisoformat(e["end_dt"]).timestamp()
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        secs += max(0.0, end - start)
+    return int(round(secs / 60))
+
+
 def _compute_summary() -> dict:
     """The actual (slow, Excel/Todoist-bound) computation — always runs to
     completion and updates _SUMMARY. Split out of day_summary() so force=True
@@ -1396,6 +1433,9 @@ def _compute_summary() -> dict:
         print("WARN day_summary advanced:", e, file=sys.stderr)
 
     val = {"points": points, "done": done}
+    minutes = tracked_minutes(iso)
+    if minutes is not None:
+        val["minutes"] = minutes
     if ledger_points is not None:
         val["ledger_points"] = ledger_points
     _SUMMARY.update(at=time.time(), val=val)

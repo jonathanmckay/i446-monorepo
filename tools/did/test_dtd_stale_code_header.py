@@ -166,26 +166,67 @@ if __name__ == "__main__":
 # have a header which says dtd, the number of tasks done, the number of tasks
 # left." The ticker's live timer/active-task footer is retired.
 
-def test_footer_is_dtd_done_left(tmp_path):
+# Top line redesign (2026-11-15, JM): "XX tasks ──── dtd ──── XX done, XXXm [XXX]".
+# tasks = rows in the list, done/points = the Ix day tally, m = minutes tracked
+# today outside 睡觉. The tally file is "points<TAB>done<TAB>minutes".
+
+def _visible(s):
+    import re
+    return re.sub(r"\033\[[0-9;]*m", "", s)
+
+
+def test_footer_is_tasks_dtd_done_minutes_points(tmp_path):
     now = time.time()
     out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
-                      dtd_tally="182 分 · 7 done", args=("footer",),
-                      env_extra={"FZF_TOTAL_COUNT": "53", "FZF_MATCH_COUNT": "4"})
-    assert out == "\033[1mdtd\033[0m   7 done   53 left"
+                      dtd_tally="765\t27\t512", args=("footer",),
+                      env_extra={"FZF_TOTAL_COUNT": "38", "FZF_MATCH_COUNT": "4",
+                                 "FZF_COLUMNS": "43"})
+    assert out == "38 tasks ─── \033[1mdtd\033[0m ─── 27 done, 512m [765]"
+    assert len(_visible(out)) == 40      # fzf's footer: columns - 3
+
+
+def test_footer_dashes_fill_a_wide_pane(tmp_path):
+    now = time.time()
+    out = _visible(_run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
+                               dtd_tally="765\t27\t512", args=("footer",),
+                               env_extra={"FZF_TOTAL_COUNT": "38", "FZF_COLUMNS": "100"}))
+    assert len(out) == 97 and out.startswith("38 tasks ──") and out.endswith("── 27 done, 512m [765]")
+    assert " dtd " in out
 
 
 def test_footer_before_first_tally_shows_placeholder(tmp_path):
     now = time.time()
-    out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now, args=("footer",),
-                      env_extra={"FZF_TOTAL_COUNT": "53"})
-    assert out.endswith("… done   53 left")
+    out = _visible(_run_hdrgen(tmp_path, self_mtime=now, live_mtime=now, args=("footer",),
+                               env_extra={"FZF_TOTAL_COUNT": "53", "FZF_COLUMNS": "43"}))
+    assert out.startswith("53 tasks ") and out.endswith(" … done")
+    assert "[" not in out and "m" not in out.split("dtd")[-1].replace("done", "")
+
+
+def test_footer_omits_minutes_when_unknown(tmp_path):
+    now = time.time()
+    out = _visible(_run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
+                               dtd_tally="765\t27\t-", args=("footer",),
+                               env_extra={"FZF_TOTAL_COUNT": "38", "FZF_COLUMNS": "43"}))
+    assert out.endswith(" 27 done [765]") and "m [" not in out
+
+
+def test_footer_narrow_pane_keeps_the_points(tmp_path):
+    """fzf truncates an over-wide footer on the right, which would eat the
+    points first; the line gives up its dashes, then ' tasks', instead."""
+    now = time.time()
+    for cols in ("36", "30", "26"):
+        out = _visible(_run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
+                                   dtd_tally="765\t27\t512", args=("footer",),
+                                   env_extra={"FZF_TOTAL_COUNT": "38", "FZF_COLUMNS": cols}))
+        assert out.endswith("[765]") and out.startswith("38"), (cols, out)
+        assert len(out) <= int(cols) - 3, (cols, out)
 
 
 def test_bottom_line_no_longer_repeats_counts(tmp_path):
     now = time.time()
     out = _run_hdrgen(tmp_path, self_mtime=now, live_mtime=now,
-                      dtd_tally="182 分 · 7 done", env_extra={"FZF_MATCH_COUNT": "4"})
-    assert "left" not in out and "done" not in out
+                      dtd_tally="182\t7\t40", env_extra={"FZF_MATCH_COUNT": "4"})
+    assert "tasks" not in out and "done" not in out
 
 
 def test_ticker_is_not_launched():
