@@ -1999,10 +1999,11 @@ cache_file, done_file, removed_file, today, cols = sys.argv[1:6]
 skipped_file = sys.argv[6] if len(sys.argv) > 6 else ''
 timer_file = sys.argv[7] if len(sys.argv) > 7 else ''
 cols = int(cols)
-# Row numbers (2026-10-24: 'add a display number to every line in dtd so I
-# can reference it from elsewhere'): every row is printed as 'NNN ' + row, so
-# rows are right-justified 4 columns narrower to keep the estimates aligned.
-ROWNUM_W = 4
+# Row codes (2026-11-15, was a row number since 2026-10-24: 'add a display
+# number to every line in dtd so I can reference it from elsewhere'): every
+# row is printed as its two-cell code + space + row, so rows are
+# right-justified 3 columns narrower to keep the estimates aligned.
+ROWNUM_W = 3
 cols = max(20, cols - ROWNUM_W)
 
 with open(cache_file) as f:
@@ -2859,11 +2860,24 @@ for t in unique:
 # N done / N left header.
 _active = running_lines + [l for _, l in sorted(started_lines, key=lambda x: -x[0])]
 _claims = working_lines + claimed_lines
-# Display position, not anything about the task: 1 = top of the unfiltered
-# list. The same order goes to ~/.local/state/jm/dtd-order.json below, so a
-# Claude session can say '/d 5' and mean row 5 (agent_claims.candidates).
-for _rn, l in enumerate(_active + _claims + normal_lines + skipped_lines, 1):
-    print(f'\x1b[2m{_rn:>3}\x1b[0m ' + l)
+# Each row leads with its dtd code (2026-11-15: 'rather than a number, I can
+# refer to each task by its initials'): two letters, or one CJK character,
+# from lib/dtd_codes over the whole cache. A Claude session can say '/d ii'
+# and mean this row (agent_claims.candidates runs the same function on its own
+# copy of the queue, so the code holds across hosts, which a display position
+# never did). The order still goes to ~/.local/state/jm/dtd-order.json below.
+try:
+    import os as _cos, sys as _csys
+    _csys.path.insert(0, _cos.path.expanduser('~/i446-monorepo/lib'))
+    import dtd_codes as _dc
+    _codes = _dc.codes(_dc.queue_tasks(d))
+    _pad = _dc.cell_pad
+except Exception:
+    _codes = {}
+    _pad = lambda c: c
+for l in _active + _claims + normal_lines + skipped_lines:
+    _cd = _codes.get(l.rsplit(chr(9), 1)[-1], '')
+    print('\x1b[2m' + (_pad(_cd) if _cd else '  ') + '\x1b[0m ' + l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
 # order, written only when that order changes, so the report can tell what
 # was on screen when each key was pressed and how far down it was.

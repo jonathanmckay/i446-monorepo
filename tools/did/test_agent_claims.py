@@ -1005,3 +1005,35 @@ def test_pruning_a_rolled_claim_leaves_a_session_that_moved_on(tmp_path, monkeyp
     assert not (tmp_path / "by-session" / "S1.free").exists()
     assert ac.held("S2", tmp_path) == [] and (tmp_path / "by-session" / "S2.free").exists()
     assert retitled == []                                             # S2's claim carries no tmux name
+
+
+# --- dtd codes (2026-11-15) ---------------------------------------------------
+class _NoMatchDid:
+    ANNOT_RE = __import__("re").compile(r"\(\(?\d+\)?\)|\[\d*G?\]|\{\d+\}")
+
+    def match_todoist_task(self, query, tasks):
+        return None
+
+
+CODE_TASKS = [{"id": "6gA3", "content": "ibx i9 (4) [20]"},
+              {"id": "6gA4", "content": "ibx m5x2 (4) [15]"},
+              {"id": "6gA5", "content": "0t (3) [10]"},
+              {"id": "6gA6", "content": "wiki index (5) [5]"},
+              {"id": "6hB1", "content": "fix claiming bug [2]"}]
+
+
+def test_a_dtd_code_claims_the_row_that_shows_it():
+    """`/d ii` is the ibx i9 card (its code), not `wiki index`, the shortest
+    name that happens to contain "ii"."""
+    df = _NoMatchDid()
+    assert [t["id"] for t in ac.candidates("ii", CODE_TASKS, df)] == ["6gA3"]
+    assert [t["id"] for t in ac.candidates("FC", CODE_TASKS, df)] == ["6hB1"]
+    assert [t["id"] for t in ac.candidates("0t", CODE_TASKS, df)] == ["6gA5"]   # a 2-char name is its own code
+
+
+def test_a_query_that_is_no_code_still_matches_by_name():
+    df = _NoMatchDid()
+    assert [t["id"] for t in ac.candidates("zz", CODE_TASKS, df)] == []          # a free code names nothing
+    assert [t["id"] for t in ac.candidates("claiming", CODE_TASKS, df)] == ["6hB1"]
+    assert [t["id"] for t in ac.candidates("ibx m5x2", CODE_TASKS, df)] == ["6gA4"]
+

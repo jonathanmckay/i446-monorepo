@@ -644,6 +644,14 @@ def all_tasks(tq: dict) -> list[dict]:
     return out
 
 
+def _dtd_codes():
+    lib = str(Path.home() / "i446-monorepo" / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import dtd_codes
+    return dtd_codes
+
+
 DTD_ORDER_FILE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "jm" / "dtd-order.json"
 ROW_MAX_AGE = 6 * 3600   # an older render is not what JM is looking at
 
@@ -674,6 +682,14 @@ def candidates(query: str, tasks: list[dict], df) -> list[dict]:
     for t in tasks:
         if str(t["id"]).lower() == q:
             return [t]
+    # A dtd code (2026-11-15: the two letters dtd leads each row with, in
+    # place of the row number). Computed from the queue alone (lib/dtd_codes),
+    # so it means the same task here as on the dtd that drew it, whichever
+    # host that is. Before name matching: `ii` is the ibx i9 card, not the
+    # shortest name containing "ii". A two-character card name is its own code.
+    tid = _dtd_codes().resolve(q, tasks)
+    if tid:
+        return [t for t in tasks if str(t["id"]) == tid]
     # Hyphens and spaces are one separator (2026-11-01: `/d 1-i446`, the
     # skill's name, missed the `1 i446` card and substring-matched
     # `1-i446 #14: ...` instead).

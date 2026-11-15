@@ -80,7 +80,7 @@ def _run_listgen(tmp, cache_obj, timer_content):
          "2026-07-19", "120", skipped, timer, view],
         capture_output=True, text=True)
     assert r.returncode == 0, f"list-gen crashed: {r.stderr}"
-    return re.sub(r"^\x1b\[2m *\d+\x1b\[0m ", "", r.stdout, flags=re.M)  # drop the row number (2026-10-24)
+    return re.sub(r"^\x1b\[2m[^\x1b]*\x1b\[0m ", "", r.stdout, flags=re.M)  # drop the row code (2026-11-15)
 
 
 CACHE = {
