@@ -2404,7 +2404,11 @@ try:
     _agent_ids = {i for i, r in _claims.items() if r['working']}
     _claim_ids = set(_claims.keys())
     _done_ids = {i for i, r in _claims.items() if r.get('done')}
-    _claim_pane = {i: str(r['pane']) for i, r in _claims.items() if r.get('pane') is not None}
+    # The task's tab initial (title_tiers, 2026-11-14) leads the row when the
+    # claim carries one, so the dtd row and the cmux tab show the same glyph;
+    # the cmux pane number is the fallback.
+    _claim_pane = {i: (r.get('init') or str(r['pane'])) for i, r in _claims.items()
+                   if r.get('init') or r.get('pane') is not None}
 except Exception:
     pass
 AGENT_GREY = '\x1b[38;2;110;110;110m'

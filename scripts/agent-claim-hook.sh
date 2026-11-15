@@ -46,6 +46,22 @@ if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]
       || "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*\[[0-9]+\][[:space:]]*"' ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
 fi
+# Auto-claim (2026-11-14): a session's FIRST ordinary prompt is matched to a dtd
+# task without /d (agent_claims.autoclaim: one Haiku call, match-only, never
+# creates). Interactive cc sessions only: CC_SESSION is set by claude-tracked, so
+# the headless `claude -p` callers (ibx wrappers, triage, 0t, wakeup) spawning
+# fresh sids all day never reach it. A `claude -p` nested inside a session
+# inherits the parent's CLAUDE_CODE_SESSION_ID, which then differs from its own
+# stdin sid: skipped too. Once per session (python writes the .auto marker even
+# when nothing matches). A `/` command, a <command-…> wrapper, or a bare [N] is
+# never a first prompt worth matching, so those cost nothing here.
+if [[ "$1" == working && -n "${CC_SESSION:-}" && -z "${DTD_NOTE_CHILD:-}" && -n "$sid" \
+      && ( -z "${CLAUDE_CODE_SESSION_ID:-}" || "$CLAUDE_CODE_SESSION_ID" == "$sid" ) \
+      && ! -f "$D/by-session/$sid" && ! -f "$D/by-session/$sid.auto" \
+      && "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*([^"[:space:]])' \
+      && "${match[1]}" != [/\<\[] ]]; then
+  print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" autoclaim 2>/dev/null
+fi
 zmodload zsh/datetime zsh/files 2>/dev/null
 AGENT_STALE_S=7200
 # In-flight subagents of this session: "<agent_id> <epoch>" per line. Kept

@@ -788,3 +788,66 @@ def test_stop_hook_launches_note_only_for_claimed_sessions():
     src = HOOK.read_text()
     assert 'agent_claims.py" note' in src and "DTD_NOTE_CHILD" in src
     assert src.index('agent_claims.py" note') < src.index('[[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0')
+
+
+# ── auto-claim (2026-11-14): the first ordinary prompt matches a dtd task ──
+
+def _auto(prompt, session="S9", **extra):
+    return ac.autoclaim(json.dumps({"session_id": session, "prompt": prompt, **extra}),
+                        compute=extra.pop("_compute", None))
+
+
+@pytest.fixture
+def auto(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "_task_queue", lambda: {"today": [TASK, {"id": "T2", "content": "source review"}]})
+    monkeypatch.setattr(ac, "_retitle", lambda s: None)
+    return hooked
+
+
+def test_autoclaim_matches_first_prompt(auto, monkeypatch):
+    monkeypatch.setattr(ac, "_haiku_match", lambda p, c: "T1")
+    out = _auto("let's build the source logging adapter")
+    assert "auto-claimed: source logging" in out and "/d off" in out
+    assert (auto / "by-session" / "S9").read_text().strip() == "T1"
+    assert (auto / "by-session" / "S9.auto").exists()
+
+
+def test_autoclaim_runs_once_and_never_creates(auto, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ac, "_haiku_match", lambda p, c: calls.append(p) or None)
+    monkeypatch.setattr(ac, "new_task", lambda c: pytest.fail("autoclaim must not create tasks"))
+    assert _auto("how long does coffee stay warm") == ""
+    assert (auto / "by-session" / "S9.auto").exists() and not (auto / "by-session" / "S9").exists()
+    # The marker stops a second attempt even when Haiku would now match.
+    monkeypatch.setattr(ac, "_haiku_match", lambda p, c: "T1")
+    assert _auto("now the source logging adapter") == ""
+    assert calls == ["how long does coffee stay warm"]
+
+
+def test_autoclaim_skips_commands_values_claimed_and_forks(auto, monkeypatch, tmp_path):
+    monkeypatch.setattr(ac, "_haiku_match", lambda p, c: "T1")
+    assert _auto("/do source logging") == ""            # a command is never a first prompt
+    assert _auto("[40]") == ""
+    assert not (auto / "by-session" / "S9.auto").exists()
+    _fast("/d source review", session="S8")            # already holds a claim: untouched
+    assert _auto("source logging please", session="S8") == ""
+    assert (auto / "by-session" / "S8").read_text().strip() == "T2"
+    tr = tmp_path / "fork.jsonl"                        # a fork carries the whole thread
+    tr.write_text('{"type":"user","message":{"content":"a"}}\n{"type":"assistant"}\n'
+                  '{"type":"user","message":{"content":"b"}}\n')
+    assert _auto("continue", session="S7", transcript_path=str(tr)) == ""
+    assert (auto / "by-session" / "S7.auto").exists() and not (auto / "by-session" / "S7").exists()
+    assert ac._transcript_user_turns(str(tr)) == 2
+    fresh = tmp_path / "fresh.jsonl"
+    fresh.write_text('{"type":"user","message":{"content":"first"}}\n')
+    assert "auto-claimed" in _auto("source logging adapter", session="S6", transcript_path=str(fresh))
+
+
+def test_zsh_hook_autoclaim_gate_is_interactive_only_and_not_an_alternation():
+    """The prefilter runs python for a first prompt only under CC_SESSION (set by
+    claude-tracked), never for headless `claude -p`, and is not written as a
+    third /(d|claim|…) alternation (test_hook_prefilter_lists_exactly_the_skill_claims)."""
+    src = HOOK.read_text()
+    assert 'CC_SESSION' in src and 'agent_claims.py" autoclaim' in src
+    assert '"$D/by-session/$sid.auto"' in src
+    assert len(_hook_alternations()) == 2

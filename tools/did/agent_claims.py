@@ -38,6 +38,7 @@ import importlib.util
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -634,6 +635,7 @@ def hook(payload: str) -> str:
             return ""
         rec = claim(cands[0], session)
         push()
+        _retitle(session)
         tail = ("the skill releases the claim when it closes the card." if sk.group(1) in SKILL_RELEASES
                 else "it has a manual part: leave the card open and the claim held; JM completes it in dtd.")
         return f"[claim hook] 😈 claimed: {rec['task']} (id {rec['task_id']}) for /{sk.group(1)}; {tail}"
@@ -683,6 +685,7 @@ def hook(payload: str) -> str:
             return f"[claim hook] couldn't create {name!r} in Todoist ({e}); nothing claimed."
         rec = claim(task, session)
         push()
+        _retitle(session)
         return (f"[claim hook] created and 😈 claimed: {rec['task']} (id {rec['task_id']}). "
                 "Already done; don't create or claim it again.")
     if len(cands) > 1:
@@ -690,7 +693,135 @@ def hook(payload: str) -> str:
         return f"[claim hook] ambiguous, nothing claimed. Candidates: {opts}"
     rec = claim(cands[0], session)
     push()
+    _retitle(session)
     return f"[claim hook] 😈 claimed: {rec['task']} (id {rec['task_id']}). Already done; don't run agent_claims.py claim again."
+
+
+# --- auto-claim (2026-11-14) -------------------------------------------------
+# "using /d for linking chat sessions to tasks ... seems pretty manual": a
+# session's FIRST ordinary prompt is matched to a dtd task by Haiku and claimed,
+# so /d becomes the override for a wrong guess rather than the ritual. Match
+# only, never create: a first prompt is often a question, and a wrong new
+# Todoist task costs more than a missed claim (JM still has `/d new`). The
+# zsh hook gates it to interactive cc sessions (CC_SESSION) and runs it once
+# per session: the .auto marker is written FIRST, so a Haiku failure or a
+# no-match never retries on the next prompt.
+AUTOCLAIM_PROMPT_MAX = 600
+AUTOCLAIM_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _auto_marker(session: str, root: Path) -> Path:
+    return root / "by-session" / f"{session}.auto"
+
+
+def _transcript_user_turns(path: str, limit: int = 3) -> int:
+    """Human user turns already in the transcript, capped at `limit`. A fork
+    (--fork-session) or an in-session /resume carries the whole conversation
+    under a new sid: its first prompt here is mid-thread, not a new one."""
+    n = 0
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                if b'"type":"user"' in line and b'"tool_result"' not in line:
+                    n += 1
+                    if n >= limit:
+                        break
+    except OSError:
+        pass
+    return n
+
+
+def _task_queue() -> dict:
+    """dtd's task cache, read straight from the file: importing did-fast costs
+    ~1 s cold, too much for a synchronous UserPromptSubmit hook."""
+    sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+    import state_paths
+    try:
+        return json.loads(Path(state_paths.TASK_QUEUE).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _haiku_match(prompt: str, cands: list[dict]) -> str | None:
+    """The id of the one candidate this prompt is clearly work on, else None.
+    No retries and a 6 s cap: the user's prompt waits on this call."""
+    try:
+        import anthropic
+        spec = importlib.util.spec_from_file_location("dtd_shorten_for_claims",
+                                                      Path(__file__).resolve().parent / "shorten.py")
+        sh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sh)
+        key = sh._api_key()
+        client = anthropic.Anthropic(api_key=key, max_retries=0, timeout=6) if key \
+            else anthropic.Anthropic(max_retries=0, timeout=6)
+        menu = "\n".join(f"{t['id']}: {t.get('content', '')}" for t in cands)
+        resp = client.messages.create(
+            model=AUTOCLAIM_MODEL, max_tokens=60,
+            messages=[{"role": "user", "content": (
+                "A Claude Code session just received its first prompt. Below is the user's "
+                "open task list (id: task). If the prompt is clearly the user starting work on "
+                "exactly one of these tasks (same deliverable, not merely the same topic), "
+                "answer {\"match\": \"<id>\"}; otherwise answer {\"match\": null}. Questions, "
+                "chat, and one-off lookups are null. JSON only.\n\n"
+                f"Prompt:\n{prompt}\n\nTasks:\n{menu}")}],
+        )
+        text = resp.content[0].text.strip()
+        m = __import__("re").search(r"\{.*\}", text, __import__("re").S)
+        tid = json.loads(m.group(0)).get("match") if m else None
+        return str(tid) if tid else None
+    except Exception:
+        return None
+
+
+def autoclaim(payload: str, compute=None) -> str:
+    """UserPromptSubmit: match this session's first prompt to a dtd task and
+    claim it. Returns the context line for the model ('' = nothing claimed)."""
+    try:
+        d = json.loads(payload)
+    except ValueError:
+        return ""
+    session = d.get("session_id") or ""
+    prompt = _unwrap_command(d.get("prompt") or "").strip()
+    if not session or not prompt or prompt.startswith("/") or VALUE_RE.match(prompt):
+        return ""
+    root = CLAIMS_DIR
+    if held(session, root):
+        return ""
+    marker = _auto_marker(session, root)
+    if marker.exists():
+        return ""
+    _write(marker, f"{int(time.time())}\n")
+    tp = d.get("transcript_path") or ""
+    if tp and _transcript_user_turns(tp) > 1:
+        return ""
+    tq = _task_queue()
+    cands = surfaced_tasks(tq) or all_tasks(tq)
+    cands = [t for t in cands if not str(t.get("content", "")).lstrip().startswith("😈")]
+    if not cands:
+        return ""
+    tid = (compute or _haiku_match)(prompt[:AUTOCLAIM_PROMPT_MAX], cands[:BARE_D_MAX])
+    task = next((t for t in cands if str(t.get("id")) == str(tid)), None) if tid else None
+    if not task:
+        return ""
+    rec = claim(task, session)
+    push()
+    _retitle(session)
+    return (f"[claim hook] 😈 auto-claimed: {rec['task']} (id {rec['task_id']}) from this first "
+            "prompt. Wrong task? `/d off` or `/d <task>`; otherwise nothing to do.")
+
+
+def _retitle(session: str) -> None:
+    """Push the claimed task's tiers onto the tab (tools/cs/title_tiers.py:
+    "<initial> <short>" on tmux @tab / the cmux tab), generating a missing
+    initial. Detached: the hook returns at once."""
+    if not session:
+        return
+    try:
+        subprocess.Popen(["python3", str(Path.home() / "i446-monorepo" / "tools" / "cs" / "title_tiers.py"),
+                          "apply", session, "--generate"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
 
 
 def main(argv: list[str]) -> int:
@@ -703,6 +834,11 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "hook":
         out = hook(sys.stdin.read())
+        if out:
+            print(out)
+        return 0
+    if cmd == "autoclaim":
+        out = autoclaim(sys.stdin.read())
         if out:
             print(out)
         return 0
@@ -739,6 +875,7 @@ def main(argv: list[str]) -> int:
     if cmd == "new" and rest:
         rec = claim(new_task(rest), session)
         push()
+        _retitle(session)
         print(json.dumps({"ok": True, **rec}, ensure_ascii=False))
         return 0
     if cmd != "claim" or not rest:
@@ -757,6 +894,7 @@ def main(argv: list[str]) -> int:
         return 3
     rec = claim(cands[0], session, also=also)
     push()
+    _retitle(session)
     print(json.dumps({"ok": True, **rec}, ensure_ascii=False))
     return 0
 

@@ -17,6 +17,11 @@ if [ -n "$surf" ] && [ -n "$sid0" ]; then
   mkdir -p ~/.local/state/jm/surface-sessions
   printf '%s\n' "$sid0" > ~/.local/state/jm/surface-sessions/"$surf"
 fi
+# Tab tiers (2026-11-14): "<initial> <short>" onto the tmux @tab (→ cmux tab text
+# through set-titles) or the local cmux tab, from the claimed dtd task, else the
+# session title. Detached, and BEFORE the exits below: a claimed session that
+# has no ai-title yet (first prompt, a /d-only session) must still get its tab.
+[ -n "$sid0" ] && (nohup python3 ~/i446-monorepo/tools/cs/title_tiers.py apply "$sid0" --generate >/dev/null 2>&1 &)
 [ -n "$tp" ] && [ -f "$tp" ] || exit 0
 title=$(python3 - "$tp" <<'PY' 2>/dev/null
 import sys, json

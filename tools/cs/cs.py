@@ -713,13 +713,30 @@ def cmd_retitle():
         subprocess.run(['cmux', 'rename-tab', '--surface', sf['id'], '--', title], capture_output=True,
                        timeout=2, env={**os.environ, 'CMUX_QUIET': '1'})
         print(f'{title.split()[0]}\t{sf["id"]}\t{title}')
+    tt = None
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location('title_tiers', Path(__file__).resolve().parent / 'title_tiers.py')
+        tt = _ilu.module_from_spec(_spec); _spec.loader.exec_module(tt)
+    except Exception:
+        tt = None
     for n, sid, sfid, cur in cmux_panes():
         f = titles / sid
         base = f.read_text().strip() if f.exists() else (REMOTE_TITLES.get(sid) or cur)
         base = NUM_PREFIX_RE.sub('', base).strip()
-        if not base:
+        # Tiers (2026-11-14): a tab is ~2 characters wide, so the claimed task's
+        # initial leads and its short name follows ("<init> <short>"); the pane
+        # number stays in `cs ls` and dtd. Sessions without tiers keep 'N · title'.
+        text = ''
+        if tt is not None:
+            try:
+                t = tt.tiers(sid)
+                text = tt.tab_text(t) if (t.get('init') or t.get('source') == 'task') else ''
+            except Exception:
+                text = ''
+        if not text and not base:
             continue
-        title = f'{n} · {base}'
+        title = text or f'{n} · {base}'
         subprocess.run(['cmux', 'rename-tab', '--surface', sfid, '--', title], capture_output=True,
                        timeout=2, env={**os.environ, 'CMUX_QUIET': '1'})
         print(f'{n}\t{sfid}\t{title}')

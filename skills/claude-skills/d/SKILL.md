@@ -39,6 +39,13 @@ context starting with `[claim hook]`:
 
 - `😈 claimed: <task>` or `created and 😈 claimed: <task>` → done. Do NOT run
   `agent_claims.py claim`/`new` again or create the task again.
+- `😈 auto-claimed: <task> ... from this first prompt` (2026-11-14) → the hook
+  matched the session's first ordinary prompt to a dtd task on its own
+  (`agent_claims.py autoclaim`, match-only, once per session, interactive cc
+  sessions only). Nothing to do; just work. If the match is wrong, `/d off` or
+  `/d <task>`. The claim also sets the tab title: initial on the cmux tab,
+  short name on the tmux title, full name in the statusline
+  (`tools/cs/title_tiers.py`).
 - `released ...` → done; just confirm.
 - `ambiguous ... Candidates: <id>: <task>; ...` → show them numbered, ask which,
   then run `python3 ~/i446-monorepo/tools/did/agent_claims.py claim <id>`.
