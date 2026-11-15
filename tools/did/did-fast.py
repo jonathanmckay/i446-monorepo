@@ -122,6 +122,10 @@ ALIASES = {"skin2skin": "问学", "stats m5x2": "stats m5x2",
            # "night hcmc" (registry alias since 2026-07-25 — mirrored here so
            # DIRECT did-fast invocations, e.g. dtd's worker, route it too).
            "evening hcmc": "night hcmc",
+           # The daily card was renamed "m5x2 stats and dashboard" on 11-10;
+           # the 0n header stayed "m5x2 stats". Unaliased, the card closed as
+           # a one-off: 0n!AC blank, [15] to 0分!T (bug 2026-11-15).
+           "m5x2 stats and dashboard": "m5x2 stats",
            # "hit" is the habitual shorthand for hiit; without this it fell
            # to needs_agent (or, with @hcb, the variable path at 1x into
            # 0分!W) instead of 0n!AE, which hcbi!Y credits at 2x

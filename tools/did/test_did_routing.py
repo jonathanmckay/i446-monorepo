@@ -363,6 +363,24 @@ class AliasTests(unittest.TestCase):
         self.assertEqual(out["step"], "1n+")
         self.assertEqual(out.get("neon_col"), "AI")
 
+    def test_m5x2_stats_and_dashboard_routes_to_the_0n_habit(self):
+        """Bug 2026-11-15: the daily card was renamed "m5x2 stats and
+        dashboard" on 11-10 with no alias, so closing it routed step=unknown:
+        0n!AC stayed blank (an all-colors miss every day) and its [15] went
+        to 0分!T as a one-off instead of the m5 column via the habit."""
+        import subprocess
+        cfg = json.loads(
+            (_HERE.parent.parent / "config" / "tasks.json").read_text())
+        self.assertIn("m5x2 stats and dashboard",
+                      cfg["habits"]["m5x2-stats"].get("aliases", []))
+        r = subprocess.run(
+            [sys.executable, str(_HERE / "route.py"), "m5x2 stats and dashboard"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["step"], "0n")
+        self.assertEqual(out.get("neon_col"), "AC")
+
     def test_evening_hcmc_routes_to_0n_via_route_py(self):
         """End-to-end through route.py against the live registry."""
         import subprocess

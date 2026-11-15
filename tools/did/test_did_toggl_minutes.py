@@ -178,3 +178,11 @@ def test_evening_hcmc_alias_and_variable_minutes(df):
     assert items[0].name == "night hcmc" and items[0].time_value == 35
     r = df.route_items(items, {"0n": {"night hcmc": 16}, "1n": {}}, TQ)[0]
     assert r.step == "0n" and r.write_value == 35
+
+
+def test_m5x2_stats_and_dashboard_card_name_resolves_to_the_habit(df):
+    """Bug 2026-11-15: dtd's worker calls did-fast directly with the card's
+    clean name (annotations are stripped by the caller, as for every card);
+    "m5x2 stats and dashboard" must resolve to the 0n header."""
+    assert df.ALIASES.get("m5x2 stats and dashboard") == "m5x2 stats"
+    assert [i.name for i in df.parse_input("m5x2 stats and dashboard")] == ["m5x2 stats"]
