@@ -192,7 +192,34 @@ def claim_record(sid: str) -> dict | None:
             rec.setdefault("task_id", tids[0])
             rec["_dir"] = str(d)
             return rec
-    return None
+    # Agent-done fallback (bug 2026-11-15): `agent_claims.py done` takes the id
+    # out of by-session so later hooks cannot flip its state back, but the
+    # session still stands for that task until JM closes it, and dtd keeps
+    # leading the ✅ row with the claim's initial. Without this the tab fell
+    # to ❔ the moment the agent marked its work done. Newest done claim of
+    # this session, inside the window dtd itself keeps the row (RELEASED_TTL).
+    import time
+    best, best_ts = None, 0
+    for d in ac._dirs(ac.CLAIMS_DIR):
+        try:
+            files = [f for f in d.glob("*.json") if f.name != "panes.json"]
+        except OSError:
+            continue
+        for f in files:
+            rec = _json(f)
+            if str(rec.get("session", "")) != sid:
+                continue
+            try:
+                state, ts = (d / f"{f.stem}.state").read_text().split()[:2]
+                ts = int(ts)
+            except (OSError, ValueError):
+                continue
+            if state != "done" or time.time() - ts > ac.RELEASED_TTL or ts <= best_ts:
+                continue
+            rec.setdefault("task_id", f.stem)
+            rec["_dir"] = str(d)
+            best, best_ts = rec, ts
+    return best
 
 
 def tiers(sid: str, generate: bool = False, title: str = "") -> dict:

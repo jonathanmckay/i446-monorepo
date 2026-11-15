@@ -71,3 +71,50 @@ def test_free_session_reads_tilde_tilde(tmp_path, monkeypatch):
     t = tt.tiers("S1")
     assert t["source"] == "free" and tt.tab_text(t) == tt.FREE_INIT == "~~"
     assert tt.tiers("S2")["init"] is None   # no title, no claim, not free
+
+
+# ── agent-done task keeps its initial on the tab (bug 2026-11-15) ────────────
+# `agent_claims.py done` drops the id from by-session/<sid> so later hooks do
+# not flip the state back; claim_record read only that index, so the tab fell
+# to ❔ while dtd still led the ✅ row with the claim's 🔔.
+
+def _claims_store(tmp_path, monkeypatch):
+    ac = tt._claims()   # _claims() loads a fresh module per call: pin one
+    monkeypatch.setattr(ac, "CLAIMS_DIR", tmp_path)
+    monkeypatch.setattr(tt, "_claims", lambda: ac)
+    (tmp_path / "by-session").mkdir()
+    return ac
+
+
+def _claim(root, tid, sid, state, ts, init="🔔"):
+    (root / f"{tid}.json").write_text(json.dumps(
+        {"task_id": tid, "task": "upgrade slack tasks [10]", "session": sid, "init": init}))
+    (root / f"{tid}.state").write_text(f"{state} {int(ts)}\n")
+
+
+def test_done_task_keeps_its_initial_on_the_tab(tmp_path, monkeypatch):
+    import time
+    _claims_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(tt, "TASK_SHORTS", tmp_path / "shorts.json")
+    _claim(tmp_path, "T1", "S1", "done", time.time())
+    t = tt.tiers("S1")
+    assert t["source"] == "task" and t["init"] == "🔔" and t["task_id"] == "T1"
+
+
+def test_done_fallback_ignores_released_other_sessions_and_expired(tmp_path, monkeypatch):
+    import time
+    ac = _claims_store(tmp_path, monkeypatch)
+    now = time.time()
+    _claim(tmp_path, "T1", "S1", "released", now)            # handed back to JM
+    _claim(tmp_path, "T2", "S2", "done", now)                # another session's
+    _claim(tmp_path, "T3", "S1", "done", now - ac.RELEASED_TTL - 60)  # dtd dropped it
+    assert tt.claim_record("S1") is None
+
+
+def test_held_task_wins_over_an_older_done_one(tmp_path, monkeypatch):
+    import time
+    _claims_store(tmp_path, monkeypatch)
+    _claim(tmp_path, "T1", "S1", "done", time.time(), init="🔔")
+    _claim(tmp_path, "T2", "S1", "working", time.time(), init="ab")
+    (tmp_path / "by-session" / "S1").write_text("T2\n")
+    assert tt.claim_record("S1")["task_id"] == "T2"
