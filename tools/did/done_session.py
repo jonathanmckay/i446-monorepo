@@ -225,6 +225,33 @@ def defer_days(tid: str, days: int, run=subprocess.run) -> tuple[bool, str]:
     return True, f"→ {out.get('target_date', '?')}"
 
 
+FIN_CLOSE_DIR = STATE_DIR / "fin-close"
+
+
+def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
+    """/fin closes the cmux tab (2026-11-14): when this thread's tab is driven from another
+    host (claude-tracked exports CC_ORIGIN into the tmux session), leave fin-close/<tmux
+    session> = <session id>. The Ix launcher reads it when claude exits (JM's `/exit`) and
+    lets the tmux session end; the Straylight launcher then closes the tab or starts a fresh
+    thread in it (see claude-tracked, after_ix_exit). Local/phone sessions: nothing."""
+    origin = (env.get("CC_ORIGIN") or "").lower()
+    if not origin or origin == socket.gethostname().split(".")[0].lower():
+        return False
+    pane = env.get("TMUX_PANE")
+    if not pane or not env.get("TMUX"):
+        return False
+    try:
+        name = run(["tmux", "display-message", "-p", "-t", pane, "#S"],
+                   capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return False
+    if not name:
+        return False
+    FIN_CLOSE_DIR.mkdir(parents=True, exist_ok=True)
+    (FIN_CLOSE_DIR / name).write_text(session + "\n")
+    return True
+
+
 def main() -> int:
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     if not session:
@@ -268,11 +295,13 @@ def main() -> int:
             all_ok &= ok
             report.append({"id": tid, "task": content, "ok": ok, "result": display,
                            "timer": timer_line(p.stdout), "report": finals.get(tid)})
+        tab_close = False
         if all_ok:
             ac.set_free(session)   # tab reads ~~ until something new starts
             ac._retitle(session)
-        print(json.dumps({"status": "done" if all_ok else "failed", "tasks": report},
-                         ensure_ascii=False, indent=2))
+            tab_close = mark_tab_close(session)
+        print(json.dumps({"status": "done" if all_ok else "failed", "tasks": report,
+                          "tab_close": tab_close}, ensure_ascii=False, indent=2))
         return 0 if all_ok else 2
     kind, val = when
     if kind == "time":
@@ -294,10 +323,13 @@ def main() -> int:
                        "timer": stop_timer_if(content, tid=tid, task_for_entry=ac.task_for_entry) if ok else None,
                        "report": finals.get(tid)})
     status = ("deferred" if kind == "days" else "delayed") if all_ok else "failed"
+    tab_close = False
     if all_ok:
         ac.set_free(session)
         ac._retitle(session)
-    print(json.dumps({"status": status, "tasks": report}, ensure_ascii=False, indent=2))
+        tab_close = mark_tab_close(session)
+    print(json.dumps({"status": status, "tasks": report, "tab_close": tab_close},
+                     ensure_ascii=False, indent=2))
     return 0 if all_ok else 2
 
 

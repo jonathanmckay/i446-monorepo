@@ -87,12 +87,18 @@ per task, exactly this shape:
 - A `report` with `error`, or missing → print the block with `n/a` fields; never
   skip the report or stop on it.
 
-## 2. Clear
+## 2. Exit or clear
 
-A skill cannot run /clear, and typing it into this session's own terminal is
-blocked by the auto-mode classifier (tmux self-drive). End with exactly:
+A skill cannot run /exit or /clear, and typing them into this session's own
+terminal is blocked by the auto-mode classifier (tmux self-drive). After the
+report, end with exactly one of:
 
-`→ /clear`
+- `→ /exit` when the JSON has `"tab_close": true` (2026-11-14: this thread's
+  cmux tab is driven from Straylight). The Ix launcher sees /fin's marker and
+  lets the tmux session end; Straylight then closes the tab if the workspace
+  has another Claude tab, or starts a fresh thread in it if it was the only one
+  (JM: one tab per window by default, more only for active threads).
+- `→ /clear` otherwise (a local or phone session keeps its tab).
 
 so JM can type it. The transcript stays in ~/.claude/projects/ and /resume
 brings it back.
