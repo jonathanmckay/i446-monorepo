@@ -47,8 +47,9 @@ def test_row_date_follows_daytime_not_a_different_machine_clock(monkeypatch):
 
     captured = {}
 
-    def fake_append(sheet, col, *, date=None, value=None):
+    def fake_append(sheet, col, *, date=None, value=None, src=None):
         captured["date"] = date
+        captured["src"] = src
         return {"ok": True, "value": "1"}
 
     monkeypatch.setattr(mod.excel, "append", fake_append)
@@ -56,6 +57,9 @@ def test_row_date_follows_daytime_not_a_different_machine_clock(monkeypatch):
 
     rc = mod.main()
     assert rc == 0
+    # Every /s write is labelled in the neon ledger (2026-11-14: 42 of
+    # November's 68 src=null entries were this writer).
+    assert captured["src"] == "s +1"
     assert captured["date"] == "3/7", (
         f"expected the row date to come from the frozen daytime.local_now() "
         f"(3/7), got {captured['date']!r} — this means the write is reading "
