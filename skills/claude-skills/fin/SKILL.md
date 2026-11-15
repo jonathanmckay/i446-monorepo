@@ -46,10 +46,10 @@ Read its JSON:
 - `"status": "failed"` → show `error` or each failing task's `result` and
   stop. Do NOT tell JM to clear; the context is needed to fix it. A time that
   has already passed today is a failure, not a no-op.
-- `"status": "no-claim"` → this session never claimed a task. Bare /fin:
-  invoke `/did` with no arguments (stops the running timer and completes the
-  task its description names), then step 2. With an argument: say there is
-  nothing to delay and stop; /defer handles a named task.
+- `"status": "no-claim"` → this session holds no claim. Bare /fin behaves
+  like `/d off` on an unclaimed session (2026-11-14): say `no claim held`, touch
+  nothing (no /did, no timer, no Todoist), then step 2. With an argument: say
+  there is nothing to delay and stop; /defer handles a named task.
 
 ## 2. Clear
 
