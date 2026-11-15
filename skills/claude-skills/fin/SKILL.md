@@ -40,9 +40,11 @@ and, per argument:
 Read its JSON:
 
 - `"status": "done"` → one line per task: `✓ <task> → <result>`, plus
-  `⏱ <timer>` when a timer was stopped. Then step 2.
-- `"status": "deferred"` → `⏭ <task> → <date>` per task (+ `⏱` line). Then step 2.
-- `"status": "delayed"` → `⏰ <task> hidden until HH:MM` per task (+ `⏱`). Then step 2.
+  `⏱ <timer>` when a timer was stopped. Then the final report, then step 2.
+- `"status": "deferred"` → `⏭ <task> → <date>` per task (+ `⏱` line). Then the
+  final report, then step 2.
+- `"status": "delayed"` → `⏰ <task> hidden until HH:MM` per task (+ `⏱`). Then
+  the final report, then step 2.
 - `"status": "failed"` → show `error` or each failing task's `result` and
   stop. Do NOT tell JM to clear; the context is needed to fix it. A time that
   has already passed today is a failure, not a no-op.
@@ -55,6 +57,35 @@ The reverse also holds (2026-11-14): closing a claimed task anywhere else
 (dtd ⌥↵, /did) types `/clear` into the session that held it, once that
 session is idle (agent_claims.fin_holders + the Stop hook). Only this
 session's own /fin is exempt, which is why step 2 exists.
+
+## 1b. Final report (2026-11-14)
+
+Each task carries a `report` object (tools/did/fin_report.py). Render one block
+per task, exactly this shape:
+
+```
+📋 <task name, annotations stripped>
+  Done:   • <what was accomplished, 2–4 bullets>
+  You:    48m on the timer across 2 entries
+  Model:  1h52m active, 23 turns, 103 messages, 412k in / 38k out, ≈ $14.20 API-equivalent
+  Points: 60 分
+```
+
+- **Done** is yours to write: what the thread actually produced, from this
+  conversation plus `report.notes` (the 😈 turn summaries posted to the task,
+  which cover turns that have since left your context). Concrete outcomes and
+  where they live (commits, files, cards), not activity. 2–4 bullets, each
+  one line. A deferred/snoozed task says what is done so far and what remains.
+- **You** is `report.jm.minutes` / `report.jm.entries` (Toggl time on this task
+  since the claim). `0m` → `no timer on this task`.
+- **Model** is `report.model`: `active_minutes` (first to last message since
+  the claim), `turns` (your prompts), `messages`, `tokens.input + cache_read +
+  cache_write_*` as "in" and `tokens.output` as "out" (k/M, one decimal),
+  `cost_usd` as API-equivalent list price (JM is on a Max plan: this is what it
+  would have cost, not a charge). `cost_usd: null` → `cost n/a (unpriced model)`.
+- **Points** is `report.points` (0 on a defer/snooze: `0 分 (deferred)`).
+- A `report` with `error`, or missing → print the block with `n/a` fields; never
+  skip the report or stop on it.
 
 ## 2. Clear
 

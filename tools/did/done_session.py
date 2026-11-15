@@ -246,6 +246,19 @@ def main() -> int:
     except (OSError, ValueError):
         tasks = []
     report, all_ok = [], True
+    # Final report per task (fin_report.py), gathered BEFORE the close: the
+    # claim (its claimed_at and linked timer) is gone afterwards. Credited
+    # points only on a close; a defer/snooze earns nothing.
+    fr = _load("fin_report")
+    finals = {}
+    for tid in ids:
+        rec = claims.get(tid) or {}
+        try:
+            finals[tid] = fr.build(session, tid, current_content(tid, claims, tasks),
+                                   float(rec.get("claimed_at") or 0), credited=when is None,
+                                   linked_entry_id=rec.get("toggl_entry_id"))
+        except Exception as e:  # noqa: BLE001 — the report never blocks the close
+            finals[tid] = {"error": str(e)}
     if when is None:
         for tid in ids:
             content = current_content(tid, claims, tasks)
@@ -254,7 +267,7 @@ def main() -> int:
             ok, display = closed_ok(p.returncode, p.stdout, tid, content, outcome)
             all_ok &= ok
             report.append({"id": tid, "task": content, "ok": ok, "result": display,
-                           "timer": timer_line(p.stdout)})
+                           "timer": timer_line(p.stdout), "report": finals.get(tid)})
         if all_ok:
             ac.set_free(session)   # tab reads ~~ until something new starts
             ac._retitle(session)
@@ -278,7 +291,8 @@ def main() -> int:
         if ok:
             ac.clear_task(tid)   # not release(): a ✅ claim must not outlive the delay
         report.append({"id": tid, "task": content, "ok": ok, "result": display,
-                       "timer": stop_timer_if(content, tid=tid, task_for_entry=ac.task_for_entry) if ok else None})
+                       "timer": stop_timer_if(content, tid=tid, task_for_entry=ac.task_for_entry) if ok else None,
+                       "report": finals.get(tid)})
     status = ("deferred" if kind == "days" else "delayed") if all_ok else "failed"
     if all_ok:
         ac.set_free(session)
