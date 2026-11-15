@@ -942,3 +942,30 @@ def test_fin_typed_marks_session_free_and_a_new_claim_clears_it(tmp_path, monkey
     assert (tmp_path / "by-session" / "S1.free").exists()
     ac.claim({"id": "T2", "content": "next"}, "S1", tmp_path)
     assert not (tmp_path / "by-session" / "S1.free").exists()
+
+
+# --- timer links (2026-11-14) -----------------------------------------------
+def test_link_timer_is_the_join_row_and_self_cleaning(tmp_path):
+    assert ac.link_timer("6ghxxj7hhCWQgvqc", 111, {"date": "2026-11-14T08:00:00"}, "0l", tmp_path)
+    assert ac.link_timer("6ghxxjGgqpmq6MPc", 222, "2026-11-14", "0t", tmp_path)
+    assert ac.timer_link("6ghxxj7hhCWQgvqc", tmp_path) is None      # one timer runs at a time
+    assert ac.timer_link("6ghxxjGgqpmq6MPc", tmp_path)["due"] == "2026-11-14"
+    assert ac.task_for_entry(222, tmp_path) == "6ghxxjGgqpmq6MPc" and ac.task_for_entry(111, tmp_path) is None
+    assert not ac.link_timer("0l", 333, root=tmp_path)             # text echoed back by dtd_resolve, not an id
+    assert not ac.link_timer("", 333, root=tmp_path) and not (tmp_path / ".timer").exists()
+    ac.unlink_timer(entry_id=222, root=tmp_path)
+    assert ac.task_for_entry(222, tmp_path) is None
+
+
+def test_load_merges_timer_and_prunes_a_rolled_recurring_claim(tmp_path):
+    ac.claim({"id": "RRRRRRRRRR01", "content": "0l (8) [20]", "due": "2026-11-14"}, "S1", tmp_path)
+    ac.claim({"id": "OOOOOOOOOO01", "content": "one-off", "due": {"date": "2026-11-14"}}, "S2", tmp_path)
+    ac.link_timer("RRRRRRRRRR01", 500, "2026-11-14", "0l", tmp_path)
+    q = {"today": [{"id": "RRRRRRRRRR01", "content": "0l (8) [20]", "due": "2026-11-15", "recurring": True},
+                   {"id": "OOOOOOOOOO01", "content": "one-off", "due": "2026-11-20", "recurring": False}]}
+    before = ac.load(tmp_path, queue={})
+    assert before["RRRRRRRRRR01"]["toggl_entry_id"] == 500 and before["OOOOOOOOOO01"]["toggl_entry_id"] is None
+    after = ac.load(tmp_path, queue=q)
+    assert "RRRRRRRRRR01" not in after                      # the card rolled to its next occurrence
+    assert "OOOOOOOOOO01" in after                          # a rescheduled one-off keeps its thread
+    assert not (tmp_path / "RRRRRRRRRR01.timer").exists()   # _forget takes the sidecar too

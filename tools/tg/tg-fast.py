@@ -35,6 +35,7 @@ def _tz() -> ZoneInfo:
 # Set by main() from a `--date YYYY-MM-DD` arg (janus viewing a past day);
 # only ever a NON-today date. Range creates honor it; live-timer forms error.
 _DATE_OVERRIDE: date | None = None
+_TASK_ID: str | None = None   # --task <todoist id>: the task a live start is FOR (→ toggl_cli start --task)
 # Entry ids created earlier in THIS invocation. A multi-item command with
 # overlapping ranges ("1427-1447 冥想 #xk26, 1427-1652 hcm #-1", 2026-07-31)
 # had item 2's MECE trim silently DELETE the entry item 1 just created —
@@ -367,6 +368,8 @@ def cmd_start(desc, project, tags):
     args = ["start", desc, project] if (project or tags) else ["start", desc]
     if tags:
         args.extend(tags)
+    if _TASK_ID:
+        args.extend(["--task", _TASK_ID])
     out = _run_cli(*args)
     _update_cache({"desc": desc or project, "project": project})
     return out
@@ -495,6 +498,8 @@ def cmd_backdated(backtime, desc, project, tags):
     if tags:
         args.extend(tags)
     args.extend(["--at", hhmm])
+    if _TASK_ID:
+        args.extend(["--task", _TASK_ID])
     start_out = _run_cli(*args)
     results.append(start_out)
     _update_cache({"desc": desc or project, "project": project})
@@ -507,6 +512,15 @@ def main():
         sys.exit(1)
 
     raw = " ".join(sys.argv[1:]).strip()
+
+    # --task <todoist id> (/do task mode, 2026-11-14): stripped here, before any
+    # parsing, so it never reaches the description; forwarded by the live-start
+    # builders so toggl_cli links the entry to the task.
+    global _TASK_ID
+    task_m = re.search(r"\s*--task\s+([A-Za-z0-9]{10,})\b", raw)
+    if task_m:
+        _TASK_ID = task_m.group(1)
+        raw = (raw[:task_m.start()] + raw[task_m.end():]).strip()
 
     # --date YYYY-MM-DD (janus viewing a past day): range creates land on
     # that date. Live-timer forms make no sense in the past and error below.

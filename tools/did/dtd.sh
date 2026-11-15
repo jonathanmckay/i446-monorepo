@@ -774,7 +774,7 @@ clean=\$(printf '%s' "\$_rr" | sed -n 1p)
 project=\$(printf '%s' "\$_rr" | sed -n 2p)
 [ -z "\$project" ] && project=\$(python3 "\$TG_FAST" --resolve "\$clean" 2>/dev/null)
 python3 "\$TOGGL_CLI" stop >/dev/null 2>&1
-python3 "\$TOGGL_CLI" start "\$clean" \$project >/dev/null 2>&1
+python3 "\$TOGGL_CLI" start "\$clean" \$project --task "\$1" >/dev/null 2>&1   # --task: timer ↔ task link (agent_claims.link_timer)
 # 3rd field carries the task id so the list generator can highlight the
 # EXACT started row, not every row sharing its annotation-stripped name —
 # two Todoist tasks named e.g. "AoS" (a recurring one + an unrelated one-off)
@@ -3613,7 +3613,7 @@ fi
 # 1. Start Toggl timer
 project=$(python3 "$TG_FAST" --resolve "$clean" 2>/dev/null)
 python3 "$TOGGL_CLI" stop >/dev/null 2>&1
-python3 "$TOGGL_CLI" start "$clean" $project >/dev/null 2>&1
+python3 "$TOGGL_CLI" start "$clean" $project --task "$1" >/dev/null 2>&1   # --task: timer ↔ task link (agent_claims.link_timer)
 
 # 1b. Auto-tag @agent in Todoist if not already tagged
 python3 -c "

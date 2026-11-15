@@ -37,6 +37,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -155,9 +156,88 @@ def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
 
 
 def _forget(tid: str, root: Path) -> None:
-    for p in (root / f"{tid}.json", root / f"{tid}.state"):
+    for p in (root / f"{tid}.json", root / f"{tid}.state", root / f"{tid}.timer"):
         try:
             p.unlink()
+        except OSError:
+            pass
+
+
+# --- timer links (2026-11-14) -------------------------------------------------
+# JM: "make the claim record the join row" / "stop matching timers by
+# description". <tid>.timer = {entry_id, due, started_at, desc}: the Toggl entry
+# started FOR this task (toggl_cli start --task <tid>, passed by dtd's start
+# bindings, tg-fast and /do). Toggl runs one timer at a time, so a new link
+# clears every other sidecar and stopping an entry removes its own. load()
+# merges it into the claim record as toggl_entry_id. Readers that stop a timer
+# key on the RUNNING entry: linked to task X → stop iff X is being closed;
+# unlinked (phone, MCP toggl_start, old janus) → by name as before. A stale
+# link (JM restarted the same timer from the phone) therefore never matters.
+TID_RE = re.compile(r"[A-Za-z0-9]{10,}")
+
+
+def _due_str(d) -> str:
+    """Todoist due as YYYY-MM-DD: the queue stores a string (sometimes with a
+    time), the raw API a dict with 'date'."""
+    if isinstance(d, dict):
+        d = d.get("date") or ""
+    return str(d or "")[:10]
+
+
+def link_timer(tid: str, entry_id, due=None, desc: str = "", root: Path = CLAIMS_DIR,
+               now: float | None = None) -> bool:
+    tid = str(tid or "")
+    if not TID_RE.fullmatch(tid) or not entry_id:
+        return False
+    try:
+        eid = int(entry_id)
+    except (TypeError, ValueError):
+        return False
+    for p in root.glob("*.timer"):
+        if p.stem != tid:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    _write(root / f"{tid}.timer", json.dumps({"entry_id": eid, "due": _due_str(due),
+                                              "started_at": int(now or time.time()), "desc": desc}) + "\n")
+    return True
+
+
+def timer_link(tid: str, root: Path = CLAIMS_DIR) -> dict | None:
+    for d in _dirs(root):
+        try:
+            return json.loads((d / f"{tid}.timer").read_text())
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def task_for_entry(entry_id, root: Path = CLAIMS_DIR) -> str | None:
+    """The task a Toggl entry was started for, or None (an unlinked timer)."""
+    try:
+        eid = int(entry_id)
+    except (TypeError, ValueError):
+        return None
+    for d in _dirs(root):
+        try:
+            sidecars = list(d.glob("*.timer"))
+        except OSError:
+            continue
+        for p in sidecars:
+            try:
+                if int(json.loads(p.read_text()).get("entry_id", 0)) == eid:
+                    return p.stem
+            except (OSError, ValueError, TypeError):
+                continue
+    return None
+
+
+def unlink_timer(entry_id=None, tid: str | None = None, root: Path = CLAIMS_DIR) -> None:
+    tid = tid or (task_for_entry(entry_id, root) if entry_id else None)
+    if tid:
+        try:
+            (root / f"{tid}.timer").unlink()
         except OSError:
             pass
 
@@ -285,6 +365,9 @@ def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
     tmux = _tmux_session_name()   # where fin_holders() types /clear (2026-11-14)
     if tmux:
         rec["tmux"] = tmux
+    due = _due_str(task.get("due"))   # which occurrence of a recurring card (load() prunes older)
+    if due:
+        rec["due"] = due
     _write(root / f"{tid}.json", json.dumps(rec, ensure_ascii=False) + "\n")
     set_state(tid, "working", now, root)   # /claim itself runs mid-turn
     _set_held(session, (held(session, root) if also else []) + [tid], root)
@@ -305,11 +388,25 @@ def pane_numbers(root: Path = CLAIMS_DIR) -> dict[str, int]:
     return out
 
 
-def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
-    """task_id -> claim record with 'state', derived 'working', and 'pane' (the
-    session's cmux number, or None when unknown)."""
+def load(root: Path = CLAIMS_DIR, now: float | None = None, *, queue: dict | None = None) -> dict[str, dict]:
+    """task_id -> claim record with 'state', derived 'working', 'pane' (the
+    session's cmux number, or None when unknown) and 'toggl_entry_id' (the
+    timer started for it, when linked). `queue` is dtd's task cache (read from
+    disk when None; tests pass {}): a claim on a RECURRING card whose due has
+    rolled past the claim's own is pruned, since the card keeps its id from one
+    occurrence to the next (2026-11-14: the 0l thread stayed claimed after the
+    card was closed). One-off tasks are not pruned on a reschedule."""
     now = now or time.time()
     out: dict[str, dict] = {}
+    if queue is None:
+        queue = _task_queue()
+    cur_due: dict[str, str] = {}
+    try:
+        for t in all_tasks(queue) if queue else []:
+            if t.get("recurring"):
+                cur_due[str(t.get("id"))] = _due_str(t.get("due"))
+    except Exception:  # noqa: BLE001 — the cache is advisory
+        cur_due = {}
     files = []
     for d in _dirs(root):
         try:
@@ -333,6 +430,14 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None) -> dict[str, dict]:
         if state in ("released", "done") and now - ts > RELEASED_TTL:
             _forget(tid, here)   # kept its top slot for a day; JM never closed it
             continue
+        rd = _due_str(rec.get("due"))
+        if rd and cur_due.get(tid) and rd < cur_due[tid]:
+            _forget(tid, here)   # a recurring card rolled past this claim's occurrence
+            continue
+        try:
+            rec["toggl_entry_id"] = int(json.loads((here / f"{tid}.timer").read_text()).get("entry_id"))
+        except (OSError, ValueError, TypeError):
+            rec["toggl_entry_id"] = None
         if tid in out and out[tid]["state_ts"] >= ts:
             continue   # the same card claimed on two hosts: the newer state wins
         rec["state"] = state

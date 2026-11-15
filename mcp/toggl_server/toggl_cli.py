@@ -101,9 +101,34 @@ def _fmt(e):
     return f"{start}-{stop} {desc}{proj_str} ({dur_str}) [id:{e['id']}]"
 
 
+def _claims():
+    """tools/did/agent_claims.py by path (timer ↔ task links, 2026-11-14)."""
+    import importlib.util
+    path = os.path.join(os.path.expanduser("~"), "i446-monorepo", "tools", "did", "agent_claims.py")
+    spec = importlib.util.spec_from_file_location("agent_claims_for_toggl", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _take_flag(args, flag):
+    """Remove `flag <value>` from args; returns (value or None, args)."""
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 < len(args):
+            return args[i + 1], args[:i] + args[i + 2:]
+        return None, args[:i]
+    return None, args
+
+
 def cmd_start(args):
     if not args:
-        sys.exit("Usage: start <description> [project] [tags...] [--at HH:MM]")
+        sys.exit("Usage: start <description> [project] [tags...] [--at HH:MM] [--task <todoist id> [--due YYYY-MM-DD]]")
+    # --task <id>: the Todoist task this timer is FOR (dtd start, tg-fast, /do).
+    # Recorded as <id>.timer in the claim store so closing the task stops the
+    # timer by id, not by description (agent_claims.link_timer, 2026-11-14).
+    task_id, args = _take_flag(args, "--task")
+    task_due, args = _take_flag(args, "--due")
     # Extract --at flag if present
     start_time = None
     if "--at" in args:
@@ -126,6 +151,11 @@ def cmd_start(args):
     proj_name = PROJECT_NAMES.get(project_id, project) if project_id else ""
     proj_str = f" → {proj_name}" if proj_name else ""
     print(f"Started: {desc}{proj_str} [id:{entry['id']}]")
+    if task_id:
+        try:
+            _claims().link_timer(task_id, entry["id"], task_due, desc)
+        except Exception:  # noqa: BLE001 — the link is bookkeeping, never fail a start
+            pass
     _maybe_agent_triage(desc)
 
 
@@ -186,6 +216,10 @@ def cmd_stop(_args):
     print(f"Stopped: {_fmt(entry)}")
     for line in entry.get("_tag_credits") or []:
         print(f"Credited: {line}")
+    try:
+        _claims().unlink_timer(entry_id=entry.get("id"))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def cmd_current(args):

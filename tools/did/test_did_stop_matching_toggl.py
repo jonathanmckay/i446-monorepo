@@ -70,3 +70,18 @@ def test_ritual_only_completion_reaches_the_stop(df, monkeypatch):
     early = early[:early.index("_emit(")]
     assert "stop_matching_toggl(" in early
     assert '[e["name"] for e in ritual_entries]' in src.split("all_names = ", 1)[1].split("\n", 1)[0]
+
+
+def test_linked_running_entry_stops_by_task_id_not_name(df, monkeypatch):
+    calls = _fake_toggl(monkeypatch, "Running: 09:00-running AoS @i9 (running) [id:4242]")
+    class _AC:
+        @staticmethod
+        def task_for_entry(eid):
+            return "RECURRING_AOS" if str(eid) == "4242" else None
+    monkeypatch.setattr(df, "_AGENT_CLAIMS_MOD", _AC)
+    # Same name, different task: the linked timer is left running.
+    assert df.stop_matching_toggl(["AoS"], ["ONEOFF_AOS"]) is None and calls == ["current"]
+    # The linked task, under a different display name: stopped.
+    assert df.stop_matching_toggl(["renamed"], ["RECURRING_AOS"])["id"] == "4242"
+    # Ritual path (no ids): pure name match, as before.
+    assert df.stop_matching_toggl(["AoS"])["id"] == "4242"

@@ -2870,11 +2870,32 @@ def _timer_key(s: str) -> str:
     return " ".join(ANNOT_RE.sub("", s.replace("😈", "")).split()).lower()
 
 
-def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
+_AGENT_CLAIMS_MOD = None
+
+
+def _agent_claims():
+    """tools/did/agent_claims.py, loaded once by path (timer ↔ task links)."""
+    global _AGENT_CLAIMS_MOD
+    if _AGENT_CLAIMS_MOD is None:
+        spec = importlib.util.spec_from_file_location(
+            "agent_claims_for_timers", Path(__file__).resolve().parent / "agent_claims.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _AGENT_CLAIMS_MOD = mod
+    return _AGENT_CLAIMS_MOD
+
+
+def stop_matching_toggl(item_names: list[str], task_ids: Optional[list[str]] = None) -> Optional[dict]:
     """If a running Toggl timer matches any item name, stop it.
 
     Returns dict with timer info (including parsed duration "minutes")
     if stopped, None otherwise.
+
+    By id first (2026-11-14): a timer started with `toggl_cli start --task
+    <id>` is linked to its task (agent_claims.task_for_entry). When the RUNNING
+    entry is linked, it stops iff its task is among `task_ids`; an unlinked
+    entry (phone, MCP toggl_start) matches by name as before. `task_ids=None`
+    (ritual paths) is a pure name match.
     """
     try:
         proc = subprocess.run(
@@ -2904,8 +2925,18 @@ def stop_matching_toggl(item_names: list[str]) -> Optional[dict]:
         # "(30)" in its description ("post babyssiter ad [15]", 2026-10-11)
         # and a ritual card's name carries 😈 while its timer reads "-1g", so
         # an exact compare left those timers running after a dtd ⌥⏎.
-        desc_key = _timer_key(desc)
-        matched = bool(desc_key) and any(_timer_key(n) == desc_key for n in item_names)
+        linked = None
+        _rid = re.search(r"\[id:(\d+)\]", line)
+        if _rid and task_ids is not None:
+            try:
+                linked = _agent_claims().task_for_entry(_rid.group(1))
+            except Exception:  # noqa: BLE001 — the link store is advisory
+                linked = None
+        if linked:
+            matched = str(linked) in {str(t) for t in task_ids}
+        else:
+            desc_key = _timer_key(desc)
+            matched = bool(desc_key) and any(_timer_key(n) == desc_key for n in item_names)
         if not matched:
             return None
 
@@ -4216,7 +4247,9 @@ def main():
     # the timer's elapsed minutes (dtd: no need to type the time when a
     # matching timer is running)
     all_names = [r.item.name for r in fast] + [e["name"] for e in ritual_entries]
-    toggl_stop = (stop_matching_toggl(all_names)
+    all_ids = [str(r.todoist_task["id"]) for r in fast
+               if getattr(r, "todoist_task", None) and r.todoist_task.get("id")]
+    toggl_stop = (stop_matching_toggl(all_names, all_ids)
                   if all_names and not points_log_run and not past_target else None)
     apply_timer_minutes(fast, toggl_stop)
     target_date = items[0].target_date or f"{_daytime.today().month}/{_daytime.today().day}"
@@ -4873,17 +4906,26 @@ def main():
             "agent_claims_for_close", Path(__file__).resolve().parent / "agent_claims.py")
         _ac = importlib.util.module_from_spec(_acs)
         _acs.loader.exec_module(_ac)
-        for _tid, (_ok, _err) in close_results.items():
-            if not _ok:
-                continue
+        # catch_up (an overdue daily habit fast-forwarded) is a close too; a
+        # defer only clears the claim, as done_session does (no /clear typed
+        # into a thread whose task JM merely rescheduled). 2026-11-14.
+        _closed = [str(t) for t, (ok, _e) in close_results.items() if ok] + \
+                  [str(t) for t, (ok, _e) in catch_up_results.items() if ok]
+        for _tid in _closed:
             try:   # reverse /fin (2026-11-14): the holding session gets its /clear
-                _ac.fin_holders(str(_tid))
+                _ac.fin_holders(_tid)
             except Exception:
                 pass
             try:
-                _ac.clear_task(str(_tid))
+                _ac.clear_task(_tid)
             except Exception:
                 pass
+        for _tid, (_ok, _e) in defer_results.items():
+            if _ok:
+                try:
+                    _ac.clear_task(str(_tid))
+                except Exception:
+                    pass
     except Exception:
         pass
     # A past-day write is not a TODAY completion: recording it here would

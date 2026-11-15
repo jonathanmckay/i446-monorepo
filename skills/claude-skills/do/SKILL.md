@@ -111,9 +111,11 @@ This is handled by /did, not by /do. The /do skill only starts the session.
    - Create via Todoist MCP `add-tasks` with `dueString: "today"`.
    - Refresh cache in background: `python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache &>/dev/null &`
 
-3. **Start the Toggl timer** with the matching project:
+3. **Start the Toggl timer** with the matching project, linked to the task
+   just created (`--task <id>` from the add-tasks result; the link is what lets
+   dtd ⌥↵ and /fin stop this timer by id rather than by name, 2026-11-14):
    ```bash
-   python3 ~/i446-monorepo/tools/tg/tg-fast.py "<description> @<tag>"
+   python3 ~/i446-monorepo/tools/tg/tg-fast.py "<description> @<tag> --task <todoist id>"
    ```
 
 4. **Report:**

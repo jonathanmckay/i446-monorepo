@@ -139,9 +139,12 @@ def timer_key(s: str) -> str:
     return " ".join(ANNOT_RE.sub("", s.replace("😈", "")).split()).lower()
 
 
-def stop_timer_if(content: str, run=subprocess.run) -> str | None:
+def stop_timer_if(content: str, run=subprocess.run, tid: str | None = None,
+                  task_for_entry=None) -> str | None:
     """Stop the running Toggl timer only when it is this task (as did-fast's
-    stop_matching_toggl, without importing did-fast). Returns a display line."""
+    stop_matching_toggl, without importing did-fast). Returns a display line.
+    By id first (2026-11-14): when the running entry is linked to a task
+    (agent_claims.task_for_entry) it must be `tid`; unlinked → by name."""
     try:
         cur = run(["python3", str(TOGGL_CLI), "current"], capture_output=True, text=True, timeout=10)
     except Exception:  # noqa: BLE001
@@ -151,7 +154,17 @@ def stop_timer_if(content: str, run=subprocess.run) -> str | None:
         return None
     desc = re.sub(r"^\d{2}:\d{2}-running\s+", "", line[len("Running:"):].strip())
     desc = desc[:desc.find(" @")].strip() if " @" in desc else desc.split("(")[0].strip()
-    if not timer_key(desc) or timer_key(desc) != timer_key(content):
+    linked = None
+    rid = re.search(r"\[id:(\d+)\]", line)
+    if rid and tid and task_for_entry:
+        try:
+            linked = task_for_entry(rid.group(1))
+        except Exception:  # noqa: BLE001
+            linked = None
+    if linked:
+        if str(linked) != str(tid):
+            return None
+    elif not timer_key(desc) or timer_key(desc) != timer_key(content):
         return None
     try:
         st = run(["python3", str(TOGGL_CLI), "stop"], capture_output=True, text=True, timeout=10)
@@ -265,7 +278,7 @@ def main() -> int:
         if ok:
             ac.clear_task(tid)   # not release(): a ✅ claim must not outlive the delay
         report.append({"id": tid, "task": content, "ok": ok, "result": display,
-                       "timer": stop_timer_if(content) if ok else None})
+                       "timer": stop_timer_if(content, tid=tid, task_for_entry=ac.task_for_entry) if ok else None})
     status = ("deferred" if kind == "days" else "delayed") if all_ok else "failed"
     if all_ok:
         ac.set_free(session)

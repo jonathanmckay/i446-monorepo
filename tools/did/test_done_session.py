@@ -154,3 +154,21 @@ def test_skill_renamed_to_fin_and_nothing_says_done():
     fin = (skills / "fin" / "SKILL.md").read_text()
     assert fin.startswith('---\nname: "fin"\ndescription: "Use when')
     assert "done_session.py" in fin and "→ /clear" in fin
+
+
+def test_stop_timer_by_id_beats_name(monkeypatch):
+    import subprocess
+    calls = []
+    def run(argv, **kw):
+        calls.append(argv[-1])
+        if argv[-1] == "current":
+            return subprocess.CompletedProcess(argv, 0, "Running: 09:00-running 0l @g245 (running) [id:777]\n", "")
+        return subprocess.CompletedProcess(argv, 0, "Stopped: 0l (5min)\n", "")
+    links = {"777": "RECUR1"}
+    # Linked to another task: same name, not stopped.
+    assert ds.stop_timer_if("0l (8) [20]", run, tid="OTHER", task_for_entry=links.get) is None
+    assert calls == ["current"]
+    # Linked to this task: stopped even though the names differ.
+    assert ds.stop_timer_if("renamed card [20]", run, tid="RECUR1", task_for_entry=links.get) == "⏱ 0l stopped"
+    # Unlinked entry: name match as before.
+    assert ds.stop_timer_if("0l", run, tid="X", task_for_entry=lambda eid: None) == "⏱ 0l stopped"
