@@ -16,7 +16,13 @@ same non-destructive move as the rest of ibx:
 Every filtered email is appended to ~/.config/ibx/agent_filtered.jsonl so a
 bad call can be found and undone.
 
-Usage: agent_triage.py i9|m5x2 [--dry-run] [--all]   (--all: read inbox mail too, m5x2)
+Usage: agent_triage.py i9|m5x2 [--dry-run] [--all] [--days N]
+  --all     m5x2: classify read inbox mail too, not just unread
+  --days N  m5x2: how far back to look (default 30)
+
+Mail is classified BATCH emails per agent call and each batch is filed as soon
+as its verdicts arrive (2026-11-15: one 100-email prompt filed 15 and left a
+day of obvious newsletters; a single call also lost everything on a timeout).
 """
 
 import fcntl
@@ -35,6 +41,8 @@ STATE_DIR = Path.home() / ".config" / "ibx"
 AUDIT_FILE = STATE_DIR / "agent_filtered.jsonl"
 LOCK_FILE = STATE_DIR / "agent_triage.{}.lock"
 BODY_CHARS = 800
+BATCH = 20           # emails per agent call
+DEFAULT_DAYS = 30    # m5x2 look-back window
 
 CRITERIA = """For each email decide whether it needs a response or action from me (Jonathan McKay, the recipient).
 
@@ -67,9 +75,9 @@ def build_prompt(source, emails):
     return "\n".join(parts)
 
 
-def parse_verdicts(text, n):
-    """Return {index: why} for emails the agent said to skip. Anything
-    unparseable or out of range is kept (fail closed = keep)."""
+def parse_rows(text, n):
+    """Return {index: (verdict, why)} for every in-range row the agent gave,
+    or None when no JSON array parses."""
     m = None
     for m in re.finditer(r"\[\s*\{.*?\}\s*\]", text or "", re.DOTALL):
         pass  # last JSON array wins: agents sometimes echo the format first
@@ -79,15 +87,24 @@ def parse_verdicts(text, n):
         rows = json.loads(m.group(0))
     except json.JSONDecodeError:
         return None
-    skips = {}
+    out = {}
     for r in rows:
         try:
             i = int(r.get("i"))
         except (TypeError, ValueError, AttributeError):
             continue
-        if 1 <= i <= n and str(r.get("v", "")).lower() == "skip":
-            skips[i] = str(r.get("why", ""))[:80]
-    return skips
+        if 1 <= i <= n:
+            out[i] = (str(r.get("v", "")).lower(), str(r.get("why", ""))[:80])
+    return out
+
+
+def parse_verdicts(text, n):
+    """Return {index: why} for emails the agent said to skip. Anything
+    unparseable or out of range is kept (fail closed = keep)."""
+    rows = parse_rows(text, n)
+    if rows is None:
+        return None
+    return {i: why for i, (v, why) in rows.items() if v == "skip"}
 
 
 def ask_agency(prompt):
@@ -133,8 +150,19 @@ def fetch_m5x2():
     _gmail["label"] = ibx.get_or_create_label(svc, ibx.TRIAGE_LABEL)
     out = []
     # The timer hook triages unread only; /ibxm5x2 passes --all (2026-10-23)
-    # so read-but-unanswered inbox mail gets the same pass.
-    for ref in ibx.fetch_inbox(svc, max_results=100, unread_only=not _gmail.get("all")):
+    # so read-but-unanswered inbox mail gets the same pass. The whole window
+    # is paged through (2026-11-15: a 100-message cap hid older mail).
+    q = f"in:inbox newer_than:{_gmail.get('days', DEFAULT_DAYS)}d"
+    if not _gmail.get("all"):
+        q += " is:unread"
+    refs, token = [], None
+    while True:
+        r = svc.users().messages().list(userId="me", q=q, maxResults=500, pageToken=token).execute()
+        refs += r.get("messages", [])
+        token = r.get("nextPageToken")
+        if not token:
+            break
+    for ref in refs:
         e = ibx.get_email(svc, ref["id"])
         out.append({"id": ref["id"], "from": e["from"], "subject": e["subject"], "body": e["body"]})
     return out
@@ -164,35 +192,55 @@ def run(source, dry_run=False):
     log(f"{source}: {len(emails)} {'in inbox' if _gmail.get('all') else 'unread'}")
     if not emails:
         return 0, 0
-    skips = parse_verdicts(ask(build_prompt(source, emails)), len(emails))
-    if skips is None:
-        log(f"{source}: agent returned no parseable verdicts; filtering nothing")
-        return len(emails), 0
     done = 0
-    for i, why in sorted(skips.items()):
-        e = emails[i - 1]
-        log(f"  skip: {e['subject'][:70]}  ({why})")
-        if dry_run:
-            continue
+    for start in range(0, len(emails), BATCH):
+        batch = emails[start:start + BATCH]
+        label = f"batch {start // BATCH + 1}"
+        # One batch failing (timeout, garbage) keeps that batch and moves on.
         try:
-            do_filter(e)
+            rows = parse_rows(ask(build_prompt(source, batch)), len(batch))
         except Exception as ex:
-            log(f"  filter failed: {ex}")
+            log(f"  {label}: agent call failed ({ex}); keeping {len(batch)}")
             continue
-        done += 1
-        with open(AUDIT_FILE, "a") as f:
-            f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"),
-                                "source": source, "id": e["id"], "from": e["from"],
-                                "subject": e["subject"], "why": why}) + "\n")
+        if rows is None:
+            log(f"  {label}: no parseable verdicts; keeping {len(batch)}")
+            continue
+        skips = {i: why for i, (v, why) in rows.items() if v == "skip"}
+        log(f"  {label}: sent {len(batch)}, verdicts {len(rows)}, skip {len(skips)}, "
+            f"keep {len(batch) - len(skips)}")
+        for i, (v, why) in sorted(rows.items()):
+            e = batch[i - 1]
+            if v != "skip":
+                log(f"  keep: {e['subject'][:70]}  ({why})")
+                continue
+            log(f"  skip: {e['subject'][:70]}  ({why})")
+            if dry_run:
+                continue
+            try:
+                do_filter(e)
+            except Exception as ex:
+                log(f"  filter failed: {ex}")
+                continue
+            done += 1
+            with open(AUDIT_FILE, "a") as f:
+                f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"),
+                                    "source": source, "id": e["id"], "from": e["from"],
+                                    "subject": e["subject"], "why": why}) + "\n")
+    log(f"{source}: filed {done} of {len(emails)}")
     return len(emails), done
 
 
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in SOURCES:
-        sys.exit("Usage: agent_triage.py i9|m5x2 [--dry-run] [--all]")
+        sys.exit("Usage: agent_triage.py i9|m5x2 [--dry-run] [--all] [--days N]")
     source, dry = args[0], "--dry-run" in args
     _gmail["all"] = "--all" in args
+    if "--days" in args:
+        try:
+            _gmail["days"] = int(args[args.index("--days") + 1])
+        except (IndexError, ValueError):
+            sys.exit("--days needs a whole number of days")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     # One run per source at a time: restarting the timer mid-triage is a no-op.
     lock = open(str(LOCK_FILE).format(source), "w")

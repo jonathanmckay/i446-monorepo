@@ -44,3 +44,51 @@ def test_trigger_matches_ibx_timers_only():
         for desc in ("ibx s897", "ibx i9 review", "teams", "ibx"):
             toggl_cli._maybe_agent_triage(desc)
         popen.assert_not_called()
+
+
+def _emails(n):
+    return [{"id": f"m{i}", "from": "a@b.c", "subject": f"s{i}", "body": ""} for i in range(1, n + 1)]
+
+
+def test_run_batches_and_maps_indices_within_each_batch(tmp_path, monkeypatch):
+    """2026-11-15: one 100-email prompt filed 15. Mail goes BATCH at a time,
+    and index i in a batch's answer means that batch's i-th email."""
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    calls, filed = [], []
+
+    def ask(prompt):
+        calls.append(prompt)
+        return '[{"i": 1, "v": "skip", "why": "newsletter"}, {"i": 2, "v": "keep", "why": "tenant"}]'
+
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(45), ask, lambda e: filed.append(e["id"])))
+    assert at.run("m5x2") == (45, 3)
+    assert len(calls) == 3                       # 20 + 20 + 5
+    assert filed == ["m1", "m21", "m41"]         # first email of each batch
+    assert len((tmp_path / "audit.jsonl").read_text().splitlines()) == 3
+
+
+def test_run_keeps_a_failed_batch_and_continues(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    filed, n = [], {"calls": 0}
+
+    def ask(prompt):
+        n["calls"] += 1
+        if n["calls"] == 1:
+            raise TimeoutError("agent timed out")
+        if n["calls"] == 2:
+            return "no json here"
+        return '[{"i": 5, "v": "skip", "why": "promo"}]'
+
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(45), ask, lambda e: filed.append(e["id"])))
+    assert at.run("m5x2") == (45, 1)
+    assert filed == ["m45"]
+
+
+def test_dry_run_files_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    filed = []
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(3),
+                                             lambda p: '[{"i": 1, "v": "skip", "why": "x"}]',
+                                             lambda e: filed.append(e["id"])))
+    assert at.run("m5x2", dry_run=True) == (3, 0)
+    assert filed == [] and not (tmp_path / "audit.jsonl").exists()
