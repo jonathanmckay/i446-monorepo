@@ -30,7 +30,7 @@ which tabs are not linked to a dtd task.
 
 Usage:
   title_tiers.py tiers <sid>            JSON {init, short, full, source}
-  title_tiers.py apply <sid> [--generate]
+  title_tiers.py apply <sid> [--generate] [--target <tmux session>]
   title_tiers.py apply-all [--generate] every live claude in tmux here (cs tmux-map)
 """
 from __future__ import annotations
@@ -58,6 +58,7 @@ MODEL = "claude-haiku-4-5-20251001"
 # A thread with no dtd task behind it leads with this instead of a Haiku initial,
 # so the tab strip shows at a glance which sessions are not linked to work.
 UNCLAIMED_INIT = "❔"
+FREE_INIT = "~~"   # the task this session held was closed; nothing new started yet (2026-11-14)
 _DID = Path.home() / "i446-monorepo" / "tools" / "did"
 _EST = re.compile(r"\(\(?\d+\)?\)|\[\d*G?\]|\{\d+\}")
 _LABEL = re.compile(r"(?:^|\s)@\S+")
@@ -166,6 +167,16 @@ def initial_for(text: str, generate: bool = False, compute=_haiku_initial) -> st
 
 
 # --- tiers --------------------------------------------------------------------
+def is_free(sid: str) -> bool:
+    """/fin (or a dtd close) finished this session's task and nothing has been
+    typed since: agent_claims.set_free left by-session/<sid>.free, which the
+    next ordinary prompt or claim removes."""
+    if not sid:
+        return False
+    ac = _claims()
+    return (ac.CLAIMS_DIR / "by-session" / f"{sid}.free").exists()
+
+
 def claim_record(sid: str) -> dict | None:
     """The claim record of the first task this session holds, from the local
     store or a mirrored remote/<host>/ one (Straylight's cs reads Ix's claims there)."""
@@ -200,6 +211,8 @@ def tiers(sid: str, generate: bool = False, title: str = "") -> dict:
     except OSError:
         full = ""
     full = full or title
+    if is_free(sid):
+        return {"init": FREE_INIT, "short": "", "full": full, "source": "free"}
     ss = _json(SESSION_SHORTS).get(sid, {})
     short = ss.get("short") if ss.get("hash") == _hash(full) else ""
     return {"init": UNCLAIMED_INIT if full else None, "short": short or trim(full),
@@ -297,17 +310,24 @@ def apply_all(generate: bool = False) -> list[dict]:
     return done
 
 
-def apply(sid: str, generate: bool = False) -> dict:
+def apply(sid: str, generate: bool = False, target: str | None = None) -> dict:
+    """`target`: a tmux session name when the caller is not inside that session
+    (did-fast finishing another thread's tab)."""
     t = tiers(sid, generate)
     _record_init(t)
     text = tab_text(t)
     if text:
-        t["applied"] = _tmux_tab(text) or _cmux_tab(text) or _osc_tab(text)
+        t["applied"] = _tmux_tab(text, target) if target else (_tmux_tab(text) or _cmux_tab(text) or _osc_tab(text))
     return t
 
 
 def main(argv: list[str]) -> int:
     gen = "--generate" in argv
+    target = None
+    if "--target" in argv:
+        i = argv.index("--target")
+        target = argv[i + 1] if i + 1 < len(argv) else None
+        argv = argv[:i] + argv[i + 2:]
     if argv[:1] == ["apply-all"]:
         rows = apply_all(gen)
         for t in rows:
@@ -317,7 +337,7 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     sid = argv[1]
-    out = apply(sid, gen) if argv[0] == "apply" else tiers(sid, gen)
+    out = apply(sid, gen, target) if argv[0] == "apply" else tiers(sid, gen)
     out.pop("_dir", None)
     print(json.dumps(out, ensure_ascii=False))
     return 0

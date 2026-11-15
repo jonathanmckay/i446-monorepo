@@ -242,6 +242,9 @@ def main() -> int:
             all_ok &= ok
             report.append({"id": tid, "task": content, "ok": ok, "result": display,
                            "timer": timer_line(p.stdout)})
+        if all_ok:
+            ac.set_free(session)   # tab reads ~~ until something new starts
+            ac._retitle(session)
         print(json.dumps({"status": "done" if all_ok else "failed", "tasks": report},
                          ensure_ascii=False, indent=2))
         return 0 if all_ok else 2
@@ -264,6 +267,9 @@ def main() -> int:
         report.append({"id": tid, "task": content, "ok": ok, "result": display,
                        "timer": stop_timer_if(content) if ok else None})
     status = ("deferred" if kind == "days" else "delayed") if all_ok else "failed"
+    if all_ok:
+        ac.set_free(session)
+        ac._retitle(session)
     print(json.dumps({"status": status, "tasks": report}, ensure_ascii=False, indent=2))
     return 0 if all_ok else 2
 

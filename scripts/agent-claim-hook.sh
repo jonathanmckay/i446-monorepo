@@ -62,6 +62,14 @@ if [[ "$1" == working && -n "${CC_SESSION:-}" && -z "${DTD_NOTE_CHILD:-}" && -n 
       && "${match[1]}" != [/\<\[] ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" autoclaim 2>/dev/null
 fi
+# A free tab (~~, agent_claims.set_free after /fin) is free until JM types an
+# ordinary prompt here (2026-11-14). Slash commands, <command-…> wrappers and a
+# bare [N] are not a new start. session-title.sh retitles on the same event.
+if [[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.free" \
+      && "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*([^"[:space:]])' \
+      && "${match[1]}" != [/\<\[] ]]; then
+  rm -f "$D/by-session/$sid.free" 2>/dev/null
+fi
 zmodload zsh/datetime zsh/files 2>/dev/null
 AGENT_STALE_S=7200
 # In-flight subagents of this session: "<agent_id> <epoch>" per line. Kept
@@ -150,6 +158,8 @@ if [[ "$1" == idle && "$state" == idle && -n "$TMUX_PANE" ]]; then
     [[ -n "$ftid" && " ${tids[*]} " == *" $ftid "* ]] || continue
     { sleep 1; tmux send-keys -t "$TMUX_PANE" -l '/clear'; sleep 0.3; tmux send-keys -t "$TMUX_PANE" Enter; } >/dev/null 2>&1 &!
     rm -f "$D/by-session/$sid" 2>/dev/null
+    print -r -- "$EPOCHSECONDS" > "$D/by-session/$sid.free" 2>/dev/null   # tab → ~~
+    python3 "$HOME/i446-monorepo/tools/cs/title_tiers.py" apply "$sid" >/dev/null 2>&1 &!
     exit 0
   done
 fi

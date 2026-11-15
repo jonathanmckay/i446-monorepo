@@ -60,3 +60,14 @@ def test_claimed_session_uses_the_task_and_its_recorded_initial(tmp_path, monkey
     assert (t["init"], t["short"], t["full"], t["source"]) == (
         "ac", "auto-claim + 3-tier titles", "auto-claim sessions + 3-tier cmux/tmux/statusline titles", "task")
     assert tt.tab_text(t) == "ac auto-claim + 3-tier titles"
+
+
+def test_free_session_reads_tilde_tilde(tmp_path, monkeypatch):
+    monkeypatch.setattr(tt, "claim_record", lambda sid: None)
+    monkeypatch.setattr(tt, "SESSION_TITLES", tmp_path / "titles")
+    (tmp_path / "titles").mkdir()
+    (tmp_path / "titles" / "S1").write_text("0l\n")
+    monkeypatch.setattr(tt, "is_free", lambda sid: sid == "S1")
+    t = tt.tiers("S1")
+    assert t["source"] == "free" and tt.tab_text(t) == tt.FREE_INIT == "~~"
+    assert tt.tiers("S2")["init"] is None   # no title, no claim, not free

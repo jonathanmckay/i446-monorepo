@@ -194,6 +194,22 @@ def _tmux_session_name() -> str:
 FIN_SSH_CMD = "python3 ~/i446-monorepo/tools/did/agent_claims.py fin {tid}"
 
 
+def set_free(session: str, root: Path = CLAIMS_DIR) -> None:
+    """The task this session held is closed and nothing new has started: its
+    tab reads ~~ (title_tiers.FREE_INIT) until the next ordinary prompt or
+    claim removes the marker (2026-11-14: "I finished that task, so I want the
+    tab to be ~~ so I know I can start something new there")."""
+    if session:
+        _write(root / "by-session" / f"{session}.free", f"{int(time.time())}\n")
+
+
+def clear_free(session: str, root: Path = CLAIMS_DIR) -> None:
+    try:
+        (root / "by-session" / f"{session}.free").unlink()
+    except OSError:
+        pass
+
+
 def type_clear(target: str, run=subprocess.run) -> bool:
     """Type `/clear⏎` into a tmux session by exact name. -l sends the text
     literally; Enter goes separately once the slash popup has settled."""
@@ -235,6 +251,8 @@ def fin_holders(tid: str, root: Path = CLAIMS_DIR, run=subprocess.run,
                 continue   # by-session is this host's own index: the session moved on
             if state == "idle" and rec.get("tmux") and type_clear(str(rec["tmux"]), run):
                 _set_held(sid, [t for t in held(sid, root) if t != tid], root)
+                set_free(sid, root)
+                _retitle(sid, target=str(rec["tmux"]))
                 out.append(f"typed:{sid}")
             else:
                 _write(root / "by-session" / f"{sid}.fin", f"{tid}\n")
@@ -259,6 +277,7 @@ def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
     subagents), which adds this task to the ones the session already holds."""
     if not also:
         release(session, root)
+    clear_free(session, root)
     tid = str(task["id"])
     rec = {"task_id": tid, "task": task.get("content", ""), "session": session,
            "host": _host(), "cwd": os.getcwd(),
@@ -903,16 +922,19 @@ def autoclaim(payload: str, compute=None) -> str:
             "prompt. Wrong task? `/d off` or `/d <task>`; otherwise nothing to do.")
 
 
-def _retitle(session: str) -> None:
-    """Push the claimed task's tiers onto the tab (tools/cs/title_tiers.py:
-    "<initial> <short>" on tmux @tab / the cmux tab), generating a missing
-    initial. Detached: the hook returns at once."""
+def _retitle(session: str, target: str | None = None) -> None:
+    """Push the session's tiers onto its tab (tools/cs/title_tiers.py: the
+    initial on @init, "<initial> <short>" on @tab / the cmux tab), generating a
+    missing initial. `target` names the tmux session when the caller is not
+    inside it. Detached: the hook returns at once."""
     if not session:
         return
+    cmd = ["python3", str(Path.home() / "i446-monorepo" / "tools" / "cs" / "title_tiers.py"),
+           "apply", session, "--generate"]
+    if target:
+        cmd += ["--target", target]
     try:
-        subprocess.Popen(["python3", str(Path.home() / "i446-monorepo" / "tools" / "cs" / "title_tiers.py"),
-                          "apply", session, "--generate"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         pass
 

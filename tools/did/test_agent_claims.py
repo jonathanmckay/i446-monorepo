@@ -931,3 +931,14 @@ def test_fin_ix_marks_unreachable_host_in_root_fin_dir(tmp_path, monkeypatch):
         {"task_id": "T1", "session": "S7", "host": "straylight"}))
     assert ac.fin_holders("T1", tmp_path, run=_Run(""), self_session="") == ["marked-remote:S7"]
     assert (tmp_path / "fin" / "S7").read_text().strip() == "T1"
+
+
+def test_fin_typed_marks_session_free_and_a_new_claim_clears_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(ac.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ac, "_retitle", lambda sid, target=None: None)
+    _claimed(tmp_path, "S1")
+    ac.set_state("T1", "idle", root=tmp_path)
+    ac.fin_holders("T1", tmp_path, run=_Run("cc-x"), self_session="")
+    assert (tmp_path / "by-session" / "S1.free").exists()
+    ac.claim({"id": "T2", "content": "next"}, "S1", tmp_path)
+    assert not (tmp_path / "by-session" / "S1.free").exists()
