@@ -4025,6 +4025,7 @@ TALLY_PID=$!
   last_m=${DTD_SNAP_M:-$(stat -f %m "$CACHE" 2>/dev/null)}
   last_blk="$(date +%Y%m%d)-$(( ( $(date +%H) - 4 ) / 2 ))"
   last_day="$(date +%Y-%m-%d)"
+  typeset -A _acq_tried   # claim ids already checked against the cache (see below)
   while [[ -f "$DTD_PORT" ]]; do
     # Claims live in the root and in remote/<host>/ (each other host's mirror,
     # 2026-10-25), so both the mtime watch and the working glob cover both.
@@ -4123,6 +4124,27 @@ TALLY_PID=$!
     if [[ -n "$cur_ac" && "$cur_ac" != "${last_ac:-}" ]]; then
       [[ -n "${last_ac:-}" ]] && ac_reload=1
       last_ac="$cur_ac"
+      # A live claim names a task this cache does not hold (bug 2026-11-15: a
+      # task created by `/d` on Ix was claimed there, the claim reached
+      # Straylight in 2s, and the card never showed: refresh-cache.py keeps the
+      # `today` bucket verbatim, so nothing refetched it until the next block
+      # boundary). One full refresh per unknown id per dtd run; did-fast unions
+      # the task by direct GET (union_claimed_tasks), so one shot is enough.
+      # Pure zsh + grep: this branch runs on every claim state change.
+      # BEGIN claimed-unqueued refresh
+      _acq_go=""
+      for _acj in "$HOME"/vault/z_ibx/agent-claims/{,remote/*/}*.json(N); do
+        _aid="${_acj:t:r}"
+        [[ "$_aid" == panes || -n "${_acq_tried[$_aid]:-}" ]] && continue
+        _ast=""
+        [[ -r "${_acj:r}.state" ]] && read -r _ast _ < "${_acj:r}.state"
+        [[ "$_ast" == (released|done) ]] && continue
+        _acq_tried[$_aid]=1
+        grep -qF "\"$_aid\"" "$CACHE" 2>/dev/null && continue
+        _acq_go=1
+      done
+      [[ -n "$_acq_go" ]] && ( python3 "$DID_FAST" --refresh-cache >/dev/null 2>&1 ) &
+      # END claimed-unqueued refresh
       # Renumber cmux tabs on a claim change (2026-10-22): an ix-hosted session's
       # hooks run on ix, where there is no cmux, so its pane number (the N in
       # "N😈") reached panes.json only when some LOCAL session's hook happened

@@ -1176,6 +1176,69 @@ def refresh_task_queue(block: bool = False) -> dict:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         lock_fd.close()
 
+CLAIMS_ROOT = Path.home() / "vault" / "z_ibx" / "agent-claims"
+CLAIM_UNION_MAX = 12   # direct GETs per refresh; a claim storm must not stall it
+
+
+def _live_claim_ids(root: Path) -> list[str]:
+    """Ids of claims an agent is still on (not released, not agent-done), in
+    this host's store and every remote/<host>/ mirror."""
+    out: list[str] = []
+    try:
+        dirs = [root] + sorted(d for d in (root / "remote").iterdir() if d.is_dir())
+    except OSError:
+        dirs = [root]
+    for d in dirs:
+        try:
+            files = sorted(d.glob("*.json"))
+        except OSError:
+            continue
+        for f in files:
+            if f.name == "panes.json" or f.stem in out:
+                continue
+            try:
+                state = (d / f"{f.stem}.state").read_text().split()[0]
+            except (OSError, IndexError):
+                state = "idle"
+            if state not in ("released", "done"):
+                out.append(f.stem)
+    return out
+
+
+def union_claimed_tasks(today: list, known_ids: set, today_iso: str,
+                        root: Path | None = None, get=None) -> list:
+    """Append to `today` every task a session is working on that the fetch did
+    not return, read straight from /tasks/{id}. Returns what was added.
+
+    Bug 2026-11-15: `/d <new task>` on Ix created an unlabeled task due today;
+    the today|overdue FILTER index lags minutes behind creation (same lag the
+    -1neon union works around), so a refresh seconds later missed it, and on
+    Straylight nothing refetched `today` at all. The claim record names the id,
+    and the single-task endpoint is fresh at once. Only open tasks due today or
+    earlier join: a claimed backlog task stays out of today's list."""
+    root = root or CLAIMS_ROOT
+    get = get or _todoist_request
+    added = []
+    for tid in [i for i in _live_claim_ids(root) if i not in known_ids][:CLAIM_UNION_MAX]:
+        try:
+            status, body = get(f"{TODOIST_BASE}/tasks/{tid}", "GET")
+            t = json.loads(body) if status == 200 else {}
+        except Exception:  # noqa: BLE001 — unreachable or gone: leave it out
+            continue
+        due = (t.get("due") or {}).get("date", "") if t.get("due") else ""
+        if not t.get("id") or t.get("checked") or not due or due[:10] > today_iso:
+            continue
+        row = {"id": t["id"], "content": t.get("content", ""),
+               "labels": t.get("labels", []), "priority": t.get("priority", "p4"),
+               "due": due, "due_datetime": _due_datetime(t),
+               "due_string": (t.get("due") or {}).get("string", "") or "",
+               "recurring": bool((t.get("due") or {}).get("is_recurring"))}
+        today.append(row)
+        known_ids.add(t["id"])
+        added.append(row)
+    return added
+
+
 def _refresh_task_queue_inner() -> dict:
     """Inner refresh logic, called under file lock."""
     labels = ["0neon", "1neon", "%E5%A4%9Cneon", "%E5%85%B3%E9%94%AE%E8%B7%AF%E5%BE%84"]
@@ -1420,6 +1483,17 @@ def _refresh_task_queue_inner() -> dict:
                 have.add(t.get("id"))
     except Exception as e:
         print(f"WARN: -1neon union skipped: {e}", file=sys.stderr)
+
+    # Tasks a session has claimed but the lagging filter has not returned yet
+    # (2026-11-15): see union_claimed_tasks.
+    try:
+        _known = {t.get("id") for v in results.values() if isinstance(v, list) for t in v}
+        _cl = union_claimed_tasks(results["today"], _known,
+                                  _daytime.local_now().strftime("%Y-%m-%d"))
+        if _cl:
+            print(f"  claimed-task union: +{len(_cl)}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN: claimed-task union skipped: {e}", file=sys.stderr)
 
     # Final -1neon verification pass (2026-08-11 bug: "dtd web shows -1n
     # tasks when they are already finished in the main dtd"). Reproduced
