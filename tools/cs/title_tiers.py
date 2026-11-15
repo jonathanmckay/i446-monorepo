@@ -16,11 +16,12 @@ claimed session reads the same in dtd, on its tab, and in its statusline.
          at a word boundary to session_short.CAP.
   full   the task content with (N) [N] {N} stripped, or the session title.
 
-`apply <sid>` pushes "<init> <short>" to the tab: inside tmux as the session's
-@tab option (dotfiles/tmux.conf has set-titles-string '#{?#{@tab},#{@tab},#S}',
-so tmux forwards it to the outer terminal and cmux prints it as the tab text,
-initial first so a narrow tab still shows it); inside a local cmux via
-rename-tab; else OSC 0. With --generate it also asks Haiku for a missing
+`apply <sid>` pushes the tiers to the tab: inside tmux as the session's @tab
+("<init> <short>") and @init (the initial alone) options; dotfiles/tmux.conf has
+set-titles-string '#{?#{@init},#{@init},#{?#{@tab},#{@tab},#S}}', so the title
+tmux forwards to the outer terminal, which cmux prints as the tab text, is just
+the initial (2026-11-14: the two-tier text ate the whole tab). Inside a local
+cmux via rename-tab; else OSC 0. With --generate it also asks Haiku for a missing
 initial and records it on the claim (<tid>.json 'init') so dtd can lead the
 row with the same glyph (that file travels to the other hosts with the claim).
 
@@ -220,6 +221,13 @@ def _tmux_tab(text: str, target: str | None = None) -> bool:
         # apply-all passes the tmux session name instead.
         subprocess.run(["tmux", "set-option", "-t", pane, "@tab", text],
                        capture_output=True, timeout=3)
+        # 2026-11-14 (JM): the cmux tab is too narrow for "<init> <short>", so
+        # the title tmux forwards is the initial alone (@init); @tab keeps the
+        # two-tier text for anything wider. set-titles-string prefers @init.
+        init = text.split(" ", 1)[0] if text else ""
+        if init:
+            subprocess.run(["tmux", "set-option", "-t", pane, "@init", init],
+                           capture_output=True, timeout=3)
         return True
     except (OSError, subprocess.TimeoutExpired):
         return False
