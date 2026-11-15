@@ -3970,9 +3970,9 @@ print -- "\$EPOCHREALTIME\thdr-start\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/nul
 # every keystroke's result event, so under a Defender exec stall it cost
 # 0.8-1.6s per keypress -- measured 2026-10-03).
 # "footer" mode: the top line (2026-11-15, JM):
-#   "XX tasks        dtd        ✅ XX, XXXm [XXX]"
+#   "XX tasks        dtd        ✓ XX, XXXm [XXX]"
 # tasks = every row in the list (not the filtered match count, so typing a
-# query doesn't change it); ✅ / points = today's Ix tally; m = minutes
+# query doesn't change it); ✓ / points = today's Ix tally; m = minutes
 # tracked today outside 睡觉. The tally file is "points<TAB>done<TAB>minutes",
 # "-" for a field the server could not work out.
 # Layout: the line is FZF_COLUMNS - 8 cells wide, the same right edge the
@@ -3987,11 +3987,11 @@ if [[ "\$1" == footer ]]; then
   [[ "\$done_n" == <-> ]] || done_n="…"
   n="\${FZF_TOTAL_COUNT:-0}"
   tail=""; [[ "\$pts" == <-> ]] && tail=" [\$pts]"
-  short="✅ \$done_n\$tail"
-  right="✅ \$done_n"; [[ "\$mins" == <-> ]] && right+=", \${mins}m"
+  short="✓ \$done_n\$tail"
+  right="✓ \$done_n"; [[ "\$mins" == <-> ]] && right+=", \${mins}m"
   right+="\$tail"
   w=\$(( \${FZF_COLUMNS:-\${COLUMNS:-80}} - 8 ))
-  rw=\$(( \${#right} + 1 ))                  # ✅ is two cells wide
+  rw=\${#right}                            # ✓ is one cell (✅ was two)
   for left in "\$n tasks" "\$n"; do
     lo=\$(( \${#left} + 1 )); hi=\$(( w - rw - 4 ))
     (( lo <= hi )) || continue
@@ -4000,7 +4000,7 @@ if [[ "\$1" == footer ]]; then
     printf '%s%*s\033[1mdtd\033[0m%*s%s' "\$left" \$(( pos - \${#left} )) '' \$(( w - rw - pos - 3 )) '' "\$right"
     exit 0
   done
-  if (( \${#n} + 1 + rw > w )); then right="\$short"; rw=\$(( \${#right} + 1 )); fi
+  if (( \${#n} + 1 + rw > w )); then right="\$short"; rw=\${#right}; fi
   pad=\$(( w - \${#n} - rw )); (( pad < 1 )) && pad=1
   printf '%s%*s%s' "\$n" \$pad '' "\$right"
   exit 0
@@ -4048,7 +4048,7 @@ export TOGGL_MAX_429_DELAY=1
 rm -f "$DTD_PORT"
 # The ticker (dtd-ticker.py: live ▶ timer + active-task lines in the footer) is
 # retired (2026-10-12, "forget about the line at the top"): the footer is the
-# static "N tasks   dtd   ✅ N, Nm [N]" header from $DTD_HDRGEN footer.
+# static "N tasks   dtd   ✓ N, Nm [N]" header from $DTD_HDRGEN footer.
 TICKER_PID=""
 
 # Day-tally refresher: pull the single Ix computation (points 分, tasks done,

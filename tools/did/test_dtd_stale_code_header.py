@@ -166,10 +166,10 @@ if __name__ == "__main__":
 # have a header which says dtd, the number of tasks done, the number of tasks
 # left." The ticker's live timer/active-task footer is retired.
 
-# Top line redesign (2026-11-15, JM): "XX tasks      dtd      ✅ XX, XXXm [XXX]".
-# No dashes; "dtd" centred; a checkbox instead of the word "done"; the line is
+# Top line redesign (2026-11-15, JM): "XX tasks      dtd      ✓ XX, XXXm [XXX]".
+# No dashes; "dtd" centred; a plain ✓ instead of the word "done" (not the two-cell ✅); the line is
 # columns - 8 wide so [points] ends in the same column as the rows' [N].
-# tasks = rows in the list, ✅/points = the Ix day tally, m = minutes tracked
+# tasks = rows in the list, ✓/points = the Ix day tally, m = minutes tracked
 # today outside 睡觉. The tally file is "points<TAB>done<TAB>minutes".
 
 def _visible(s):
@@ -178,8 +178,9 @@ def _visible(s):
 
 
 def _cells(s):
-    """Display width: ✅ is two cells, everything else on this line is one."""
-    return len(s) + s.count("✅")
+    """Display width: every glyph on this line is one cell."""
+    assert "✅" not in s
+    return len(s)
 
 
 def _footer(tmp_path, cols, tally="765\t27\t512", total="38"):
@@ -194,7 +195,7 @@ def test_footer_wide_pane_centres_dtd_and_right_aligns_points_to_the_rows(tmp_pa
     raw = _footer(tmp_path, 100)
     out = _visible(raw)
     assert "\033[1mdtd\033[0m" in raw and "─" not in out and "done" not in out
-    assert out.startswith("38 tasks ") and out.endswith(" ✅ 27, 512m [765]")
+    assert out.startswith("38 tasks ") and out.endswith(" ✓ 27, 512m [765]")
     assert _cells(out) == 92                      # rows justify (N) [N] to columns - 8
     assert out[44:47] == "dtd"                    # (92 - 3) // 2: the true centre
 
@@ -203,30 +204,30 @@ def test_footer_43_columns_centres_dtd_in_the_gap(tmp_path):
     """JM's usual pane: the true centre would run into the right block, so
     dtd sits mid-way between the two sides instead."""
     out = _visible(_footer(tmp_path, 43))
-    assert out == "38 tasks   dtd    ✅ 27, 512m [765]"
+    assert out == "38 tasks    dtd    ✓ 27, 512m [765]"
     assert _cells(out) == 35
 
 
 def test_footer_before_first_tally_shows_placeholder(tmp_path):
     out = _visible(_footer(tmp_path, 43, tally=None, total="53"))
-    assert out.startswith("53 tasks ") and out.endswith("✅ …") and "[" not in out
+    assert out.startswith("53 tasks ") and out.endswith("✓ …") and "[" not in out
     assert _cells(out) == 35
 
 
 def test_footer_omits_minutes_when_unknown(tmp_path):
     out = _visible(_footer(tmp_path, 43, tally="765\t27\t-"))
-    assert out.endswith(" ✅ 27 [765]") and "m [" not in out and _cells(out) == 35
+    assert out.endswith(" ✓ 27 [765]") and "m [" not in out and _cells(out) == 35
 
 
 def test_footer_narrow_pane_keeps_the_points_in_the_rows_column(tmp_path):
     """Dropped in order: ' tasks', then dtd, then the minutes. Never the points."""
-    assert _visible(_footer(tmp_path, 34)) == "38  dtd  ✅ 27, 512m [765]"
+    assert _visible(_footer(tmp_path, 34)) == "38  dtd   ✓ 27, 512m [765]"
     for cols in (34, 30, 26):
         out = _visible(_footer(tmp_path, cols))
         assert out.startswith("38") and out.endswith("[765]"), (cols, out)
         assert _cells(out) == cols - 8, (cols, out)
     assert "512m" in _visible(_footer(tmp_path, 30)) and "dtd" not in _visible(_footer(tmp_path, 30))
-    assert _visible(_footer(tmp_path, 26)) == "38     ✅ 27 [765]"
+    assert _visible(_footer(tmp_path, 26)) == "38      ✓ 27 [765]"
 
 
 def test_bottom_line_no_longer_repeats_counts(tmp_path):
