@@ -3160,8 +3160,11 @@ chmod +x "$DTD_BUMP"
 # regular spot in the list': the inverse of Enter's top slot. Appends a
 # tombstone to dtd-started for the cursor row (or every marked row) that has a
 # live start today; the list generator then drops it from the started tier.
-# Local only: the Toggl timer and the Todoist task are left alone, so the row
-# under a running timer stays on top until the timer moves.
+# It also drops the row's agent claim (agent_claims.py unpin): the rows JM
+# first tried this on were held up by RELEASED claims, which keep the top slot
+# for a day, not by a start. A claim an agent is mid-turn on is left alone.
+# The Toggl timer and the Todoist task are untouched, so the row under a
+# running timer stays on top until the timer moves.
 DTD_UNSTART="/tmp/dtd-$DTD_ID.unstart.sh"
 cat > "$DTD_UNSTART" << UNSTARTEOF
 #!/bin/zsh
@@ -3185,11 +3188,21 @@ for _t in "\${ids[@]}"; do
   (( \${+live[\$_t]} )) || continue
   printf '%s\t%s\tx\t%s\n' "\$_day" "\$_t" "\$_now" >> "\$_sf" && (( _n++ ))
 done
-if (( _n )); then
-  echo "⬇ back in line: \$_n task(s) (a running timer keeps its row on top until it moves)" > "$DTD_HDR"
-else
-  echo "· not started today, nothing to move" > "$DTD_HDR"
-fi
+# Claims: one row can hold both a start and a claim, so count rows, not writes.
+typeset -A moved
+for _t in "\${ids[@]}"; do (( \${+live[\$_t]} )) && moved[\$_t]=1; done
+_res=\$(python3 "\$HOME/i446-monorepo/tools/did/agent_claims.py" unpin "\${ids[@]}" 2>/dev/null)
+for _t in \$(print -r -- "\$_res" | jq -r '.dropped[]?' 2>/dev/null); do moved[\$_t]=1; done
+_live=\$(print -r -- "\$_res" | jq -r '.live | length' 2>/dev/null); _live=\${_live:-0}
+_failed=\$(print -r -- "\$_res" | jq -r '.failed | length' 2>/dev/null); _failed=\${_failed:-0}
+_else=\$(print -r -- "\$_res" | jq -r '.elsewhere | length' 2>/dev/null); _else=\${_else:-0}
+_n=\${#moved[@]}
+_msg="· nothing pins this row: not started today, no agent claim"
+(( _n )) && _msg="⬇ back in line: \$_n task(s) (a running timer keeps its row on top until it moves)"
+(( _live )) && _msg="\$_msg · \$_live held: an agent is mid-turn on it"
+(( _failed )) && _msg="\$_msg · ✗ \$_failed not moved: Ix unreachable, claim kept"
+(( _else )) && _msg="\$_msg · \$_else claimed on another host: ⌥↓ it there"
+echo "\$_msg" > "$DTD_HDR"
 UNSTARTEOF
 chmod +x "$DTD_UNSTART"
 

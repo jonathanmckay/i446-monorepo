@@ -44,7 +44,9 @@ import sys
 import time
 from pathlib import Path
 
-CLAIMS_DIR = Path.home() / "vault" / "z_ibx" / "agent-claims"
+# AGENT_CLAIMS_DIR: tests that run dtd's generated scripts point the CLI at a
+# temp store (2026-11-15); everything else uses the vault's.
+CLAIMS_DIR = Path(os.environ.get("AGENT_CLAIMS_DIR") or Path.home() / "vault" / "z_ibx" / "agent-claims")
 # A turn with no Stop for this long is a crashed/killed session, not work.
 STALE_SECS = 3600
 # A released claim keeps the task at the TOP of dtd (2026-10-21, "when an
@@ -153,6 +155,113 @@ def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
         existed |= (d / f"{tid}.json").exists()
         _forget(str(tid), d)
     return existed
+
+
+# --- unpin (2026-11-15) ---------------------------------------------------
+# dtd's ⌥↓: "sometimes I get started on a task accidentally or I want to move
+# it back to regular spot in the list". The rows JM meant were held at the top
+# by RELEASED claims (see RELEASED_TTL), so ⌥↓ drops the claim as well as the
+# started-today entry. Decided per directory, because the same card can be
+# released in one store and working in another:
+#   - a claim mid-turn (working, fresh) is left alone: the agent is on it;
+#   - anything else (released, ✅ done, idle) goes. A ✅ record is not in its
+#     session's index, so `/d off` cannot clear it, and an idle one has no TTL;
+#   - only .json and .state go: <tid>.timer is the Toggl link did-fast needs
+#     to stop the right timer on close.
+# A copy mirrored from Ix (remote/ix/, re-pulled every ~2 s by dtd's watcher)
+# is dropped ON Ix first, synchronously over ssh, and locally only once that
+# succeeded; otherwise the next pull would put the row back after the header
+# said it moved. On Ix a copy another host pushed (remote/<host>/) cannot be
+# reached (Straylight blocks inbound ssh) and comes back with its next push,
+# so it is reported as held elsewhere instead.
+UNPIN_SSH_CMD = "python3 ~/i446-monorepo/tools/did/agent_claims.py unpin {ids}"
+
+
+def _copy_state(d: Path, tid: str, now: float) -> str | None:
+    """'working' for a claim mid-turn, 'idle' | 'released' | 'done' for one
+    that can go, None when this directory holds no claim for the task."""
+    if not (d / f"{tid}.json").exists() and not (d / f"{tid}.state").exists():
+        return None
+    try:
+        s, t = (d / f"{tid}.state").read_text().split()[:2]
+        if s == "working" and now - int(t) >= STALE_SECS:
+            return "idle"   # a turn with no Stop for an hour: crashed, not work
+        return s
+    except (OSError, ValueError):
+        return "idle"
+
+
+def _drop_copy(d: Path, tid: str) -> None:
+    for p in (d / f"{tid}.json", d / f"{tid}.state"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def unpin(ids: list[str], root: Path = CLAIMS_DIR, now: float | None = None,
+          run=subprocess.run, host: str | None = None) -> dict[str, list[str]]:
+    """Drop the claims that pin these tasks to the top of dtd. Returns
+    {dropped, live, failed, elsewhere}: live = an agent is mid-turn on it,
+    failed = Ix could not be reached so its mirrored claim stays, elsewhere =
+    the claim lives on a host this one cannot reach."""
+    now = now or time.time()
+    me = host or _host()
+    ids = [str(i) for i in ids if TID_RE.fullmatch(str(i))]
+    out: dict[str, list[str]] = {"dropped": [], "live": [], "failed": [], "elsewhere": []}
+
+    def note(key: str, tid: str) -> None:
+        if tid not in out[key]:
+            out[key].append(tid)
+
+    ix_dir = root / "remote" / "ix"
+    via_ix = [t for t in ids if me != "ix" and _copy_state(ix_dir, t, now) not in (None, "working")]
+    ix_dropped: set[str] = set()
+    ix_live: set[str] = set()
+    if via_ix:
+        try:
+            r = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "ix",
+                     UNPIN_SSH_CMD.format(ids=" ".join(via_ix))],
+                    capture_output=True, text=True, timeout=8)
+            res = json.loads(r.stdout) if r.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            res = None
+        if isinstance(res, dict):
+            ix_live = {str(t) for t in res.get("live") or []}
+            # Not live on Ix = gone from Ix (dropped now, or already absent).
+            ix_dropped = set(via_ix) - ix_live
+        else:
+            for t in via_ix:
+                note("failed", t)
+
+    pushed = False
+    for tid in ids:
+        for d in _dirs(root):
+            state = _copy_state(d, tid, now)
+            if state is None:
+                continue
+            if state == "working" or (d == ix_dir and tid in ix_live):
+                note("live", tid)
+            elif d == root:
+                if state == "idle":   # its session still indexes it: let go cleanly
+                    try:
+                        _detach(json.loads((d / f"{tid}.json").read_text()), tid, root)
+                    except (OSError, ValueError):
+                        pass
+                _drop_copy(d, tid)
+                note("dropped", tid)
+                pushed = True
+            elif d == ix_dir and me != "ix":
+                if tid in ix_dropped:
+                    _drop_copy(d, tid)
+                    note("dropped", tid)
+            else:
+                note("elsewhere", tid)
+    for key in ("live", "failed", "elsewhere"):   # one verdict per task, the blocking one
+        out["dropped"] = [t for t in out["dropped"] if t not in out[key]]
+    if pushed and me != "ix":
+        push()   # this host's root → Ix's remote/<host>/ (rsync --delete)
+    return out
 
 
 def _detach(rec: dict, tid: str, root: Path) -> None:
@@ -1109,6 +1218,9 @@ def main(argv: list[str]) -> int:
         out = autoclaim(sys.stdin.read())
         if out:
             print(out)
+        return 0
+    if cmd == "unpin":   # dtd ⌥↓: these rows go back to their regular spot
+        print(json.dumps(unpin(argv[1:])))
         return 0
     if cmd == "fin":   # did-fast on another host closed a task held here
         acted = fin_holders(rest) if rest else []
