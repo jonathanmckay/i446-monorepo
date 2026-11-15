@@ -96,3 +96,18 @@ def test_late_all_colors_does_not_lower_the_handicap():
     assert ac.next_handicap(6, "3000.0") == 7
     assert ac.next_handicap(6, "2130.0") == 5
     assert ac.next_handicap(6, "") == 7
+
+
+def test_target_habits_do_not_count_toward_all_colors_from_2026_11_15():
+    """JM 2026-11-15: xk20/xk22/xk26, o314, 冥想 and 其他人 are targets, not
+    daily duties, so a blank one is not a miss. From that day on only: days
+    already closed under the old rule keep it (no retroactive stamps)."""
+    import datetime as dt
+    since = ac.TARGETS_SINCE
+    assert since == dt.date(2026, 11, 15)
+    for name in ("xk20", "xk22", "xk26", "o314", "冥想", "其他人", " XK20 "):
+        assert not ac.is_habit_header(name, since), name
+        assert not ac.is_habit_header(name), name                         # no day = current rule
+        assert ac.is_habit_header(name, since - dt.timedelta(days=1)), name
+    assert ac.is_habit_header("hiit", since)
+    assert ac.is_habit_header("xk88", since)

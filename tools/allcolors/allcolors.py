@@ -130,7 +130,7 @@ def gather(d: dt.date, headers: list[str], conn, late_ok: bool = False):
     core, habits = [], []
     core_names = {ac.norm(c) for c in ac.CORE}
     for letter, (h, v) in day.cells.items():
-        if not ac.is_habit_header(h):
+        if not ac.is_habit_header(h, d):
             continue
         cell = _timed(h.strip(), v, _done_at(conn, SHEET, letter, day.row), d, late_ok)
         (core if ac.norm(h) in core_names else habits).append(cell)
@@ -266,7 +266,7 @@ def settle_late_all_colors(today: dt.date, headers: list[str], conn, dry: bool,
                 or ac.classify_value(ah) == ac.BLANK
                 or any(ac.classify_value(row.get(c)) != ac.DONE for c in core)):
             continue
-        blanks = sum(1 for n, v in row.items() if ac.is_habit_header(n) and n not in core
+        blanks = sum(1 for n, v in row.items() if ac.is_habit_header(n, d) and n not in core
                      and ac.classify_value(v) == ac.BLANK)
         if blanks > _int(ah):
             continue

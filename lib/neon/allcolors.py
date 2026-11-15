@@ -3,7 +3,8 @@
 A day D gets all colors when
   * the core three (0t, 0l, 0g) are done (non-blank, nonzero), and
   * misses <= handicap, where misses = blank cells among the other 0n habit
-    columns (D:AS minus AF/AG/AH, 词汇 and the core three) plus one virtual
+    columns (D:AS minus AF/AG/AH, 词汇, the core three and, from 2026-11-15,
+    the target habits xk20/xk22/xk26/o314/冥想/其他人) plus one virtual
     habit "1n": every 1n+ card whose row-3 weekday is D's weekday is filled
     in its week row.
 An explicit 0 is N/A — never a miss, never counted as done.
@@ -26,6 +27,11 @@ LATE_ALL_COLORS = 3000   # 0n!AG: reached only with after-the-day writes
 # 0n columns that are not habits (bookkeeping) or are excluded by JM
 # ("词汇": retired, blank every day since 2026-10).
 NON_HABIT = {"n color", "⎣∀clr", "#", "词汇"}
+# Targets, not daily duties (JM 2026-11-15): a blank one is not a miss. Only
+# from TARGETS_SINCE on, so days closed under the old rule are not re-stamped
+# by the 14-day sweep.
+TARGETS = {"xk20", "xk22", "xk26", "o314", "冥想", "其他人"}
+TARGETS_SINCE = dt.date(2026, 11, 15)
 
 
 @dataclass(frozen=True)
@@ -50,8 +56,12 @@ def norm(name: str) -> str:
     return " ".join((name or "").replace("\xa0", " ").split()).lower()
 
 
-def is_habit_header(name: str) -> bool:
+def is_habit_header(name: str, day: Optional[dt.date] = None) -> bool:
+    """Whether this 0n column counts toward all colors on `day` (None = the
+    current rule)."""
     n = norm(name)
+    if n in TARGETS and (day is None or day >= TARGETS_SINCE):
+        return False
     return bool(n) and n not in NON_HABIT
 
 
