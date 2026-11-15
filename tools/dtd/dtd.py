@@ -48,6 +48,8 @@ SUMMARY_MAX_AGE = 45  # seconds; day-total (points + done) cache
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import daytime  # noqa: E402  — device-priority 'today' (lib/where.py), not Ix's own clock
+sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
+import inbox_counts as _inbox_counts  # noqa: E402  — ✉N badges on inbox habit cards
 
 # Survey forms (2026-10-22): card -> form map + field specs, loaded by path
 # (tests load this file by path too, so a plain import can't rely on cwd).
@@ -525,6 +527,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         return []
 
     today = _today().isoformat()
+    try:
+        ibx_badges = _inbox_counts.read_badges(prefer_host=_host_slug())
+    except Exception:
+        ibx_badges = {}
 
     def sec(key, bound):
         return [t for t in d.get(key, []) if isinstance(t, dict)
@@ -639,12 +645,20 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         display = t.get("short") or raw
         title = strip_ann(display) or raw
         est, pts = card_points(raw, t.get("labels", []), _ritual_cfg)
+        # Inbox badge (2026-11-15): pending-message count on the daily inbox
+        # habits, same snapshots terminal dtd reads. A field of its own: title
+        # and raw go back to did-fast and the edit box and must stay clean.
+        badge = ""
+        if ibx_badges:
+            badge = _inbox_counts.badge_text(
+                ibx_badges.get(_inbox_counts.norm(strip_ann(raw))))
         color, dom = color_of(t.get("labels", []), raw)
         out.append({
             "id": tid,
             "raw": raw,
             "title": title,
             "est": est,
+            "badge": badge,
             "points": pts,
             "color": color,
             "domain": dom,
@@ -1934,7 +1948,7 @@ function makeRow(t){
   ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.recurring?'↻ ':'') + t.title;
   const est = document.createElement('span');
   est.className = 'est';
-  est.textContent = t.est || '';
+  est.textContent = (t.badge ? t.badge + ' ' : '') + (t.est || '');
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 

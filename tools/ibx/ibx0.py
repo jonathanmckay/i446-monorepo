@@ -2114,15 +2114,38 @@ def main():
                 if message:
                     console.print(f"[dim]{message}[/dim]")
 
-def headless_counts(timeout=60):
+def _own_snapshot():
+    """(snapshot dict, age in seconds) of this host's file, or (None, None)."""
+    try:
+        p = _ic.snapshot_path()
+        snap = json.loads(p.read_text(encoding="utf-8"))
+        return snap, time.time() - float(snap["ts"])
+    except Exception:
+        return None, None
+
+
+def headless_counts(timeout=60, if_older=0):
     """--counts: one quiet fetch cycle, write the per-habit snapshot for dtd,
-    never close anything (see the auto-close rules above). Meant for launchd
-    on ix so the badges stay fresh while no ibx tab is open."""
+    never close anything (see the auto-close rules above). Run from cron on ix
+    every 5 min (config/ix.crontab) so the badges stay fresh while no ibx tab
+    is open.
+
+    ``--if-older N`` (2026-11-15): do nothing when this host's snapshot is
+    younger than N seconds, so a tick never overwrites what a live ibx tab
+    just wrote from its own queue. An unchanged result is rewritten only once
+    the file nears dtd's 15 min badge expiry: every write makes terminal dtd
+    reload and Syncthing ship the file."""
     import io
     import signal
+    prev, prev_age = _own_snapshot()
+    if if_older and prev_age is not None and 0 <= prev_age < if_older:
+        print(json.dumps({"skipped": "fresh", "age": round(prev_age)}))
+        return
     os.environ["IBX_HEADLESS"] = "1"
     signal.signal(signal.SIGALRM, lambda *_: os._exit(3))
-    signal.alarm(timeout * 4)  # never hang a launchd slot on a stuck source
+    # Never hang a cron slot on a stuck source. Well under the 5 min cadence,
+    # so two runs cannot overlap.
+    signal.alarm(150)
     quiet = Console(file=io.StringIO())
     mods = [_ibx, _imsg, _slack]
     if _outlook_active():
@@ -2137,13 +2160,28 @@ def headless_counts(timeout=60):
     items, returned = _fetch_cycle(skip_triage=True, timeout=timeout)
     items = _drop_day_skipped(_drop_outside_block(items))
     snap = _ic.build_snapshot(items, _cycle_channel_ok(returned))
+    signal.alarm(0)
+    if (prev is not None and prev_age is not None
+            and prev.get("habits") == snap["habits"]
+            and 0 <= prev_age < _ic.MAX_AGE_S - 360):
+        print(json.dumps({"skipped": "unchanged", "habits": snap["habits"]},
+                         ensure_ascii=False))
+        return
     path = _ic.write_snapshot(snap)
     print(json.dumps({"path": str(path), "returned": sorted(returned),
                       "habits": snap["habits"]}, ensure_ascii=False))
 
 
+def _flag_int(name, default=0):
+    argv = sys.argv[1:]
+    try:
+        return int(argv[argv.index(name) + 1])
+    except (ValueError, IndexError):
+        return default
+
+
 if __name__ == "__main__":
     if "--counts" in sys.argv[1:]:
-        headless_counts()
+        headless_counts(if_older=_flag_int("--if-older"))
     else:
         main()
