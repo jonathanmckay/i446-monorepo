@@ -1,33 +1,58 @@
 #!/usr/bin/env python3
-"""done_session — /done: close the task this Claude session claimed.
+"""done_session — /fin: finish this Claude session's claimed task.
 
-    done_session.py
+    done_session.py            close it (JM's ⌥↵): points, Todoist, claim, timer
+    done_session.py <N>        delay it N days (defer-fast --id, as dtd's ctrl-d)
+    done_session.py <time>     hide it in dtd until that time TODAY (ctrl-v snooze
+                               file, epoch float) — 1500 · 15:00 · 3pm · 3:30pm
 
 The task: every claim of $CLAUDE_CODE_SESSION_ID that is held or marked ✅
 (`agent_claims.py done` drops the id from the session index, so held() alone is
-usually empty by the time JM types /done; a 'released' claim is a task this
-session let go of, never closed here). Each is completed exactly as dtd's ⌥↵
-does it, `did-fast.py --task-id <id> <content>`, which credits its points,
-closes Todoist, clears the claim and stops the running Toggl timer only when
-the timer is that task. Content comes from the dtd cache, not the claim
-record: a card renamed since the claim would otherwise miss its timer.
+usually empty by the time JM types /fin; a 'released' claim is a task this
+session let go of, never touched here).
 
-Prints one JSON object: {"status": "done"|"no-claim"|"failed", "tasks": [...]}.
-"done" means every task really closed (Todoist included), so the conversation
-is safe to /clear.
+Close: each task is completed exactly as dtd's ⌥↵ does it, `did-fast.py
+--task-id <id> <content>`, which credits its points, closes Todoist, clears the
+claim and stops the running Toggl timer only when the timer is that task.
+Content comes from the dtd cache, not the claim record: a card renamed since
+the claim would otherwise miss its timer.
+
+Delay (days or time): nothing is credited. The claim is cleared with
+agent_claims.clear_task (release() only drops held ids, so a ✅ claim would
+otherwise show tomorrow's recurring card as finished for a day), and the Toggl
+timer is stopped only if it is that task, via toggl_cli — did-fast is never
+imported here (its module load talks to Excel, Todoist and ix-osa).
+A bare integer is DAYS (`15` = 15 days); a time needs 4 digits, a colon or
+am/pm (`1500`, `15:00`, `3pm`). The time path writes dtd's per-day snooze
+file (same shape as ctrl-v +Nm: absolute epoch float, forward-only date) and
+its Syncthing mirror, never a Todoist label — a 地支 label is durable and
+would hide a recurring card at that hour every day.
+
+Prints one JSON object: {"status": "done"|"deferred"|"delayed"|"no-claim"|
+"failed", "tasks": [...]}. "done" means every task really closed (Todoist
+included), so the conversation is safe to /clear.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import importlib.util
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DID_FAST = HERE / "did-fast.py"
-TASK_QUEUE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "jm" / "task-queue.json"
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "jm"
+TASK_QUEUE = STATE_DIR / "task-queue.json"
+SNOOZE = STATE_DIR / "dtd-block-snooze.json"          # dtd ctrl-v snooze file (host-local)
+SNOOZE_MIRROR_DIR = Path.home() / "vault" / "z_ibx"   # dtd-block-snooze-<host>.json, Syncthing-synced
+DEFER_FAST = HERE / "defer-fast.py"
+TOGGL_CLI = Path.home() / "i446-monorepo" / "mcp" / "toggl_server" / "toggl_cli.py"
+ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")   # same as did-fast's
 
 
 def _load(name: str):
@@ -78,10 +103,124 @@ def timer_line(raw: str) -> str | None:
     return None
 
 
+def parse_when(arg: str | None, now: _dt.datetime | None = None):
+    """None → close. ("days", N) for a bare 1-3 digit integer (1..365).
+    ("time", datetime today) for 1500 · 15:00 · 3pm · 3:30pm. Raises ValueError
+    with a usage message otherwise (0 days, 2460, 13pm, 'tomorrow')."""
+    if arg is None or not str(arg).strip():
+        return None
+    a = str(arg).strip().lower()
+    now = now or _dt.datetime.now()
+    if re.fullmatch(r"\d{1,3}", a):
+        n = int(a)
+        if not 1 <= n <= 365:
+            raise ValueError(f"days must be 1..365, got {a}")
+        return ("days", n)
+    m = re.fullmatch(r"(\d{2})(\d{2})", a) or re.fullmatch(r"(\d{1,2}):(\d{2})", a)
+    ampm = None
+    if not m:
+        m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", a)
+        if m:
+            ampm = m.group(3)
+    if not m:
+        raise ValueError(f"not a day count or a time: {arg!r} (use 3 · 1500 · 15:00 · 3pm)")
+    h, mi = int(m.group(1)), int(m.group(2) or 0)
+    if ampm:
+        if not 1 <= h <= 12:
+            raise ValueError(f"bad 12h hour: {arg!r}")
+        h = h % 12 + (12 if ampm == "pm" else 0)
+    if h > 23 or mi > 59:
+        raise ValueError(f"bad time: {arg!r}")
+    return ("time", now.replace(hour=h, minute=mi, second=0, microsecond=0))
+
+
+def timer_key(s: str) -> str:
+    """did-fast's _timer_key: no 😈, no (N)/[N]/{N}, single-spaced, lowercase."""
+    return " ".join(ANNOT_RE.sub("", s.replace("😈", "")).split()).lower()
+
+
+def stop_timer_if(content: str, run=subprocess.run) -> str | None:
+    """Stop the running Toggl timer only when it is this task (as did-fast's
+    stop_matching_toggl, without importing did-fast). Returns a display line."""
+    try:
+        cur = run(["python3", str(TOGGL_CLI), "current"], capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001
+        return None
+    line = (cur.stdout or "").strip()
+    if cur.returncode != 0 or not line.startswith("Running:"):
+        return None
+    desc = re.sub(r"^\d{2}:\d{2}-running\s+", "", line[len("Running:"):].strip())
+    desc = desc[:desc.find(" @")].strip() if " @" in desc else desc.split("(")[0].strip()
+    if not timer_key(desc) or timer_key(desc) != timer_key(content):
+        return None
+    try:
+        st = run(["python3", str(TOGGL_CLI), "stop"], capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001
+        return f"⏱ {desc} (stop failed)"
+    return f"⏱ {desc} stopped" if st.returncode == 0 else f"⏱ {desc} (stop failed)"
+
+
+def snooze_until(ids: list[str], until: _dt.datetime, path: Path = SNOOZE,
+                 mirror_dir: Path = SNOOZE_MIRROR_DIR, now: _dt.datetime | None = None) -> float:
+    """Hide ids in dtd until `until` today: dtd.sh's ctrl-v writer, minute form
+    (absolute epoch float; an int would mean an hour-of-day block delay).
+    Forward-only date gate and the per-host vault mirror exactly as dtd.sh
+    (DTD_BLOCKAPPLY) does them, so dtd cli, dtd web and the other host all
+    read it. Returns the epoch written."""
+    now = now or _dt.datetime.now()
+    if until <= now:
+        raise ValueError(f"{until.strftime('%H:%M')} has already passed")
+    today = now.date().isoformat()
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict) or today > data.get("date", ""):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    if today > data.get("date", ""):
+        data["date"] = today
+    sn = data.setdefault("snoozes", {})
+    epoch = float(until.timestamp())
+    for i in ids:
+        sn[str(i)] = epoch
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, path)
+    try:
+        slug = re.sub(r"[^a-z0-9]+", "-", socket.gethostname().lower()).strip("-")[:24]
+        mirror_dir.mkdir(parents=True, exist_ok=True)
+        mp = mirror_dir / f"dtd-block-snooze-{slug}.json"
+        mt = mp.with_name(mp.name + ".tmp")
+        mt.write_text(json.dumps(data))
+        os.replace(mt, mp)
+    except OSError:
+        pass
+    return epoch
+
+
+def defer_days(tid: str, days: int, run=subprocess.run) -> tuple[bool, str]:
+    """dtd's ctrl-d path: defer-fast --id <tid> <days>, no points argument (the
+    posthoc stub is a [0] audit record, not credit). (ok, display)."""
+    p = run(["python3", str(DEFER_FAST), "--id", tid, str(days)], capture_output=True, text=True, timeout=60)
+    try:
+        out = json.loads(p.stdout or "{}")
+    except ValueError:
+        out = {}
+    if p.returncode != 0 or out.get("error"):
+        return False, out.get("error") or (p.stderr or p.stdout or "").strip()[-160:] or f"defer-fast exit {p.returncode}"
+    return True, f"→ {out.get('target_date', '?')}"
+
+
 def main() -> int:
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     if not session:
         print(json.dumps({"status": "failed", "error": "no CLAUDE_CODE_SESSION_ID; run inside Claude"}))
+        return 1
+    try:
+        when = parse_when(sys.argv[1] if len(sys.argv) > 1 else None)
+    except ValueError as e:
+        print(json.dumps({"status": "failed", "error": str(e), "tasks": []}))
         return 1
     ac, outcome = _load("agent_claims"), _load("dtd_outcome")
     claims = ac.load()
@@ -94,16 +233,38 @@ def main() -> int:
     except (OSError, ValueError):
         tasks = []
     report, all_ok = [], True
+    if when is None:
+        for tid in ids:
+            content = current_content(tid, claims, tasks)
+            p = subprocess.run(["python3", str(DID_FAST), "--task-id", tid, content],
+                               capture_output=True, text=True)
+            ok, display = closed_ok(p.returncode, p.stdout, tid, content, outcome)
+            all_ok &= ok
+            report.append({"id": tid, "task": content, "ok": ok, "result": display,
+                           "timer": timer_line(p.stdout)})
+        print(json.dumps({"status": "done" if all_ok else "failed", "tasks": report},
+                         ensure_ascii=False, indent=2))
+        return 0 if all_ok else 2
+    kind, val = when
+    if kind == "time":
+        try:
+            snooze_until(ids, val)
+        except ValueError as e:
+            print(json.dumps({"status": "failed", "error": str(e), "tasks": []}))
+            return 1
     for tid in ids:
         content = current_content(tid, claims, tasks)
-        p = subprocess.run(["python3", str(DID_FAST), "--task-id", tid, content],
-                           capture_output=True, text=True)
-        ok, display = closed_ok(p.returncode, p.stdout, tid, content, outcome)
+        if kind == "days":
+            ok, display = defer_days(tid, val)
+        else:
+            ok, display = True, f"hidden until {val.strftime('%H:%M')} today"
         all_ok &= ok
+        if ok:
+            ac.clear_task(tid)   # not release(): a ✅ claim must not outlive the delay
         report.append({"id": tid, "task": content, "ok": ok, "result": display,
-                       "timer": timer_line(p.stdout)})
-    print(json.dumps({"status": "done" if all_ok else "failed", "tasks": report},
-                     ensure_ascii=False, indent=2))
+                       "timer": stop_timer_if(content) if ok else None})
+    status = ("deferred" if kind == "days" else "delayed") if all_ok else "failed"
+    print(json.dumps({"status": status, "tasks": report}, ensure_ascii=False, indent=2))
     return 0 if all_ok else 2
 
 

@@ -54,3 +54,103 @@ def test_timer_line():
     raw = json.dumps({"toggl_stopped": {"description": "fix x", "stopped": True, "minutes": 12}})
     assert ds.timer_line(raw) == "stopped fix x (12m)"
     assert ds.timer_line(json.dumps({"toggl_stopped": None})) is None
+
+
+# --- /fin (2026-11-14): "if I put an integer or time after it it means to delay
+# that many days or to that time today" ---------------------------------------
+import datetime as dt
+import subprocess
+
+NOW = dt.datetime(2026, 11, 14, 9, 30)
+
+
+def test_parse_when_bare_integer_is_days_not_a_time():
+    assert ds.parse_when(None) is None and ds.parse_when("") is None
+    assert ds.parse_when("3", NOW) == ("days", 3)
+    assert ds.parse_when("15", NOW) == ("days", 15)          # fifteen DAYS, never 15:00
+    assert ds.parse_when("365", NOW) == ("days", 365)
+
+
+def test_parse_when_time_forms_land_today():
+    for a in ("1500", "15:00", "3pm", "3PM", "3:00pm"):
+        assert ds.parse_when(a, NOW) == ("time", dt.datetime(2026, 11, 14, 15, 0)), a
+    assert ds.parse_when("3:30pm", NOW) == ("time", dt.datetime(2026, 11, 14, 15, 30))
+    assert ds.parse_when("12am", NOW) == ("time", dt.datetime(2026, 11, 14, 0, 0))
+    assert ds.parse_when("12pm", NOW) == ("time", dt.datetime(2026, 11, 14, 12, 0))
+    assert ds.parse_when("0930", NOW) == ("time", dt.datetime(2026, 11, 14, 9, 30))
+
+
+def test_parse_when_rejects_nonsense():
+    import pytest
+    for bad in ("0", "366", "2460", "13pm", "25:00", "tomorrow", "1.5", "15h"):
+        with pytest.raises(ValueError):
+            ds.parse_when(bad, NOW)
+
+
+def test_snooze_until_writes_dtd_ctrl_v_shape_and_mirror(tmp_path):
+    """Same file dtd.sh's DTD_BLOCKAPPLY writes for ctrl-v +Nm: {date, snoozes:
+    {id: epoch FLOAT}} (an int would read as an hour-of-day block delay), plus
+    the per-host mirror in the vault so dtd web / the other host see it."""
+    path = tmp_path / "state" / "dtd-block-snooze.json"
+    mirror = tmp_path / "z_ibx"
+    until = dt.datetime(2026, 11, 14, 15, 0)
+    epoch = ds.snooze_until(["T1", "T2"], until, path=path, mirror_dir=mirror, now=NOW)
+    data = json.loads(path.read_text())
+    assert data["date"] == "2026-11-14"
+    assert data["snoozes"] == {"T1": epoch, "T2": epoch}
+    assert isinstance(data["snoozes"]["T1"], float) and epoch == until.timestamp()
+    mirrors = list(mirror.glob("dtd-block-snooze-*.json"))
+    assert len(mirrors) == 1 and json.loads(mirrors[0].read_text()) == data
+    # existing same-day snoozes survive; a stale (older) date is wiped
+    ds.snooze_until(["T3"], dt.datetime(2026, 11, 14, 16, 0), path=path, mirror_dir=mirror, now=NOW)
+    assert set(json.loads(path.read_text())["snoozes"]) == {"T1", "T2", "T3"}
+    path.write_text(json.dumps({"date": "2026-11-13", "snoozes": {"OLD": 18}}))
+    ds.snooze_until(["T4"], until, path=path, mirror_dir=mirror, now=NOW)
+    assert set(json.loads(path.read_text())["snoozes"]) == {"T4"}
+
+
+def test_snooze_until_refuses_a_time_already_passed(tmp_path):
+    import pytest
+    with pytest.raises(ValueError):
+        ds.snooze_until(["T1"], dt.datetime(2026, 11, 14, 9, 0), path=tmp_path / "s.json",
+                        mirror_dir=tmp_path, now=NOW)
+
+
+def test_stop_timer_only_when_it_is_this_task():
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd[-1])
+        if cmd[-1] == "current":
+            return subprocess.CompletedProcess(cmd, 0, "Running: 09:12-running 😈 fix dtd (30) [15] @i447 (running) [id:9]", "")
+        return subprocess.CompletedProcess(cmd, 0, "stopped", "")
+    assert ds.stop_timer_if("other task [10]", run) is None and calls == ["current"]
+    calls.clear()
+    assert ds.stop_timer_if("fix dtd (30) [15]", run) == "⏱ 😈 fix dtd (30) [15] stopped" and calls == ["current", "stop"]
+
+
+def test_defer_days_uses_defer_fast_by_id_without_points():
+    seen = {}
+
+    def run(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"task": "x", "target_date": "2026-11-17"}), "")
+    ok, display = ds.defer_days("ABC", 3, run)
+    assert ok and display == "→ 2026-11-17"
+    assert seen["cmd"][1:] == [str(ds.DEFER_FAST), "--id", "ABC", "3"], "dtd's ctrl-d form: id, days, NO points arg"
+    bad = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps({"error": "task id ABC not found"}), "")
+    assert ds.defer_days("ABC", 3, bad) == (False, "task id ABC not found")
+
+
+def test_skill_renamed_to_fin_and_nothing_says_done():
+    skills = HERE.parent.parent / "skills" / "claude-skills"
+    assert (skills / "fin" / "SKILL.md").exists() and not (skills / "done").exists()
+    import re
+    # fin's own description may name the old command ("Replaces /done") so a
+    # typed /done still routes here; nothing else may. "archive/done" is prose.
+    offenders = [p for p in skills.glob("*/SKILL.md")
+                 if p.parent.name != "fin" and re.search(r"(?<![\w])/done\b", p.read_text())]
+    assert offenders == [], offenders
+    fin = (skills / "fin" / "SKILL.md").read_text()
+    assert fin.startswith('---\nname: "fin"\ndescription: "Use when')
+    assert "done_session.py" in fin and "→ /clear" in fin

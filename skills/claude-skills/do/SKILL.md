@@ -1,6 +1,6 @@
 ---
 name: "do"
-description: "Start an activity. Variable tasks (xk20, 冥想, bball, ...) start an input-based timer with points auto-calculated from duration on /done. Anything else creates a Todoist task + starts a timer, and requires [N] points (asks if missing). Usage: /do <task> [(time)] [[points]] [@tag]"
+description: "Start an activity. Variable tasks (xk20, 冥想, bball, ...) start an input-based timer with points auto-calculated from duration on /fin. Anything else creates a Todoist task + starts a timer, and requires [N] points (asks if missing). Usage: /do <task> [(time)] [[points]] [@tag]"
 user-invocable: true
 ---
 
@@ -8,7 +8,7 @@ user-invocable: true
 
 One entry point for starting work. Two modes, decided by the task name:
 
-1. **Variable mode** — the task is in the Variable Task Set below → input-based timer; points auto-calculated from duration when stopped via `/done` or `/did`.
+1. **Variable mode** — the task is in the Variable Task Set below → input-based timer; points auto-calculated from duration when stopped via `/fin` or `/did`.
 2. **Task mode** — anything else → create a Todoist task (due today) + start a Toggl timer, like the old `/doing`. **`[N]` points are required in this mode** — if the input has no `[N]`, ask the user for the point value before doing anything else.
 
 
@@ -90,7 +90,7 @@ Match → Variable mode. No match → Task mode.
 
 ### Variable completion flow
 
-When `/done` or `/did` (no args) is called, the /did skill detects the active /do session and:
+When `/fin` or `/did` (no args) is called, the /did skill detects the active /do session and:
 1. Stops the timer
 2. Reads duration from the stopped timer
 3. Computes points = duration (minutes) + `start_bonus` (0 for plain variable tasks)

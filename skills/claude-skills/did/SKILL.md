@@ -221,7 +221,7 @@ For each label on the closed task matching `d359/<slug>`:
 2. If file exists, update or insert `last_contact: <targetDate>` in the frontmatter.
 3. If no file matches the slug, log a one-line warning and continue (don't fail the /did flow).
 
-Convention: `d359/<slug>` labels mark Todoist tasks (and Toggl tags) as outreach for that contact. Same convention used by `/done` and `/tg stop` for time entries. Slug = d359 filename minus `-d359.md` / ` d359.md` suffix (e.g., `mark-mckay`, `mariah-mckay`).
+Convention: `d359/<slug>` labels mark Todoist tasks (and Toggl tags) as outreach for that contact. Same convention used by `/fin` and `/tg stop` for time entries. Slug = d359 filename minus `-d359.md` / ` d359.md` suffix (e.g., `mark-mckay`, `mariah-mckay`).
 
 ## Step 6: Variable Task
 

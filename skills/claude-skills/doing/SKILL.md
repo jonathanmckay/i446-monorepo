@@ -8,5 +8,5 @@ user-invocable: true
 
 `/doing` and `/do` were combined (2026-06-06). Follow the instructions in `~/.claude/skills/do/SKILL.md` exactly, treating the input identically:
 
-- Task in the Variable Task Set → variable-mode timer (points from duration via /done)
+- Task in the Variable Task Set → variable-mode timer (points from duration via /fin)
 - Anything else → Todoist task + Toggl timer; `[N]` points required, ask if missing

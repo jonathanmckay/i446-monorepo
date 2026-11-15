@@ -30,7 +30,7 @@ No question means: audit the loop for its single worst seam right now.
 | Plan | `/0g`, `/-1g`, `/1g`, `/1-2g` audit | — | `scripts/0g-sync.py`, `-1g-cron.py` (Ix cron) | build order ↔ Todoist `#0g`/`#-1g` |
 | Pick | dtd (fzf TUI `tools/did/dtd.sh`, phone `tools/dtd/dtd.py` on Ix:5560), `卯` | `/d`, `/claim` (`tools/did/agent_claims.py`, UserPromptSubmit hook) | `task-queue.json` cache via `did-fast --refresh-cache` | Todoist |
 | Do + time | `/do`, `/tg`, janus (`tools/tg/janus.py`) | `cc` wrapper (`claude-tracked`, `llm-sessions.db`), transcript export cron | `tg-fast.py`, toggl_server MCP | Toggl |
-| Close + points | `/did`, `/done`, dtd swipe/Enter | `/d done` (marks agent-finished, does not credit) | `tools/did/did-fast.py` → Todoist close + Neon write via excel-http daemon on Ix | Neon (0₦, 1n+, 0分) |
+| Close + points | `/did`, `/fin`, dtd swipe/Enter | `/d done` (marks agent-finished, does not credit) | `tools/did/did-fast.py` → Todoist close + Neon write via excel-http daemon on Ix | Neon (0₦, 1n+, 0分) |
 | Backfill | `/0n`, `/1n`, `/2n` gap fill | — | `0n-backfill.py`, `1n-backfill.py` | Neon / Toggl |
 | Rituals | `/inbound`, `/-2n`, `/ibx0`, `/ص` | — | `did-fast --ritual` | Neon 0n |
 | Review | `/0r`, `/0s`, `/1s`, `/1-1n`, `/2s`, `/3s`, `/dash`, janus | `/1-i446` vault health | personal-dashboard points cache (Ix cron) | Neon + Toggl |
@@ -41,7 +41,7 @@ Crons and daemons: `docs/cron-and-daemons.md`. Self-clearing skills and
 frontmatter rules: `skills/claude-skills/README.md`.
 
 Known overlap worth checking before recommending anything new: `/did` vs
-`/done`, `/d` vs `/claim`, `/inbound` vs `/-2n`. (`/doing`, `/d1d`, `/bugg`,
+`/fin`, `/d` vs `/claim`, `/inbound` vs `/-2n`. (`/doing`, `/d1d`, `/bugg`,
 `/salat` and `/ص` were retired to `_archive/` on 2026-11-01.)
 
 The map goes stale. A skill's frontmatter describes intent; `did-fast.py` and
