@@ -30,9 +30,12 @@ python3 agent_triage.py m5x2 --all
    → `### Week of <Y.MM.DD>` (week received). Already-linked threads are
    skipped. `--archive` then files each linked update still in the inbox.
    Last line of output is JSON: `found`, `linked`, `filed`.
-2. `agent_triage.py m5x2 --all` classifies every inbox message (read or
-   unread) with `claude -p` against the ibx criteria and files the confident
-   "no response needed" ones. Each filed message is logged to
+2. `agent_triage.py m5x2 --all` takes every inbox message from the last 30
+   days (read or unread; `--days N` changes the window). Fixed sender rules
+   file first (`RULE_SKIP`: all Property Meld notifications, JM 2026-11-15);
+   the rest is classified 20 at a time with `claude -p` against the ibx
+   criteria, and the confident "no response needed" ones are filed. It logs
+   a `keep:` line with the reason for everything it leaves. Each filed message is logged to
    `~/.config/ibx/agent_filtered.jsonl` (undo = re-add INBOX). A run that's
    already in progress (the ibx m5x2 timer hook) makes this a no-op.
 
@@ -46,4 +49,5 @@ inbox → K of T filed to ai-no-response-needed; T−K left for you
 ```
 
 Then list the subjects the triage filed (from its `skip:` lines) so a wrong
-call is visible at a glance. Don't open, reply to, or summarize email bodies.
+call is visible at a glance; give rule-filed mail as one line with its count
+(e.g. "81 Property Meld notifications"), not one line each. Don't open, reply to, or summarize email bodies.

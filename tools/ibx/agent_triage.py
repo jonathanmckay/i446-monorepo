@@ -63,6 +63,22 @@ EXTRA = {
 }
 
 
+# Senders filed without asking the agent: (regex on From, reason). JM
+# 2026-11-15: "File all Property Meld". Its merge/status notifications (79 in
+# one evening) were kept by the maintenance-is-keep rule above.
+RULE_SKIP = {
+    "m5x2": [(re.compile(r"@msg\.propertymeld\.com\b", re.I), "Property Meld notification (rule)")],
+}
+
+
+def rule_skip(source, e):
+    """Reason string when a fixed sender rule files this email, else None."""
+    for rx, why in RULE_SKIP.get(source, []):
+        if rx.search(e.get("from") or ""):
+            return why
+    return None
+
+
 def log(msg):
     print(f"{datetime.now():%H:%M:%S} {msg}", flush=True)
 
@@ -193,6 +209,29 @@ def run(source, dry_run=False):
     if not emails:
         return 0, 0
     done = 0
+
+    def file_it(e, why):
+        log(f"  skip: {e['subject'][:70]}  ({why})")
+        if dry_run:
+            return 0
+        try:
+            do_filter(e)
+        except Exception as ex:
+            log(f"  filter failed: {ex}")
+            return 0
+        with open(AUDIT_FILE, "a") as f:
+            f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"),
+                                "source": source, "id": e["id"], "from": e["from"],
+                                "subject": e["subject"], "why": why}) + "\n")
+        return 1
+
+    ruled = [(e, rule_skip(source, e)) for e in emails]
+    for e, why in ruled:
+        if why:
+            done += file_it(e, why)
+    total, emails = len(emails), [e for e, why in ruled if not why]
+    if total != len(emails):
+        log(f"  rules: {total - len(emails)} filed by sender rule, {len(emails)} to the agent")
     for start in range(0, len(emails), BATCH):
         batch = emails[start:start + BATCH]
         label = f"batch {start // BATCH + 1}"
@@ -213,21 +252,9 @@ def run(source, dry_run=False):
             if v != "skip":
                 log(f"  keep: {e['subject'][:70]}  ({why})")
                 continue
-            log(f"  skip: {e['subject'][:70]}  ({why})")
-            if dry_run:
-                continue
-            try:
-                do_filter(e)
-            except Exception as ex:
-                log(f"  filter failed: {ex}")
-                continue
-            done += 1
-            with open(AUDIT_FILE, "a") as f:
-                f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"),
-                                    "source": source, "id": e["id"], "from": e["from"],
-                                    "subject": e["subject"], "why": why}) + "\n")
-    log(f"{source}: filed {done} of {len(emails)}")
-    return len(emails), done
+            done += file_it(e, why)
+    log(f"{source}: filed {done} of {total}")
+    return total, done
 
 
 def main():

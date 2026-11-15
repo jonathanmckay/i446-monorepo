@@ -92,3 +92,22 @@ def test_dry_run_files_nothing(tmp_path, monkeypatch):
                                              lambda e: filed.append(e["id"])))
     assert at.run("m5x2", dry_run=True) == (3, 0)
     assert filed == [] and not (tmp_path / "audit.jsonl").exists()
+
+
+def test_property_meld_is_filed_by_rule_without_the_agent(tmp_path, monkeypatch):
+    """JM 2026-11-15: file all Property Meld. The sender rule runs before the
+    agent, so the m5x2 "maintenance is keep" criterion cannot hold them."""
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    emails = _emails(3)
+    emails[1]["from"] = "Property Meld <abc-123@msg.propertymeld.com>"
+    emails[1]["subject"] = "EMERGENCY Meld at 1905 W 2nd Ave, Unit E: (Merged) Ecall no heat"
+    seen, filed = [], []
+
+    def ask(prompt):
+        seen.append(prompt)
+        return '[{"i": 1, "v": "keep", "why": "tenant"}, {"i": 2, "v": "keep", "why": "tenant"}]'
+
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: emails, ask, lambda e: filed.append(e["id"])))
+    assert at.run("m5x2") == (3, 1)
+    assert filed == ["m2"] and "Ecall no heat" not in seen[0]
+    assert at.rule_skip("i9", emails[1]) is None     # rule is m5x2-only
