@@ -95,6 +95,10 @@
             "type": "command",
             "command": "~/i446-monorepo/scripts/session-title.sh >/dev/null 2>&1",
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "~/i446-monorepo/scripts/jm-device.sh 2>/dev/null"
           }
         ]
       }
