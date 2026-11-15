@@ -67,7 +67,7 @@ per task, exactly this shape:
 📋 <task name, annotations stripped>
   Done:   • <what was accomplished, 2–4 bullets>
   You:    48m on the timer across 2 entries
-  Model:  1h52m active, 23 turns, 103 messages, 412k in / 38k out, ≈ $14.20 API-equivalent
+  Model:  1h52m active, 23 turns, 103 calls, 92k new in / 38k out (context avg 257k, 15.9M re-read), ≈ $14.20 API-equivalent
   Points: 60 分
 ```
 
@@ -78,11 +78,17 @@ per task, exactly this shape:
   one line. A deferred/snoozed task says what is done so far and what remains.
 - **You** is `report.jm.minutes` / `report.jm.entries` (Toggl time on this task
   since the claim). `0m` → `no timer on this task`.
-- **Model** is `report.model`: `active_minutes` (first to last message since
-  the claim), `turns` (your prompts), `messages`, `tokens.input + cache_read +
-  cache_write_*` as "in" and `tokens.output` as "out" (k/M, one decimal),
-  `cost_usd` as API-equivalent list price (JM is on a Max plan: this is what it
+- **Model** is `report.model`, counted from this task's claim to the session's
+  next claim (2026-11-15: windows no longer overlap, so several tasks' reports
+  add up to the session): `active_minutes`, `turns` (your prompts), `messages`
+  as "calls" (append `+ N subagent` when `subagent_calls` > 0), `new_in` as
+  "new in" (how much the context grew: prompts, tool results and files read,
+  the work figure), `tokens.output` as "out", then in brackets `context_avg`
+  and `tokens.cache_read` as "re-read" (the context re-sent on every call: it
+  measures thread length, not work). k/M, one decimal. `cost_usd` is the
+  API-equivalent list price of all of it (JM is on a Max plan: this is what it
   would have cost, not a charge). `cost_usd: null` → `cost n/a (unpriced model)`.
+  Unclaimed work between two claims is counted on the earlier task.
 - **Points** is `report.points` (0 on a defer/snooze: `0 分 (deferred)`).
 - A `report` with `error`, or missing → print the block with `n/a` fields; never
   skip the report or stop on it.
