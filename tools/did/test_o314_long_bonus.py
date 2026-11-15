@@ -92,3 +92,46 @@ def test_long_meditation_routes_as_meditation():
 def test_long_o314_routes_as_o314(text):
     assert df.LONG_TO_BASE_0N.get(df.header_normalize(
         df.ONENEON_ALIASES.get(text.lower(), text.lower()))) == "o314"
+
+
+# -- past-day writes (bug 2026-11-14) -----------------------------------------
+# Yesterday's 62m o314, logged from janus's past-day view (--past-ok), wrote
+# AQ=62 but no 长o314 credit: the call site gated the bonus on `not
+# past_target`. The 1n path already handles past days, so the bonus must run.
+
+import datetime as _dt
+import inspect
+
+
+class _Today:
+    @staticmethod
+    def today():
+        return _dt.date(2026, 11, 14)
+
+
+def test_past_day_write_still_earns_the_long_bonus(monkeypatch):
+    monkeypatch.setattr(df, "_daytime", _Today)
+    w = _w(); w.item.target_date = "11/13"
+    [r] = df._long_bonus_results([w], _echo("", "62"), {"1neon": [CARD]}, past_target=True)
+    assert (r.item.name, r.step, r.variable_value) == ("长o314", "1n", 31)
+    assert r.item.target_date == "11/13"
+
+
+def test_past_day_bonus_closes_card_only_in_the_current_week(monkeypatch):
+    monkeypatch.setattr(df, "_daytime", _Today)
+    same = _w(); same.item.target_date = "11/13"          # Fri of the running week
+    [r] = df._long_bonus_results([same], _echo("", "62"), {"1neon": [CARD]}, past_target=True)
+    assert r.todoist_task == CARD
+    old = _w(); old.item.target_date = "11/3"             # a finished week
+    assert (df.neon_weeks.habit_week_label("长o314", _dt.date(2026, 11, 3))
+            != df.neon_weeks.habit_week_label("长o314", _dt.date(2026, 11, 14)))
+    [r] = df._long_bonus_results([old], _echo("", "62"), {"1neon": [CARD]}, past_target=True)
+    assert r.variable_value == 31 and r.todoist_task is None
+
+
+def test_main_no_longer_gates_the_bonus_on_past_target():
+    src = inspect.getsource(df.main)
+    assert "_long_bonus_results(on_writes, on_result.stdout, tq,\n" in src or \
+           "_long_bonus_results(on_writes, on_result.stdout, tq, past_target=past_target)" in src.replace("\n", "").replace(" " * 40, " ")
+    gate = src[src.index("_long_bonus_results(") - 120: src.index("_long_bonus_results(")]
+    assert "not past_target" not in gate

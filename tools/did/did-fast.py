@@ -2220,10 +2220,18 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
                                        stderr="")
 
 
-def _long_bonus_results(on_writes: list, stdout: str, tq: dict) -> list:
+def _long_bonus_results(on_writes: list, stdout: str, tq: dict,
+                        past_target: bool = False) -> list:
     """1n RouteResults for the long-session bonus earned by these 0n writes,
     from each cell's value before (PRE line) and after (echo) the write; the
-    daemon and raw-script paths print the same shape."""
+    daemon and raw-script paths print the same shape.
+
+    A past-day write (janus past-day view, --past-ok) earns the bonus too
+    (bug 2026-11-14: yesterday's 62m o314 logged today got no 长o314 credit):
+    the 1n path already puts the minutes in THAT day's week row and the
+    points on that day. The open 1neon card is only attached when the
+    target day falls in the card's current week; an older week's bonus
+    must not close this week's card."""
     from neon import long_bonus
     pre = parse_pre_lines(stdout)
     after: dict[str, str] = {}
@@ -2259,9 +2267,14 @@ def _long_bonus_results(on_writes: list, stdout: str, tq: dict) -> list:
                         fen_col=LABEL_TO_0FEN.get(HABIT_PROJECT.get(base, "hcm"), "V"),
                         write_value=pts, is_variable_1n=True, variable_value=pts)
         # The card is named by the alias ("long o314"), the column by the
-        # header ("长o314"); try both.
+        # header ("长o314"); try both. Past day: only if it is this week's card.
         card = None
-        for nm in [weekly] + [k for k, v in ONENEON_ALIASES.items() if v == weekly]:
+        same_week = True
+        if past_target:
+            _td = date.fromisoformat(target_date_iso(w.item.target_date, _daytime.today()))
+            same_week = (neon_weeks.habit_week_label(weekly, _td)
+                         == neon_weeks.habit_week_label(weekly, _daytime.today()))
+        for nm in ([weekly] + [k for k, v in ONENEON_ALIASES.items() if v == weekly]) if same_week else []:
             card = match_todoist_task(nm, tq.get("1neon", []), require_labels={"1neon"})
             if card:
                 break
@@ -4226,13 +4239,16 @@ def main():
             if script:
                 on_result = ix_run(script, timeout=30.0)
 
-    # 4a-ii'. Long-session bonus (JM 2026-11-03): a same-day o314 write that
-    # puts AQ's day total at 30m+ earns 0.5分 for every minute of the day,
+    # 4a-ii'. Long-session bonus (JM 2026-11-03): an o314 write that puts
+    # AQ's day total at 30m+ earns 0.5分 for every minute of the day,
     # credited to the weekly 长o314 habit. Added as a 1n result so steps
     # 4b-6 write the week cell, append the 0分 points and close the card
-    # exactly as for any 1neon completion.
-    if on_result and on_result.returncode == 0 and not past_target:
-        fast.extend(_long_bonus_results(on_writes, on_result.stdout, tq))
+    # exactly as for any 1neon completion. Past-day writes included
+    # (2026-11-14): the 1n path routes them to that day's week and that
+    # day's 0分 row; only the card close is week-gated.
+    if on_result and on_result.returncode == 0:
+        fast.extend(_long_bonus_results(on_writes, on_result.stdout, tq,
+                                        past_target=past_target))
 
     # 4a-i. "night hcmc" side effect: carve a real Toggl entry for the
     # pre-sleep audiobook listening out of the 睡觉/"generic placeholder"
