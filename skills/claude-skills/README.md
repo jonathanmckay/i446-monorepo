@@ -66,5 +66,6 @@ never have to check off a card for work a skill just did.
 Current roster: `/0t` (0t card), `/0g` (0g card), `/-1g` (😈 -1g ritual card,
 current block only), `/notes` (notes card), `/ibx0` (inbox habit set),
 `/allcolors` (⎣∀clr stamp), `/1hcme` (1 hcme weekly card: writes
-0s897!X then runs the 1n+ /did path), `/2hci` (2 hci monthly card: report, then the 1n+ /did path). When adding a skill that corresponds to a dtd
+0s897!X then runs the 1n+ /did path), `/2hci` (2 hci monthly card: report, did-fast `--task-id`, then its 2₦ block cell),
+`/2n1` (5^2 1 n Efficiency Clearance monthly card: report, did-fast `--task-id`, then its 2₦ block cell). When adding a skill that corresponds to a dtd
 card, make it self-clearing and add it to this list.

@@ -752,11 +752,12 @@ SKILL_CLAIMS = {
     "f695": "1 f695", "2n": "2n checksum", "3s": "3s", "moralaudit": "moral audit",
     "2026-4g-checkin": "4g checkin", "1-i446": "1 i446", "1hcme": "1 hcme",
     "1f693": "1 f693", "ibxi9": "ibx i9", "ibxm5x2": "ibx m5x2", "2hci": "2 hci",
+    "2n1": "5^2 1 n efficiency clearance",
 }
 # Skills whose flow closes the card and then releases the claim itself.
 # (/xk887's survey closes '1 xk88' from its own cmux tab after the skill's
 # turn is over, so the skill can't release; it stays a keeper.)
-SKILL_RELEASES = {"0t", "notes", "0g", "早餐", "1i9", "1m5x2", "1hcme", "1hcmc", "1-2g", "2hci"}
+SKILL_RELEASES = {"0t", "notes", "0g", "早餐", "1i9", "1m5x2", "1hcme", "1hcmc", "1-2g", "2hci", "2n1"}
 # Skills JM decided NOT to link (2026-10-11), so /1-i446 stops asking.
 SKILL_NO_CLAIM = {
     "s": "/salat alias; the '1s' card is the weekly review",
