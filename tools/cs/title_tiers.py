@@ -24,9 +24,13 @@ rename-tab; else OSC 0. With --generate it also asks Haiku for a missing
 initial and records it on the claim (<tid>.json 'init') so dtd can lead the
 row with the same glyph (that file travels to the other hosts with the claim).
 
+An unclaimed thread leads with ❔ instead of an initial, so the strip shows
+which tabs are not linked to a dtd task.
+
 Usage:
   title_tiers.py tiers <sid>            JSON {init, short, full, source}
   title_tiers.py apply <sid> [--generate]
+  title_tiers.py apply-all [--generate] every live claude in tmux here (cs tmux-map)
 """
 from __future__ import annotations
 
@@ -50,6 +54,9 @@ SESSION_SHORTS = STATE / "session-shortnames.json"
 TASK_SHORTS = _sp.TASK_SHORTNAMES
 CAP = 28
 MODEL = "claude-haiku-4-5-20251001"
+# A thread with no dtd task behind it leads with this instead of a Haiku initial,
+# so the tab strip shows at a glance which sessions are not linked to work.
+UNCLAIMED_INIT = "❔"
 _DID = Path.home() / "i446-monorepo" / "tools" / "did"
 _EST = re.compile(r"\(\(?\d+\)?\)|\[\d*G?\]|\{\d+\}")
 _LABEL = re.compile(r"(?:^|\s)@\S+")
@@ -84,8 +91,12 @@ def prose(content: str) -> str:
 
 
 def trim(text: str, cap: int = CAP) -> str:
+    """Cut at a word boundary, never mid-word; a cut that lands exactly on a
+    space keeps the whole word before it."""
     if len(text) <= cap:
         return text
+    if text[cap] == " ":
+        return text[:cap].rstrip(" -–—:,")
     cut = text[:cap]
     sp = cut.rfind(" ")
     return (cut[:sp] if sp > 0 else cut).rstrip(" -–—:,")
@@ -172,7 +183,9 @@ def claim_record(sid: str) -> dict | None:
     return None
 
 
-def tiers(sid: str, generate: bool = False) -> dict:
+def tiers(sid: str, generate: bool = False, title: str = "") -> dict:
+    """`title` is a fallback for a session with no recorded title yet (apply-all
+    passes the one cs read from the transcript)."""
     rec = claim_record(sid)
     if rec:
         full = prose(rec.get("task", "")) or rec.get("task_id", "")
@@ -185,10 +198,11 @@ def tiers(sid: str, generate: bool = False) -> dict:
         full = (SESSION_TITLES / sid).read_text().strip()
     except OSError:
         full = ""
+    full = full or title
     ss = _json(SESSION_SHORTS).get(sid, {})
     short = ss.get("short") if ss.get("hash") == _hash(full) else ""
-    init = initial_for(full, generate) if full else None
-    return {"init": init, "short": short or trim(full), "full": full, "source": "session"}
+    return {"init": UNCLAIMED_INIT if full else None, "short": short or trim(full),
+            "full": full, "source": "session"}
 
 
 def tab_text(t: dict) -> str:
@@ -196,13 +210,14 @@ def tab_text(t: dict) -> str:
 
 
 # --- apply --------------------------------------------------------------------
-def _tmux_tab(text: str) -> bool:
-    pane = os.environ.get("TMUX_PANE")
-    if not os.environ.get("TMUX") or not pane:
+def _tmux_tab(text: str, target: str | None = None) -> bool:
+    pane = target or os.environ.get("TMUX_PANE")
+    if not pane or (not target and not os.environ.get("TMUX")):
         return False
     try:
         # A pane target with no -p/-w sets the option on the session holding
         # the pane: one cc tmux session holds one claude, so that is the tab.
+        # apply-all passes the tmux session name instead.
         subprocess.run(["tmux", "set-option", "-t", pane, "@tab", text],
                        capture_output=True, timeout=3)
         return True
@@ -234,19 +249,49 @@ def _osc_tab(text: str) -> bool:
         return False
 
 
+def _record_init(t: dict) -> None:
+    """Record a task initial on the claim so dtd leads the row with it; the
+    claim file travels to the other hosts, initials.json does not."""
+    if not (t.get("source") == "task" and t.get("init") and t.get("_dir")):
+        return
+    p = Path(t["_dir"]) / f"{t['task_id']}.json"
+    rec = _json(p)
+    if rec and not rec.get("init"):
+        rec["init"] = t["init"]
+        try:
+            _claims()._write(p, json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+
+def apply_all(generate: bool = False) -> list[dict]:
+    """Every live claude in a tmux session on this host (cs tmux-map): compute
+    its tiers and set that tmux session's @tab. One-shot catch-up for sessions
+    started before the hooks did this; the hooks keep them current afterwards."""
+    try:
+        out = subprocess.run(["python3", str(Path(__file__).resolve().parent / "cs.py"), "tmux-map"],
+                             capture_output=True, text=True, timeout=20).stdout
+        rows = json.loads(out or "[]")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        rows = []
+    done = []
+    for r in rows:
+        sid, name = r.get("sid") or "", r.get("tmux") or ""
+        if not sid or not name:
+            continue
+        t = tiers(sid, generate, title=r.get("title") or "")
+        _record_init(t)
+        text = tab_text(t)
+        t["tmux"] = name
+        t["applied"] = bool(text) and _tmux_tab(text, target=name)
+        t.pop("_dir", None)
+        done.append(t)
+    return done
+
+
 def apply(sid: str, generate: bool = False) -> dict:
     t = tiers(sid, generate)
-    if t.get("source") == "task" and t.get("init") and t.get("_dir"):
-        # Record the initial on the claim so dtd leads the row with it; the
-        # claim file travels to the other hosts, initials.json does not.
-        p = Path(t["_dir"]) / f"{t['task_id']}.json"
-        rec = _json(p)
-        if rec and not rec.get("init"):
-            rec["init"] = t["init"]
-            try:
-                _claims()._write(p, json.dumps(rec, ensure_ascii=False) + "\n")
-            except OSError:
-                pass
+    _record_init(t)
     text = tab_text(t)
     if text:
         t["applied"] = _tmux_tab(text) or _cmux_tab(text) or _osc_tab(text)
@@ -254,10 +299,15 @@ def apply(sid: str, generate: bool = False) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    gen = "--generate" in argv
+    if argv[:1] == ["apply-all"]:
+        rows = apply_all(gen)
+        for t in rows:
+            print(f"{t['tmux']:<10} {'ok ' if t.get('applied') else 'no '} {tab_text(t)}")
+        return 0
     if len(argv) < 2 or argv[0] not in ("tiers", "apply"):
         print(__doc__, file=sys.stderr)
         return 2
-    gen = "--generate" in argv
     sid = argv[1]
     out = apply(sid, gen) if argv[0] == "apply" else tiers(sid, gen)
     out.pop("_dir", None)
