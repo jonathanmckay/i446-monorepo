@@ -346,6 +346,27 @@ block verbatim into the review (Step 7) and feed it to the narrative (Step
 6). If the target week's survey row is not yet saved (title blank), the
 table still renders; the digest just lacks that week's title/win text.
 
+### Step 4d: Cause evidence (points cache + ledger + Toggl store)
+
+```bash
+python3 ~/i446-monorepo/tools/1s/1s-causes.py [YYYY-MM-DD] [--weeks 8]
+```
+
+Read-only and local (no Excel). It prints the evidence block Step 6b ranks:
+domain totals against the trailing mean with the share that came through
+ledger credits versus habit formulas, the largest credited items, the
+corrections to ignore, the weekday and 2-hour-block profile, 0₲ per day,
+zero-hcb days, 分 per hour by domain, the week's average 分 per waking hour,
+a per-activity yield table (Toggl time of 20 minutes or more joined to
+credits by name), zero-point time (i444, infra, hcmc, no project) and ritual
+and planning overhead. `--json` gives the raw structure.
+
+Its domain numbers come from the points cache and the Toggl store, a third
+source next to Step 3 (live Toggl) and Step 4 (0分). Use them only inside the
+Causes section; the Step 5 table keeps Steps 3 and 4. If the script warns
+that the Toggl store is not settled through Saturday, take that day's hours
+from Step 3.
+
 ### Step 5: Build comparison table
 
 For each domain, compute:
@@ -388,6 +409,80 @@ Analyze:
 
 Keep it under 260 words total. No hedging.
 ```
+
+### Step 6b: Causes in 分 (required every week)
+
+The narrative says what happened. This section says why, in 分, so JM can
+rank what to change. Build it from the Step 4d block plus Steps 2 to 4c. It
+is not optional and it is not capped by Step 6's 260 words.
+
+**Lead (two or three sentences).** The week's total, the part of it that
+was one-off income, and the total without it. One-off = a credited cluster
+that will not recur (an interview loop, a party, a trip, a true-up entry):
+sum its items from "Largest credited items", name the domain columns it
+landed in, and say when it ends. Correct any claim in Step 6's narrative
+that the one-off explains better (2026-11-15: 社 +110% was read as "three
+Redmond dinners"; 510 of it was interview prep credited to 社).
+
+**Ranked table.** One row per cause, largest 分 first, five to eight rows:
+
+| Cause | Evidence this week | Est. 分/week | Fix |
+|---|---|---|---|
+
+- **Cause**: a mechanism, not a domain ("Redmond trip ran off-protocol",
+  "block goal-setting takes 14 min a block", not "hcb was low").
+- **Evidence**: the numbers from the evidence block (minutes, 分, days,
+  this week against the trailing mean).
+- **Est. 分/week**: signed. Lost points are the gap to the trailing mean or
+  to target. Freed hours convert at the week's average 分 per waking hour
+  (state the rate once above the table); use a domain's own 分/hr only when
+  the hours would move to that domain.
+- **Fix**: exactly one of *person* (name who), *agent* (name the tool or
+  access it would use), *efficiency* (what JM does differently), or *none*
+  (the price of a choice already made; say so).
+
+Look for causes in this order, and say "none found" for a class only if you
+checked it:
+
+1. **Delegable to an agent**: booking, reservations, logistics, drafting
+   block goals, recurring checks against AppFolio, QuickBooks, calendar or
+   Todoist, and any ritual in the overhead list whose minutes exceed its 分.
+2. **Delegable to a person**: follow-ups and goals that slid for lack of JM's
+   hours (deferred three times or more, or a {N} goal scored ❌), with the
+   person who could own them.
+3. **Time that could be done more effectively**: zero-point time, activities
+   at the bottom of the yield table, blocks and weekdays far under their
+   trailing mean, zero-hcb days.
+4. **Points earned but not credited**: 1n minute habits holding a bare `1`
+   or blank against Toggl time that happened (Step 4b), credits with no
+   domain, unpointed tasks.
+
+**Patterns already known and not followed.** Three to five bullets, each
+naming the rule, its source and what breaking it cost in 分. Sources to
+check every week: the Task Value Rule in `~/vault/g245/CLAUDE.md` (value
+should exceed time, else delegate or skip); `~/vault/g245/5e0/5e0-travel-protocol.md`
+on any week with travel; the prior weeks' "missed" notes in the Step 4c
+block; last week's "One priority for next week" in its review file; the
+{N} focus bonuses on offer against those earned. When a known pattern WAS
+followed and paid, say that too with its 分: it is the evidence the rule
+works.
+
+**Order for next week.** At most three items, each with its 分, highest
+first, taken from the table.
+
+Rules for this section:
+
+- 分 are integers. Never `$` for 分.
+- Hours are solid; 分 per activity are approximate, because time is matched
+  to credits by task name. Say so in one closing line, once.
+- A 0 in the yield table means no credit under that name, not that the time
+  earned nothing. Check "Credited with no Toggl entry of that name" and the
+  habit/unattributed column before calling an activity worthless.
+- Never propose handing i9 (Microsoft) work to a personal agent or to
+  anyone outside Microsoft. Say that i9 was not searched for delegation.
+- Do not react to the week with advice that has no 分 attached.
+- Do not repeat the Step 6 narrative; a cause listed there gets its number
+  here.
 
 ### Step 7: Write to vault
 
@@ -437,6 +532,10 @@ Overperformers: {habit} ({actual}/{target}), ...
 ### Analysis
 
 {narrative from Step 6}
+
+### Causes in 分
+
+{lead, ranked table, patterns not followed, order for next week from Step 6b}
 ```
 
 Ensure `~/vault/g245/reviews/` directory exists (create if not).
@@ -463,7 +562,8 @@ Ask the user which action to take for each stale entry.
 
 Show the comparison table, the 1n Completion % (with below-target/
 overperformer habits from Step 4b), the week-over-week Δ line (Step 4c:
-what moved ≥15% vs the trailing mean), and narrative to the user. Do NOT run `/did 1s`
+what moved ≥15% vs the trailing mean), the narrative, and the full Causes in 分
+section (Step 6b) to the user. Do NOT run `/did 1s`
 here — the weekly 1s task is marked done by the survey form on `^S` (the
 task is not complete until the survey is; user decision 2026-07-21). If the
 survey is still open, say so; if it was cancelled, the task stays open until
@@ -483,5 +583,6 @@ the user submits it (rerun `1s-survey.py` directly if needed).
 - Use `toggl_range` for the whole week in one call (see Step 3) — not 7 separate `toggl_date` calls.
 - 0分 column mapping must match exactly. If columns shift, the review will have wrong data.
 - AppleScript calls sequential (no parallel Excel access).
+- `1s-causes.py` (Step 4d) reads the neon ledger DB (`~/.local/share/neon/neon.db`, Ix only) after `ledger.catch_up()`, so it must run on Ix; habit-formula points never reach the ledger, which is why its table carries a habit/unattributed column.
 - `1s-weeks.py` (Step 4c) imports `week_range`/`week_row_label` from `1s-survey.py` — keep the label logic there, not duplicated.
 - The `reviews/` folder uses M.W labels, not ISO week numbers: `YYYY-M.W-1s.md` (e.g. `2026-8.2-1s.md`), matching `1分+1s`/`1n+`'s own week labeling.
