@@ -901,6 +901,12 @@ def _dismissed() -> dict:
         return {}
 
 
+# Alerts whose whole value is the real-time notification (2026-11-14: JM asked
+# why Straylight's hotel/plane/hotspot wifi drops reached the weekly review).
+# They stay in the report as one count line but never make a review item.
+ALERTS_NO_REVIEW = {("net-probe", "link_degraded")}
+
+
 def check_alerts(now: dt.datetime) -> Finding:
     if not ALERTS.exists():
         return Finding("alerts", "ok", "no alerts sink")
@@ -923,13 +929,17 @@ def check_alerts(now: dt.datetime) -> Finding:
         g["n"] += 1
         if ts >= g["last"]:
             g["last"], g["detail"] = ts, str(a.get("detail", ""))[:120]
+    quiet = {k: groups.pop(k) for k in list(groups) if k[:2] in ALERTS_NO_REVIEW}
+    quiet_lines = [f"not for review: {k[0]} / {k[1]} ×{g['n']}, last {g['last']:%m-%d %H:%M}"
+                   for k, g in quiet.items()]
     if not groups:
-        return Finding("alerts", "ok", "no alerts in the last 7 days")
+        return Finding("alerts", "ok", "no alerts to review in the last 7 days" if quiet
+                       else "no alerts in the last 7 days", quiet_lines)
     detail = [f"{k[0]} / {k[1]} [{k[2]}] ×{g['n']}, last {g['last']:%m-%d %H:%M}: {g['detail']}"
               for k, g in sorted(groups.items(), key=lambda kv: kv[1]["last"], reverse=True)]
     crit = any(k[2] in ("critical", "error") for k in groups)
     return Finding("alerts", "fail" if crit else "warn", f"{sum(g['n'] for g in groups.values())} alert(s) in 7 days",
-                   detail, review=True)
+                   detail + quiet_lines, review=True)
 
 
 NEON_DIFF_DIR = VAULT / "g245" / "neon-ledger" / "rules-diff"

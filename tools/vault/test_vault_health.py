@@ -31,6 +31,24 @@ def test_alerts_grouped_by_tool_reason_and_only_last_7_days(tmp_path, monkeypatc
     assert len(f.detail) == 1 and "×2" in f.detail[0] and "old" not in f.detail[0]
 
 
+def test_net_probe_link_alerts_never_make_a_review_item(tmp_path, monkeypatch):
+    """2026-11-14: Straylight wifi drops (net-probe) are real-time notices, not weekly decisions."""
+    vh = _load()
+    now = dt.datetime(2026, 11, 14, 21, tzinfo=vh.TZ)
+    probe = {"ts": "2026-11-12T14:50:47Z", "tool": "net-probe", "reason": "link_degraded",
+             "severity": "warning", "detail": "MSFTCONNECT: loss 100.0%"}
+    p = tmp_path / "alerts.jsonl"; p.write_text(json.dumps(probe))
+    monkeypatch.setattr(vh, "ALERTS", p)
+    monkeypatch.setattr(vh, "DISMISSED", tmp_path / "none.json")
+    f = vh.check_alerts(now)
+    assert f.status == "ok" and not f.review and "net-probe" in f.detail[0]
+    other = {"ts": "2026-11-13T10:00:00Z", "tool": "triage", "reason": "apply_failed", "severity": "warning", "detail": "x"}
+    p.write_text(json.dumps(probe) + "\n" + json.dumps(other))
+    f = vh.check_alerts(now)
+    assert f.status == "warn" and f.review and "1 alert(s)" in f.summary
+    assert "triage" in f.detail[0] and f.detail[-1].startswith("not for review")
+
+
 def test_description_lists_only_review_items(tmp_path):
     vh = _load()
     fs = [vh.Finding("a", "ok", "fine"), vh.Finding("b", "warn", "needs you", ["d1", "d2"], review=True)]
