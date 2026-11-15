@@ -683,13 +683,15 @@ def candidates(query: str, tasks: list[dict], df) -> list[dict]:
         if str(t["id"]).lower() == q:
             return [t]
     # A dtd code (2026-11-15: the two letters dtd leads each row with, in
-    # place of the row number). Computed from the queue alone (lib/dtd_codes),
-    # so it means the same task here as on the dtd that drew it, whichever
-    # host that is. Before name matching: `ii` is the ibx i9 card, not the
-    # shortest name containing "ii". A two-character card name is its own code.
-    tid = _dtd_codes().resolve(q, tasks)
-    if tid:
-        return [t for t in tasks if str(t["id"]) == tid]
+    # place of the row number). Resolved against the maps the running dtds
+    # published (lib/dtd_codes.lookup), so it means the row JM is looking at,
+    # whichever host drew it; two dtds that drew the code on different tasks
+    # come back as two candidates and the caller asks. Before name matching:
+    # `ii` is the ibx i9 card, not the shortest name containing "ii". A
+    # two-character card name is its own code.
+    ids = _dtd_codes().lookup(q, tasks)
+    if ids:
+        return [t for tid in ids for t in tasks if str(t["id"]) == tid]
     # Hyphens and spaces are one separator (2026-11-01: `/d 1-i446`, the
     # skill's name, missed the `1 i446` card and substring-matched
     # `1-i446 #14: ...` instead).
@@ -930,6 +932,11 @@ def hook(payload: str) -> str:
         # "/d 5" with no row 5 in a fresh render: never create a task named "5".
         return (f"[claim hook] no dtd row {query} in the latest render (dtd closed, "
                 "or the list is shorter); nothing claimed.")
+    if not explicit_new and not cands and _dtd_codes().is_code(query.strip().lower()):
+        # "/d fb" with no row showing fb: a mistyped or stale code, never a
+        # new task named "fb" (2026-11-15). `/d new fb` still creates one.
+        return (f"[claim hook] no dtd row has the code {query.strip()!r} and no task is named that; "
+                "nothing claimed.")
     if explicit_new or not cands:
         # No dtd match = new work: create it and claim (default since
         # 2026-10-06, "that should be the default behavior"). `/d new` stays

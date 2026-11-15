@@ -97,6 +97,17 @@ def find_task(query: str, tasks: list[dict], order: Path = DTD_ORDER) -> dict | 
         return by_id.get(tid) or f"ERROR: dtd row {q} is task {tid}, not in the task cache"
     if q in by_id:
         return by_id[q]
+    # The two-letter code dtd leads the row with (2026-11-15, lib/dtd_codes).
+    try:
+        sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+        import dtd_codes
+        ids = dtd_codes.lookup(q, tasks)
+    except Exception:  # noqa: BLE001
+        ids = []
+    if len(ids) == 1:
+        return by_id[ids[0]]
+    if len(ids) > 1:
+        return "ERROR: ambiguous task: " + "; ".join(task_name(by_id[i]["content"]) for i in ids[:6])
     ql = q.lower()
     hits = [t for t in tasks if ql and ql in task_name(t.get("content", "")).lower()]
     exact = [t for t in hits if task_name(t.get("content", "")).lower() == ql]

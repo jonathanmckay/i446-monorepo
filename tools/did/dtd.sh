@@ -2405,11 +2405,12 @@ try:
     _agent_ids = {i for i, r in _claims.items() if r['working']}
     _claim_ids = set(_claims.keys())
     _done_ids = {i for i, r in _claims.items() if r.get('done')}
-    # The task's tab initial (title_tiers, 2026-11-14) leads the row when the
-    # claim carries one, so the dtd row and the cmux tab show the same glyph;
-    # the cmux pane number is the fallback.
-    _claim_pane = {i: (r.get('init') or str(r['pane'])) for i, r in _claims.items()
-                   if r.get('init') or r.get('pane') is not None}
+    # The claim marker carries the cmux pane number. The task's two-letter
+    # code now leads every row (2026-11-15) and the tab shows the same code
+    # (title_tiers), so repeating the claim's recorded initial here would
+    # print it twice, or print a stale one.
+    _claim_pane = {i: str(r['pane']) for i, r in _claims.items()
+                   if r.get('pane') is not None}
 except Exception:
     pass
 AGENT_GREY = '\x1b[38;2;110;110;110m'
@@ -2862,15 +2863,16 @@ _active = running_lines + [l for _, l in sorted(started_lines, key=lambda x: -x[
 _claims = working_lines + claimed_lines
 # Each row leads with its dtd code (2026-11-15: 'rather than a number, I can
 # refer to each task by its initials'): two letters, or one CJK character,
-# from lib/dtd_codes over the whole cache. A Claude session can say '/d ii'
-# and mean this row (agent_claims.candidates runs the same function on its own
-# copy of the queue, so the code holds across hosts, which a display position
-# never did). The order still goes to ~/.local/state/jm/dtd-order.json below.
+# from lib/dtd_codes over the whole cache. A task keeps its code from render
+# to render, and the map is published to ~/vault/z_ibx/dtd-codes-<host>.json,
+# so a Claude session on another host can say '/d ii' and mean this row
+# (agent_claims.candidates reads the published maps), which a display position
+# never did. The order still goes to ~/.local/state/jm/dtd-order.json below.
 try:
     import os as _cos, sys as _csys
     _csys.path.insert(0, _cos.path.expanduser('~/i446-monorepo/lib'))
     import dtd_codes as _dc
-    _codes = _dc.codes(_dc.queue_tasks(d))
+    _codes = _dc.render_codes(_dc.queue_tasks(d))
     _pad = _dc.cell_pad
 except Exception:
     _codes = {}

@@ -33,6 +33,7 @@ The script decides what the argument is:
 | Argument | Result |
 |---|---|
 | contains a URL | that link; title and byline are read from the page. Words typed beside the URL are the title (`<url> Title — Author` sets both) |
+| a dtd code (`ii`, `业`) | the task whose dtd row leads with that code |
 | a bare number | the task on that dtd row |
 | a task id or words of a task name | that task: its name, first link, `(N)` minutes, `[N]` 分 and domain label |
 | `Title — Author`, no task match | a card with no link |

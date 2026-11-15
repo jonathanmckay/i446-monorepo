@@ -15,11 +15,15 @@ ac = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(ac)
 
 
-def test_every_printed_row_is_numbered_from_one_in_display_order():
-    assert "for _rn, l in enumerate(_active + _claims + normal_lines + skipped_lines, 1):" in DTD
-    assert "print(f'\\x1b[2m{_rn:>3}\\x1b[0m ' + l)" in DTD
-    # the number eats 4 columns, so rows right-justify 4 narrower
-    assert "ROWNUM_W = 4" in DTD and "cols = max(20, cols - ROWNUM_W)" in DTD
+def test_every_printed_row_leads_with_its_code_not_a_number():
+    """2026-11-15: the display position became the task's two-letter code
+    (lib/dtd_codes), published per host so a session elsewhere resolves it."""
+    assert "for l in _active + _claims + normal_lines + skipped_lines:" in DTD
+    assert "_codes = _dc.render_codes(_dc.queue_tasks(d))" in DTD
+    assert "print('\\x1b[2m' + (_pad(_cd) if _cd else '  ') + '\\x1b[0m ' + l)" in DTD
+    assert "{_rn:>3}" not in DTD
+    # the code eats 3 columns (two cells + a space), so rows right-justify 3 narrower
+    assert "ROWNUM_W = 3" in DTD and "cols = max(20, cols - ROWNUM_W)" in DTD
 
 
 def test_list_writes_the_shared_order_for_claude_sessions():

@@ -222,6 +222,17 @@ def claim_record(sid: str) -> dict | None:
     return best
 
 
+def _dtd_code(tid) -> str | None:
+    """The code dtd leads this task's row with (lib/dtd_codes), or None."""
+    if not tid:
+        return None
+    try:
+        import dtd_codes
+        return dtd_codes.code_for(str(tid), dtd_codes.queue_tasks(_json(_sp.TASK_QUEUE)))
+    except Exception:  # noqa: BLE001 — a tab title must never fail on this
+        return None
+
+
 def tiers(sid: str, generate: bool = False, title: str = "") -> dict:
     """`title` is a fallback for a session with no recorded title yet (apply-all
     passes the one cs read from the transcript)."""
@@ -230,7 +241,10 @@ def tiers(sid: str, generate: bool = False, title: str = "") -> dict:
         full = prose(rec.get("task", "")) or rec.get("task_id", "")
         ts = _json(TASK_SHORTS).get(str(rec.get("task_id")), {})
         short = prose(ts.get("short", "")) if ts.get("short") else ""
-        init = rec.get("init") or initial_for(full, generate)
+        # The dtd row's own two-letter code first (2026-11-15), so the tab
+        # and the row JM would type to /d read the same; the recorded or
+        # Haiku initial covers a task no dtd has drawn.
+        init = _dtd_code(rec.get("task_id")) or rec.get("init") or initial_for(full, generate)
         return {"init": init, "short": short or trim(full), "full": full,
                 "source": "task", "task_id": rec.get("task_id"), "_dir": rec.get("_dir")}
     try:

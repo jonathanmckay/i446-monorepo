@@ -1037,3 +1037,21 @@ def test_a_query_that_is_no_code_still_matches_by_name():
     assert [t["id"] for t in ac.candidates("claiming", CODE_TASKS, df)] == ["6hB1"]
     assert [t["id"] for t in ac.candidates("ibx m5x2", CODE_TASKS, df)] == ["6gA4"]
 
+
+def test_a_code_two_dtds_drew_on_different_rows_is_ambiguous_not_guessed(tmp_path, monkeypatch):
+    """Straylight's dtd and Ix's can hold different maps; `/d qq` must list
+    both rows instead of claiming whichever the session's host computed."""
+    monkeypatch.setenv("DTD_CODES_DIR", str(tmp_path))
+    now = __import__("time").time()
+    (tmp_path / "dtd-codes-straylight.json").write_text(json.dumps({"ts": now, "codes": {"6hB1": "qq"}}))
+    (tmp_path / "dtd-codes-ix.json").write_text(json.dumps({"ts": now, "codes": {"6gA6": "qq"}}))
+    got = ac.candidates("qq", CODE_TASKS, _NoMatchDid())
+    assert sorted(t["id"] for t in got) == ["6gA6", "6hB1"]
+
+
+def test_hook_never_creates_a_task_named_after_an_unknown_code():
+    src = (Path(ac.__file__)).read_text()
+    i = src.index("explicit_new = query.lower().startswith(\"new \")")
+    block = src[i:i + 2600]
+    assert block.index("_dtd_codes().is_code(query.strip().lower())") < block.index("task = new_task(name)")
+

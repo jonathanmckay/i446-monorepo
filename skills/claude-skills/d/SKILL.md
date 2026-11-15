@@ -9,9 +9,17 @@ user-invocable: true
 - `/d <task>[: request]` claims the matching dtd task; if NOTHING matches it
   creates `<task>` in Todoist (due today) and claims that (default since
   2026-10-06).
-- `/d <N>[: request]` (2026-10-24) claims the task on dtd row N: the dim number
-  dtd prints at the left of every row, in display order (latest render, read
-  from `~/.local/state/jm/dtd-order.json`). `/claim <N>` and `done <N>` take it too.
+- `/d <code>[: request]` (2026-11-15) claims the dtd row that leads with that
+  code: the dim two letters (or one Chinese character) at the left of every
+  row, e.g. `/d ii` for `ibx i9`. dtd keeps a task's code stable and publishes
+  its map to `~/vault/z_ibx/dtd-codes-<host>.json`, so the code means the row
+  JM is looking at whichever host his dtd runs on (`lib/dtd_codes.py`). A
+  request needs the colon (`/d ii: clear it`). If two dtds drew the code on
+  different rows the hook answers `ambiguous`; if no row has it, nothing is
+  claimed and no task is created. `/claim <code>` and `done <code>` take it too.
+- `/d <N>` (2026-10-24) still resolves an old row number against this host's
+  latest render (`~/.local/state/jm/dtd-order.json`), but dtd no longer
+  displays numbers; prefer the code.
 - `/d new <task>[: request]` always creates `<task>` in Todoist (due today; an `@code`
   token becomes its label), then claims it, so work that isn't in dtd yet
   still shows up there as underway.
