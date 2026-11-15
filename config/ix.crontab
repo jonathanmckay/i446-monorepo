@@ -77,3 +77,5 @@
 30 4 * * * ssh -o BatchMode=yes -o ConnectTimeout=10 localhost /usr/bin/python3 i446-monorepo/tools/triage/triage.py --apply --card >> $HOME/i446-monorepo/tools/triage/.triage.log 2>&1 || $HOME/bin/cron-alert.sh triage apply_failed "daily triage exited non-zero (see tools/triage/.triage.log)"
 # ix-memory sampler for /1-i446 (2026-11-03)
 */15 * * * * /usr/bin/python3 $HOME/i446-monorepo/tools/vault/ix_mem_sample.py >/dev/null 2>&1 || $HOME/bin/cron-alert.sh ix_mem sample_failed "ix_mem_sample.py exited non-zero"
+# inbox badges for dtd: per-habit pending counts (slack m5x2, ibx m5x2, ...) -> ~/vault/z_ibx/inbox-counts-<host>.json (2026-11-15). Never closes anything.
+*/5 * * * * /usr/bin/python3 $HOME/i446-monorepo/tools/ibx/ibx0.py --counts --if-older 240 >> $HOME/Library/Logs/ibx-counts.log 2>&1
