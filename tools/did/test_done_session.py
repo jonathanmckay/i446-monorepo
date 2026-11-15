@@ -172,3 +172,16 @@ def test_stop_timer_by_id_beats_name(monkeypatch):
     assert ds.stop_timer_if("renamed card [20]", run, tid="RECUR1", task_for_entry=links.get) == "⏱ 0l stopped"
     # Unlinked entry: name match as before.
     assert ds.stop_timer_if("0l", run, tid="X", task_for_entry=lambda eid: None) == "⏱ 0l stopped"
+
+
+def test_mark_tab_close_only_for_a_remote_driven_tab(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(ds, "FIN_CLOSE_DIR", tmp_path)
+    monkeypatch.setattr(ds.socket, "gethostname", lambda: "ix.local")
+    run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "cc-fix-bug\n", "")
+    env = {"CC_ORIGIN": "straylight", "TMUX_PANE": "%1", "TMUX": "/tmp/x"}
+    assert ds.mark_tab_close("S1", env=env, run=run) is True
+    assert (tmp_path / "cc-fix-bug").read_text().strip() == "S1"
+    assert ds.mark_tab_close("S1", env={"TMUX_PANE": "%1", "TMUX": "/tmp/x"}, run=run) is False   # local session
+    assert ds.mark_tab_close("S1", env={**env, "CC_ORIGIN": "ix"}, run=run) is False             # driven from this host
+    assert ds.mark_tab_close("S1", env={"CC_ORIGIN": "straylight"}, run=run) is False            # not in tmux
