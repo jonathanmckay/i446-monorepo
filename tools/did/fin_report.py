@@ -10,8 +10,10 @@ the "accomplished" bullets itself from the thread and the 😈 turn notes here.
   jm        Toggl minutes on the task since the claim: the entry linked to it
             (agent_claims.timer_link) plus any entry whose description is the
             task's annotation-free name (older timers, the phone).
-  model     from the session transcript (~/.claude/projects/*/<sid>.jsonl):
-            JM turns, assistant messages, tokens by model since the claim, and
+  model     from the session transcript (~/.claude/projects/*/<sid>.jsonl)
+            plus its subagents': JM turns, API calls, tokens by model from
+            this task's claim to the session's NEXT claim (window_end), the
+            context growth (new_in) and size, and
             an API-equivalent cost from PRICING (JM is on a Max plan, so this is
             what the work would have cost at list price, not a charge).
   notes     the 😈 two-sentence turn summaries agent_claims posted on the task.
@@ -107,15 +109,31 @@ def _is_jm_turn(o: dict) -> bool:
     return not c.lstrip().startswith(INJECTED)
 
 
-def model_usage(path: Path | None, since: float = 0.0, now: float | None = None) -> dict:
-    """Turns, messages and tokens since `since`. Streamed assistant messages
-    repeat their usage on every content-block line: the last line per
-    message id wins."""
-    now = now or time.time()
-    out = {"turns": 0, "messages": 0, "first": None, "last": None, "by_model": {}, "tokens": {}}
+SHARE_S = 60   # claims this close together (`claim --also`) share one window
+
+
+def subagent_paths(sid: str) -> list[Path]:
+    """Subagent transcripts: their usage never appears in the main one."""
+    return [Path(p) for p in glob.glob(str(PROJECTS / "*" / sid / "subagents" / "agent-*.jsonl"))]
+
+
+def window_end(since: float, starts) -> float | None:
+    """Where a task's window stops: the session's next claim (released ones
+    included) more than SHARE_S after this one. Without it every earlier
+    task's report re-counted all later tasks (2026-11-15: three nested
+    reports, 41.6M / 23M / 9.8M tokens)."""
+    later = [float(s) for s in starts if s and float(s) > since + SHARE_S]
+    return min(later) if later else None
+
+
+def _read(path: Path | None) -> tuple[list[dict], list[float]]:
+    """(API calls in order, JM turn timestamps). A streamed assistant message
+    repeats its usage on every content-block line: one call per message id,
+    stamped with its FIRST line so it lands in exactly one window."""
+    calls: dict[str, dict] = {}
+    turns: list[float] = []
     if not path or not path.exists():
-        return out
-    per_msg: dict[str, tuple[str, dict]] = {}
+        return [], turns
     with open(path, "rb") as f:
         for line in f:
             try:
@@ -123,37 +141,95 @@ def model_usage(path: Path | None, since: float = 0.0, now: float | None = None)
             except ValueError:
                 continue
             ts = _ts(o)
-            if ts and ts < since:
-                continue
             if _is_jm_turn(o):
-                out["turns"] += 1
+                turns.append(ts)
             elif o.get("type") == "assistant":
                 msg = o.get("message") or {}
                 u = msg.get("usage")
                 if not u:
                     continue
-                per_msg[msg.get("id") or o.get("uuid") or str(ts)] = (msg.get("model") or "", u)
-            else:
-                continue
-            if ts:
-                out["first"] = ts if out["first"] is None else min(out["first"], ts)
-                out["last"] = ts if out["last"] is None else max(out["last"], ts)
+                key = msg.get("id") or o.get("uuid") or str(ts)
+                c = calls.setdefault(key, {"ts": ts})
+                c["last"] = ts
+                c["model"], c["u"] = msg.get("model") or "", u
+    return list(calls.values()), turns
+
+
+def _tok(u: dict) -> dict:
+    cc = u.get("cache_creation") or {}
+    w1h = int(cc.get("ephemeral_1h_input_tokens") or 0)
+    w5m = int(cc.get("ephemeral_5m_input_tokens") or 0)
+    if not cc:
+        w5m = int(u.get("cache_creation_input_tokens") or 0)
+    return {"input": int(u.get("input_tokens") or 0), "output": int(u.get("output_tokens") or 0),
+            "cache_read": int(u.get("cache_read_input_tokens") or 0),
+            "cache_write_5m": w5m, "cache_write_1h": w1h}
+
+
+def _ctx(t: dict) -> int:
+    """Context sent on one call: fresh + cached + newly cached input."""
+    return t["input"] + t["cache_read"] + t["cache_write_5m"] + t["cache_write_1h"]
+
+
+def model_usage(path: Path | None, since: float = 0.0, now: float | None = None,
+                until: float | None = None, extra=()) -> dict:
+    """Turns, calls and tokens in [since, until). `extra` are subagent
+    transcripts: their tokens and cost count, their context does not.
+
+    tokens.cache_read is the context re-sent on every call, so it measures
+    thread length, not work. new_in is the work figure: how much the context
+    GREW call over call (beyond the previous call's own output), i.e. prompts,
+    tool results and files entering for the first time. A cache rewrite after
+    an idle gap is a big cache_write but no growth, so it does not count."""
+    now = now or time.time()
+    out = {"turns": 0, "messages": 0, "first": None, "last": None, "by_model": {}, "tokens": {}}
+    calls, turns = _read(path)
+
+    def inside(ts: float) -> bool:
+        return not (ts and (ts < since or (until is not None and ts >= until)))
+
     tot = {"input": 0, "output": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
-    for model, u in per_msg.values():
-        bm = out["by_model"].setdefault(model, dict.fromkeys(tot, 0))
-        cc = u.get("cache_creation") or {}
-        w1h = int(cc.get("ephemeral_1h_input_tokens") or 0)
-        w5m = int(cc.get("ephemeral_5m_input_tokens") or 0)
-        if not cc:
-            w5m = int(u.get("cache_creation_input_tokens") or 0)
-        for k, v in (("input", u.get("input_tokens")), ("output", u.get("output_tokens")),
-                     ("cache_read", u.get("cache_read_input_tokens")),
-                     ("cache_write_5m", w5m), ("cache_write_1h", w1h)):
-            bm[k] += int(v or 0)
-            tot[k] += int(v or 0)
-    out["messages"] = len(per_msg)
+
+    def add(c: dict) -> dict:
+        t = _tok(c["u"])
+        bm = out["by_model"].setdefault(c["model"], dict.fromkeys(tot, 0))
+        for k, v in t.items():
+            bm[k] += v
+            tot[k] += v
+        return t
+
+    stamps = [ts for ts in turns if inside(ts)]
+    out["turns"] = len(stamps)
+    prev, new_in, ctxs = None, 0, []
+    for c in calls:
+        if not inside(c["ts"]):
+            if c["ts"] and c["ts"] < since:
+                prev = _tok(c["u"])          # seeds the growth of the first call
+            continue
+        t = add(c)
+        ctx = _ctx(t)
+        new_in += ctx if prev is None else max(0, ctx - _ctx(prev) - prev["output"])
+        ctxs.append(ctx)
+        prev = t
+        stamps += [c["ts"], c.get("last") or c["ts"]]
+    sub = 0
+    for p in extra:
+        for c in _read(p)[0]:
+            if inside(c["ts"]):
+                add(c)
+                sub += 1
+    stamps = [s for s in stamps if s]
+    if until is not None:
+        stamps = [min(s, until) for s in stamps]
+    if stamps:
+        out["first"], out["last"] = min(stamps), max(stamps)
+    out["messages"] = len(ctxs)
+    out["subagent_calls"] = sub
     out["tokens"] = tot
-    out["cost_usd"] = cost_usd(out["by_model"]) if per_msg else 0.0
+    out["new_in"] = new_in
+    out["context_avg"] = round(sum(ctxs) / len(ctxs)) if ctxs else 0
+    out["context_peak"] = max(ctxs, default=0)
+    out["cost_usd"] = cost_usd(out["by_model"]) if (ctxs or sub) else 0.0
     out["active_minutes"] = round((out["last"] - out["first"]) / 60) if out["first"] and out["last"] else 0
     return out
 
@@ -213,18 +289,24 @@ def task_points(content: str) -> int:
 
 
 def build(sid: str, tid: str, content: str, since: float, *, credited: bool,
-          linked_entry_id=None, now: float | None = None) -> dict:
+          linked_entry_id=None, now: float | None = None, until: float | None = None) -> dict:
+    """`until` (window_end) closes the model window at the session's next
+    claim; JM's minutes are matched by task, not by window."""
     now = now or time.time()
     mins, n = jm_minutes(toggl_entries_since(since), content, linked_entry_id, now)
-    mu = model_usage(transcript_path(sid), since, now)
+    mu = model_usage(transcript_path(sid), since, now, until, subagent_paths(sid))
     return {
         "task": content,
         "points": task_points(content) if credited else 0,
         "since": int(since),
-        "wall_minutes": round((now - since) / 60) if since else None,
+        "until": int(until) if until else None,
+        "wall_minutes": round(((until or now) - since) / 60) if since else None,
         "jm": {"minutes": mins, "entries": n},
         "model": {"turns": mu["turns"], "messages": mu["messages"],
+                  "subagent_calls": mu["subagent_calls"],
                   "active_minutes": mu["active_minutes"], "tokens": mu["tokens"],
+                  "new_in": mu["new_in"], "context_avg": mu["context_avg"],
+                  "context_peak": mu["context_peak"],
                   "by_model": sorted(mu["by_model"]), "cost_usd": mu.get("cost_usd")},
         "notes": demon_notes(tid),
     }

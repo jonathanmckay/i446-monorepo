@@ -278,12 +278,17 @@ def main() -> int:
     # points only on a close; a defer/snooze earns nothing.
     fr = _load("fin_report")
     finals = {}
+    # Every claim this session made (released ones too) bounds the window of
+    # the task claimed before it, so reports partition the session.
+    starts = [r.get("claimed_at") for r in claims.values() if r.get("session") == session]
     for tid in ids:
         rec = claims.get(tid) or {}
+        since = float(rec.get("claimed_at") or 0)
         try:
             finals[tid] = fr.build(session, tid, current_content(tid, claims, tasks),
-                                   float(rec.get("claimed_at") or 0), credited=when is None,
-                                   linked_entry_id=rec.get("toggl_entry_id"))
+                                   since, credited=when is None,
+                                   linked_entry_id=rec.get("toggl_entry_id"),
+                                   until=fr.window_end(since, starts) if since else None)
         except Exception as e:  # noqa: BLE001 — the report never blocks the close
             finals[tid] = {"error": str(e)}
     if when is None:
