@@ -1,137 +1,161 @@
 {
   "2024-01": {
-    "concessions": -0.0
+    "concessions": -0.0,
+    "gpr": 0.0
   },
   "2024-02": {
-    "concessions": -0.0
+    "concessions": -0.0,
+    "gpr": 0.0
   },
   "2024-03": {
-    "concessions": -0.0
+    "concessions": -0.0,
+    "gpr": 0.0
   },
   "2024-04": {
-    "concessions": -0.0
+    "concessions": -0.0,
+    "gpr": 0.0
   },
   "2024-05": {
-    "concessions": -0.0
+    "concessions": -0.0,
+    "gpr": 0.0
   },
   "2024-06": {
-    "concessions": -0.0
+    "concessions": -0.0,
+    "gpr": 0.0
   },
   "2024-07": {
     "concessions": 25.0,
+    "gpr": 0.0,
     "lines": 1,
     "units": 0
   },
   "2024-08": {
     "concessions": 104.49,
+    "gpr": 137999.99,
     "lines": 1,
     "units": 0
   },
   "2024-09": {
-    "concessions": -0.0
+    "concessions": -0.0,
+    "gpr": 138456.11
   },
   "2024-10": {
     "concessions": 2050.0,
+    "gpr": 196204.82,
     "lines": 1,
     "units": 0
   },
   "2024-11": {
     "concessions": 4118.33,
+    "gpr": 272965.0,
     "lines": 3,
     "units": 0
   },
   "2024-12": {
     "concessions": 8714.86,
+    "gpr": 273213.18,
     "lines": 3,
     "units": 0
   },
   "2025-01": {
     "concessions": 1300.0,
+    "gpr": 288677.04,
     "lines": 3,
     "units": 0
   },
   "2025-02": {
     "concessions": 1315.54,
+    "gpr": 320310.0,
     "lines": 1,
     "units": 0
   },
   "2025-03": {
     "concessions": 731.96,
+    "gpr": 358686.15,
     "lines": 2,
     "units": 0
   },
   "2025-04": {
     "concessions": 10563.33,
+    "gpr": 635010.33,
     "lines": 5,
     "units": 0
   },
   "2025-05": {
     "concessions": 8052.7,
+    "gpr": 636364.81,
     "lines": 8,
     "units": 0
   },
   "2025-06": {
     "concessions": 7741.03,
+    "gpr": 636539.0,
     "lines": 9,
     "units": 0
   },
   "2025-07": {
     "concessions": 8085.05,
+    "gpr": 637889.3,
     "lines": 9,
     "units": 0
   },
   "2025-08": {
     "concessions": 7750.24,
+    "gpr": 636537.99,
     "lines": 7,
     "units": 0
   },
   "2025-09": {
     "concessions": 6828.61,
+    "gpr": 635804.63,
     "lines": 7,
     "units": 0
   },
   "2025-10": {
     "concessions": 8868.33,
+    "gpr": 693651.31,
     "lines": 8,
     "units": 0
   },
   "2025-11": {
     "concessions": 8325.5,
+    "gpr": 693181.16,
     "lines": 8,
     "units": 0
   },
   "2025-12": {
     "concessions": 15162.03,
+    "gpr": 692367.38,
     "lines": 10,
     "units": 0
   },
   "2026-01": {
     "concessions": 22879.07,
-    "gpr": 0.0,
+    "gpr": 1074919.14,
     "lines": 27,
     "units": 0
   },
   "2026-02": {
     "concessions": 26915.2,
-    "gpr": 0.0,
+    "gpr": 1076703.38,
     "lines": 28,
     "units": 0
   },
   "2026-03": {
     "concessions": 28528.78,
-    "gpr": 0.0,
+    "gpr": 1261078.02,
     "lines": 28,
     "units": 0
   },
   "2026-04": {
     "concessions": 36618.3,
-    "gpr": 0.0,
+    "gpr": 1254142.56,
     "lines": 33,
     "units": 0
   },
   "2026-05": {
     "concessions": 35651.62,
-    "gpr": 0.0,
+    "gpr": 1253789.92,
     "lines": 31,
     "units": 0
   },
@@ -166,9 +190,9 @@
     "units": 265
   },
   "2026-11": {
-    "concessions": 43015.94,
+    "concessions": 43531.16,
     "gpr": 0.0,
-    "lines": 274,
-    "units": 244
+    "lines": 280,
+    "units": 245
   }
 }
