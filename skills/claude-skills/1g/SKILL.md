@@ -180,6 +180,15 @@ next section's header: tell JM and ask which to drop or whether to add a row
 in Excel. Surface any non-zero exit verbatim; never fall back to local
 `osascript` or a hand-written AppleScript.
 
+### Step 4b: Todoist tasks (when JM asks for the goals in Todoist / dtd)
+
+One task per goal, named `😈 1g: <goal> {N}` (`{N}` = the goal's bonus, which
+credits 0g on completion), domain label and project. **Due TODAY, never the
+goal's deadline:** dtd lists only tasks due today or overdue, so a goal dated
+Fri or Sat is invisible all week (2026-11-15: seven goal tasks created due
+11-20/11-21, none showed in dtd). The deadline stays in the name ("by Fri
+11-20"). Then `python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache`.
+
 ### Step 5: Report
 
 Output a table:
