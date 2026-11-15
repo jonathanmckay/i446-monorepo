@@ -51,6 +51,11 @@ Read its JSON:
   nothing (no /did, no timer, no Todoist), then step 2. With an argument: say
   there is nothing to delay and stop; /defer handles a named task.
 
+The reverse also holds (2026-11-14): closing a claimed task anywhere else
+(dtd ⌥↵, /did) types `/clear` into the session that held it, once that
+session is idle (agent_claims.fin_holders + the Stop hook). Only this
+session's own /fin is exempt, which is why step 2 exists.
+
 ## 2. Clear
 
 A skill cannot run /clear, and typing it into this session's own terminal is

@@ -851,3 +851,83 @@ def test_zsh_hook_autoclaim_gate_is_interactive_only_and_not_an_alternation():
     assert 'CC_SESSION' in src and 'agent_claims.py" autoclaim' in src
     assert '"$D/by-session/$sid.auto"' in src
     assert len(_hook_alternations()) == 2
+
+
+# --- reverse /fin (2026-11-14) ---------------------------------------------
+class _Run:
+    """Records tmux commands; has-session succeeds for the one named session."""
+    def __init__(self, alive):
+        self.alive, self.calls = alive, []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(cmd)
+        rc = 0 if cmd[1] != "has-session" or cmd[3] == f"={self.alive}" else 1
+        return subprocess.CompletedProcess(cmd, rc, "", "")
+
+
+def _claimed(tmp_path, sid, tmux="cc-x"):
+    rec = ac.claim({"id": "T1", "content": "fix it"}, sid, tmp_path)
+    rec["tmux"] = tmux
+    (tmp_path / "T1.json").write_text(json.dumps(rec))
+    return rec
+
+
+def test_fin_idle_session_is_typed_into(tmp_path, monkeypatch):
+    monkeypatch.setattr(ac.time, "sleep", lambda s: None)
+    _claimed(tmp_path, "S1")
+    ac.set_state("T1", "idle", root=tmp_path)
+    run = _Run("cc-x")
+    assert ac.fin_holders("T1", tmp_path, run=run, self_session="") == ["typed:S1"]
+    sent = [c for c in run.calls if c[1] == "send-keys"]
+    assert sent[0][-2:] == ["-l", "/clear"] and sent[1][-1] == "Enter"
+    assert ac.held("S1", tmp_path) == []            # no longer attached
+    assert not (tmp_path / "by-session" / "S1.fin").exists()
+
+
+def test_fin_working_session_gets_marker_not_keys(tmp_path):
+    _claimed(tmp_path, "S1")                         # claim() leaves state working
+    run = _Run("cc-x")
+    assert ac.fin_holders("T1", tmp_path, run=run, self_session="") == ["marked:S1"]
+    assert not run.calls
+    assert (tmp_path / "by-session" / "S1.fin").read_text().strip() == "T1"
+    assert ac.held("S1", tmp_path) == ["T1"]         # the hook validates against this
+
+
+def test_fin_idle_without_live_tmux_falls_back_to_marker(tmp_path):
+    _claimed(tmp_path, "S1", tmux="gone")
+    ac.set_state("T1", "idle", root=tmp_path)
+    assert ac.fin_holders("T1", tmp_path, run=_Run("cc-x"), self_session="") == ["marked:S1"]
+
+
+def test_fin_skips_self_done_and_released(tmp_path):
+    _claimed(tmp_path, "S1")
+    ac.set_state("T1", "idle", root=tmp_path)
+    run = _Run("cc-x")
+    assert ac.fin_holders("T1", tmp_path, run=run, self_session="S1") == []   # /fin from inside
+    ac.mark_done("S1", ["T1"], tmp_path)
+    assert ac.fin_holders("T1", tmp_path, run=run, self_session="") == []
+    _claimed(tmp_path, "S1")
+    ac.release("S1", tmp_path)
+    assert ac.fin_holders("T1", tmp_path, run=run, self_session="") == []
+    assert not run.calls
+
+
+def test_fin_ix_record_from_other_host_goes_over_ssh(tmp_path, monkeypatch):
+    monkeypatch.setattr(ac, "_host", lambda: "straylight")
+    (tmp_path / "remote" / "ix").mkdir(parents=True)
+    (tmp_path / "remote" / "ix" / "T1.json").write_text(json.dumps(
+        {"task_id": "T1", "session": "S9", "host": "ix", "tmux": "cc-9"}))
+    spawned = []
+    def spawn(cmd, **kw):
+        spawned.append(cmd)
+    assert ac.fin_holders("T1", tmp_path, run=_Run("cc-9"), self_session="", spawn=spawn) == ["ssh:ix"]
+    assert spawned[0][:1] == ["ssh"] and spawned[0][-1] == ac.FIN_SSH_CMD.format(tid="T1")
+
+
+def test_fin_ix_marks_unreachable_host_in_root_fin_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(ac, "_host", lambda: "ix")
+    (tmp_path / "remote" / "straylight").mkdir(parents=True)
+    (tmp_path / "remote" / "straylight" / "T1.json").write_text(json.dumps(
+        {"task_id": "T1", "session": "S7", "host": "straylight"}))
+    assert ac.fin_holders("T1", tmp_path, run=_Run(""), self_session="") == ["marked-remote:S7"]
+    assert (tmp_path / "fin" / "S7").read_text().strip() == "T1"

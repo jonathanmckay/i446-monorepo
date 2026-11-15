@@ -162,6 +162,96 @@ def _forget(tid: str, root: Path) -> None:
             pass
 
 
+def _host() -> str:
+    return socket.gethostname().split(".")[0]
+
+
+def _tmux_session_name() -> str:
+    """Name of the tmux session holding this process's pane ('' outside tmux)."""
+    pane = os.environ.get("TMUX_PANE")
+    if not pane or not os.environ.get("TMUX"):
+        return ""
+    try:
+        return subprocess.run(["tmux", "display-message", "-p", "-t", pane, "#S"],
+                              capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+# --- reverse /fin (2026-11-14) ---------------------------------------------
+# "Closing a task runs /fin on any attached claude session." did-fast calls
+# fin_holders(tid) before clear_task(tid) for every task it closes. The task is
+# already closed, so what is left of /fin is the `/clear` JM would type into the
+# session that held it. Typing into a session mid-turn is unsafe (the Enter
+# would answer a pending permission prompt), so only an idle session is typed
+# into here; a working one gets by-session/<sid>.fin, which its own Stop hook
+# (scripts/agent-claim-hook.sh idle) consumes once the turn has ended and the
+# input is free. Sessions on Ix closed from elsewhere are handled on Ix over
+# ssh (`agent_claims.py fin <tid>`); a session on a host Ix cannot reach gets
+# fin/<sid> in Ix's root, which that host's dtd pulls into remote/ix/ for its
+# hook (agent-claims-pull.sh). The session that closes its own task (/fin via
+# done_session.py) is skipped: the skill hands off with its own "→ /clear".
+FIN_SSH_CMD = "python3 ~/i446-monorepo/tools/did/agent_claims.py fin {tid}"
+
+
+def type_clear(target: str, run=subprocess.run) -> bool:
+    """Type `/clear⏎` into a tmux session by exact name. -l sends the text
+    literally; Enter goes separately once the slash popup has settled."""
+    try:
+        if run(["tmux", "has-session", "-t", f"={target}"], capture_output=True, timeout=2).returncode != 0:
+            return False
+        run(["tmux", "send-keys", "-t", f"={target}", "-l", "/clear"], capture_output=True, timeout=2)
+        time.sleep(0.3)
+        run(["tmux", "send-keys", "-t", f"={target}", "Enter"], capture_output=True, timeout=2)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def fin_holders(tid: str, root: Path = CLAIMS_DIR, run=subprocess.run,
+                self_session: str | None = None, spawn=subprocess.Popen) -> list[str]:
+    """Finish every session still attached to a task that has just been closed.
+    Returns what it did: typed:<sid>, marked:<sid>, ssh:ix, marked-remote:<sid>."""
+    me = _host()
+    me_sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "") if self_session is None else self_session
+    out: list[str] = []
+    for d in _dirs(root):
+        try:
+            rec = json.loads((d / f"{tid}.json").read_text())
+        except (OSError, ValueError):
+            continue
+        sid, host = str(rec.get("session") or ""), str(rec.get("host") or "")
+        if not sid or sid == me_sid:
+            continue
+        state = "idle"
+        try:
+            state = (d / f"{tid}.state").read_text().split()[0]
+        except (OSError, IndexError):
+            pass
+        if state in ("released", "done"):
+            continue   # the session already let go of it
+        if host == me:
+            if tid not in held(sid, root):
+                continue   # by-session is this host's own index: the session moved on
+            if state == "idle" and rec.get("tmux") and type_clear(str(rec["tmux"]), run):
+                _set_held(sid, [t for t in held(sid, root) if t != tid], root)
+                out.append(f"typed:{sid}")
+            else:
+                _write(root / "by-session" / f"{sid}.fin", f"{tid}\n")
+                out.append(f"marked:{sid}")
+        elif host == "ix":
+            try:
+                spawn(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "ix", FIN_SSH_CMD.format(tid=tid)],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                out.append("ssh:ix")
+            except OSError:
+                pass
+        elif me == "ix":
+            _write(root / "fin" / sid, f"{tid}\n")
+            out.append(f"marked-remote:{sid}")
+    return out
+
+
 def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
           now: float | None = None, also: bool = False) -> dict:
     """One task per session: an earlier claim by this session is released —
@@ -171,8 +261,11 @@ def claim(task: dict, session: str, root: Path = CLAIMS_DIR,
         release(session, root)
     tid = str(task["id"])
     rec = {"task_id": tid, "task": task.get("content", ""), "session": session,
-           "host": socket.gethostname().split(".")[0], "cwd": os.getcwd(),
+           "host": _host(), "cwd": os.getcwd(),
            "claimed_at": int(now or time.time())}
+    tmux = _tmux_session_name()   # where fin_holders() types /clear (2026-11-14)
+    if tmux:
+        rec["tmux"] = tmux
     _write(root / f"{tid}.json", json.dumps(rec, ensure_ascii=False) + "\n")
     set_state(tid, "working", now, root)   # /claim itself runs mid-turn
     _set_held(session, (held(session, root) if also else []) + [tid], root)
@@ -841,6 +934,12 @@ def main(argv: list[str]) -> int:
         out = autoclaim(sys.stdin.read())
         if out:
             print(out)
+        return 0
+    if cmd == "fin":   # did-fast on another host closed a task held here
+        acted = fin_holders(rest) if rest else []
+        if rest:
+            clear_task(rest)
+        print(json.dumps({"ok": True, "fin": acted}))
         return 0
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     if cmd == "list":

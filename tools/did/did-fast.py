@@ -4874,8 +4874,16 @@ def main():
         _ac = importlib.util.module_from_spec(_acs)
         _acs.loader.exec_module(_ac)
         for _tid, (_ok, _err) in close_results.items():
-            if _ok:
+            if not _ok:
+                continue
+            try:   # reverse /fin (2026-11-14): the holding session gets its /clear
+                _ac.fin_holders(str(_tid))
+            except Exception:
+                pass
+            try:
                 _ac.clear_task(str(_tid))
+            except Exception:
+                pass
     except Exception:
         pass
     # A past-day write is not a TODAY completion: recording it here would

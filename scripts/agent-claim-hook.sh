@@ -135,6 +135,24 @@ case "$1" in
   idle) [[ -n "$(_live_agents)" || -n "$(_live_shells)" ]] && state=working || state=idle ;;
   release) state=released ;;
 esac
+# Reverse /fin (2026-11-14): did-fast closed a task this session holds and
+# left by-session/<sid>.fin (or, for a claim made here and closed on Ix, Ix's
+# fin/<sid>, pulled into remote/ix/ by agent-claims-pull.sh). Only on a true
+# idle: typing into a running turn could answer a permission prompt. Detached,
+# so the keys land after the hook returns and the input is free. The index
+# goes with it: the task is closed. See agent_claims.fin_holders.
+if [[ "$1" == idle && "$state" == idle && -n "$TMUX_PANE" ]]; then
+  for m in "$D/by-session/$sid.fin" "$D/remote/ix/fin/$sid"; do
+    [[ -f "$m" ]] || continue
+    ftid="$(<"$m")"; ftid="${ftid//[[:space:]]/}"
+    rm -f "$m" 2>/dev/null
+    [[ "$m" == */remote/ix/* ]] && ssh -o BatchMode=yes -o ConnectTimeout=5 ix "rm -f vault/z_ibx/agent-claims/fin/$sid" >/dev/null 2>&1 &!
+    [[ -n "$ftid" && " ${tids[*]} " == *" $ftid "* ]] || continue
+    { sleep 1; tmux send-keys -t "$TMUX_PANE" -l '/clear'; sleep 0.3; tmux send-keys -t "$TMUX_PANE" Enter; } >/dev/null 2>&1 &!
+    rm -f "$D/by-session/$sid" 2>/dev/null
+    exit 0
+  done
+fi
 case "$1" in
   working|idle|subagent-start|subagent-stop|release)
     # release = SessionEnd: hand the tasks back but keep them at the TOP of dtd
