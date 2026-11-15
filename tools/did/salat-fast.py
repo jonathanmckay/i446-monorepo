@@ -56,9 +56,9 @@ def main() -> int:
     col = cols.maybe_col("0n", "ص") or "AP"
 
     if count is None:
-        res = excel.append("0n", col, date=today, value="+1")
+        res = excel.append("0n", col, date=today, value="+1", src="s +1")
     else:
-        res = excel.write("0n", col, date=today, value=str(count))
+        res = excel.write("0n", col, date=today, value=str(count), src=f"s ={count}")
     if not res.get("ok"):
         print(f"ص: write failed — {res.get('error', 'unknown error')}")
         return 1

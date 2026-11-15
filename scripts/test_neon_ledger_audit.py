@@ -53,6 +53,33 @@ def test_fallback_warns_not_errors():
     assert errors == [] and len(warns) == 1 and "fallback" in warns[0]
 
 
+def test_first_baseline_is_silent_and_starts_chain():
+    # Nightly reconcile journals a never-seen cell as kind=baseline with
+    # before=None; that is a chain start, not a daemon-down fallback.
+    errors, warns, last = audit.replay([
+        E(kind="baseline", value=None, before=None, after="=0", src="baseline"),
+        E(before="=0", after="=0+10"),
+    ])
+    assert errors == [] and warns == []
+    assert last[("0分", "R", "r207")][1] == "=0+10"
+
+
+def test_baseline_on_seen_cell_still_warns():
+    _, warns, _ = audit.replay([
+        E(before="=1", after="=1+10"),
+        E(kind="baseline", value=None, before=None, after="=7", src="baseline"),
+    ])
+    assert len(warns) == 1
+
+
+def test_break_after_baseline_is_an_error():
+    errors, _, _ = audit.replay([
+        E(kind="baseline", value=None, before=None, after="=0", src="baseline"),
+        E(before="=5", after="=5+10"),
+    ])
+    assert len(errors) == 1 and "chain BREAK" in errors[0]
+
+
 def test_entry_key_row_fallback():
     assert audit.entry_key({"sheet": "1n+", "col": "AI", "row": 35, "date": None}) == ("1n+", "AI", "r35")
 

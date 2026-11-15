@@ -105,7 +105,13 @@ def replay(entries):
                 warns.append(f"{msg} [acked {e.get('ts')}: {e.get('note')}]")
             last[key] = (e, e.get("after"))
             continue
-        if e.get("before") is None:  # fallback write, daemon was down
+        if e.get("before") is None and e.get("kind") == "baseline" and prev is None:
+            # Nightly reconcile's first sighting of a cell (~135/day): a chain
+            # start, not a daemon-down write. Warning on these buried the real
+            # fallbacks under ~3,800 lines (2026-11-14). A baseline on a cell
+            # the audit HAS seen still warns below.
+            pass
+        elif e.get("before") is None:  # fallback write, daemon was down
             warns.append(f"{e.get('ts')} {cell}: fallback write (before unknown), src={e.get('src')}")
         elif prev is not None and e["before"] != prev[1]:
             pending.setdefault(key, []).append(

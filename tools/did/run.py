@@ -493,7 +493,7 @@ def apply_long_bonus(long_habit_id: str, pts: int, target_date: str) -> str | No
         old = int(float(cur.get("value", 0) or 0))
     except (TypeError, ValueError):
         old = 0
-    excel.write("1n+", bonus_col, row=week_row, value=str(old + pts))
+    excel.write("1n+", bonus_col, row=week_row, value=str(old + pts), src=f"1n {long_habit.name}")
 
     if fen_col:
         excel.append("0分", fen_col, date=target_date, value=f"+{pts}", src=f"1n {long_habit.name}")
@@ -547,14 +547,14 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
             old = int(float(cur.get("value", 0) or 0))
         except (TypeError, ValueError):
             old = 0
-        result = excel.write(sheet, col, date=target_date, value=str(old + minutes))
+        result = excel.write(sheet, col, date=target_date, value=str(old + minutes), src=f"did {name}")
     elif minutes == 1:
         # Boolean habit (default value 1): idempotent set, not append.
         # Writing "1" twice yields "1", not "1+1".
-        result = excel.write(sheet, col, date=target_date, value="1")
+        result = excel.write(sheet, col, date=target_date, value="1", src=f"did {name}")
     else:
         # Actual minutes (from Toggl auto-detect or explicit): append
-        result = excel.append(sheet, col, date=target_date, value=f"+{minutes}")
+        result = excel.append(sheet, col, date=target_date, value=f"+{minutes}", src=f"did {name}")
     if not result.get("ok"):
         print(f"  ✗ Excel write failed: {result}", file=sys.stderr)
         return 1
@@ -706,7 +706,7 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         except (TypeError, ValueError):
             old = 0
         cell_add = _VARIABLE_1N_BASES[name] if name in _BASE_IN_CELL_1N else minutes
-        excel.write("1n+", col, row=week_row, value=str(old + cell_add))
+        excel.write("1n+", col, row=week_row, value=str(old + cell_add), src=f"1n {name}")
         if name in _VARIABLE_1N_BASES or name in _VARIABLE_1N_RATES:
             base = _VARIABLE_1N_BASES.get(name, 0)
             rate = _VARIABLE_1N_RATES.get(name, 1.0)
@@ -731,7 +731,7 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
                 points = int(float(row5_val or 0))
             except (TypeError, ValueError):
                 points = 0
-        excel.write("1n+", col, row=week_row, value=str(minutes))
+        excel.write("1n+", col, row=week_row, value=str(minutes), src=f"1n {name}")
 
     # Append the points to today's 0分 domain column
     if fen_col and points:
