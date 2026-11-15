@@ -4100,7 +4100,12 @@ TALLY_PID=$!
     # mirror's mtime advances, fold it into the local completed-today
     # ($DONE) and touch $CACHE so the reload branch below rebuilds the
     # overlay and the just-completed card disappears from this dtd too.
-    cur_rm=$(stat -f %m "$HOME"/vault/z_ibx/completed-today-*.json 2>/dev/null | sort -rn | head -1)
+    # Signature of every mirror (name + mtime), Syncthing copies and the
+    # fast-pulled Ix ones (agent-claims-pull.sh, 2026-11-15), not the newest
+    # mtime: a pulled file keeps Ix's mtime, which can be older than this
+    # host's own mirror and would never move a max. (N): an empty fast dir
+    # must not abort the stat for the other glob.
+    cur_rm=$(stat -f '%N %Fm' "$HOME"/vault/z_ibx/completed-today-*.json(N) "${XDG_STATE_HOME:-$HOME/.local/state}"/jm/remote-done/*/completed-today-*.json(N) 2>/dev/null)
     if [[ -n "$cur_rm" && "$cur_rm" != "${last_rm:-}" ]]; then
       last_rm="$cur_rm"
       python3 "$HOME/i446-monorepo/tools/did/mark-completed.py" --absorb-remote >/dev/null 2>&1

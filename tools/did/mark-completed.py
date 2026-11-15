@@ -288,6 +288,26 @@ def is_duplicate_today(name: str, *, today: str | None = None, path: Path | None
 # pushes its fake ids into the synced vault, and Ix absorbs them into the live
 # completed-today.json (2026-10-19: "-1g": "r2" from test_did_refresh_keep_old).
 MIRROR_DIR = Path(os.environ.get("JM_COMPLETED_MIRROR_DIR") or (Path.home() / "vault" / "z_ibx"))
+# Fast copy of Ix's mirrors, pulled over ssh every ~2s by agent-claims-pull.sh
+# on hosts Ix cannot reach (2026-11-15: /fin on Ix closed 1g, Straylight's dtd
+# showed it for 66s until Syncthing delivered the mirror). Outside the vault so
+# Syncthing never sees it. A test that redirects the mirror dir without naming
+# a fast dir gets none, so it cannot read the live one.
+_fast_env = os.environ.get("JM_COMPLETED_FAST_DIR")
+FAST_DIR = (Path(_fast_env) if _fast_env
+            else None if os.environ.get("JM_COMPLETED_MIRROR_DIR")
+            else Path.home() / ".local" / "state" / "jm" / "remote-done")
+
+
+def _remote_mirror_files() -> list:
+    """Other hosts' completed-today mirrors: the Syncthing copies, then the
+    fast-pulled ones. _merge_remote takes the max per key, so reading the same
+    host's record twice (or an older copy) is harmless."""
+    own = _mirror_path().name
+    files = sorted(MIRROR_DIR.glob("completed-today-*.json"))
+    if FAST_DIR is not None:
+        files += sorted(FAST_DIR.glob("*/completed-today-*.json"))
+    return [p for p in files if p.name != own and ".sync-conflict-" not in p.name]
 
 
 def _host_slug() -> str:
@@ -360,11 +380,8 @@ def absorb_remote(today: str | None = None) -> int:
     just synced in). Undos travel too (2026-10-08): see _merge_remote.
     """
     today = today or daytime.today_iso()
-    own = _mirror_path().name
     remotes = []
-    for p in sorted(MIRROR_DIR.glob("completed-today-*.json")):
-        if p.name == own or ".sync-conflict-" in p.name:
-            continue
+    for p in _remote_mirror_files():
         try:
             with open(p, encoding="utf-8") as f:
                 remote = json.load(f)

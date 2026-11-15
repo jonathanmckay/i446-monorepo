@@ -122,3 +122,61 @@ def test_absorb_skips_sync_conflict_copies(mc):
     _remote(mc, "otherbox.sync-conflict-20260101-000000-ABC", {
         "date": date.today().isoformat(), "names": ["ghost"]})
     assert mc.absorb_remote() == 0
+
+
+# --- fast pull (2026-11-15) ----------------------------------------------------
+# /fin closed `1g` on Ix; Straylight's dtd kept the row for 66s, until Syncthing
+# delivered Ix's mirror. agent-claims-pull.sh now also pulls Ix's mirrors into
+# a non-synced dir every ~2s; absorb_remote must read that copy too.
+
+def test_absorb_reads_fast_pulled_ix_mirror_before_syncthing_delivers(mc, tmp_path, monkeypatch):
+    today = date.today().isoformat()
+    fast = tmp_path / "remote-done"
+    (fast / "ix").mkdir(parents=True)
+    monkeypatch.setattr(mc, "FAST_DIR", fast)
+    mc.MIRROR_DIR.mkdir(parents=True, exist_ok=True)   # Syncthing copy not here yet
+    # Not "ix-local": on Ix that is this host's own mirror name, which is skipped.
+    (fast / "ix" / "completed-today-otherbox.json").write_text(json.dumps({
+        "date": today, "names": ["1g (20)"], "ids": {"1g (20)": "6gJPwc4QXW8JhrX6"}}))
+    assert mc.absorb_remote() == 1
+    assert json.loads(mc.COMPLETED.read_text())["ids"]["1g (20)"] == "6gJPwc4QXW8JhrX6"
+
+
+def test_fast_dir_skips_own_mirror_and_conflict_copies(mc, tmp_path, monkeypatch):
+    today = date.today().isoformat()
+    fast = tmp_path / "remote-done"
+    (fast / "ix").mkdir(parents=True)
+    monkeypatch.setattr(mc, "FAST_DIR", fast)
+    rec = json.dumps({"date": today, "names": ["echo"], "ids": {"echo": "1"}})
+    (fast / "ix" / mc._mirror_path().name).write_text(rec)
+    (fast / "ix" / "completed-today-ix.sync-conflict-20261115.json").write_text(rec)
+    assert mc.absorb_remote() == 0
+
+
+def test_redirected_mirror_dir_never_reads_the_live_fast_dir(monkeypatch):
+    """conftest points JM_COMPLETED_MIRROR_DIR at a temp dir; without its own
+    override the fast dir must be off, or tests would absorb live Ix rows."""
+    monkeypatch.setenv("JM_COMPLETED_MIRROR_DIR", "/tmp/jm-test-nowhere")
+    monkeypatch.delenv("JM_COMPLETED_FAST_DIR", raising=False)
+    spec = importlib.util.spec_from_file_location("mc_fast_off", _HERE / "mark-completed.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.FAST_DIR is None
+
+
+def test_dtd_watcher_watches_fast_dir_by_signature_not_max_mtime():
+    """A pulled file keeps Ix's mtime, which can be older than this host's own
+    mirror, so `sort -rn | head -1` never moved; and a bare glob on an empty
+    fast dir aborts the whole stat in zsh."""
+    line = next(l for l in (_HERE / "dtd.sh").read_text().splitlines()
+                if l.strip().startswith("cur_rm=$(stat"))
+    assert "remote-done/*/completed-today-*.json(N)" in line
+    assert "z_ibx/completed-today-*.json(N)" in line
+    assert "%N %Fm" in line and "head -1" not in line
+
+
+def test_pull_script_fetches_ix_mirrors_outside_the_vault():
+    sh = (_HERE.parents[1] / "scripts" / "agent-claims-pull.sh").read_text()
+    assert "jm/remote-done/ix" in sh
+    assert "--include='completed-today-*.json' --exclude='*'" in sh
+    assert "--exclude='*.sync-conflict-*'" in sh

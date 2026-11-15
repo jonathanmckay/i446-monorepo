@@ -28,3 +28,14 @@ rsync -a --delete --exclude=/remote/ --exclude=/by-session/ --exclude=/panes.jso
   --exclude='*.tmp' --exclude='*.agents' \
   -e "ssh -o BatchMode=yes -o ConnectTimeout=5" \
   "${AGENT_CLAIMS_PULL_SRC:-ix:vault/z_ibx/agent-claims/}" "$D/remote/ix/" >/dev/null 2>&1
+# Ix's completed-today mirrors ride the same pull (2026-11-15): a task closed
+# on Ix stayed in this host's dtd until Syncthing delivered the mirror (66s
+# measured). Lands outside the vault; mark-completed.py's absorb_remote reads
+# it and dtd's watcher reloads on its change. -a keeps Ix's mtimes so an
+# unchanged file is not re-sent every cycle.
+R="${XDG_STATE_HOME:-$HOME/.local/state}/jm/remote-done/ix"
+mkdir -p "$R"
+rsync -a --delete --timeout=10 --exclude='*.sync-conflict-*' \
+  --include='completed-today-*.json' --exclude='*' \
+  -e "ssh -o BatchMode=yes -o ConnectTimeout=5" \
+  "${COMPLETED_PULL_SRC:-ix:vault/z_ibx/}" "$R/" >/dev/null 2>&1
