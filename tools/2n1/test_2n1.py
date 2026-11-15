@@ -96,3 +96,16 @@ def test_shared_writer_finds_october_and_is_idempotent(monkeypatch):
     r1 = m._monthly.credit_monthly_cell(m.MONTHLY_HABIT, 1)
     assert r1.get("skipped") and r1["col"] == "E" and len(writes) == 1
     assert not m._monthly.credit_monthly_cell("no such habit", 10)["ok"]
+
+
+def test_note_sections_newest_first_and_rerun_replaces():
+    today = date(2026, 11, 14)
+    e10 = m.month_efficiency(m.parse_sheet(_sheet()), 10)
+    e11 = m.month_efficiency(m.parse_sheet(_sheet()), 11)
+    note = m.merge_note("", m.section(e10, 2026, today), today)
+    assert note.startswith("---\ntitle:") and note.count("## 2026-10") == 1 and "| family | 3/4 |" in note
+    note = m.merge_note(note, m.section(e11, 2026, today), today)
+    assert note.index("## 2026-11") < note.index("## 2026-10")
+    again = m.merge_note(note, m.section(e10, 2026, date(2026, 11, 20)), today)
+    assert again.count("## 2026-10") == 1 and "run 2026-11-20" in again and again.count("---\ntitle:") == 1
+    assert m.report_year(12, date(2027, 1, 3)) == 2026 and m.report_year(10, today) == 2026

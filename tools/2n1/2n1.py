@@ -17,8 +17,13 @@ into the 2₦ block row '1 ₦ efficiency' for the month the card was DUE in.
 An explicit month is report-only: a second close of an already-advanced
 monthly card would credit its points twice.
 
+Publishing (2026-11-14): every run except --json writes the month's table
+into the running note vault/g245/5e2/1n-efficiency.md (one `## YYYY-MM`
+section per month, newest first; a rerun replaces that month's section) and
+opens it in Obsidian unless --no-open.
+
 Usage:
-  python3 2n1.py [month] [--no-mark] [--json]
+  python3 2n1.py [month] [--no-mark] [--no-open] [--json]
   month: 10 | oct | 2026-10   (default: the last completed month)
 """
 from __future__ import annotations
@@ -46,6 +51,16 @@ MONTHLY_HABIT = "1 ₦ efficiency"     # col B of the 2₦ block row this card c
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 WEEK_RE = re.compile(r"^(\d{1,2})\.(\d)$")
 MISMATCH = 0.0005
+NOTE = Path.home() / "vault/g245/5e2/1n-efficiency.md"
+NOTE_HEAD = """---
+title: "1₦ Efficiency by Month"
+date: {date}
+type: report
+tags: [g245, neon, 1n, efficiency]
+source: 2n1.py
+---
+Monthly 1₦ efficiency from Neon `1n+`, written by `/2n1`: points earned over points possible, and the habits that cost the most. Newest month first.
+"""
 
 
 # ── month selection ──────────────────────────────────────────────────────────
@@ -133,7 +148,7 @@ def month_efficiency(sheet: dict, month: int) -> dict:
             "habits": sorted(habits, key=lambda h: -h["missed"])}
 
 
-def render(e: dict, top: int = 10) -> str:
+def render(e: dict, top: int | None = 10) -> str:
     out = [f"1₦ efficiency {MONTHS[e['month'] - 1]}: {e['pct']:.1%}  "
            f"({round(e['earned'])} of {round(e['possible'])} 分, {e['weeks']} weeks)"]
     if e["sheet_avg"] is None:
@@ -144,6 +159,43 @@ def render(e: dict, top: int = 10) -> str:
     for h in [h for h in e["habits"] if h["missed"] > 0][:top]:
         out.append(f"| {h['habit']} | {h['done']}/{h['weeks']} | {round(h['missed'])} |")
     return "\n".join(out)
+
+
+# ── publishing ───────────────────────────────────────────────────────────────
+
+def report_year(month: int, today: date) -> int:
+    """The sheet holds one year of weeks; a month later than today's is last year's."""
+    return today.year - 1 if month > today.month else today.year
+
+
+def section(e: dict, year: int, today: date) -> str:
+    lines = render(e, top=None).split("\n")
+    return "\n".join([f"## {year}-{e['month']:02d}", "",
+                      f"**{e['pct']:.1%}**: {round(e['earned'])} of {round(e['possible'])} 分 over "
+                      f"{e['weeks']} weeks (run {today.isoformat()})"] + lines[1:]) + "\n"
+
+
+def merge_note(existing: str, sec: str, today: date) -> str:
+    """Put `sec` into the note: replace the section with the same `## YYYY-MM`
+    heading, else insert it so sections stay newest first."""
+    if not existing.strip():
+        existing = NOTE_HEAD.format(date=today.isoformat())
+    parts = re.split(r"(?m)^(?=## \d{4}-\d{2}\s*$)", existing)
+    head, secs = parts[0].rstrip("\n") + "\n", {}
+    for part in parts[1:]:
+        secs[part.split("\n", 1)[0].strip()] = part.rstrip("\n") + "\n"
+    secs[sec.split("\n", 1)[0].strip()] = sec.rstrip("\n") + "\n"
+    return head + "\n" + "\n".join(secs[k] for k in sorted(secs, reverse=True))
+
+
+def publish(e: dict, today: date, open_note: bool = True) -> Path:
+    NOTE.parent.mkdir(parents=True, exist_ok=True)
+    old = NOTE.read_text() if NOTE.exists() else ""
+    NOTE.write_text(merge_note(old, section(e, report_year(e["month"], today), today), today))
+    if open_note:
+        rel = str(NOTE.relative_to(Path.home() / "vault")).replace("/", "%2F")
+        subprocess.run(["open", f"obsidian://open?vault=vault&file={rel}"], check=False)
+    return NOTE
 
 
 # ── self-clearing ────────────────────────────────────────────────────────────
@@ -194,6 +246,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("month", nargs="?")
     ap.add_argument("--no-mark", action="store_true", help="report only; leave the card open")
+    ap.add_argument("--no-open", action="store_true", help="publish the note without opening it")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     today = datetime.now(TZ).date()
@@ -209,7 +262,13 @@ def main() -> None:
         sys.exit(f"ERROR: {err}")
     print(json.dumps(e, ensure_ascii=False, indent=2) if a.json else render(e))
 
-    if a.no_mark or a.json:
+    if a.json:
+        return
+    try:
+        print(f"\npublished: {publish(e, today, open_note=not a.no_open)}", flush=True)
+    except OSError as err:
+        print(f"\npublish failed: {err}", flush=True)
+    if a.no_mark:
         return
     if a.month:
         print("\nreport only (explicit month); run bare /2n1 to close the card")

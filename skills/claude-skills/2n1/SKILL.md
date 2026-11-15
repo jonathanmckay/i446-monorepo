@@ -1,6 +1,6 @@
 ---
 name: "2n1"
-description: "Use when JM runs /2n1, opens the monthly '5^2 1 n Efficiency Clearance' card, or asks how efficient his weekly 1n habits were last month and which ones cost the most points. Not for marking a weekly 1n habit done (/1n, /1nd), not the monthly Toggl coverage audit (/2n), not the quarterly scorecards that read this number (/3s, /4gneon-s). Usage: /2n1 [month] [--no-mark]"
+description: "Use when JM runs /2n1, opens the monthly '5^2 1 n Efficiency Clearance' card, or asks how efficient his weekly 1n habits were last month and which ones cost the most points. Not for marking a weekly 1n habit done (/1n, /1nd), not the monthly Toggl coverage audit (/2n), not the quarterly scorecards that read this number (/3s, /4gneon-s). Usage: /2n1 [month] [--no-mark] [--no-open]"
 user-invocable: true
 ---
 
@@ -10,8 +10,14 @@ Run the helper with the args verbatim and show its output as is (headline,
 then the table of habits by 分 missed):
 
 ```bash
-python3 ~/i446-monorepo/tools/2n1/2n1.py [month] [--no-mark] [--json]
+python3 ~/i446-monorepo/tools/2n1/2n1.py [month] [--no-mark] [--no-open] [--json]
 ```
+
+Every run except `--json` also publishes: the month's full table goes into
+the running note `vault/g245/5e2/1n-efficiency.md` (one `## YYYY-MM` section
+per month, newest first; a rerun replaces that month's section) and the note
+opens in Obsidian. `--no-open` writes without opening. Commit and push the
+note after the run.
 
 `[month]` is `10`, `oct` or `2026-10`. No arg = the last completed month.
 
@@ -44,6 +50,6 @@ the 1n+ 2₦ block row `1 ₦ efficiency` for the month the card was **due** in
 (shared writer `lib/neon/monthly.py`, also used by `/2hci`), then a dtd cache
 refresh.
 
-An explicit month, `--no-mark` or `--json` is report-only. Never close the
+An explicit month, `--no-mark` or `--json` leaves the card alone. Never close the
 card for a past month by hand: once the monthly card has advanced, a second
 close credits its points twice.
