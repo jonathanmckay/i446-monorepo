@@ -60,8 +60,23 @@ def test_past_day_has_no_live_residual(db, monkeypatch):
     monkeypatch.setattr(view.rules, "derive_day", lambda d, c=None, strict=False: {
         "date": d, "cols": {c: {"derived": 1.0, "unknown": []} for c in view.rules.POINT_COLS + ["D"]},
         "blocks": {"卯": {"lock": 1.0, "observed": 1.0}}, "weights_known": 1, "strict": True})
+    ledger.record(_lock("G", 1.0, "2026-10-18T06:00:10"), db)   # the day has an event (see the test below)
     v = view.day_view("2026-10-18", db, now=dt.datetime(2026, 10, 19, 11, 30))
     assert v["live_block"] is None and v["blocks"] == {"卯": 1.0}
+
+
+def test_day_with_no_events_yet_has_no_ledger_view(db, monkeypatch):
+    """2026-11-14: from 00:00 until the 03:50 baseline the ledger has no event
+    for the new day, derive_day yields 0, and Excel's row already evaluates
+    to its formula floor (-46 = W -50 + T 4). dtd and janus logged that as a
+    disagreement every midnight. No event for the date = no ledger value:
+    day_view returns None, so pick() shows Excel and nothing is logged."""
+    monkeypatch.setattr(view.rules, "derive_day", lambda d, c=None, strict=False: {
+        "date": d, "cols": {c: {"derived": 0.0, "unknown": []} for c in view.rules.POINT_COLS + ["D"]},
+        "blocks": {}, "weights_known": 43, "strict": True})
+    assert view.day_view("2026-11-14", db, now=dt.datetime(2026, 11, 14, 0, 0, 7)) is None
+    assert view.pick(-46, None) == -46
+    assert view.log_reader_diff("dtd", "2026-11-14", -46, None) is False
 
 
 def test_missing_db_returns_none_without_creating_it(tmp_path, monkeypatch):
