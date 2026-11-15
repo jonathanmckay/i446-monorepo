@@ -42,7 +42,7 @@ def test_batch_bindings_select_cursor_row_before_acting():
     the row under the cursor to count as well, so every {+2} binding runs
     fzf's `select` (idempotent, cursor stays put) before the action. With no
     marks the result is unchanged: {+2} already fell back to the cursor row."""
-    for key in ("ctrl-d", "ctrl-x", "ctrl-k", "ctrl-v", "alt-up"):
+    for key in ("ctrl-d", "ctrl-x", "ctrl-k", "ctrl-v", "alt-up", "alt-down"):
         m = re.search(rf'--bind "{key}:([^"]*)"', SRC)
         assert m, f"{key} binding not found"
         assert "{+2}" in m.group(1), f"{key} is not a batch binding"

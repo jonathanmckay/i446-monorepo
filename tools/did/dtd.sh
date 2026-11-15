@@ -2122,13 +2122,19 @@ except Exception: pass
 # 🧮 and goes to the top; when the timer moves on and it isn't done, it stays
 # at the top, without the 🧮 since 2026-10-30). start.sh appends date/id/epoch to dtd-started on every Enter
 # and ctrl-s; id -> latest start today. Completion hides the row as usual.
+# ⌥↓ (2026-11-15: 'sometimes I get started on a task accidentally or I want
+# to move it back to regular spot in the list') appends a tombstone, 3rd field
+# 'x' (date, id, x, epoch): it drops the id, and a later start re-adds it, so
+# lines are read in file order. Append-only: start.sh and janus append here too.
 started_at = {}
 try:
     import os as _os_s
     _sp = _os_s.path.join(_os_s.environ.get('XDG_STATE_HOME') or _os_s.path.expanduser('~/.local/state'), 'jm', 'dtd-started')
     for _l in open(_sp):
         _p = _l.strip().split('\t')
-        if len(_p) >= 3 and _p[0] == today and _p[2].isdigit():
+        if len(_p) >= 3 and _p[0] == today and _p[2] == 'x':
+            started_at.pop(_p[1], None)
+        elif len(_p) >= 3 and _p[0] == today and _p[2].isdigit():
             started_at[_p[1]] = max(started_at.get(_p[1], 0), int(_p[2]))
 except Exception: pass
 
@@ -3149,6 +3155,44 @@ print -- "\$EPOCHREALTIME\tbump-end\t" >> "${DTD_TIMING:-/dev/null}" 2>/dev/null
 BUMPEOF
 chmod +x "$DTD_BUMP"
 
+# --- Unstart script used by fzf alt-down binding (2026-11-15) ---
+# 'sometimes I get started on a task accidentally or I want to move it back to
+# regular spot in the list': the inverse of Enter's top slot. Appends a
+# tombstone to dtd-started for the cursor row (or every marked row) that has a
+# live start today; the list generator then drops it from the started tier.
+# Local only: the Toggl timer and the Todoist task are left alone, so the row
+# under a running timer stays on top until the timer moves.
+DTD_UNSTART="/tmp/dtd-$DTD_ID.unstart.sh"
+cat > "$DTD_UNSTART" << UNSTARTEOF
+#!/bin/zsh
+[[ -n "\${DTD_WARM:-}" ]] && exit 0   # DTD_WARM pre-exec (Defender first-exec scan), see the warm loop before the UI loop
+_T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}$DTD_ID\${_T}action\${_T}unstart\${_T}\${(j:,:)@}\${_T}" >> "$DTD_EVENTS" 2>/dev/null
+typeset -a ids
+for _t in "\$@"; do [[ -n "\$_t" && "\$_t" != BLOCK:* ]] && ids+=("\$_t"); done
+(( \${#ids[@]} )) || exit 0
+# State path resolved at run time, like start.sh's, not baked in at launch.
+_sf="\${XDG_STATE_HOME:-\$HOME/.local/state}/jm/dtd-started"
+_day=\$(date +%Y-%m-%d); _now=\$(date +%s)
+# Ids with a live start today: same file-order rule as the list generator.
+typeset -A live
+while IFS=\$'\t' read -r _d _i _e _rest; do
+  [[ "\$_d" == "\$_day" ]] || continue
+  if [[ "\$_e" == x ]]; then unset "live[\$_i]"
+  elif [[ "\$_e" == <-> ]]; then live[\$_i]=1; fi
+done < "\$_sf" 2>/dev/null
+_n=0
+for _t in "\${ids[@]}"; do
+  (( \${+live[\$_t]} )) || continue
+  printf '%s\t%s\tx\t%s\n' "\$_day" "\$_t" "\$_now" >> "\$_sf" && (( _n++ ))
+done
+if (( _n )); then
+  echo "⬇ back in line: \$_n task(s) (a running timer keeps its row on top until it moves)" > "$DTD_HDR"
+else
+  echo "· not started today, nothing to move" > "$DTD_HDR"
+fi
+UNSTARTEOF
+chmod +x "$DTD_UNSTART"
+
 # --- Skip script used by fzf ctrl-k binding ---
 DTD_SKIP="/tmp/dtd-$DTD_ID.skip.sh"
 cat > "$DTD_SKIP" << SKIPEOF
@@ -3881,7 +3925,7 @@ fzf --id-nth=2 --filter=x </dev/null >/dev/null 2>&1; (( $? == 2 )) && DTD_FZF_I
 # bindings (which run in fzf's child shell) can read it. With --header-first the
 # header renders BELOW the prompt (Claude-style status line): the live match
 # count ($FZF_MATCH_COUNT), any worker status ($DTD_HDR), and these keys.
-export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) or new task if no match + [N] | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
+export DTD_KEYS="enter: start (0l 1s xk887 -1g 0g 1hcme 1i9 1hcb: form) or new task if no match + [N] | ⌥⏎: done | ctrl-s: timer | ctrl-d: 📅schedule | ctrl-p: ✂done-so-far | ctrl-v/k: ⏰delay | esc: back | ⌥↑: p1 top | ⌥↓: back in line | ctrl-o/g: details+edit | ctrl-l: open link | ctrl-x: del | ctrl-z: undo | ctrl-r: refresh | ctrl-t: view | ⇧↑↓: mark multi"
 
 # Status-line generator (the header, below the prompt): "<N left>   <worker
 # status>   <keys>". fzf exports $FZF_MATCH_COUNT to this child; $DTD_KEYS is
@@ -4249,7 +4293,7 @@ _dtd_warm() { local _s; for _s in "$@"; do [[ -x "$_s" ]] && DTD_WARM=1 "$_s" </
 ( exec 3>&-
   _dtd_warm "$DTD_LIST" "$DTD_HDRGEN" "$DTD_BLOCKARM" "$DTD_PICKENTER" "$DTD_BLOCKAPPLY" \
             "$DTD_DEFER" "$DTD_DONE_ROUTER" "$DTD_DONE_HIDE" "$DTD_DONE" "$DTD_START" "$DTD_ENTER" "$DTD_BACK" &
-  _dtd_warm "$DTD_DOMAINSEARCH" "$DTD_EDIT" "$DTD_SPLIT" "$DTD_UNDO" "$DTD_BUMP" "$DTD_SKIP" \
+  _dtd_warm "$DTD_DOMAINSEARCH" "$DTD_EDIT" "$DTD_SPLIT" "$DTD_UNDO" "$DTD_BUMP" "$DTD_UNSTART" "$DTD_SKIP" \
             "$DTD_DELETE" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_VIEWTOGGLE" "$DTD_AGENT" "$DTD_FORM" &
   wait
   : > "$DTD_WARM_DONE"
@@ -4369,6 +4413,7 @@ while true; do
       --bind "ctrl-p:execute(DTD_SPLIT_SEED=1 $DTD_EDIT {2})+clear-screen+deselect-all+reload($DTD_RELOAD)+transform([[ -e /tmp/dtd-$DTD_ID.editsaved ]] && echo clear-query)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-v:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "alt-up:select+execute-silent($DTD_BUMP {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query+transform-header($DTD_HDRGEN)" \
+      --bind "alt-down:select+execute-silent($DTD_UNSTART {+2})+deselect-all+reload-sync($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-g:execute($DTD_EDIT {2})+clear-screen+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
       --bind "ctrl-k:select+execute-silent($DTD_BLOCKARM {+2})+deselect-all+reload-sync($DTD_RELOAD)+clear-query" \
       --bind "ctrl-z:execute-silent($DTD_UNDO)+reload($DTD_RELOAD)+transform-header($DTD_HDRGEN)" \
@@ -4519,5 +4564,5 @@ kill "$TALLY_PID" 2>/dev/null
 # precedent) -- it's the only postmortem record of what a session pushed,
 # and is what made the 2026-08-01 false-positive diagnosis possible.
 stty susp '^Z' < /dev/tty 2>/dev/null   # give ^Z back to the shell (see DTD_ID)
-rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
+rm -f "$DTD_FIFO" "$DTD_HDR" "$DTD_LOG" "$DTD_LOG.err" "$DTD_START" "$DTD_ENTER" "$DTD_DONE" "$DTD_DONE_HIDE" "$DTD_DONE_ROUTER" "$DTD_DEFER" "$DTD_DELETE" "$DTD_SPLIT" "$DTD_AGENT" "$DTD_SKIP" "$DTD_UNSTART" "$DTD_BUMP" "$DTD_UNDO" "$DTD_REFRESH" "$DTD_BGREFRESH" "$DTD_CACHE_FILE" "$DTD_REMOVED" "$DTD_REMOVED.ids" "$DTD_LIST" "$DTD_DONE_FILE" "$DTD_JOURNAL" "$DTD_PUSHED" "$DTD_PROCESSED" "$DTD_PROCESSED_IDS" "$DTD_STOP" "$DTD_SESSION" "$DTD_TIMER" "$DTD_FAILED" "$DTD_FAILED.tmp" "$DTD_PORT" "$DTD_HDRGEN" "$DTD_TALLY" "$DTD_VIEW" "$DTD_VIEWTOGGLE" "$DTD_BLOCKPICK" "$DTD_BLOCKPICK.mode" "$DTD_BLOCKPICK.custom" "$DTD_BLOCKPICK.days" "$DTD_BLOCKPICK.hint" "$DTD_BLOCKPICK.snoozed" "$DTD_BLOCKARM" "$DTD_BLOCKAPPLY" "$DTD_PICKENTER" "$DTD_BACK" "$DTD_EDIT" "$DTD_FORM" "$DTD_WARM_DONE"
 rm -rf "$DTD_RESOLVED_DIR" 2>/dev/null
