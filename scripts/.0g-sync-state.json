@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-14T18:00:01.843671-08:00"
+  "tasks": {
+    "1500 分 「50」": {
+      "todoist_id": "6j2WhMMG3X74pfHc",
+      "minutes": 15
+    },
+    "birthday party strees free": {
+      "todoist_id": "6j2WhMQg6fjp57cM",
+      "minutes": 50
+    },
+    "version 1 of 3 tier running": {
+      "todoist_id": "6j2WhMV3Vm9wvhpw",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-11-14T20:00:28.497049-08:00"
 }
