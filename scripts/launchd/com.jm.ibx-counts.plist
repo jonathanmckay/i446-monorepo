@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Inbox badges for dtd (2026-11-15): per-habit pending counts to
+     ~/vault/z_ibx/inbox-counts-<host>.json every 5 min. Never closes anything.
+     Install: cp to ~/Library/LaunchAgents, launchctl bootstrap gui/$(id -u) <plist> -->
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/mckay</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>Label</key>
+	<string>com.jm.ibx-counts</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/mckay/i446-monorepo/tools/ibx/ibx0.py</string>
+		<string>--counts</string>
+		<string>--if-older</string>
+		<string>240</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/mckay/Library/Logs/ibx-counts.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/mckay/Library/Logs/ibx-counts.log</string>
+</dict>
+</plist>

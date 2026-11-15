@@ -2126,9 +2126,10 @@ def _own_snapshot():
 
 def headless_counts(timeout=60, if_older=0):
     """--counts: one quiet fetch cycle, write the per-habit snapshot for dtd,
-    never close anything (see the auto-close rules above). Run from cron on ix
-    every 5 min (config/ix.crontab) so the badges stay fresh while no ibx tab
-    is open.
+    never close anything (see the auto-close rules above). Run by launchd on
+    ix every 5 min (scripts/launchd/com.jm.ibx-counts.plist; not cron, whose
+    install hangs on a macOS permission dialog) so the badges stay fresh while
+    no ibx tab is open.
 
     ``--if-older N`` (2026-11-15): do nothing when this host's snapshot is
     younger than N seconds, so a tick never overwrites what a live ibx tab
@@ -2143,7 +2144,7 @@ def headless_counts(timeout=60, if_older=0):
         return
     os.environ["IBX_HEADLESS"] = "1"
     signal.signal(signal.SIGALRM, lambda *_: os._exit(3))
-    # Never hang a cron slot on a stuck source. Well under the 5 min cadence,
+    # Never hang a launchd slot on a stuck source. Well under the 5 min cadence,
     # so two runs cannot overlap.
     signal.alarm(150)
     quiet = Console(file=io.StringIO())
