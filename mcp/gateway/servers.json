@@ -1,0 +1,24 @@
+{
+  "_comment": "One launchd agent (com.jm.mcp-<name>) per server: mcp-proxy wraps the stdio server once and serves it at http://127.0.0.1:<port>/mcp to every Claude session. Keys match the names in ~/.claude.json so mcp__<name>__* tool names do not change. env values are expanded by sh after env_file is sourced; env_file lives in the Syncthing secrets dir, never in git.",
+  "appfolio-mcp": {
+    "port": 8771,
+    "env_file": "~/files/i447/secrets/appfolio.env",
+    "env": {"VHOST": "$APPFOLIO_VHOST", "USERNAME": "$APPFOLIO_USERNAME", "PASSWORD": "$APPFOLIO_PASSWORD"},
+    "command": ["/opt/homebrew/bin/appfolio-mcp-server"]
+  },
+  "quickbooks-mcp": {
+    "port": 8772,
+    "env": {"QBO_CREDENTIAL_MODE": "local", "QBO_INLINE_OUTPUT": "true"},
+    "command": ["/opt/homebrew/bin/quickbooks-mcp"]
+  },
+  "google-calendar-mcp": {
+    "port": 8773,
+    "env_file": "~/files/i447/secrets/google-calendar-mcp.env",
+    "command": ["/opt/homebrew/bin/google-calendar-mcp"]
+  },
+  "workspace-mcp": {
+    "port": 8774,
+    "env_file": "~/files/i447/secrets/workspace-mcp.env",
+    "command": ["/Users/mckay/.local/bin/workspace-mcp"]
+  }
+}

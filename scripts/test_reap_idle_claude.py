@@ -36,14 +36,46 @@ def test_candidates_reap_only_idle_unclaimed_interactive(tmp_path, monkeypatch):
     _session(tmp_path, 5, "shell", status="shell")
     _session(tmp_path, 6, "bg", kind="bg")
     _session(tmp_path, 7, "reused")                           # pid now belongs to another process
-    _session(tmp_path, 8, "claimed")
+    _session(tmp_path, 8, "claimed")                          # under the 200h claim bar
     _session(tmp_path, 9, "me")
     _session(tmp_path, 10, "gone")                            # not running
-    table = {p: 1 for p in range(1, 10)}
-    rows = m.candidates(48, NOW, table, held={"claimed"}, me={9})
+    _session(tmp_path, 11, "claimed-old", idle_h=300)         # reap: past the claim bar too
+    _session(tmp_path, 12, "prompt", status="waiting", idle_h=60)   # under the 72h waiting bar
+    table = {p: 1 for p in range(1, 13) if p != 10}
+    rows = m.candidates(48, NOW, table, held={"claimed", "claimed-old"}, me={9}, waiting_hours=72, claim_hours=200)
     assert {r["session"]: r["skip"] for r in rows} == {
         "old": None, "waiting": None, "fresh": "idle 10h", "busy": "status busy", "shell": "status shell",
-        "bg": "kind bg", "reused": "pid reused", "claimed": "holds a dtd claim", "me": "this session"}
+        "bg": "kind bg", "reused": "pid reused", "claimed": "idle 100h, claimed", "me": "this session",
+        "claimed-old": None, "prompt": "idle 60h, waiting"}
+    assert {r["session"] for r in rows if r["claimed"]} == {"claimed", "claimed-old"}
+
+
+def test_bars_default_to_hours_when_not_given(tmp_path, monkeypatch):
+    m = _load()
+    monkeypatch.setattr(m, "SESSIONS", tmp_path)
+    monkeypatch.setattr(m, "lstart_utc", lambda pid: "Tue Nov 3 16:21:43 2026")
+    _session(tmp_path, 1, "claimed", idle_h=50)
+    assert m.candidates(48, NOW, {1: 1}, held={"claimed"}, me=set())[0]["skip"] is None
+
+
+def test_cap_takes_oldest_idle_rows_over_the_floor_only():
+    m = _load()
+    rows = [
+        {"status": "idle", "idle_h": 5, "skip": "idle 5h"},                 # oldest qualifying
+        {"status": "idle", "idle_h": 3, "skip": "idle 3h, claimed"},        # claimed still counts
+        {"status": "idle", "idle_h": 0, "skip": "idle 0h"},                 # under the 1h floor
+        {"status": "waiting", "idle_h": 9, "skip": "idle 9h, waiting"},     # never capped
+        {"status": "busy", "idle_h": 9, "skip": "status busy"},
+        {"status": "idle", "idle_h": 9, "skip": "pid reused"},
+        {"status": "idle", "idle_h": 9, "skip": "kind bg"},                 # not an interactive session
+        {"status": "idle", "idle_h": 9, "skip": None},                      # already doomed
+    ]
+    # 6 survivors (bg and the doomed row excluded) with a cap of 4 → flip 2
+    flipped = m.cap(rows, max_live=4, min_idle_h=1)
+    assert [r["idle_h"] for r in flipped] == [5, 3] and all(r["skip"] is None and r["cap"] for r in flipped)
+    assert rows[2]["skip"] == "idle 0h" and rows[3]["skip"] == "idle 9h, waiting"
+    # nothing to do when under the cap
+    assert m.cap([{"status": "idle", "idle_h": 5, "skip": "idle 5h"}], max_live=4, min_idle_h=1) == []
 
 
 def test_unknown_claims_reap_nothing(tmp_path, monkeypatch):
@@ -78,10 +110,10 @@ def test_reap_signals_the_tree_captured_before_the_parent_dies(monkeypatch):
     assert 200 in alive
 
 
-def test_ix_crontab_runs_the_reaper_at_0245():
+def test_ix_crontab_runs_the_reaper_hourly():
     cron = (HERE.parent / "config" / "ix.crontab").read_text().splitlines()
     reap = next(l for l in cron if "reap-idle-claude.py" in l and not l.startswith("#"))
-    assert reap.split()[:2] == ["45", "2"]
+    assert reap.split()[:2] == ["45", "*"]
 
 
 def test_dead_tmux_only_detached_cc_sessions_at_a_bare_shell():
