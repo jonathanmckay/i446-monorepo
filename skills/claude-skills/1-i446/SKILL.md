@@ -23,9 +23,12 @@ hand does the same thing interactively, from whichever machine you are on
    (`~/vault/z_meta/YYYY-MM-DD-1-i446.md`) verbatim: every check numbered
    and carrying its ✅/⚠️/❌ icon (user request 2026-10-17). Say what was
    auto-fixed. Review decisions below refer to checks by that number.
-2. Walk the review items **ten at a time, numbered, with a recommended option
-   marked (a)** — the same format as the 2026-09-24 singleton review. Do not
-   move, delete or rename anything until JM answers each number.
+2. Walk the review items **ten at a time, as one table** (user request
+   2026-11-14; prose lists of options are too slow to parse):
+   `| # | Item | What it is | (a) recommended | (b) | (c) |`, one row per
+   decision, each cell a short phrase. Nothing else around it but a one-line
+   reply format (`1a 2a 3b ...`). Do not move, delete or rename anything until
+   JM answers each number.
 3. Apply the answers. For singleton folders: flatten (prefix + move up), merge
    into the canonical doc, delete, or record the folder in
    `singleton-audit.py`'s `EXCLUDE_PREFIXES` as a confirmed exception. For
