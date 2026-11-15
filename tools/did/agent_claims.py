@@ -155,6 +155,28 @@ def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
     return existed
 
 
+def _detach(rec: dict, tid: str, root: Path) -> None:
+    """A claim is being forgotten behind its session's back (load() pruning a
+    recurring card that rolled on): take the id out of that session's index and,
+    when it holds nothing else, mark it free so its tab reads ~~. Bug
+    2026-11-15: the 1s survey closed the card through run.py, load() forgot the
+    record, and the index still named it with no .free marker, so the tab fell
+    to ❔. Only a session that still holds the id is touched (a released claim's
+    session has ended or moved on), and the tab is retitled only when the claim
+    names its tmux session: without a target title_tiers paints the caller's
+    own tab, which here is dtd's. No /clear is typed: load() runs on every dtd
+    render."""
+    sid = str(rec.get("session") or "")
+    if not sid or tid not in held(sid, root):
+        return
+    rest = [t for t in held(sid, root) if t != tid]
+    _set_held(sid, rest, root)
+    if not rest:
+        set_free(sid, root)
+    if rec.get("tmux"):
+        _retitle(sid, target=str(rec["tmux"]))
+
+
 def _forget(tid: str, root: Path) -> None:
     for p in (root / f"{tid}.json", root / f"{tid}.state", root / f"{tid}.timer"):
         try:
@@ -432,6 +454,8 @@ def load(root: Path = CLAIMS_DIR, now: float | None = None, *, queue: dict | Non
             continue
         rd = _due_str(rec.get("due"))
         if rd and cur_due.get(tid) and rd < cur_due[tid]:
+            if here == root:
+                _detach(rec, tid, root)
             _forget(tid, here)   # a recurring card rolled past this claim's occurrence
             continue
         try:

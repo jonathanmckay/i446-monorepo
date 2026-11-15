@@ -957,7 +957,8 @@ def test_link_timer_is_the_join_row_and_self_cleaning(tmp_path):
     assert ac.task_for_entry(222, tmp_path) is None
 
 
-def test_load_merges_timer_and_prunes_a_rolled_recurring_claim(tmp_path):
+def test_load_merges_timer_and_prunes_a_rolled_recurring_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(ac, "_retitle", lambda *a, **k: None)   # the prune retitles the holder's tab
     ac.claim({"id": "RRRRRRRRRR01", "content": "0l (8) [20]", "due": "2026-11-14"}, "S1", tmp_path)
     ac.claim({"id": "OOOOOOOOOO01", "content": "one-off", "due": {"date": "2026-11-14"}}, "S2", tmp_path)
     ac.link_timer("RRRRRRRRRR01", 500, "2026-11-14", "0l", tmp_path)
@@ -969,3 +970,38 @@ def test_load_merges_timer_and_prunes_a_rolled_recurring_claim(tmp_path):
     assert "RRRRRRRRRR01" not in after                      # the card rolled to its next occurrence
     assert "OOOOOOOOOO01" in after                          # a rescheduled one-off keeps its thread
     assert not (tmp_path / "RRRRRRRRRR01.timer").exists()   # _forget takes the sidecar too
+
+
+def test_pruning_a_rolled_claim_frees_the_session_that_held_it(tmp_path, monkeypatch):
+    """Bug 2026-11-15: the 1s survey closed the card through run.py (no
+    fin_holders), the recurring card rolled, and load() forgot the claim but
+    left by-session/<sid> pointing at it with no .free marker, so the tab read
+    ❔ instead of ~~."""
+    retitled = []
+    monkeypatch.setattr(ac, "_retitle", lambda sid, target=None: retitled.append((sid, target)))
+    monkeypatch.setattr(ac, "_tmux_session_name", lambda: "cc-cr")
+    ac.claim({"id": "RRRRRRRRRR02", "content": "1s (20) [45]", "due": "2026-11-15"}, "S1", tmp_path)
+    q = {"today": [{"id": "RRRRRRRRRR02", "content": "1s (20) [45]", "due": "2026-11-22", "recurring": True}]}
+    assert "RRRRRRRRRR02" not in ac.load(tmp_path, queue=q)
+    assert ac.held("S1", tmp_path) == []                              # no dangling index
+    assert (tmp_path / "by-session" / "S1.free").exists()             # tab reads ~~
+    assert retitled == [("S1", "cc-cr")]
+
+
+def test_pruning_a_rolled_claim_leaves_a_session_that_moved_on(tmp_path, monkeypatch):
+    """A released claim's session has ended or holds something else: pruning it
+    must not free that session's tab, and a claim with no tmux name must not
+    retitle (the fallback would paint the caller's own tab, i.e. dtd's)."""
+    retitled = []
+    monkeypatch.setattr(ac, "_retitle", lambda sid, target=None: retitled.append((sid, target)))
+    monkeypatch.setattr(ac, "_tmux_session_name", lambda: "")
+    ac.claim({"id": "RRRRRRRRRR03", "content": "0l (8) [20]", "due": "2026-11-14"}, "S1", tmp_path)
+    ac.claim({"id": "TTTTTTTTTT01", "content": "other work"}, "S1", tmp_path)   # releases the first
+    ac.claim({"id": "RRRRRRRRRR04", "content": "0t (3) [10]", "due": "2026-11-14"}, "S2", tmp_path)
+    q = {"today": [{"id": "RRRRRRRRRR03", "content": "0l (8) [20]", "due": "2026-11-15", "recurring": True},
+                   {"id": "RRRRRRRRRR04", "content": "0t (3) [10]", "due": "2026-11-15", "recurring": True}]}
+    ac.load(tmp_path, queue=q)
+    assert ac.held("S1", tmp_path) == ["TTTTTTTTTT01"]
+    assert not (tmp_path / "by-session" / "S1.free").exists()
+    assert ac.held("S2", tmp_path) == [] and (tmp_path / "by-session" / "S2.free").exists()
+    assert retitled == []                                             # S2's claim carries no tmux name
