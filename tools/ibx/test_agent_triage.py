@@ -111,3 +111,22 @@ def test_property_meld_is_filed_by_rule_without_the_agent(tmp_path, monkeypatch)
     assert at.run("m5x2") == (3, 1)
     assert filed == ["m2"] and "Ecall no heat" not in seen[0]
     assert at.rule_skip("i9", emails[1]) is None     # rule is m5x2-only
+
+
+def test_a_restored_message_is_never_filed_again(tmp_path, monkeypatch):
+    """2026-11-15: a recruiter reply JM's side restored to the inbox was filed
+    again on the next run. An id already in the audit file that is back in the
+    inbox was put there by a person: keep it, and don't show it to the agent."""
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text('{"source": "m5x2", "id": "m2", "subject": "s2"}\n{"source": "i9", "id": "m3"}\n')
+    monkeypatch.setattr(at, "AUDIT_FILE", audit)
+    seen, filed = [], []
+
+    def ask(prompt):
+        seen.append(prompt)
+        return '[{"i": 1, "v": "skip", "why": "x"}, {"i": 2, "v": "skip", "why": "x"}]'
+
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(3), ask, lambda e: filed.append(e["id"])))
+    assert at.run("m5x2") == (3, 2)
+    assert filed == ["m1", "m3"]                 # m2 restored; m3's audit row is another source
+    assert "Subject: s2" not in seen[0]

@@ -59,7 +59,7 @@ EMAILS:
 
 EXTRA = {
     "i9": "Context: this is my Microsoft (Xbox) work inbox. Mail from my manager, skip-level, direct reports or a named teammate is keep unless clearly automated.",
-    "m5x2": "Context: this is my real-estate company inbox (McKay Capital / m5x2). Property-management email (tenants, maintenance, inspections, leasing, owners, lenders, investors, introductions) is keep, including threads where my team is replying, unless the thread is plainly closed.",
+    "m5x2": "Context: this is my real-estate company inbox (McKay Capital / m5x2). Property-management email (tenants, maintenance, inspections, leasing, owners, lenders, investors, introductions) is keep, including threads where my team is replying, unless the thread is plainly closed. Hiring is keep too: job applications (including automated applicant notices), recruiter replies and any thread I started about a role I am filling. Weekly updates from my team are keep.",
 }
 
 
@@ -77,6 +77,25 @@ def rule_skip(source, e):
         if rx.search(e.get("from") or ""):
             return why
     return None
+
+
+def filed_before(source):
+    """Ids this source's triage has already filed. One of them showing up in
+    the inbox again means a person put it back, so it is never re-filed
+    (2026-11-15: a restored recruiter reply was filed again on the next run)."""
+    ids = set()
+    try:
+        with open(AUDIT_FILE) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("source") == source:
+                    ids.add(r.get("id"))
+    except OSError:
+        pass
+    return ids
 
 
 def log(msg):
@@ -225,13 +244,18 @@ def run(source, dry_run=False):
                                 "subject": e["subject"], "why": why}) + "\n")
         return 1
 
+    total, restored = len(emails), filed_before(source)
+    back = [e for e in emails if e["id"] in restored]
+    for e in back:
+        log(f"  keep: {e['subject'][:70]}  (restored after an earlier filing)")
+    emails = [e for e in emails if e["id"] not in restored]
     ruled = [(e, rule_skip(source, e)) for e in emails]
     for e, why in ruled:
         if why:
             done += file_it(e, why)
-    total, emails = len(emails), [e for e, why in ruled if not why]
-    if total != len(emails):
-        log(f"  rules: {total - len(emails)} filed by sender rule, {len(emails)} to the agent")
+    emails = [e for e, why in ruled if not why]
+    if len(ruled) != len(emails):
+        log(f"  rules: {len(ruled) - len(emails)} filed by sender rule, {len(emails)} to the agent")
     for start in range(0, len(emails), BATCH):
         batch = emails[start:start + BATCH]
         label = f"batch {start // BATCH + 1}"
