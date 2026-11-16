@@ -1889,7 +1889,10 @@ end tell'''
                         sum_py = int(round(sum(float(p) for p in py_parts if p.strip())))
                     except ValueError:
                         sum_py = None  # non-numeric cell → torn; fall back to cap
-                total_ok = _total_trustworthy(candidate, sum_py)
+                # Evaluated on every read (not short-circuited) so an in-cap
+                # read in between clears a pending over-cap sighting.
+                high_ok = _high_total_confirmed(candidate, sum_py, now.date())
+                total_ok = _total_trustworthy(candidate, sum_py) or high_ok
                 if total_ok:
                     STATE.today_points = candidate
                     # The same P:Y cells, kept per domain for the habit strip's
@@ -1965,9 +1968,10 @@ end tell'''
         pass
 
 
-# Backstop only — used when P:Y can't be read for the cross-check below. Heaviest
-# realistic 分 day is well under 1000 (test fixtures top out ~900). Negative is torn.
-_MAX_PLAUSIBLE_TOTAL = 2000
+# Backstop only — used when P:Y can't be read for the cross-check below. Negative
+# is torn. Was 2000 until 2026-11-15, when a real 2173分 day crossed it and every
+# read was rejected; JM set 3000. Above it, see _high_total_confirmed.
+_MAX_PLAUSIBLE_TOTAL = 3000
 
 
 def _total_trustworthy(candidate: int | None, sum_py: int | None) -> bool:
@@ -2002,6 +2006,32 @@ def _total_trustworthy(candidate: int | None, sum_py: int | None) -> bool:
     # No P:Y cross-check available (loose-cap fallback): a negative D with
     # nothing to corroborate it is still treated as torn.
     return candidate >= 0
+
+
+# (day, candidate) of the last over-cap read whose P:Y agreed, awaiting a repeat.
+_HIGH_TOTAL_SEEN: tuple | None = None
+
+
+def _high_total_confirmed(candidate: int | None, sum_py: int | None, day) -> bool:
+    """Whether a Σ above _MAX_PLAUSIBLE_TOTAL may be committed after all.
+
+    The cap exists because a mid-recalc snapshot can tear D and P:Y to the same
+    spike (5064/5064, 2026-07-03), so one agreeing read over the cap proves
+    nothing. But a real day can top it: on 2026-11-15 Σ reached 2173 against a
+    cap of 2000 and every read was rejected from 19:23 on, freezing the header
+    at 1975 and leaving a freshly started janus with no points at all ("janus
+    is showing no points for the day or per block"). The cap is 3000 now; this
+    keeps a day beyond it from freezing again. A torn spike is transient; a real total is
+    still there on the next poll. So accept an over-cap Σ only when P:Y agrees
+    AND the previous read of the same day returned the same value."""
+    global _HIGH_TOTAL_SEEN
+    if (candidate is None or sum_py is None
+            or abs(candidate) <= _MAX_PLAUSIBLE_TOTAL
+            or abs(candidate - sum_py) > 1):
+        _HIGH_TOTAL_SEEN = None
+        return False
+    prev, _HIGH_TOTAL_SEEN = _HIGH_TOTAL_SEEN, (day, candidate)
+    return prev == (day, candidate)
 
 
 def _blocks_consistent(total: int, bp: dict[str, int]) -> bool:

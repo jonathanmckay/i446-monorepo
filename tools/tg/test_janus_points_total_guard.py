@@ -125,8 +125,9 @@ def test_total_trustworthy_unit():
     # STILL be rejected — agreement above the cap isn't proof of a real total.
     # (This set the cold-start current-block header to 5064分.)
     assert m._total_trustworthy(5064, 5064) is False  # matching torn spike over cap
-    assert m._total_trustworthy(2001, 2001) is False  # just over the cap, agreeing
-    assert m._total_trustworthy(2000, 2000) is True   # exactly at the cap is fine
+    assert m._total_trustworthy(3001, 3001) is False  # just over the cap, agreeing
+    assert m._total_trustworthy(3000, 3000) is True   # exactly at the cap is fine
+    assert m._total_trustworthy(2173, 2173) is True   # 2026-11-15: a real day over 2000
 
 
 def test_residual_block_value_read_directly_rounds_once(monkeypatch, tmp_path):
@@ -149,3 +150,59 @@ def test_residual_block_value_read_directly_rounds_once(monkeypatch, tmp_path):
     assert m.STATE.block_points.get("午") == 288, "residual block value must round once, straight from Neon"
     assert m.STATE.block_points.get("卯") == 6
     assert m.STATE.block_points.get("辰") == 218  # 217.5 rounds to even
+
+
+# Today's actual row at 19:35 on 2026-11-15 (from /tmp/janus-points-rejected.log).
+_RAW_2173 = ("2173.071428571428||227.5|542.571428571429|220.5|602.999999999999|145.5|175"
+             "|=D317-SUM(G317,H317,I317,J317,K317,L317,M317)"
+             "|=D317-SUM(G317,H317,I317,J317,K317,L317,M317,N317)"
+             "|85.0|169.0|90.0|668.0|579.0|12.0|169.0|202.071428571429|189.0|10.0"
+             "||227.5|542.571428571429|220.5|602.999999999999|145.5|175.0|259.0|0.0")
+
+
+def test_real_2173_day_is_adopted(monkeypatch, tmp_path):
+    """Regression (2026-11-15, "janus is showing no points for the day or per
+    block"): Σ reached 2173, above the old 2000 cap, so every read was
+    rejected; the header froze at 1975 and a fresh janus showed nothing."""
+    m = _load_tui()
+    m.STATE.today_points = 1975
+    m.STATE.block_points = {"戌": 61}
+    _run(monkeypatch, m, _RAW_2173, tmp_path)
+    assert m.STATE.today_points == 2173
+    assert m.STATE.block_points["戌"] == 259
+    assert m.STATE.block_points["未"] == 603
+
+
+def test_day_over_the_cap_is_adopted_on_the_second_read(monkeypatch, tmp_path):
+    """Above the cap, a total that agrees with P:Y and repeats on the next
+    read is real; one sighting alone is not proof."""
+    m = _load_tui()
+    m.STATE.today_points = 2950
+    raw = "3200|=D|=D|=D|=D|=D|=D|=D|=D|=D|21|29|2819|33|195|34|13|6|50|0"
+    _run(monkeypatch, m, raw, tmp_path)
+    assert m.STATE.today_points == 2950
+    _run(monkeypatch, m, raw, tmp_path)
+    assert m.STATE.today_points == 3200
+
+
+def test_transient_over_cap_spike_is_never_adopted(monkeypatch, tmp_path):
+    """The 5064/5064 torn spike (2026-07-03) appears once, between good reads."""
+    m = _load_tui()
+    good = "758|=D|=D|=D|=D|=D|=D|=D|=D|=D|21|29|377|33|195|34|13|6|50|0"
+    spike = "5064|=D|=D|=D|=D|=D|=D|=D|=D|=D|21|29|4683|33|195|34|13|6|50|0"
+    for raw in (good, spike, good, spike):
+        _run(monkeypatch, m, raw, tmp_path)
+        assert m.STATE.today_points == 758
+
+
+def test_high_total_confirmed_unit():
+    import datetime as dt
+    m = _load_tui()
+    d1, d2 = dt.date(2026, 11, 15), dt.date(2026, 11, 16)
+    assert m._high_total_confirmed(3173, 3173, d1) is False  # first sighting
+    assert m._high_total_confirmed(3173, 3173, d1) is True   # repeated
+    assert m._high_total_confirmed(3223, 3223, d1) is False  # new value: wait again
+    assert m._high_total_confirmed(3223, 3223, d2) is False  # other day's value
+    assert m._high_total_confirmed(3223, 1975, d2) is False  # P:Y disagrees
+    assert m._high_total_confirmed(3223, 3223, d2) is False  # disagreement reset it
+    assert m._high_total_confirmed(3223, None, d2) is False  # no cross-check
