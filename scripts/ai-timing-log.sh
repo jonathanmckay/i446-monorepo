@@ -25,7 +25,19 @@ case "$EVENT" in
     fi
     # Desk/mobile attribution: log the prompt to the synced source-log with
     # net / ssh_from (lib/jmsource.py). Backgrounded: never slow the prompt.
-    JMS_SID=$SESSION_ID nohup python3 -c 'import os,sys; sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib")); import jmsource; jmsource.record("prompt", os.environ["JMS_SID"], source="cli", via="claude", tty=True)' >/dev/null 2>&1 &
+    # tty = "a person typed this". Headless runs (`claude -p` / `--print` from
+    # cron, daemons, detached helpers) fire this hook too; until 2026-11-16 they
+    # were logged tty=True and the hourly d357-auto-file cron lit 🖥️ desk in
+    # every block of the /1-1n heatmap. Two signals, either is enough: the
+    # entrypoint Claude Code exports (sdk-cli = headless) and the parent
+    # process's argv (covers a `claude -p` that inherits `cli` from the
+    # interactive session that spawned it).
+    JMS_TTY=1
+    [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "sdk-cli" ] && JMS_TTY=0
+    case " $(ps -o args= -p "$PPID" 2>/dev/null) " in
+      *" -p "*|*" --print "*) JMS_TTY=0 ;;
+    esac
+    JMS_TTY=$JMS_TTY JMS_SID=$SESSION_ID nohup python3 -c 'import os,sys; sys.path.insert(0, os.path.expanduser("~/i446-monorepo/lib")); import jmsource; jmsource.record("prompt", os.environ["JMS_SID"], source="cli", via="claude", tty=os.environ.get("JMS_TTY") != "0")' >/dev/null 2>&1 &
     # Finalize previous turn: flush LAST_FILE to JSONL
     if [ -f "$LAST_FILE" ]; then
       cat "$LAST_FILE" >> "$LOG_FILE"
