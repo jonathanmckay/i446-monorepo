@@ -182,3 +182,31 @@ def test_zerog_day_has_0400_cutoff():
     import datetime as dt
     assert nb.zerog_day(dt.datetime(2026, 11, 10, 3, 59)) == "2026-11-09"
     assert nb.zerog_day(dt.datetime(2026, 11, 10, 4, 0)) == "2026-11-10"
+
+
+def test_log_1g_suggestions_record_kinds(tmp_path):
+    """2026-11-16: shared by the -2n goal card and the -1g form. An accepted
+    ghost (picks, resp "1") is a pick, never a skip; picks + typed = mixed."""
+    import json
+    shown = [{"content": "ship the memo", "source": "0g", "domain": ""}]
+    nb.log_1g_suggestions("巳", shown, "1", [1], [], None, mode="form", log_dir=tmp_path, host="h")
+    nb.log_1g_suggestions("巳", shown, "1 | call LR", [1], ["call LR"], None, mode="form", log_dir=tmp_path, host="h")
+    nb.log_1g_suggestions("巳", shown, "call LR", [], ["call LR"], None, mode="form", log_dir=tmp_path, host="h")
+    nb.log_1g_suggestions("巳", shown, "", [], [], None, mode="form", log_dir=tmp_path, host="h")
+    nb.log_1g_suggestions("巳", [], "", [], [], None, existing_goals=["a"], log_dir=tmp_path, host="h")
+    recs = [json.loads(l) for l in (tmp_path / "-1g-suggest.h.jsonl").read_text().splitlines()]
+    assert [r["response_kind"] for r in recs] == ["pick", "mixed", "custom", "skip", "keep"]
+    assert recs[0]["mode"] == "form" and recs[0]["suggestions"][0]["source"] == "0g"
+
+
+def test_log_1g_suggestions_failure_is_recorded_not_raised(tmp_path, monkeypatch):
+    err = tmp_path / "errors.log"
+    monkeypatch.setattr(nb, "_SUGGEST_ERR_LOG", err)
+    nb.log_1g_suggestions("巳", [], "1", [1], [], None, log_dir="/dev/null/nope", host="h")
+    assert "mode=-2n block=巳" in err.read_text()
+
+
+def test_log_1g_suggestions_noop_under_pytest_without_log_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(nb, "SUGGEST_LOG_DIR", tmp_path / "v_logs")
+    nb.log_1g_suggestions("巳", [], "x", [], ["x"], None)
+    assert not (tmp_path / "v_logs").exists()

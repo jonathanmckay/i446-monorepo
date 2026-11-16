@@ -493,6 +493,80 @@ def append_daily_goals(goals: list[str], build_order: Path | None = None) -> lis
 
 
 # ---------------------------------------------------------------------------
+# -1g suggestion eval log (moved here from tools/ibx/-2n.py 2026-11-16).
+# One JSON line per render of a goal-setting surface, read offline by
+# skills/claude-skills/1-1n/suggest_eval.py. The response is the label: picked
+# numbers are positives, typed goals are the gold answer, skip is unlabeled.
+# It lived in -2n.py only, and the week of Nov 9-15 produced no records for 25
+# goal blocks because every goal went through the -1g form (dtd), which did
+# not log. Per-host file: Syncthing cannot merge concurrent appends.
+# ---------------------------------------------------------------------------
+SUGGEST_LOG_DIR = Path.home() / "vault" / "g245" / "v_logs"
+_SUGGEST_ERR_LOG = Path.home() / ".local" / "state" / "jm" / "1g-suggest-errors.log"
+
+
+def _suggest_host() -> str:
+    import platform
+    return (platform.node() or "unknown").split(".")[0]
+
+
+def log_1g_suggestions(block_name, suggestions, resp, picks, custom, reason,
+                       existing_goals=None, mode="-2n", log_dir=None, host=None):
+    """Append one eval record for a -1g render. Never raises; a failed write
+    leaves one line in ~/.local/state/jm/1g-suggest-errors.log so an empty
+    eval can be told apart from a broken logger. `picks` are 1-based indexes
+    into `suggestions`. `mode` names the surface: "-2n", "inbound" or "form".
+    No-op under pytest unless `log_dir` is given (tests must not write to the
+    vault)."""
+    try:
+        import os
+        if log_dir is None and "PYTEST_CURRENT_TEST" in os.environ:
+            return
+        if picks and custom:
+            kind = "mixed"
+        elif picks:
+            kind = "pick"
+        elif resp is None or resp.strip() == "" or resp.strip().lower() == "skip":
+            kind = "keep" if (existing_goals and not reason) else "skip"
+        else:
+            kind = "custom"
+        now = dt.datetime.now().astimezone()
+        host = host or _suggest_host()
+        rec = {
+            "ts": now.isoformat(timespec="seconds"),
+            "date": now.date().isoformat(),
+            "weekday": now.strftime("%a"),
+            "block": block_name,
+            "host": host,
+            "mode": mode,
+            "existing_goals": len(existing_goals or []),
+            "suggestions": [
+                {"content": s.get("content", ""),
+                 "source": s.get("source", "todoist"),
+                 "domain": s.get("domain", "")}
+                for s in (suggestions or [])
+            ],
+            "response_kind": kind,
+            "picks": list(picks or []),
+            "custom": list(custom or []),
+            "reason": reason,
+            "raw": resp or "",
+        }
+        d = Path(log_dir) if log_dir else SUGGEST_LOG_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / f"-1g-suggest.{host}.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    except Exception as exc:  # noqa: BLE001 - logging must never lose the goals
+        try:
+            _SUGGEST_ERR_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(_SUGGEST_ERR_LOG, "a", encoding="utf-8") as f:
+                f.write(f"{dt.datetime.now().isoformat(timespec='seconds')} "
+                        f"mode={mode} block={block_name} {type(exc).__name__}: {exc}\n")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
 # 0₲ → -1g prefill (moved here from tools/-1g/-1g-form.py 2026-11-09 so dtd's
 # list generator can show the same text on the 😈 -1g card).
 # ---------------------------------------------------------------------------

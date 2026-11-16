@@ -42,7 +42,8 @@ Then append four sections, in order:
    0分, per-day Σ, and mean block 分 with vs without each ritual (correlational;
    say so, never call it an effect).
 3. **-1g suggestion eval.** Append the helper's output. It reads the
-   `v_logs/-1g-suggest.*.jsonl` records the goal card writes on every render
+   `v_logs/-1g-suggest.*.jsonl` records the -2n goal card and the -1g form
+   (`mode: form`, a pool of one: the 0₲ ghost; logged since 2026-11-16) write on every render
    (pick / custom / skip, optional `-w -s -b -d` reason code) and reports pick
    rate per source and block, how often a typed goal was in the pool but
    outranked vs absent, and whether picked goals were `- [x]` by block end.
@@ -66,7 +67,7 @@ Then append four sections, in order:
 | ☀️ | prayer (salah) | Build order: ☀️ stamp on the block header (written by /ص, prayer_marker, did-fast). Past days from `vault/g245/v_logs/YYYY.MM.DD-build-order.md`, today from live `build-order.md` |
 | 📧 | inbox processed | Build order: 📧 stamp on the block header (written by the -1ibx card close, -2n/inbound, and did-fast when an ibx/slack/teams 0n habit is marked). Toggl description starting with `ibx` as fallback |
 | 🎯 | goal set for block (-1g) | Build order `## -1₲` section: non-empty checkbox under the block header. Past days from `vault/g245/v_logs/YYYY.MM.DD-build-order.md`, today from the live `build-order.md` |
-| ⏱️ | time logged | Toggl: `-1t` / `-1l` / `0t` / `0l` |
+| ⏱️ | time logged | Toggl entry whose description starts with `-1t` / `-1l` / `0t` / `0l` (`0l, food log` counts). Not the header ⏱️ stamp and not the `😈 -1t` / `😈 -1l` card closes: the daemon auto-awards both from Toggl coverage, so they mark tracked time, not the ritual |
 | ✓ | task completed | Todoist completed tasks (`/api/v1/tasks/completed`) by completed_at |
 
 ## Interface layer (🖥️ desk / 📱 mobile)
@@ -80,6 +81,7 @@ and LAN, and daemon vias live in `config/devices.json`.
 - 📱: `1p-app`/`watch` source (janus-mobile, /卯), ssh from a phone IP, phone captures.
 - 🖥️: interactive use on ix; laptop only when `net == highgarden` or ssh'd in from the home LAN (JM's rule).
 - Ignored: daemon vias, non-tty writes, laptop over Tailscale/off-network, Todoist/Toggl's own apps (no device info).
+- Headless Claude runs (`claude -p` from cron or a daemon) are non-tty: `ai-timing-log.sh` logs them `tty: false` since 2026-11-16, and earlier rows are corrected from the session transcripts on the host that ran them (entrypoint `sdk-cli`). Before that the hourly d357-auto-file cron lit 🖥️ in every block, so 🖥️ figures in reports up to 2026.11.16 are inflated.
 - `net`/`ssh_from`/`tty` exist only from 2026-11-02, so earlier laptop work is unclassified.
 
 ## Blocks (地支, 04:00 wake)
@@ -88,7 +90,7 @@ and LAN, and daemon vias live in `config/devices.json`.
 
 ## Notes
 
-- Times are bucketed in America/Los_Angeles (PDT, −07:00). Adjust `PT` in the script for PST.
+- Times are bucketed in America/Los_Angeles (DST-aware). Toggl is queried with bare dates; an explicit UTC offset shifts the window a day whenever it disagrees with local time.
 - Toggl key loads via `~/i446-monorepo/mcp/toggl_server/toggl_cli.py`; Neon path is `~/OneDrive/vault-excel/Neon分v12.2.xlsx` (read-only open is safe even while Excel has it open); Todoist token is embedded.
 - If a source fails, the script still renders and appends an HTML comment with the warning.
 - All reports live in `vault/g245/5e-1/1e-1n/YYYY.MM.DD-block-ritual-heatmap.md`. Each run writes a new dated file.

@@ -416,9 +416,23 @@ def run_form(block: str, daily: bool = False) -> list[str] | None:
     app = Application(layout=Layout(root, focused_element=areas[0]), key_bindings=kb,
                       full_screen=True, style=style, mouse_support=True)
     app.timeoutlen = 0.05   # lone Esc fires after 50ms instead of the 1s chord wait
+    # Suggestion eval (2026-11-16): one record per render of the block form,
+    # the same log the -2n goal card writes (nb.log_1g_suggestions, read by
+    # /1-1n's suggest_eval.py). The pool here is the single 0₲ ghost: accepted
+    # = pick 1, typed over = custom, ^Q = skip. Never raises.
+    shown = [{"content": prefill, "source": "0g", "domain": ""}] if prefill else []
     if app.run() != "submit":
+        if not daily:
+            nb.log_1g_suggestions(block, shown, "", [], [], None, mode="form")
         return None
     out = [a.text.strip() for a in areas]
+    if not daily:
+        took = bool(prefill) and (
+            (ghost["on"] and not out[0])
+            or _goal_key(out[0].lstrip("- ")) == _goal_key(prefill))
+        typed = [t for t in (out[1:] if took else out) if t]
+        nb.log_1g_suggestions(block, shown, " | ".join((["1"] if took else []) + typed),
+                              [1] if took else [], typed, None, mode="form")
     if ghost["on"] and not out[0]:
         out[0] = "- " + prefill   # bullet form: parse_goals_text won't split on its commas
     elif prefill:

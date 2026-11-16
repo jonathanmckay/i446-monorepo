@@ -30,7 +30,10 @@ def block_of(hour):
 
 ICON_ORDER = ['☀️','📧','🎯','⏱️','✓']
 
-GOALS_T = {'-1t','0t','-1l','0l'}  # time-log ritual descriptions
+# Time-log ritual descriptions. Prefix match on a word boundary (2026-11-16):
+# real entries read `0l, food log` or `0t sleep backfill`, which the old exact
+# set match dropped.
+GOALS_T_RE = re.compile(r'^(?:😈\s*)?(?:-1t|0t|-1l|0l)(?![\w.])')
 PRAYERS = {'الفاتحة','الشمس','النور','الظهر','العصر','المغرب','العشاء','الفجر'}
 
 # ---------- Toggl ----------
@@ -39,8 +42,12 @@ def toggl_entries(start, end):
     import toggl_cli  # noqa: loads API key
     from toggl_server import toggl_api as t
     from toggl_server.config import PROJECT_NAMES
-    s = start.isoformat()+'T00:00:00-07:00'
-    e = (end+dt.timedelta(days=1)).isoformat()+'T00:00:00-07:00'
+    # Bare dates (2026-11-16). This used to pass `T00:00:00-07:00`; toggl_api
+    # converts an aware timestamp to local time and keeps the date, so once DST
+    # ended (11-01) every request slid back a day: 11-09..11-15 returned
+    # 11-08..11-14 and the last day of each range had no Toggl data at all.
+    s = start.isoformat()
+    e = (end+dt.timedelta(days=1)).isoformat()
     out = []
     for x in t.get_entries(s, e):
         st = x.get('start')
@@ -66,7 +73,7 @@ def add_toggl(grid, start, end):
         # prayer can be marked without a timed Toggl entry.
         if dl.startswith('ibx'):
             grid[day][b].add('📧')
-        if desc in GOALS_T:
+        if GOALS_T_RE.match(desc):
             grid[day][b].add('⏱️')
 
 # ---------- Build-order goals -> 🎯 ----------
@@ -220,8 +227,11 @@ def classify_row(r, kind_by_ip, kind_by_host, lans, daemon_vias):
     if r.get('source') in ('1p-app', 'watch'):
         return MOBILE
     # Rows since 2026-11-02 carry `tty`; a non-interactive write (cron, a
-    # backgrounded daemon) says nothing about where JM was. Prompts are typed.
-    if 'tty' in r and not r['tty'] and r.get('metric') != 'prompt':
+    # backgrounded daemon) says nothing about where JM was. That includes
+    # prompts: headless `claude -p` runs fire the prompt hook too, and since
+    # 2026-11-16 scripts/ai-timing-log.sh logs them tty=False (before that
+    # every prompt said True; add_device corrects those from the transcripts).
+    if 'tty' in r and not r['tty']:
         return None
     ssh = r.get('ssh_from')
     if ssh:
@@ -246,26 +256,93 @@ def classify_row(r, kind_by_ip, kind_by_host, lans, daemon_vias):
     return None
 
 
+# Prompt rows logged before this moment all say tty=True, headless or not
+# (ai-timing-log.sh hard-coded it): the hourly d357-auto-file cron alone put
+# two "typed" prompts in every block, so 🖥️ read 100% (week of Nov 9-15: 63/63
+# blocks, 14/63 once the headless runs are removed). For those rows the
+# session transcript is the evidence: a headless run records entrypoint
+# `sdk-cli`. Transcripts live only on the host that ran the session, so rows
+# from other hosts, and rows whose transcript has been cleaned up, stay as
+# logged.
+PROMPT_TTY_FIXED = dt.datetime(2026, 11, 16, 19, 49, tzinfo=dt.timezone.utc)
+CLAUDE_PROJECTS = os.path.expanduser('~/.claude/projects')
+
+
+def _local_log_host():
+    try:
+        sys.path.insert(0, '/Users/mckay/i446-monorepo/lib')
+        import jmsource
+        return jmsource._host()
+    except Exception:
+        import socket
+        return socket.gethostname().split('.')[0].lower()
+
+
+def _transcript_headless(path):
+    """True if the transcript's first entries carry entrypoint sdk-cli, False
+    if they carry another entrypoint, None if it cannot be read."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                if i >= 60:
+                    break
+                if '"entrypoint"' not in line:
+                    continue
+                m = re.search(r'"entrypoint"\s*:\s*"([^"]+)"', line)
+                if m:
+                    return m.group(1) == 'sdk-cli'
+    except OSError:
+        pass
+    return None
+
+
+def legacy_headless_sessions(rows, host, projects=None):
+    """Session ids among pre-fix prompt rows of `host` that the local
+    transcripts show to be headless runs."""
+    import glob
+    projects = projects or CLAUDE_PROJECTS
+    want = set()
+    for r, ts in rows:
+        if (r.get('metric') == 'prompt' and r.get('via') == 'claude'
+                and r.get('host') == host and ts < PROMPT_TTY_FIXED):
+            want.add(str(r.get('ext_id')))
+    if not want:
+        return set()
+    out = set()
+    for path in glob.glob(f'{projects}/*/*.jsonl'):
+        sid = os.path.basename(path)[:-6]
+        if sid in want and _transcript_headless(path):
+            out.add(sid)
+    return out
+
+
 def add_device(dev, start, end):
     cfg, by_ip, by_host, lans = _devices()
     daemons = set(cfg.get('daemon_vias', []))
     months = {f'{d.year}-{d.month:02d}' for d in (start, end)}
     import glob
+    rows = []
     for path in glob.glob(f'{SOURCE_LOG}/*.jsonl'):
         if not any(path.endswith(f'{m}.jsonl') for m in months):
             continue
         for line in open(path, encoding='utf-8'):
             try:
                 r = json.loads(line)
-                loc = dt.datetime.fromisoformat(r['ts']).astimezone(PT)
+                ts = dt.datetime.fromisoformat(r['ts'])
+                loc = ts.astimezone(PT)
             except Exception:
                 continue
             day, b = loc.date(), block_of(loc.hour)
             if b is None or day < start or day > end:
                 continue
-            g = classify_row(r, by_ip, by_host, lans, daemons)
-            if g:
-                dev[day][b].add(g)
+            rows.append((r, ts, day, b))
+    headless = legacy_headless_sessions([(r, ts) for r, ts, _, _ in rows], _local_log_host())
+    for r, ts, day, b in rows:
+        if r.get('metric') == 'prompt' and str(r.get('ext_id')) in headless:
+            continue
+        g = classify_row(r, by_ip, by_host, lans, daemons)
+        if g:
+            dev[day][b].add(g)
     # Phone-app captures: YYYY-MM-DD-HHMMSS-<id>-<device>.md, inbox or archive.
     import glob
     for p in glob.glob(f'{Z_IBX}/phone/*.md') + glob.glob(f'{Z_IBX}/archive/*/phone/*.md'):

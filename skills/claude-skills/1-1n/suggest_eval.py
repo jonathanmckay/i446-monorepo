@@ -212,6 +212,8 @@ def render(recs, start: dt.date, end: dt.date) -> str:
     lines.append(f"{n} cards shown · "
                  + ' · '.join(f"{k} {mix[k]} ({_pct(mix[k], n)})"
                               for k in ('pick', 'mixed', 'custom', 'skip', 'keep') if mix.get(k)))
+    modes = Counter(r.get('mode') or '?' for r in recs)
+    lines.append('By surface: ' + ' · '.join(f"{k} {v}" for k, v in modes.most_common()))
     lines.append('')
 
     shown, picked = pick_rates_by_source(recs)
@@ -232,14 +234,19 @@ def render(recs, start: dt.date, end: dt.date) -> str:
         lines.append('Reasons: ' + ', '.join(f"{k} {v}" for k, v in reasons.most_common()))
         lines.append('')
 
-    cov, examples = coverage(recs)
-    tot = sum(cov.values())
-    if tot:
-        lines.append(f"Custom goals {tot}: outranked {cov['outranked']} ({_pct(cov['outranked'], tot)}) · "
-                     f"absent from pool {cov['absent']} ({_pct(cov['absent'], tot)})")
-        for e in examples:
-            lines.append(f"- absent: {e}")
-        lines.append('')
+    # Coverage is split by surface (2026-11-16): the -1g form offers a pool of
+    # one (the 0₲ ghost), so nearly every typed goal there is "absent"; pooled
+    # with the ranked goal card it would read as a missing source.
+    for label, group in (('goal card', [r for r in recs if r.get('mode') != 'form']),
+                         ('-1g form, pool of one', [r for r in recs if r.get('mode') == 'form'])):
+        cov, examples = coverage(group)
+        tot = sum(cov.values())
+        if tot:
+            lines.append(f"Custom goals ({label}) {tot}: outranked {cov['outranked']} ({_pct(cov['outranked'], tot)}) · "
+                         f"absent from pool {cov['absent']} ({_pct(cov['absent'], tot)})")
+            for e in examples:
+                lines.append(f"- absent: {e}")
+            lines.append('')
 
     try:
         oc = outcomes(recs)

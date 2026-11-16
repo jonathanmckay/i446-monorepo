@@ -1193,41 +1193,18 @@ def _short_host() -> str:
 
 def log_1g_suggestions(block_name, suggestions, resp, picks, custom, reason,
                        existing_goals=None, mode="-2n", log_dir=None):
-    """Append one eval record for a -1g card render. Never raises."""
+    """Append one eval record for a -1g card render. Never raises. The writer
+    lives in lib/neon_blocks.py (shared with the -1g form since 2026-11-16);
+    this wrapper keeps the module-level SUGGEST_LOG_DIR / _short_host hooks."""
     try:
-        if resp is None or resp.strip() == "" or resp.strip().lower() == "skip":
-            kind = "keep" if (existing_goals and not reason) else "skip"
-        elif picks and custom:
-            kind = "mixed"
-        elif picks:
-            kind = "pick"
-        else:
-            kind = "custom"
-        now = datetime.now().astimezone()
-        rec = {
-            "ts": now.isoformat(timespec="seconds"),
-            "date": now.date().isoformat(),
-            "weekday": now.strftime("%a"),
-            "block": block_name,
-            "host": _short_host(),
-            "mode": mode,
-            "existing_goals": len(existing_goals or []),
-            "suggestions": [
-                {"content": s.get("content", ""),
-                 "source": s.get("source", "todoist"),
-                 "domain": s.get("domain", "")}
-                for s in (suggestions or [])
-            ],
-            "response_kind": kind,
-            "picks": list(picks or []),
-            "custom": list(custom or []),
-            "reason": reason,
-            "raw": resp or "",
-        }
-        d = Path(log_dir) if log_dir else SUGGEST_LOG_DIR
-        d.mkdir(parents=True, exist_ok=True)
-        with open(d / f"-1g-suggest.{rec['host']}.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+        _lib = str(Path.home() / "i446-monorepo" / "lib")
+        if _lib not in sys.path:
+            sys.path.insert(0, _lib)
+        import neon_blocks as _nb
+        _nb.log_1g_suggestions(
+            block_name, suggestions, resp, picks, custom, reason,
+            existing_goals=existing_goals, mode=mode,
+            log_dir=log_dir or SUGGEST_LOG_DIR, host=_short_host())
     except Exception:
         pass
 
