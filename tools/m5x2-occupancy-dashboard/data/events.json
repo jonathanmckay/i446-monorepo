@@ -9148,5 +9148,45 @@
     "unit": "A08",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-17",
+    "effective": "2026-12-01",
+    "kind": "ntv",
+    "unit_id": "1226",
+    "prop": "tc68",
+    "unit": "C77",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-17",
+    "effective": "2026-11-17",
+    "kind": "ntv",
+    "unit_id": "913",
+    "prop": "kn47 K1",
+    "unit": "G103",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-17",
+    "effective": "2026-12-11",
+    "kind": "leased",
+    "unit_id": "1430",
+    "prop": "c702",
+    "unit": "J303",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-17",
+    "effective": "2027-01-01",
+    "kind": "ntv",
+    "unit_id": "799",
+    "prop": "v202",
+    "unit": "13",
+    "tenant": null,
+    "baseline": false
   }
 ]

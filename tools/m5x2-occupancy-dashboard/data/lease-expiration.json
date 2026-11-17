@@ -768,18 +768,6 @@
     "rent": "1304.00"
   },
   {
-    "unit_id": 945,
-    "property_name": "kn47 K1",
-    "unit": "J203",
-    "tenant_name": "Butler, Scott",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2023-05-16",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-10-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 981,
     "property_name": "kn47 K1",
     "unit": "M106",
@@ -1512,18 +1500,6 @@
     "rent": "931.00"
   },
   {
-    "unit_id": 876,
-    "property_name": "kn47 K1",
-    "unit": "D206",
-    "tenant_name": "Houtrouw, Steven",
-    "status": "Pending",
-    "lease_sign_date": "2026-03-12",
-    "move_in": "2026-03-16",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "931.00"
-  },
-  {
     "unit_id": 973,
     "property_name": "kn47 K1",
     "unit": "L206",
@@ -1558,6 +1534,18 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-03-01",
     "rent": "1089.00"
+  },
+  {
+    "unit_id": 876,
+    "property_name": "kn47 K1",
+    "unit": "D206",
+    "tenant_name": "Houtrouw, Steven",
+    "status": "Pending",
+    "lease_sign_date": "2026-03-12",
+    "move_in": "2026-03-16",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "931.00"
   },
   {
     "unit_id": 1009,
@@ -2626,18 +2614,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-04-01",
     "rent": "1425.00"
-  },
-  {
-    "unit_id": 799,
-    "property_name": "v202",
-    "unit": "13",
-    "tenant_name": "Meyers, Colleen A.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-03-21",
-    "move_in": "2025-03-22",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-04-01",
-    "rent": "1475.00"
   },
   {
     "unit_id": 121,
