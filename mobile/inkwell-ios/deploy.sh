@@ -17,13 +17,18 @@ LOG="${LOG:-$HOME/.cache/jm/ios-deploy.log}"
 #   triage-scan   dry run; logs only the .zip entries in ~/Downloads
 #   triage-apply  triage.py --source downloads --apply (config/triage.json)
 #   noop          nothing; the resting state, so a re-fire never deploys
-# Same ssh-localhost hop as tools/triage/com.mckay.triage.plist (launchd has no
-# TCC access to ~/Downloads). The log is written whole, ending in "done rc=N".
+# Same ssh-localhost hop as tools/triage/com.mckay.triage.plist when sshd is up. The log is written whole, ending in "done rc=N".
 VERB=$(head -1 "$TRIGGER" 2>/dev/null)
 case "$VERB" in
   triage-scan|triage-apply|noop)
-    HOP="/usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=10 localhost"
-    TRIAGE="/usr/bin/python3 i446-monorepo/tools/triage/triage.py --source downloads"
+    # sshd is off on Straylight (found 2026-11-17: connection refused), so fall
+    # back to running triage directly; macOS then asks once for Downloads access.
+    if /usr/bin/nc -z -G 2 localhost 22 >/dev/null 2>&1; then
+      HOP="/usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=10 localhost"
+    else
+      HOP="/bin/sh -c"
+    fi
+    TRIAGE="cd $HOME && /usr/bin/python3 i446-monorepo/tools/triage/triage.py --source downloads"
     {
       echo "=== $VERB start $(date '+%F %T') ==="
       rc=0
@@ -31,7 +36,8 @@ case "$VERB" in
         triage-scan)
           $HOP "$TRIAGE --json" | /usr/bin/python3 -c '
 import json, os, sys
-for d in json.load(sys.stdin):
+raw = sys.stdin.read()
+for d in json.loads(raw) if raw.strip() else []:
     if d["path"].lower().endswith(".zip"):
         print(os.path.basename(d["path"]), d["size"], d["added"], d["rule"], d["action"], sep=" | ")'
           rc=${PIPESTATUS[0]} ;;
