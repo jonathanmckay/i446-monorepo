@@ -32,8 +32,11 @@ ENV_ID = "DTD_TASK_ID"
 ENV_FILE = "DTD_HIDE_IDS_FILE"
 
 
-def _target() -> tuple[str, Path] | None:
-    tid = (os.environ.get(ENV_ID) or "").strip()
+def _target(tid: str | None = None) -> tuple[str, Path] | None:
+    """(task id, hide file). `tid` overrides the card dtd launched the form
+    from: a form that closes OTHER cards too (xk887 closes both `1 xk88`
+    and `1 xk87`) hides each of them by id."""
+    tid = (tid or os.environ.get(ENV_ID) or "").strip()
     f = (os.environ.get(ENV_FILE) or "").strip()
     if not tid or not f:
         return None
@@ -61,9 +64,9 @@ def did_fast_closed(stdout: str) -> bool:
     return False
 
 
-def hide_card() -> bool:
+def hide_card(tid: str | None = None) -> bool:
     """Append the dtd task id to the hide file. True if a hide was recorded."""
-    t = _target()
+    t = _target(tid)
     if t is None:
         return False
     tid, path = t
@@ -75,10 +78,10 @@ def hide_card() -> bool:
     return True
 
 
-def unhide_card() -> bool:
+def unhide_card(tid: str | None = None) -> bool:
     """Strip the dtd task id from the hide file (atomic rewrite). True if
     the file was rewritten."""
-    t = _target()
+    t = _target(tid)
     if t is None:
         return False
     tid, path = t

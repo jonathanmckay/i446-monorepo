@@ -869,6 +869,12 @@ _T=\$'\t'; zmodload zsh/datetime 2>/dev/null; print -r -- "\$EPOCHREALTIME\${_T}
 id="\$1"; form="\$2"; shift 2
 HDR="$DTD_HDR"
 export DTD_HDR_FILE="\$HDR"   # forms that finish in the background report here
+# ...and ask fzf to repaint the header themselves (lib/form_detach.py): nothing
+# watches \$HDR, so a detached saver's "✓ saved" used to sit unseen until the
+# next keypress or cache reload (2026-11-17).
+export DTD_PORT_FILE="$DTD_PORT"
+export DTD_HDRGEN_FILE="$DTD_HDRGEN"
+_h0=""; [[ -r "\$HDR" ]] && _h0="\$(<"\$HDR")"
 # Optimistic row-hide for detached forms (2026-11-12: "-1g, 0l ... I see the
 # task at the top of the list flash before it disappears"): -1g/0g/0l save in
 # a detached child, so at reload time the card was still open in the cache.
@@ -904,7 +910,12 @@ if (( rc )); then
   read -k 1 _discard < /dev/tty 2>/dev/null
   echo "✗ \${form:t} exited \$rc" > "\$HDR"
 else
-  echo "✓ \${form:t}" > "\$HDR"
+  # A form that saves in the background has already written its own status
+  # ("⏳ … saving", or the saver's "✓ … saved"): the generic tick below used
+  # to overwrite it and read as "saved" while the write was still running
+  # (2026-11-17). Only tick when the form left the header alone.
+  _h1=""; [[ -r "\$HDR" ]] && _h1="\$(<"\$HDR")"
+  [[ "\$_h1" == "\$_h0" ]] && echo "✓ \${form:t}" > "\$HDR"
 fi
 exit 0
 FORMEOF
@@ -1745,7 +1756,7 @@ elif [[ -n "\$id" ]]; then
   case "\$_clean" in
     0l)                               _form="$HOME/i446-monorepo/tools/0s/0s.py --detach" ;;
     1s)                               _form="$HOME/i446-monorepo/tools/1s/1s-survey.py --no-mark" ;;
-    "1 xk88"|"1 xk87"|"1 xk87 wknd")  _form="$HOME/i446-monorepo/tools/xk887/xk887-survey.py" ;;
+    "1 xk88"|"1 xk87"|"1 xk87 wknd")  _form="$HOME/i446-monorepo/tools/xk887/xk887-survey.py --detach" ;;
     "moral audit"|moralaudit)         _form="$HOME/i446-monorepo/tools/moralaudit/moralaudit.py" ;;
     "1 hcme")                         _form="$HOME/i446-monorepo/tools/1hcme/1hcme.py" ;;
     "1 i9")                           _form="$HOME/i446-monorepo/tools/1i9/1i9.py" ;;

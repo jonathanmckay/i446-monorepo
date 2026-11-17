@@ -33,13 +33,17 @@ import argparse
 import calendar
 import datetime as _dt
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
+import dtd_hide  # noqa: E402  optimistic dtd row-hide for the cards --detach closes
+import form_detach  # noqa: E402  dtd status line + detached child (--detach)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "xk887.xlsx"
@@ -51,6 +55,8 @@ WORKBOOK_PATH = Path.home() / "Library/CloudStorage/OneDrive-Personal/vault-exce
 # not /tmp (macOS periodic cleanup can reap /tmp; hand-typed answers with no
 # other durability shouldn't live there). See write_answers_safely().
 RECOVERY_DIR = Path.home() / ".cache/xk887-recovery"
+# --detach: the saver child's stdout/stderr (its progress goes to dtd's status line).
+LOG = Path.home() / ".cache/xk887-survey.log"
 
 # Each sheet: (sheet name, display title, fields).
 # Fields: (key, label, column, kind).  kind: text | textml | num | num_auto
@@ -351,12 +357,14 @@ def _card_name(content: str) -> str:
     return _ANNOT_RE.sub("", content or "").strip().lower()
 
 
-def open_finish_cards(queue: dict, today: _dt.date) -> list[str]:
-    """The FINISH_CARDS that are open in the 1neon tier of dtd's task cache
-    and due on or before `today` (a missing due counts as due). Exact card
-    name after stripping (N)/[N]/{N}, so "1 xk87 wknd" never matches
-    "1 xk87". Returned in FINISH_CARDS order, deduplicated."""
-    found = set()
+def finish_card_tasks(queue: dict, today: _dt.date) -> list[tuple[str, str]]:
+    """(card name, Todoist id) for every FINISH_CARDS task that is open in
+    the 1neon tier of dtd's task cache and due on or before `today` (a
+    missing due counts as due). Exact card name after stripping
+    (N)/[N]/{N}, so "1 xk87 wknd" never matches "1 xk87". A closed weekly
+    card stays in the cache with a LATER due, which is why due is checked
+    and mere presence is not. FINISH_CARDS order."""
+    found: list[tuple[str, str]] = []
     for t in queue.get("1neon", []) or []:
         name = _card_name(t.get("content", ""))
         if name not in FINISH_CARDS:
@@ -368,7 +376,14 @@ def open_finish_cards(queue: dict, today: _dt.date) -> list[str]:
                     continue
             except ValueError:
                 pass
-        found.add(name)
+        found.append((name, str(t.get("id") or "")))
+    return sorted(found, key=lambda x: FINISH_CARDS.index(x[0]))
+
+
+def open_finish_cards(queue: dict, today: _dt.date) -> list[str]:
+    """The FINISH_CARDS names from finish_card_tasks, deduplicated, in
+    FINISH_CARDS order."""
+    found = {name for name, _tid in finish_card_tasks(queue, today)}
     return [c for c in FINISH_CARDS if c in found]
 
 
@@ -404,6 +419,247 @@ def drain_writes() -> bool:
     every queued write succeeded, so the caller can still exit non-zero on a
     background failure even though it was discovered after moving on."""
     return _writer.drain()
+
+
+# ---------------------------------------------------------------------------
+# --detach (dtd, 2026-11-17): "move saving the 1xk887 survey ... to the
+# background so that the UI is more snappy, and then we can have the bottom
+# notification letting me know when it is saved." Page-to-page was already
+# non-blocking; the wait was the END of run_paginated, where drain_writes()
+# held dtd's screen until four ix-osa round trips and two card closes were
+# done. With --detach the form never writes anything itself:
+#
+#   form     rewrites one spool file (atomically) each time a page is
+#            submitted, and once more when it finishes or is cancelled.
+#   saver    ONE detached child (this script, --save-spool), started at the
+#            first submitted page. It follows the spool: writes each
+#            submitted page as it appears (so pages 1-3 are usually in Excel
+#            before page 4 is typed), then, once the form says "finished",
+#            closes the week's cards, and reports every step in dtd's status
+#            line (lib/form_detach.py). It outlives the form, so a closed
+#            tab mid-survey still saves the pages that were submitted.
+#
+# One saver = one writer, in page order, exactly like the BackgroundWriter
+# thread it replaces. Any failed sheet is dumped to RECOVERY_DIR as before.
+# ---------------------------------------------------------------------------
+
+def spool_path(sunday: _dt.date) -> Path:
+    return RECOVERY_DIR / ("pending-%s-%d.json" % (week_row_label(sunday), os.getpid()))
+
+
+def write_spool(path: Path, data: dict) -> None:
+    """Atomic: the saver polls this file and must never read half of it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+    os.replace(tmp, path)
+
+
+def read_spool(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("pages"), dict) else None
+
+
+def answers_from_file(path: Path) -> tuple[dict, list | None, str | None]:
+    """(--from-json) A flat answers dict writes every sheet, as always. A
+    saver spool (an interrupted --detach run can leave one behind) replays
+    only the pages that were actually submitted, into the week it recorded.
+    Returns (answers, sheets or None for all, ISO Sunday or None)."""
+    data = json.loads(path.read_text())
+    if isinstance(data, dict) and isinstance(data.get("pages"), dict) \
+            and isinstance(data.get("answers"), dict):
+        done = data["pages"]
+        return (data["answers"], [cfg for cfg in SHEETS if cfg["sheet"] in done],
+                data.get("week"))
+    return data, None, None
+
+
+class DetachedSaver:
+    """The form's side of --detach. page() and end() only touch the spool
+    file; they never wait on Excel. `ok` False means the hand-off failed
+    (child could not start, spool unwritable) and the caller must fall back
+    to the in-process writer for whatever page() refused."""
+
+    def __init__(self, sunday: _dt.date):
+        self.sunday = sunday
+        self.path = spool_path(sunday)
+        self.pages: dict[str, int] = {}
+        self.answers: dict = {}
+        self.seq = 0
+        self.proc = None
+        self.ok = True
+
+    def _write(self, state: str, close: list | None = None) -> None:
+        write_spool(self.path, {
+            "week": self.sunday.isoformat(), "parent": os.getpid(), "state": state,
+            "pages": self.pages, "close": close or [], "answers": self.answers})
+
+    def page(self, answers: dict, cfg: dict) -> bool:
+        if not self.ok:
+            return False
+        prev = (dict(self.pages), self.answers, self.seq)
+        try:
+            self.seq += 1
+            self.pages[cfg["sheet"]] = self.seq   # a re-submitted page gets a newer seq
+            self.answers = dict(answers)
+            self._write("open")
+            if self.proc is None:
+                self.proc = form_detach.spawn_detached(
+                    [sys.executable, str(Path(__file__).resolve()),
+                     "--save-spool", str(self.path)], LOG)
+        except OSError:
+            self.pages, self.answers, self.seq = prev
+            self.ok = False
+            if self.proc is None:
+                try:
+                    self.path.unlink()
+                except OSError:
+                    pass
+            else:
+                try:   # the saver still owns the earlier pages: let it finish them
+                    self._write("cancelled")
+                except OSError:
+                    pass
+            return False
+        return True
+
+    def end(self, state: str, mark: bool = False, today: _dt.date | None = None) -> list[str]:
+        """Tell the saver the form is over. state 'finished' + mark closes
+        the week's cards; their dtd rows are hidden HERE, before this
+        process exits, so the list that comes back never shows them
+        (lib/dtd_hide.py). Returns the card names the saver will close."""
+        if self.proc is None or not self.ok:
+            return []
+        close: list[tuple[str, str]] = []
+        if state == "finished" and mark:
+            try:
+                queue = json.loads(TASK_QUEUE.read_text())
+            except (OSError, ValueError):
+                queue = {}
+            close = finish_card_tasks(queue, today or _dt.date.today())
+            for _name, tid in close:
+                if tid:
+                    dtd_hide.hide_card(tid)
+        # Header BEFORE the final spool write: the saver's own messages must
+        # always come after this one, never be overwritten by it.
+        form_detach.hdr("⏳ xk887 week %s: saving in the background …"
+                        % week_row_label(self.sunday), poke=False)
+        try:
+            self._write(state, close=[list(c) for c in close])
+        except OSError:
+            # The saver sees this process exit and saves what it has, without
+            # closing cards: put their rows back.
+            for _name, tid in close:
+                if tid:
+                    dtd_hide.unhide_card(tid)
+            return []
+        return [name for name, _tid in close]
+
+
+def close_card(card: str) -> tuple[bool, str]:
+    """Close one weekly card through run.py (dtd's own done path). True only
+    on a CONFIRMED close (or a card run.py found already closed today)."""
+    try:
+        r = run_bounded(["/usr/bin/python3", str(RUN_PY), card], timeout=120)
+    except Exception as e:  # noqa: BLE001  timeout, missing interpreter
+        return False, "%s: %s" % (card, type(e).__name__)
+    out = (r.stdout or "") + (r.stderr or "")
+    tail = out.strip().splitlines()
+    ok = r.returncode == 0 and ("todoist closed" in out or "already closed" in out)
+    return ok, "%s: %s" % (card, tail[-1].strip() if tail else "exit %d" % r.returncode)
+
+
+def run_saver(path: Path, poll: float = 0.3, settle: float = 0.5) -> int:
+    """The detached child (--save-spool). Follows the spool until the form
+    has ended (or died) and every submitted page is written."""
+    written: dict[str, int] = {}
+    fails: dict[str, Path] = {}
+    saved: list[str] = []
+    spool = None
+    misses = 0
+    while True:
+        cur = read_spool(path)
+        if cur is None:
+            misses += 1
+            if misses > 40:   # ~12s of an unreadable spool: nothing more to follow
+                break
+            time.sleep(poll)
+            continue
+        misses, spool = 0, cur
+        sunday = _dt.date.fromisoformat(spool["week"])
+        label = week_row_label(sunday)
+        parent_gone = not form_detach.pid_alive(spool.get("parent") or 0)
+        ended = spool.get("state") != "open" or parent_gone
+        pending = [cfg for cfg in SHEETS
+                   if spool["pages"].get(cfg["sheet"], 0) > written.get(cfg["sheet"], 0)]
+        if not pending:
+            if ended:
+                break
+            time.sleep(poll)
+            continue
+        cfg = pending[0]
+        sheet = cfg["sheet"]
+        seq = spool["pages"][sheet]
+        # fzf is inside execute() while the form is up: write the text, but
+        # only ask for a repaint once the form is gone.
+        form_detach.hdr("⏳ xk887 week %s: saving %s (%d of %d) …"
+                        % (label, sheet, len(set(saved) | {sheet}), len(spool["pages"])),
+                        poke=parent_gone)
+        try:
+            print("xk887 saver → %s: %s" % (sheet, write_answers(spool["answers"], sunday, sheets=[cfg])),
+                  flush=True)
+            fails.pop(sheet, None)
+            if sheet not in saved:
+                saved.append(sheet)
+        except Exception as e:  # noqa: BLE001
+            fails[sheet] = dump_recovery(spool["answers"], sunday, sheet)
+            print("xk887 saver ✗ %s FAILED: %s (answers in %s)" % (sheet, e, fails[sheet]), flush=True)
+        written[sheet] = seq
+    if spool is None:
+        print("xk887 saver ✗ spool %s unreadable, nothing saved" % path, flush=True)
+        form_detach.hdr("✗ xk887: save FAILED, spool unreadable (%s)" % path)
+        return 1
+    closed, not_closed = [], []
+    if spool.get("state") == "finished":
+        for name, tid in spool.get("close") or []:
+            form_detach.hdr("⏳ xk887 week %s: saved, closing %s …" % (label, name),
+                            poke=not form_detach.pid_alive(spool.get("parent") or 0))
+            ok, line = close_card(name)
+            print("xk887 saver → %s" % line, flush=True)
+            if ok:
+                closed.append(name)
+            else:
+                not_closed.append(name)
+                if tid:
+                    dtd_hide.unhide_card(tid)   # still open in Todoist: show the row again
+        if spool.get("close"):
+            try:
+                run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
+            except Exception:  # noqa: BLE001
+                pass
+    if fails:
+        msg = "✗ xk887 week %s: FAILED %s, answers in %s" % (
+            label, ", ".join(fails), ", ".join(str(p) for p in fails.values()))
+        if saved:
+            msg += " · saved " + ", ".join(s for s in saved if s not in fails)
+    else:
+        msg = "✓ xk887 week %s saved (%s)" % (label, ", ".join(saved) or "nothing to write")
+    if closed:
+        msg += " · closed " + ", ".join(closed)
+    if not_closed:
+        msg += " · NOT closed: " + ", ".join(not_closed)
+    print("xk887 saver → " + msg, flush=True)
+    # The final line must land after dtd's wrapper has handed the screen back
+    # to fzf, or the repaint request is dropped: announce() waits for the form.
+    form_detach.announce(msg, parent=spool.get("parent") or 0, settle=settle)
+    try:
+        path.unlink()   # every failed sheet has its own recovery dump
+    except OSError:
+        pass
+    return 1 if (fails or not_closed) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +804,8 @@ def run_page(cfg: dict, sunday: _dt.date, saturday: _dt.date,
     return action, {k: a.text.strip() for k, (a, _kind, _lbl) in areas.items()}
 
 
-def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False) -> int:
+def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False,
+                  detach: bool = False) -> int:
     """One page per sheet/person; each page is QUEUED to Excel the moment it
     is submitted and the NEXT page renders immediately — the write itself
     runs in the background (see queue_write/drain_writes) so a crash or
@@ -558,28 +815,44 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False) -
     clobber, so re-writes are safe). Every queued write is waited on and
     reported exactly once, at the very end (drain_writes) — never between
     pages, since a background thread printing while the next page's
-    full-screen Application is running would corrupt the display."""
+    full-screen Application is running would corrupt the display.
+
+    detach=True (dtd): pages go to a DetachedSaver instead, nothing is
+    waited on, and the function returns the moment the form ends; the saver
+    child reports in dtd's status line. A page the saver cannot take falls
+    back to the in-process writer above."""
     answers: dict = {}
     total = len(SHEETS)
     queued = []
+    saver = DetachedSaver(sunday) if detach else None
+    inline = False   # True once any page went to the in-process writer
     i = 0
     while i < total:
         cfg = SHEETS[i]
         action, page = run_page(cfg, sunday, saturday, i + 1, total, answers)
         answers.update(page)
         if action is None:
-            drain_writes()
+            handed = bool(saver and saver.proc is not None and saver.ok)
+            if saver:
+                saver.end("cancelled")
+            if inline or not saver:
+                drain_writes()
             print("xk887 cancelled on page %d/%d%s." % (
                 i + 1, total,
                 "; queued before cancel: " + ", ".join(queued) if queued else ""))
-            return 1
+            # Pages handed to the saver are being written: that is not a
+            # failed form, and a non-zero exit makes dtd's wrapper hold the
+            # screen and overwrite the saver's status line.
+            return 0 if (handed and not inline) else 1
         if action == "back":
             i -= 1
             continue
         filled = sum(1 for key, _l, _c, _k in cfg["fields"]
                      if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
         print("xk887 → %s: queued %d fields …" % (cfg["sheet"], filled), flush=True)
-        queue_write(answers, sunday, cfg)
+        if not (saver and saver.page(answers, cfg)):
+            queue_write(answers, sunday, cfg)
+            inline = True
         if cfg["sheet"] not in queued:
             queued.append(cfg["sheet"])
         i += 1
@@ -588,6 +861,14 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False) -
     # Every page submitted = survey finished → close the week's family cards
     # (queued behind the Neon writes; see queue_finish_marks). An Esc before
     # the last page saves what was filled but leaves the cards open.
+    if saver and saver.ok and saver.proc is not None and not inline:
+        marked = saver.end("finished", mark=not (no_mark or i < total))
+        print("xk887 → week %s: saving in the background (%s)%s · log %s" % (
+            week_row_label(sunday), ", ".join(queued),
+            "; closing " + ", ".join(marked) if marked else "", LOG))
+        return 0
+    if saver:
+        saver.end("cancelled")   # it keeps the pages it has; marks run below
     marked = [] if (no_mark or i < total) else queue_finish_marks()
     all_ok = drain_writes()
     print("xk887 → week %s done (%s)%s" % (
@@ -605,21 +886,29 @@ def main() -> int:
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
     ap.add_argument("--no-mark", action="store_true",
                     help="do not close the open '1 xk88' / '1 xk87' cards on finish (reruns)")
+    ap.add_argument("--detach", action="store_true",
+                    help="save in a detached child and exit the moment the form ends (dtd)")
+    ap.add_argument("--save-spool", help=argparse.SUPPRESS)   # the --detach child
     args = ap.parse_args()
+
+    if args.save_spool:
+        return run_saver(Path(args.save_spool))
 
     sunday, saturday = week_range(args.date)
 
     if args.from_json:
-        answers = json.loads(Path(args.from_json).read_text())
+        answers, only, spool_week = answers_from_file(Path(args.from_json))
+        if spool_week and not args.date:
+            sunday, saturday = week_range(spool_week)
         if args.print_script:
-            print(build_applescript(answers, sunday))
+            print(build_applescript(answers, sunday, sheets=only))
             return 0
-        filled = sum(1 for cfg in SHEETS for key, _l, _c, _kind in cfg["fields"]
+        filled = sum(1 for cfg in (only or SHEETS) for key, _l, _c, _kind in cfg["fields"]
                      if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
         print("xk887 → writing %d fields to xk887.xlsx week %s …" % (filled, week_row_label(sunday)),
               flush=True)
         try:
-            result = write_answers(answers, sunday)
+            result = write_answers(answers, sunday, sheets=only)
         except Exception as e:  # noqa: BLE001
             print("xk887 ✗ WRITE FAILED: %s" % e, flush=True)
             print("xk887 → input JSON is already durable at %s -- retry once fixed" % args.from_json,
@@ -629,7 +918,7 @@ def main() -> int:
         return 0
 
     # Interactive: one page per person, written as each page is submitted.
-    return run_paginated(sunday, saturday, no_mark=args.no_mark)
+    return run_paginated(sunday, saturday, no_mark=args.no_mark, detach=args.detach)
 
 
 if __name__ == "__main__":

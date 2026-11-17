@@ -461,3 +461,273 @@ def test_tail_row_lookup_is_one_range_read_not_a_per_row_loop():
     src = (Path(__file__).resolve().with_name("xk887-survey.py")).read_text()
     assert 'string value of range "A2:A1000" of ws' in src
     assert 'set av to (string value of range ("A" & r)' not in src
+
+
+# ── --detach: the form hands the save to a detached saver (2026-11-17) ───────
+# "move saving the 1xk887 survey ... to the background so that the UI is more
+# snappy, and then we can have the bottom notification letting me know when
+# it is saved." Before this the END of the form held dtd's screen until four
+# ix-osa writes and two card closes were done.
+
+import json as _json
+import subprocess as _sp
+
+
+class _FakeProc:
+    pid = 1
+
+
+def _detach_env(m, monkeypatch, tmp_path, cache=None):
+    """RECOVERY_DIR, a task cache, dtd's env files; spawn recorded, not run."""
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path / "rec")
+    q = tmp_path / "task-queue.json"
+    q.write_text(_json.dumps(cache if cache is not None else {"1neon": [
+        {"id": "A1", "content": "1 xk88 (30) [60]", "due": "2026-11-15"},
+        {"id": "B2", "content": "1 xk87 (30) [60]", "due": "2026-11-15"},
+        {"id": "C3", "content": "1 xk87 wknd (60) [90]", "due": "2026-11-15"}]}))
+    monkeypatch.setattr(m, "TASK_QUEUE", q)
+    hide = tmp_path / "removed.ids"
+    hdr = tmp_path / "hdr"
+    monkeypatch.setenv("DTD_HIDE_IDS_FILE", str(hide))
+    monkeypatch.setenv("DTD_TASK_ID", "C3")
+    monkeypatch.setenv("DTD_HDR_FILE", str(hdr))
+    monkeypatch.delenv("DTD_PORT_FILE", raising=False)
+    spawned = []
+    monkeypatch.setattr(m.form_detach, "spawn_detached",
+                        lambda argv, log, env=None: spawned.append(argv) or _FakeProc())
+    wrote = []
+    monkeypatch.setattr(m, "write_answers",
+                        lambda a, s, sheets=None: wrote.append(sheets[0]["sheet"]) or "OK")
+    return hide, hdr, spawned, wrote
+
+
+def _pages(m, monkeypatch, actions=None):
+    """run_page stub: every page submits one field, or follow `actions`."""
+    seq = iter(actions or [])
+
+    def _rp(cfg, sunday, saturday, i, total, answers):
+        act = next(seq, "submit")
+        if act is None:
+            return None, {}
+        key = m.field_key(cfg["sheet"], cfg["fields"][0][0])
+        return act, {key: "x%d" % i}
+    monkeypatch.setattr(m, "run_page", _rp)
+
+
+def _dead_pid():
+    p = _sp.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+def test_detach_finish_returns_at_once_without_writing(monkeypatch, tmp_path):
+    m = _load()
+    hide, hdr, spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
+    _pages(m, monkeypatch)
+    monkeypatch.setattr(m, "drain_writes", lambda: (_ for _ in ()).throw(AssertionError("must not wait")))
+    rc = m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), detach=True)
+    assert rc == 0
+    assert wrote == [], "the form process must never touch Excel under --detach"
+    assert len(spawned) == 1 and "--save-spool" in spawned[0], "exactly one saver child"
+    spool = m.read_spool(Path(spawned[0][-1]))
+    assert spool["state"] == "finished"
+    assert list(spool["pages"]) == ["xk88", "xk20", "xk22", "xk26"]
+    assert spool["close"] == [["1 xk88", "A1"], ["1 xk87", "B2"]]
+    # every card the saver will close is hidden before this process exits;
+    # the wknd row we were launched from is never closed, so never hidden
+    assert hide.read_text().split() == ["A1", "B2"]
+    assert hdr.read_text().startswith("⏳ xk887 week 11.2")
+
+
+def test_detach_spawns_at_the_first_page_so_saving_starts_while_typing(monkeypatch, tmp_path):
+    m = _load()
+    _hide, _hdr, spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    s = m.DetachedSaver(dt.date(2026, 11, 8))
+    assert s.page({"xk88_good": "a"}, m.SHEETS[0]) is True
+    assert len(spawned) == 1
+    assert m.read_spool(s.path)["state"] == "open"
+    assert s.page({"xk88_good": "a", "xk20_is": "b"}, m.SHEETS[1]) is True
+    assert len(spawned) == 1, "one saver for the whole form"
+    assert m.read_spool(s.path)["pages"] == {"xk88": 1, "xk20": 2}
+    # going back and re-submitting page 1 bumps its seq so the saver rewrites it
+    assert s.page({"xk88_good": "edited", "xk20_is": "b"}, m.SHEETS[0]) is True
+    assert m.read_spool(s.path)["pages"] == {"xk88": 3, "xk20": 2}
+
+
+def test_detach_cancel_after_pages_saves_them_and_closes_nothing(monkeypatch, tmp_path):
+    m = _load()
+    hide, _hdr, spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
+    _pages(m, monkeypatch, ["submit", "submit", None])
+    rc = m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), detach=True)
+    assert rc == 0, "handed-off pages are being saved: not a failed form (wrapper would hold the screen)"
+    spool = m.read_spool(Path(spawned[0][-1]))
+    assert spool["state"] == "cancelled" and spool["close"] == []
+    assert list(spool["pages"]) == ["xk88", "xk20"]
+    assert not hide.exists() and wrote == []
+
+
+def test_detach_cancel_on_page_one_is_still_a_plain_cancel(monkeypatch, tmp_path):
+    m = _load()
+    _hide, _hdr, spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    _pages(m, monkeypatch, [None])
+    assert m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), detach=True) == 1
+    assert spawned == []
+    assert not list((tmp_path / "rec").glob("pending-*"))
+
+
+def test_detach_no_mark_hides_and_closes_nothing(monkeypatch, tmp_path):
+    m = _load()
+    hide, _hdr, spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    _pages(m, monkeypatch)
+    assert m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), no_mark=True, detach=True) == 0
+    assert m.read_spool(Path(spawned[0][-1]))["close"] == []
+    assert not hide.exists()
+
+
+def test_detach_falls_back_to_the_inline_writer_when_the_saver_cannot_start(monkeypatch, tmp_path):
+    """No child, no hand-off: the answers must still be written, by the old
+    path, and waited on."""
+    m = _load()
+    _hide, _hdr, _spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
+
+    def _no(argv, log, env=None):
+        raise OSError("fork failed")
+    monkeypatch.setattr(m.form_detach, "spawn_detached", _no)
+    monkeypatch.setattr(m, "queue_finish_marks", lambda: [])
+    _pages(m, monkeypatch)
+    rc = m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), detach=True)
+    assert rc == 0
+    assert wrote == ["xk88", "xk20", "xk22", "xk26"]
+    assert not list((tmp_path / "rec").glob("pending-*")), "no orphan spool left behind"
+
+
+def _spool(m, tmp_path, pages, state="finished", close=(), answers=None):
+    path = tmp_path / "rec" / "pending-11.2-1.json"
+    m.write_spool(path, {"week": "2026-11-08", "parent": _dead_pid(), "state": state,
+                         "pages": pages, "close": [list(c) for c in close],
+                         "answers": answers or {"xk88_good": "a"}})
+    return path
+
+
+def test_saver_writes_pages_in_order_reports_and_removes_the_spool(monkeypatch, tmp_path):
+    m = _load()
+    hide, hdr, _spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "close_card", lambda card: (True, card + ": ok"))
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: None)
+    hide.write_text("A1\nB2\n")
+    path = _spool(m, tmp_path, {"xk20": 2, "xk88": 1, "xk26": 4, "xk22": 3},
+                  close=[("1 xk88", "A1"), ("1 xk87", "B2")])
+    assert m.run_saver(path, poll=0.01, settle=0) == 0
+    assert wrote == ["xk88", "xk20", "xk22", "xk26"]
+    assert hdr.read_text().strip() == \
+        "✓ xk887 week 11.2 saved (xk88, xk20, xk22, xk26) · closed 1 xk88, 1 xk87"
+    assert not path.exists()
+    assert hide.read_text().split() == ["A1", "B2"], "closed cards stay hidden"
+
+
+def test_saver_continues_past_a_failed_sheet_and_says_where_the_answers_are(monkeypatch, tmp_path):
+    m = _load()
+    _hide, hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    wrote = []
+
+    def _w(answers, sunday, sheets=None):
+        if sheets[0]["sheet"] == "xk20":
+            raise RuntimeError("ERROR: workbook not open")
+        wrote.append(sheets[0]["sheet"])
+        return "OK"
+    monkeypatch.setattr(m, "write_answers", _w)
+    path = _spool(m, tmp_path, {"xk88": 1, "xk20": 2, "xk22": 3}, state="cancelled")
+    assert m.run_saver(path, poll=0.01, settle=0) == 1
+    assert wrote == ["xk88", "xk22"]
+    dumps = list((tmp_path / "rec").glob("11.2-xk20-*.json"))
+    assert len(dumps) == 1, "the failed sheet has a replayable recovery dump"
+    line = hdr.read_text()
+    assert line.startswith("✗ xk887 week 11.2: FAILED xk20") and str(dumps[0]) in line
+    assert "saved xk88, xk22" in line
+
+
+def test_saver_unhides_a_card_it_could_not_close(monkeypatch, tmp_path):
+    """A card Todoist still shows open must come back in dtd, decided from
+    run.py's own result: the cache keeps a closed weekly card (later due), so
+    'still in the cache' proves nothing."""
+    m = _load()
+    hide, hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "close_card",
+                        lambda card: (card == "1 xk88", card + ": x"))
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: None)
+    hide.write_text("A1\nB2\n")
+    path = _spool(m, tmp_path, {"xk88": 1}, close=[("1 xk88", "A1"), ("1 xk87", "B2")])
+    assert m.run_saver(path, poll=0.01, settle=0) == 1
+    assert hide.read_text().split() == ["A1"]
+    assert hdr.read_text().strip().endswith("· closed 1 xk88 · NOT closed: 1 xk87")
+
+
+def test_saver_only_closes_cards_when_the_form_finished(monkeypatch, tmp_path):
+    m = _load()
+    _hide, _hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    called = []
+    monkeypatch.setattr(m, "close_card", lambda card: called.append(card) or (True, ""))
+    # form died mid-survey: state still "open", parent gone
+    path = _spool(m, tmp_path, {"xk88": 1}, state="open", close=[("1 xk88", "A1")])
+    assert m.run_saver(path, poll=0.01, settle=0) == 0
+    assert called == []
+
+
+def test_saver_rewrites_a_page_resubmitted_while_it_was_saving(monkeypatch, tmp_path):
+    m = _load()
+    _hide, _hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    path = _spool(m, tmp_path, {"xk88": 1}, state="cancelled", answers={"xk88_good": "v1"})
+    seen = []
+
+    def _w(answers, sunday, sheets=None):
+        seen.append(answers["xk88_good"])
+        if len(seen) == 1:   # the form re-submits page 1 mid-write
+            m.write_spool(path, dict(m.read_spool(path), pages={"xk88": 2},
+                                     answers={"xk88_good": "v2"}))
+        return "OK"
+    monkeypatch.setattr(m, "write_answers", _w)
+    assert m.run_saver(path, poll=0.01, settle=0) == 0
+    assert seen == ["v1", "v2"]
+
+
+def test_close_card_needs_a_confirmed_close(monkeypatch):
+    m = _load()
+
+    class R:
+        def __init__(self, rc, out):
+            self.returncode, self.stdout, self.stderr = rc, out, ""
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: R(0, "  ✓ 1 xk88 → 1 + todoist closed\n"))
+    assert m.close_card("1 xk88")[0] is True
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: R(0, "  ✓ 1 xk88 → 1\n"))
+    assert m.close_card("1 xk88")[0] is False
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: R(1, "  ✗ Todoist close failed\n"))
+    assert m.close_card("1 xk88")[0] is False
+
+    def _t(*a, **k):
+        raise _sp.TimeoutExpired("run.py", 120)
+    monkeypatch.setattr(m, "run_bounded", _t)
+    assert m.close_card("1 xk88")[0] is False
+
+
+def test_finish_card_tasks_skips_closed_weekly_cards_still_in_the_cache():
+    """A closed weekly card stays in the cache with next week's due: only
+    id + due <= today means "still to close"."""
+    m = _load()
+    q = {"1neon": [{"id": "A1", "content": "1 xk88 (30) [60]", "due": "2026-11-24"},
+                   {"id": "B2", "content": "1 xk87 (30) [60]", "due": "2026-11-17"},
+                   {"id": "C3", "content": "1 xk87 wknd (60) [90]", "due": "2026-11-15"}]}
+    assert m.finish_card_tasks(q, dt.date(2026, 11, 17)) == [("1 xk87", "B2")]
+    assert m.open_finish_cards(q, dt.date(2026, 11, 17)) == ["1 xk87"]
+
+
+def test_from_json_replays_a_spool_only_for_the_submitted_pages(tmp_path):
+    m = _load()
+    p = tmp_path / "pending.json"
+    m.write_spool(p, {"week": "2026-11-08", "parent": 1, "state": "open",
+                      "pages": {"xk20": 2, "xk88": 1}, "close": [], "answers": {"xk88_good": "a"}})
+    answers, only, week = m.answers_from_file(p)
+    assert answers == {"xk88_good": "a"} and week == "2026-11-08"
+    assert [c["sheet"] for c in only] == ["xk88", "xk20"]
+    flat = tmp_path / "flat.json"
+    flat.write_text('{"xk88_good": "a"}')
+    assert m.answers_from_file(flat) == ({"xk88_good": "a"}, None, None)

@@ -123,6 +123,14 @@ Then confirm: fill the form, ^S to save.
   queued behind the Neon writes (user request 2026-09-29). `1 xk87 wknd`
   and cards already advanced to next week are untouched. `--no-mark`
   skips this for reruns. A cancelled survey closes nothing.
+- From dtd the form runs with `--detach` (2026-11-17): nothing is written by
+  the form itself. One detached saver starts at the first submitted page,
+  writes each page as it is submitted, closes the cards when the form
+  finishes, and reports each step in dtd's status line (`⏳ … saving xk20
+  (2 of 4)`, then `✓ xk887 week 11.2 saved (…) · closed …` or `✗ … FAILED
+  <sheet>, answers in <path>`). The form returns to dtd the moment it ends.
+  Log: `~/.cache/xk887-survey.log`. Launched from this skill (own tab, no
+  dtd status line) it keeps the wait-and-report behaviour above.
 - Non-interactive paths (scripting/tests): `xk887-survey.py --from-json
   <file>` writes answers from JSON; `--print-script --from-json <file>`
   prints the AppleScript without writing.
