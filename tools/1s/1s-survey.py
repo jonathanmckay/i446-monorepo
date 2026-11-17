@@ -18,6 +18,7 @@ Usage:
   python3 1s-survey.py --from-json F  # non-interactive write (tests/scripting)
   python3 1s-survey.py --print-script --from-json F   # print AppleScript only
   python3 1s-survey.py --print-context                # dump fetched context
+  python3 1s-survey.py --detach       # (dtd) save in a detached child, exit at once
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import argparse
 import asyncio
 import datetime as _dt
 import json
+import os
 import subprocess
 import sys
 import time
@@ -33,6 +35,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
+import dtd_hide  # noqa: E402  optimistic dtd row-hide when --detach will close the card
+import form_detach  # noqa: E402  dtd status line + detached child (--detach)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WORKBOOK = "Neon分v12.2.xlsx"
@@ -42,6 +46,13 @@ DAILY_SHEET = "0s897"
 # here before 2026-08-11, same gap 0s had. Same shape as xk887's.
 RECOVERY_DIR = Path.home() / ".cache/1s-recovery"
 _writer = BackgroundWriter(recovery_dir=RECOVERY_DIR)
+# --detach: the saver child's stdout/stderr (its result goes to dtd's status line).
+LOG = Path.home() / ".cache/1s-survey.log"
+RUN_PY = Path.home() / "i446-monorepo/tools/did/run.py"
+# Key the --detach answers file carries next to the answers: the review week's
+# Sunday (ISO), so a replay with a bare `--from-json F` lands in the week the
+# answers were typed for, not whichever week is "last completed" by then.
+WEEK_KEY = "_week"
 
 # (key, label, column in 1分+1s, kind, context_key)
 # kind: text | textml | num. context_key names the daily-answer list shown
@@ -477,6 +488,162 @@ def write_answers(answers: dict, sunday: _dt.date) -> str:
     return out
 
 
+def _mark_1s_done(confirm: dict | None = None) -> str:
+    """Close the weekly 1s card through run.py (dtd's own done path), only
+    after a successful Neon write. `confirm` (the --detach child) also
+    records whether the close was CONFIRMED, so the caller can put the dtd
+    row back when it was not; that path uses run_bounded, because a hung
+    grandchild in a detached process has nobody to press ^C."""
+    if not _neon_write_ok(SHEET):
+        return "1s not marked: Neon write failed"
+    if confirm is None:
+        subprocess.run(["/usr/bin/python3",
+                        str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
+                       capture_output=True, text=True, timeout=120)
+        return "1s marked done"
+    proc = run_bounded(["/usr/bin/python3", str(RUN_PY), "1s"], timeout=120)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    tail = out.strip().splitlines()
+    confirm["line"] = tail[-1].strip() if tail else "exit %s" % proc.returncode
+    # run_1n prints "+ todoist closed" on a close and "already done this
+    # week" for a card that already rolled forward; both mean it is not open.
+    confirm["closed"] = proc.returncode == 0 and any(
+        k in out for k in ("todoist closed", "already done this week", "already closed"))
+    return "1s marked done" if confirm["closed"] else "1s NOT closed: %s" % confirm["line"]
+
+
+def queue_save(answers: dict, sunday: _dt.date, no_mark: bool,
+               confirm: dict | None = None) -> None:
+    """Queue the Neon write, then (unless no_mark) the 1s mark, on the one
+    serial writer. Completing the survey IS completing the weekly 1s task
+    (user decision 2026-07-21); the two stay serialized, not concurrent
+    (JM 2026-08-11, see 0s.py). RECOVERY_DIR is re-read each call so tests
+    that monkeypatch it after module load still take effect."""
+    _writer.recovery_dir = RECOVERY_DIR
+    _writer.queue(write_answers, answers, sunday, tag=SHEET,
+                  recovery_payload=answers)
+    if not no_mark:
+        # A closure, not an argument: queue() deep-copies its args, and the
+        # caller reads `confirm` back after drain().
+        _writer.queue(lambda: _mark_1s_done(confirm), tag="1s-mark")
+
+
+def _neon_saved() -> bool:
+    """After drain(): did the Neon write POSITIVELY succeed? Not `all_ok`:
+    drain() is also True when the worker died without recording a result."""
+    return any(t == SHEET and ok for t, ok, *_ in _writer.last_results)
+
+
+# ---------------------------------------------------------------------------
+# --detach (dtd, 2026-11-17): "move saving ... (all surveys) to the background
+# so that the UI is more snappy, and then we can have the bottom notification
+# letting me know when it is saved." The form used to stay up through the
+# whole Neon write (+1.5s to show the tick), then main() slept another second.
+# With --detach the form process does no Excel/Todoist work at all: it writes
+# the answers to RECOVERY_DIR, starts ONE detached child (this script,
+# --from-json ... --report-hdr) and exits; the child does today's writes in
+# today's order and reports in dtd's status line (lib/form_detach.py).
+# ---------------------------------------------------------------------------
+
+def pending_path(sunday: _dt.date) -> Path:
+    return RECOVERY_DIR / ("pending-%s-%d.json" % (week_row_label(sunday), os.getpid()))
+
+
+def detach_save(answers: dict, sunday: _dt.date, no_mark: bool) -> tuple[bool, Path | None]:
+    """Hand the save to a detached child. (True, file) once the child is
+    running; (False, file or None) when the hand-off failed and the caller
+    must save inline (the file, if written, still holds the answers)."""
+    path = pending_path(sunday)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(dict(answers, **{WEEK_KEY: sunday.isoformat()}),
+                                  ensure_ascii=False, indent=1))
+        os.replace(tmp, path)
+    except OSError:
+        return False, None
+    # Hide the dtd row only when this save closes the card dtd opened the
+    # form from, and BEFORE the spawn so the child's unhide can never run
+    # ahead of it (lib/dtd_hide.py). dtd's own route passes --no-mark.
+    hid = (not no_mark) and dtd_hide.hide_card()
+    argv = [sys.executable, str(Path(__file__).resolve()), sunday.isoformat(),
+            "--from-json", str(path), "--unlink-json", "--expanded", "--report-hdr"]
+    if no_mark:
+        argv.append("--no-mark")
+    try:
+        form_detach.spawn_detached(argv, LOG)
+    except OSError:
+        if hid:
+            dtd_hide.unhide_card()
+        return False, path
+    # The clock keeps the text different from whatever the header held when
+    # the form opened: dtd's wrapper overwrites an UNCHANGED header with its
+    # generic tick. The child's own line comes later (announce() waits for
+    # this process to exit).
+    form_detach.hdr("⏳ 1s week %s: saving in the background … (%s)"
+                    % (week_row_label(sunday), time.strftime("%H:%M:%S")), poke=False)
+    return True, path
+
+
+def run_from_json(args, sunday: _dt.date, dates: list[_dt.date]) -> int:
+    """--from-json: the non-interactive write, and (with the hidden
+    --expanded/--unlink-json/--report-hdr) the --detach child."""
+    src = Path(args.from_json)
+    answers = json.loads(src.read_text())
+    week = answers.pop(WEEK_KEY, None) if isinstance(answers, dict) else None
+    if week and not args.date:
+        sunday, _sat = week_range(week)
+        dates = [sunday + _dt.timedelta(days=i) for i in range(7)]
+    if not args.expanded:
+        ctx = fetch_context(dates) if not args.print_script else {k: [] for k in DAILY_COLS}
+        answers = expand_selections(answers, ctx)
+
+    if args.print_script:
+        print(build_applescript(answers, sunday))
+        return 0
+
+    filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS if (answers.get(k) or "").strip())
+    confirm = {} if args.report_hdr else None
+    queue_save(answers, sunday, args.no_mark, confirm)
+
+    all_ok = _writer.drain()
+    saved = _neon_saved()
+    label = week_row_label(sunday)
+    if all_ok and (saved or not args.report_hdr):
+        print("✓ 1s saved to Neon — %s week %s, %d field%s written" % (
+            SHEET, label, filled, "" if filled == 1 else "s"))
+    if not args.report_hdr:
+        if args.unlink_json and saved:
+            src.unlink(missing_ok=True)
+        return 0 if all_ok else 1
+
+    # --- the --detach child's report ---
+    closed = bool(confirm.get("closed"))
+    if not args.no_mark and not closed:
+        dtd_hide.unhide_card()   # still open in Todoist: show the row again
+    if saved:
+        if args.unlink_json:
+            src.unlink(missing_ok=True)
+        if args.no_mark or closed:
+            msg = "✓ 1s week %s saved (%d field%s)%s" % (
+                label, filled, "" if filled == 1 else "s", "" if args.no_mark else " · 1s closed")
+        else:
+            why = confirm.get("line") or next(
+                (m for t, ok, m, _r in _writer.last_results if t == "1s-mark" and not ok), "no result")
+            msg = "✗ 1s week %s save FAILED (1s card NOT closed: %s) answers are in Neon" % (label, why)
+    else:
+        rec = next((r for t, ok, _m, r in _writer.last_results if t == SHEET and not ok and r), None)
+        why = next((m for t, ok, m, _r in _writer.last_results if t == SHEET and not ok),
+                   "writer died without a result")
+        if rec and args.unlink_json:
+            src.unlink(missing_ok=True)   # the recovery dump is the replayable copy
+        msg = "✗ 1s week %s save FAILED (%s: %s) answers in %s" % (
+            label, SHEET, " ".join(str(why).split())[:120], rec or src)
+    print("1s saver → " + msg, flush=True)
+    form_detach.announce(msg)
+    return 0 if msg.startswith("✓") else 1
+
+
 # ---------------------------------------------------------------------------
 # Full-screen form (prompt_toolkit) — same interaction grammar as 0s.py
 # ---------------------------------------------------------------------------
@@ -491,7 +658,7 @@ def _ctx_lines(ctx_list: list[tuple[int, str]], dates: list[_dt.date]) -> str:
 
 
 def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
-             no_mark: bool = False) -> dict | None:
+             no_mark: bool = False, detach: bool = False) -> dict | None:
     from prompt_toolkit import Application
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import HSplit, Layout, ScrollablePane, VSplit, Window
@@ -558,6 +725,13 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
         filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS
                      if (answers.get(k) or "").strip())
 
+        if detach:
+            # --detach: no write here at all. main() hands the answers to a
+            # detached child and exits; "pending" tells it nothing is saved.
+            app.exit(result={"answers": answers, "all_ok": None,
+                             "filled": filled, "pending": True})
+            return
+
         # Keep the form on screen through the whole write instead of exiting
         # immediately: exiting drops back to the plain terminal (which can be
         # showing anything left over from before this pane's shell started —
@@ -570,18 +744,7 @@ def run_form(sunday: _dt.date, dates: list[_dt.date], ctx: dict,
         app.invalidate()
 
         def _do_write():
-            _writer.recovery_dir = RECOVERY_DIR
-            _writer.queue(write_answers, answers, sunday, tag=SHEET,
-                          recovery_payload=answers)
-            if not no_mark:
-                def _mark_1s_done():
-                    if not _neon_write_ok(SHEET):
-                        return "1s not marked: Neon write failed"
-                    subprocess.run(["/usr/bin/python3",
-                                    str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
-                                   capture_output=True, text=True, timeout=120)
-                    return "1s marked done"
-                _writer.queue(_mark_1s_done, tag="1s-mark")
+            queue_save(answers, sunday, no_mark)
             # report=False: a background thread printing while this
             # full-screen Application still owns the terminal corrupts the
             # display (see review_form_writer.py) — the status line above is
@@ -677,6 +840,11 @@ def main() -> int:
                     help="open the form even with week-completeness blockers")
     ap.add_argument("--no-mark", action="store_true",
                     help="do not mark the 1s task done after a successful save")
+    ap.add_argument("--detach", action="store_true",
+                    help="after the form, save in a detached child and exit at once (dtd)")
+    ap.add_argument("--unlink-json", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--expanded", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--report-hdr", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     sunday, saturday = week_range(args.date)
@@ -696,47 +864,16 @@ def main() -> int:
         return 0
 
     if args.from_json:
-        answers = json.loads(Path(args.from_json).read_text())
-        ctx = fetch_context(dates) if not args.print_script else {k: [] for k in DAILY_COLS}
-        answers = expand_selections(answers, ctx)
-
-        if args.print_script:
-            print(build_applescript(answers, sunday))
-            return 0
-
-        filled = sum(1 for k, _l, _c, _kind, _ck in FIELDS if (answers.get(k) or "").strip())
-
-        def _write_neon():
-            return write_answers(answers, sunday)
-
-        # Re-reads RECOVERY_DIR each call (rather than trusting whatever
-        # _writer was constructed with) so tests that monkeypatch it after
-        # module load still take effect — same reasoning as
-        # xk887-survey.py's queue_write.
-        _writer.recovery_dir = RECOVERY_DIR
-        _writer.queue(_write_neon, tag=SHEET, recovery_payload=answers)
-
-        # Completing the survey IS completing the weekly 1s task (user
-        # decision 2026-07-21: "I need to complete the survey before task is
-        # complete") — mark it here, not in the /1s skill flow. Queued onto
-        # the SAME background writer as the Neon write above (serialized,
-        # not concurrent, per JM 2026-08-11 — see 0s.py's identical comment
-        # for why).
-        if not args.no_mark:
-            def _mark_1s_done():
-                if not _neon_write_ok(SHEET):
-                    return "1s not marked: Neon write failed"
-                subprocess.run(["/usr/bin/python3",
-                                str(Path.home() / "i446-monorepo/tools/did/run.py"), "1s"],
-                               capture_output=True, text=True, timeout=120)
-                return "1s marked done"
-            _writer.queue(_mark_1s_done, tag="1s-mark")
-
-        all_ok = _writer.drain()
-        if all_ok:
-            print("✓ 1s saved to Neon — %s week %s, %d field%s written" % (
-                SHEET, week_row_label(sunday), filled, "" if filled == 1 else "s"))
-        return 0 if all_ok else 1
+        if not args.report_hdr:
+            return run_from_json(args, sunday, dates)
+        try:
+            return run_from_json(args, sunday, dates)
+        except BaseException as e:  # noqa: BLE001  the child has no screen: say it in dtd
+            if not args.no_mark:
+                dtd_hide.unhide_card()
+            form_detach.announce("✗ 1s save FAILED (%s: %s) answers in %s" % (
+                type(e).__name__, " ".join(str(e).split())[:120], args.from_json))
+            raise
 
     ctx = fetch_context(dates)
     # Hard gate (user decision 2026-07-21): the weekly review may not run
@@ -755,10 +892,29 @@ def main() -> int:
     # "Saving to Neon…" and the ✓/✗ result on screen for the whole AppleScript
     # round trip, instead of exiting to a blank/stale terminal and leaving the
     # user guessing whether anything happened (JM 2026-08-16).
-    result = run_form(sunday, dates, ctx, no_mark=args.no_mark)
+    result = run_form(sunday, dates, ctx, no_mark=args.no_mark, detach=args.detach)
     if result is None:
         print("1s survey cancelled.")
         return 1
+
+    if result.get("pending"):
+        # --detach: nothing has been written yet (see _submit).
+        if not result["filled"]:
+            # Esc on an untouched form: no child, no round trip.
+            print("1s → nothing filled, nothing written.")
+            return 0
+        spawned, pending = detach_save(result["answers"], sunday, args.no_mark)
+        if spawned:
+            print("1s → week %s: saving in the background (log: %s)" % (
+                week_row_label(sunday), LOG))
+            return 0
+        # The child could not start: save here, as the form always did. The
+        # answers file (if it was written) stays until Neon has them.
+        print("1s → background save unavailable, saving inline …", flush=True)
+        queue_save(result["answers"], sunday, args.no_mark)
+        result["all_ok"] = _writer.drain(report=False)
+        if pending is not None and _neon_saved():
+            pending.unlink(missing_ok=True)
 
     all_ok = result["all_ok"]
     filled = result["filled"]
@@ -785,6 +941,9 @@ def main() -> int:
     if all_ok:
         print("✓ 1s saved to Neon — %s week %s, %d field%s written" % (
             SHEET, week_row_label(sunday), filled, "" if filled == 1 else "s"))
+        if args.detach:
+            # Inline fallback inside dtd: the pane is dtd's, never close it.
+            return 0
         # Interactive runs close their own cmux tab after a successful save,
         # so the survey doesn't leave a stray pane sitting at a shell prompt
         # (user decision 2026-08-02).

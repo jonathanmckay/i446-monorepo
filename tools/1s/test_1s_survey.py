@@ -286,6 +286,294 @@ def test_write_failure_dumps_recovery_and_returns_nonzero(monkeypatch, tmp_path)
     assert list(tmp_path.glob("recovery*.json")), "expected a recovery dump for the failed write"
 
 
+# ── --detach (2026-11-17): the form process saves nothing itself ────────────
+# "move saving ... (all surveys) to the background so that the UI is more
+# snappy, and then we can have the bottom notification letting me know when it
+# is saved." The form writes the answers to RECOVERY_DIR, starts one detached
+# child (--from-json ... --report-hdr) and exits; the child reports in dtd's
+# status line.
+
+SUN = dt.date(2026, 7, 12)
+
+
+def _detach_env(m, monkeypatch, tmp_path, result, argv=("--detach", "--force")):
+    """Interactive main() with the form, context fetch and every writer faked.
+    Returns a log of everything that would have touched live data."""
+    log = {"spawn": [], "writes": [], "runs": [], "hdr": [], "order": []}
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path / "rec")
+    monkeypatch.setattr(m, "LOG", tmp_path / "1s.log")
+    monkeypatch.setattr(m, "fetch_context", lambda dates: {k: [] for k in m.DAILY_COLS})
+    seen = {}
+    def form(sunday, dates, ctx, no_mark=False, detach=False):
+        seen.update(no_mark=no_mark, detach=detach)
+        return result
+    monkeypatch.setattr(m, "run_form", form)
+    log["form"] = seen
+    def write(answers, sunday):
+        log["writes"].append((dict(answers), sunday))
+        return "OK: weekRow=40 wrote=1"
+    monkeypatch.setattr(m, "write_answers", write)
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: log["runs"].append(a))
+    def bounded(*a, **k):
+        log["runs"].append(a)
+        raise AssertionError("no subprocess in the form process")
+    monkeypatch.setattr(m, "run_bounded", bounded)
+    def spawn(argv, logf, env=None):
+        log["order"].append("spawn")
+        log["spawn"].append((list(argv), logf, Path(argv[argv.index("--from-json") + 1]).read_text()))
+    monkeypatch.setattr(m.form_detach, "spawn_detached", spawn)
+    monkeypatch.setattr(m.form_detach, "hdr",
+                        lambda msg, poke=True: log["hdr"].append((msg, poke)) or True)
+    monkeypatch.setattr(m.dtd_hide, "hide_card",
+                        lambda tid=None: log["order"].append("hide") or True)
+    monkeypatch.setattr(m.dtd_hide, "unhide_card",
+                        lambda tid=None: log["order"].append("unhide") or True)
+    monkeypatch.setattr("sys.argv", ["1s-survey.py", SUN.isoformat(), *argv])
+    return log
+
+
+def _pending(answers, filled=1):
+    return {"answers": answers, "all_ok": None, "filled": filled, "pending": True}
+
+
+def test_detach_spawns_one_child_and_writes_nothing(monkeypatch, tmp_path):
+    import json
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path, _pending({"title": "Big week", "win": ""}),
+                      argv=("--detach", "--force", "--no-mark"))
+    assert m.main() == 0
+    assert log["form"] == {"no_mark": True, "detach": True}
+    assert log["writes"] == [] and log["runs"] == []
+    assert len(log["spawn"]) == 1
+    argv, logf, content = log["spawn"][0]
+    assert argv[1].endswith("1s-survey.py") and argv[2] == "2026-07-12"
+    for flag in ("--from-json", "--unlink-json", "--expanded", "--report-hdr", "--no-mark"):
+        assert flag in argv
+    assert "--detach" not in argv            # the child must not detach again
+    path = Path(argv[argv.index("--from-json") + 1])
+    assert path.parent == tmp_path / "rec" and path.exists()   # recovery dir, not /tmp
+    assert json.loads(content) == {"title": "Big week", "win": "", "_week": "2026-07-12"}
+    assert logf == tmp_path / "1s.log"
+    (msg, poke), = log["hdr"]
+    assert msg.startswith("⏳ 1s week 7.2: saving in the background …") and poke is False
+    assert log["order"] == ["spawn"]         # --no-mark closes no card: nothing hidden
+
+
+def test_detach_hides_card_before_spawn_when_it_will_close_it(monkeypatch, tmp_path):
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path, _pending({"title": "T"}))
+    assert m.main() == 0
+    assert log["order"] == ["hide", "spawn"]
+    assert "--no-mark" not in log["spawn"][0][0]
+    assert log["writes"] == [] and log["runs"] == []
+
+
+def test_detach_spawn_failure_falls_back_inline(monkeypatch, tmp_path, capsys):
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path, _pending({"title": "T"}))
+    def no_spawn(argv, logf, env=None):
+        raise OSError("fork: resource temporarily unavailable")
+    monkeypatch.setattr(m.form_detach, "spawn_detached", no_spawn)
+    assert m.main() == 0
+    assert log["writes"] == [({"title": "T"}, SUN)]            # saved inline
+    assert len(log["runs"]) == 1 and log["runs"][0][0][-1] == "1s"   # and marked, as today
+    assert not any(a[0][:1] == ["cmux"] for a in log["runs"])  # dtd's pane stays open
+    assert log["order"] == ["hide", "unhide"]                  # row back: no child will close it
+    assert log["hdr"] == []                                    # no "saving in the background" claim
+    assert list((tmp_path / "rec").glob("pending-*")) == []    # Neon has them: file gone
+    assert "saving inline" in capsys.readouterr().out
+
+
+def test_detach_fallback_failure_keeps_the_answers_file(monkeypatch, tmp_path):
+    import json
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path, _pending({"title": "T"}),
+                      argv=("--detach", "--force", "--no-mark"))
+    monkeypatch.setattr(m.form_detach, "spawn_detached",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
+    def boom(answers, sunday):
+        raise RuntimeError("excel down")
+    monkeypatch.setattr(m, "write_answers", boom)
+    assert m.main() == 1
+    kept, = (tmp_path / "rec").glob("pending-*.json")
+    assert json.loads(kept.read_text())["title"] == "T"
+
+
+def test_detach_unwritable_answers_file_saves_inline(monkeypatch, tmp_path):
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path, _pending({"title": "T"}),
+                      argv=("--detach", "--force", "--no-mark"))
+    blocker = tmp_path / "blocker"
+    blocker.write_text("")
+    monkeypatch.setattr(m, "RECOVERY_DIR", blocker / "rec")    # mkdir fails: not a directory
+    assert m.main() == 0
+    assert log["spawn"] == [] and log["writes"] == [({"title": "T"}, SUN)]
+
+
+def test_detach_cancel_spawns_nothing(monkeypatch, tmp_path):
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path, None)
+    assert m.main() == 1
+    assert log["spawn"] == [] and log["writes"] == [] and log["runs"] == []
+    assert log["order"] == [] and log["hdr"] == []
+    assert not (tmp_path / "rec").exists()
+
+
+def test_detach_empty_form_spawns_nothing(monkeypatch, tmp_path):
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path, _pending({"title": "", "win": ""}, filled=0))
+    assert m.main() == 0
+    assert log["spawn"] == [] and log["writes"] == [] and log["runs"] == []
+    assert log["order"] == [] and not (tmp_path / "rec").exists()
+
+
+def test_without_detach_form_is_not_asked_to_detach(monkeypatch, tmp_path):
+    m = _load()
+    log = _detach_env(m, monkeypatch, tmp_path,
+                      {"answers": {"title": "T"}, "all_ok": False, "filled": 1},
+                      argv=("--force", "--no-mark"))
+    assert m.main() == 1
+    assert log["form"] == {"no_mark": True, "detach": False}
+    assert log["spawn"] == [] and log["hdr"] == [] and log["order"] == []
+
+
+def _child_env(m, monkeypatch, tmp_path, answers, extra=(), run_out=None, write=None):
+    """The detached child: main() with --from-json ... --report-hdr."""
+    import json
+    log = {"writes": [], "runs": [], "announce": [], "order": []}
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path / "rec")
+    def no_ctx(dates):
+        raise AssertionError("the child must not re-read the daily context")
+    monkeypatch.setattr(m, "fetch_context", no_ctx)
+    def ok_write(a, sunday):
+        log["order"].append("write")
+        log["writes"].append((dict(a), sunday))
+        return "OK: weekRow=40 wrote=1"
+    monkeypatch.setattr(m, "write_answers", write or ok_write)
+    def bounded(cmd, timeout=None, **k):
+        log["order"].append("mark")
+        log["runs"].append(cmd)
+        if isinstance(run_out, BaseException):
+            raise run_out
+        return type("P", (), {"returncode": 0, "stdout": run_out or "", "stderr": ""})()
+    monkeypatch.setattr(m, "run_bounded", bounded)
+    monkeypatch.setattr(m.form_detach, "announce",
+                        lambda msg, **k: log["announce"].append(msg) or True)
+    monkeypatch.setattr(m.dtd_hide, "hide_card",
+                        lambda tid=None: log["order"].append("hide") or True)
+    monkeypatch.setattr(m.dtd_hide, "unhide_card",
+                        lambda tid=None: log["order"].append("unhide") or True)
+    f = tmp_path / "pending-7.2-1.json"
+    f.write_text(json.dumps(dict(answers, _week="2026-07-12")))
+    monkeypatch.setattr("sys.argv", ["1s-survey.py", "2026-07-12", "--from-json", str(f),
+                                     "--unlink-json", "--expanded", "--report-hdr", *extra])
+    log["file"] = f
+    return log
+
+
+def test_child_success_header_and_unlink(monkeypatch, tmp_path):
+    m = _load()
+    log = _child_env(m, monkeypatch, tmp_path, {"title": "3", "win": "W"}, extra=("--no-mark",))
+    assert m.main() == 0
+    # "3" stays "3": the form already expanded day picks, the child must not.
+    assert log["writes"] == [({"title": "3", "win": "W"}, SUN)]
+    assert log["runs"] == []
+    assert log["announce"] == ["✓ 1s week 7.2 saved (2 fields)"]
+    assert not log["file"].exists()
+    assert "unhide" not in log["order"]
+
+
+def test_child_write_then_mark_and_confirmed_close(monkeypatch, tmp_path):
+    m = _load()
+    log = _child_env(m, monkeypatch, tmp_path, {"title": "T"},
+                     run_out="  ✓ 1s → 1n+ + todoist closed\n")
+    assert m.main() == 0
+    assert log["order"] == ["write", "mark"]
+    assert log["runs"][0][-2:] == [str(m.RUN_PY), "1s"]
+    assert log["announce"] == ["✓ 1s week 7.2 saved (1 field) · 1s closed"]
+
+
+def test_child_already_done_this_week_counts_as_closed(monkeypatch, tmp_path):
+    m = _load()
+    log = _child_env(m, monkeypatch, tmp_path, {"title": "T"},
+                     run_out="  = 1s already done this week\n")
+    assert m.main() == 0
+    assert "unhide" not in log["order"]
+
+
+def test_child_failure_header_names_a_replayable_file(monkeypatch, tmp_path):
+    import json
+    m = _load()
+    def boom(a, sunday):
+        raise RuntimeError("Invalid object specifier\n(workbook not open)")
+    log = _child_env(m, monkeypatch, tmp_path, {"title": "T"}, write=boom)
+    assert m.main() == 1
+    assert log["runs"] == []                     # a failed write never marks
+    msg, = log["announce"]
+    assert msg.startswith("✗ 1s week 7.2 save FAILED (1分+1s: Invalid object specifier (workbook not open)) answers in ")
+    kept = Path(msg.rsplit(" answers in ", 1)[1])
+    assert kept.exists() and kept.parent == tmp_path / "rec"
+    assert json.loads(kept.read_text()) == {"title": "T"}
+    assert log["order"] == ["unhide"]            # card was hidden by the form, still open
+
+
+@pytest.mark.parametrize("run_out", [
+    "  ✗ 1s: todoist error\n",                   # ran, close not confirmed
+    "",                                          # no output at all
+    __import__("subprocess").TimeoutExpired("run.py", 120),
+])
+def test_child_unconfirmed_close_unhides_and_reports(monkeypatch, tmp_path, run_out):
+    m = _load()
+    log = _child_env(m, monkeypatch, tmp_path, {"title": "T"}, run_out=run_out)
+    assert m.main() == 1
+    assert log["order"] == ["write", "mark", "unhide"]
+    msg, = log["announce"]
+    assert msg.startswith("✗ 1s week 7.2 save FAILED (1s card NOT closed")
+    assert msg.endswith("answers are in Neon")
+    assert not log["file"].exists()              # the answers did land
+
+
+def test_child_crash_keeps_file_unhides_and_reports(monkeypatch, tmp_path):
+    m = _load()
+    log = _child_env(m, monkeypatch, tmp_path, {"title": "T"})
+    def crash(*a, **k):
+        raise KeyError("boom")
+    monkeypatch.setattr(m, "queue_save", crash)
+    with pytest.raises(KeyError):
+        m.main()
+    assert log["order"] == ["unhide"]
+    assert log["announce"] == ["✗ 1s save FAILED (KeyError: 'boom') answers in %s" % log["file"]]
+    assert log["file"].exists()
+
+
+def test_child_never_ticks_when_the_writer_died_silently(monkeypatch, tmp_path):
+    """drain() is True when the worker recorded nothing (it died inside the
+    recovery dump). That must not read as saved, nor delete the answers."""
+    m = _load()
+    log = _child_env(m, monkeypatch, tmp_path, {"title": "T"}, extra=("--no-mark",))
+    monkeypatch.setattr(m, "queue_save", lambda *a, **k: None)
+    assert m.main() == 1
+    msg, = log["announce"]
+    assert msg.startswith("✗ 1s week 7.2 save FAILED") and msg.endswith(str(log["file"]))
+    assert log["file"].exists()
+
+
+def test_week_key_replays_into_the_recorded_week(monkeypatch, tmp_path):
+    """A leftover answers file replayed with a bare --from-json lands in the
+    week it was typed for, and the key never reaches the sheet."""
+    m = _load()
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path)
+    monkeypatch.setattr(m, "fetch_context", lambda dates: {k: [] for k in m.DAILY_COLS})
+    got = []
+    monkeypatch.setattr(m, "write_answers", lambda a, s: got.append((dict(a), s)) or "OK")
+    f = tmp_path / "pending.json"
+    f.write_text('{"title": "T", "_week": "2026-07-12"}')
+    monkeypatch.setattr("sys.argv", ["1s-survey.py", "--from-json", str(f), "--no-mark"])
+    assert m.main() == 0
+    assert got == [({"title": "T"}, SUN)]
+    assert f.exists()                            # no --unlink-json: left alone
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

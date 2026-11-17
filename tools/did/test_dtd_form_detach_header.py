@@ -29,8 +29,14 @@ def test_wrapper_exports_what_a_saver_needs_to_repaint_the_header():
     assert 'export DTD_HDRGEN_FILE="$DTD_HDRGEN"' in w
 
 
-def test_xk887_route_saves_in_the_background():
-    assert 'tools/xk887/xk887-survey.py --detach"' in DTD
+def test_every_survey_route_that_writes_after_submit_saves_in_the_background():
+    """All of dtd's inline forms that reach Excel / Todoist after submit run
+    with --detach. moralaudit only writes a local note, so it has no flag."""
+    for form in ("0s/0s.py", "1s/1s-survey.py --no-mark", "xk887/xk887-survey.py",
+                 "1hcme/1hcme.py", "1i9/1i9.py", "1hcb/1hcb.py", "f693/1f693.py",
+                 "-1g/-1g-form.py", "-1g/-1g-form.py --daily"):
+        assert 'tools/%s --detach" ;;' % form in DTD, form
+    assert 'tools/moralaudit/moralaudit.py" ;;' in DTD
 
 
 def _tick_logic(tmp_path, before: str, during: str | None) -> str:

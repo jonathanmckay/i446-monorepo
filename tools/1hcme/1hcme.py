@@ -33,11 +33,14 @@ Usage:
   python3 1hcme.py --from-text "…"       # non-interactive write
   python3 1hcme.py --print-script --from-text "…"   # AppleScript only
   python3 1hcme.py --no-mark             # write X but leave the card open
+  python3 1hcme.py --detach              # dtd: save in a detached child, exit at once
+  python3 1hcme.py --from-json F         # replay an answers file left by --detach
 """
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import os
 import re
 import shutil
@@ -49,6 +52,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import run_bounded  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
+import dtd_hide  # noqa: E402  optimistic dtd row-hide for the card --detach closes
+import form_detach  # noqa: E402  dtd status line + detached child (--detach)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 DID_RUN = Path.home() / "i446-monorepo/tools/did/run.py"
@@ -58,6 +63,11 @@ SHEET = "0s897"
 HCME_COL = "X"
 HABIT = "1 hcme"
 QUESTION = "What did I learn this week about my emotions that I should remember?"
+# Hand-typed answers that could not be written land here (stable, not /tmp).
+# --detach also keeps its pending answers file here until the write succeeds.
+RECOVERY_DIR = Path.home() / ".cache/1hcme-recovery"
+# --detach: the saver child's stdout/stderr (its result goes to dtd's status line).
+LOG = Path.home() / ".cache/1hcme.log"
 
 # Columns pulled from each 0s897 row, in the order they are read (A..X).
 # Rendering below picks from these by letter.
@@ -445,15 +455,196 @@ def write_answer(row: int, text: str) -> str:
     return out
 
 
-def mark_done() -> str:
+def mark_done_checked(unhide: bool = False) -> tuple[str, str]:
+    """Mark the habit done through run.py, refresh dtd's cache. Returns
+    (state, run.py's last line); state is
+      "closed"   the Todoist card was closed (or found already closed),
+      "rolled"   run.py says the habit is already done this week and left
+                 the card alone (it is still open, with a later due),
+      "credited" run.py wrote the 1n+ credit but closed no card (none
+                 matched, or the Todoist call failed): a second /did would
+                 credit the points twice,
+      "failed"   anything else (non-zero exit): nothing is confirmed.
+    unhide=True (the --detach child): on anything but "closed" the card's
+    dtd row is put back BEFORE the cache refresh, so the reload that the
+    refresh triggers already shows it. Raises what run_bounded raises."""
     env = dict(os.environ, DIDFAST_WATCHDOG_SECS="110")
     proc = run_bounded(["/usr/bin/python3", str(DID_RUN), HABIT], timeout=120, env=env)
+    out = (proc.stdout or "") + (proc.stderr or "")
     msg = (proc.stdout or proc.stderr or "").strip().splitlines()
+    if proc.returncode == 0 and ("todoist closed" in out or "already closed" in out):
+        state = "closed"
+    elif proc.returncode == 0 and "already done this week" in out:
+        state = "rolled"
+    elif proc.returncode == 0 and "✓" in out:
+        state = "credited"
+    else:
+        state = "failed"
+    if unhide and state != "closed":
+        dtd_hide.unhide_card()
+    _refresh_cache()
+    return state, (msg[-1] if msg else "(no output from did run.py)")
+
+
+def _refresh_cache() -> None:
     try:  # foreground refresh so an open dtd reloads at once (README rule)
         run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
     except Exception:  # noqa: BLE001
         pass
-    return msg[-1] if msg else "(no output from did run.py)"
+
+
+def _unhide() -> None:
+    """Put the card's dtd row back and make dtd reload (its watcher reloads
+    on the cache refresh; the row was also excluded client-side)."""
+    if dtd_hide.unhide_card():
+        _refresh_cache()
+
+
+def stale_pending(min_age: float = 600.0) -> list[Path]:
+    """Answers files a --detach child never finished (killed, reboot, failed
+    write): older than any save can take. Each is replayable with --from-json."""
+    try:
+        files = sorted(RECOVERY_DIR.glob("pending-*.json"))
+    except OSError:
+        return []
+    now = time.time()
+    out = []
+    for f in files:
+        try:
+            if now - f.stat().st_mtime >= min_age:
+                out.append(f)
+        except OSError:
+            pass
+    return out
+
+
+def mark_done() -> str:
+    return mark_done_checked()[1]
+
+
+# ---------------------------------------------------------------------------
+# --detach (dtd, 2026-11-17): "move saving the 1xk887 survey (and all surveys
+# for that matter) to the background so that the UI is more snappy, and then
+# we can have the bottom notification letting me know when it is saved."
+# Opened inline from dtd the form held the screen through the 0s897 write,
+# run.py (1n+ credit + Todoist close) and the cache refresh. With --detach
+# the form process only writes the answer to a file in RECOVERY_DIR and
+# starts ONE detached child (this script, --from-json), which does the same
+# writes in the same order and reports in dtd's status line
+# (lib/form_detach.py). The file is removed only after the 0s897 write
+# succeeded; a failed write leaves it there and names it in the status line.
+# ---------------------------------------------------------------------------
+
+def spool_path(target: _dt.date) -> Path:
+    return RECOVERY_DIR / ("pending-%s-%d.json" % (target.isoformat(), os.getpid()))
+
+
+def detach(target: _dt.date, row: int, label: str, text: str, no_mark: bool) -> bool:
+    """Hand the save to a detached child. True = handed off: this process
+    must do no write and exit. False = the hand-off failed (answers file
+    unwritable, child could not start) and nothing is pending: save inline."""
+    path = spool_path(target)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"target": target.isoformat(), "row": row, "label": label,
+                                    "text": text, "no_mark": bool(no_mark)},
+                                   ensure_ascii=False, indent=1))
+    except OSError:
+        return False
+    # The child will close the `1 hcme` card unless --no-mark: hide its dtd
+    # row NOW, before the spawn, so the child's unhide can never run ahead of
+    # it and the list that comes back never shows the row (lib/dtd_hide.py).
+    hid = (not no_mark) and dtd_hide.hide_card()
+    try:
+        form_detach.spawn_detached(
+            [sys.executable, str(Path(__file__).resolve()),
+             "--from-json", str(path), "--unlink-json", "--report-hdr"], LOG)
+    except OSError:
+        if hid:
+            dtd_hide.unhide_card()
+        try:
+            path.unlink()   # the inline save has its own recovery dump
+        except OSError:
+            pass
+        return False
+    # poke=False: this process still owns the screen (fzf is inside execute()).
+    # The child's own line comes from announce(), which waits for us to exit.
+    form_detach.hdr("⏳ 1hcme week %s: saving in the background …" % label, poke=False)
+    return True
+
+
+def _warn_stale() -> None:
+    for f in stale_pending():
+        print("⚠ unsaved 1hcme answer from an earlier run: %s (replay: 1hcme.py --from-json %s)"
+              % (f, f))
+
+
+def _short(e) -> str:
+    return " ".join(str(e).split())[:160] or type(e).__name__
+
+
+def save_from_json(path: Path, unlink: bool = False, report: bool = False) -> int:
+    """(--from-json) Write an answers file left by --detach: the 0s897 write,
+    then the habit mark, exactly as the inline save. No sheet read: the row
+    was resolved by the form. `unlink` removes the file once the answer is in
+    Excel; `report` (the detached child) puts the result in dtd's status
+    line. Any unconfirmed close puts the card's dtd row back."""
+    def say(msg: str) -> None:
+        print(msg, flush=True)
+        if report:
+            form_detach.announce(msg)
+
+    try:
+        data = json.loads(path.read_text())
+        row, text = int(data["row"]), str(data["text"])
+        if row <= 0 or not text.strip():
+            raise ValueError("no row/answer in it")
+        label = str(data.get("label") or "?")
+        no_mark = bool(data.get("no_mark"))
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        _unhide()
+        say("✗ 1hcme save FAILED (answers file unreadable: %s) answers in %s" % (_short(e), path))
+        return 1
+    try:
+        res = write_answer(row, text)
+    except BaseException as e:  # noqa: BLE001  incl. SystemExit/timeouts: the card stays open
+        _unhide()
+        say("✗ 1hcme week %s save FAILED (%s write: %s) answers in %s"
+            % (label, SHEET, _short(e), path))
+        return 1
+    print("✓ %s (week %s)" % (res, label), flush=True)
+    if unlink:
+        try:
+            path.unlink()   # the answer is in Excel now
+        except OSError:
+            pass
+    if no_mark:
+        say("✓ 1hcme week %s saved (%s)" % (label, res))
+        return 0
+    try:
+        state, line = mark_done_checked(unhide=True)
+    except BaseException as e:  # noqa: BLE001  TimeoutExpired is the usual one
+        state, line = "failed", _short(e)
+        _unhide()
+    line = line.strip()
+    print("%s: %s" % (HABIT, line), flush=True)
+    if state == "closed":
+        say("✓ 1hcme week %s saved · %s closed" % (label, HABIT))
+        return 0
+    # Not closed: mark_done_checked already put the dtd row back.
+    where = res.replace("OK: ", "")
+    if state == "rolled":
+        say("✓ 1hcme week %s saved · %s was already done this week, card left alone"
+            % (label, HABIT))
+        return 0
+    if state == "credited":
+        # run.py credits 1n+ even when it closes no card: /did would credit twice.
+        say("✗ 1hcme week %s saved (%s) and credited, but the %s card is NOT closed: "
+            "close it in Todoist by hand, do not /did it again" % (label, where, HABIT))
+        return 1
+    say("✗ 1hcme week %s saved (%s), but marking %s done FAILED (%s): "
+        "check 1n+ before running /did %s" % (label, where, HABIT, line, HABIT))
+    return 1
 
 
 def _hold_pane(args) -> None:
@@ -465,6 +656,19 @@ def _hold_pane(args) -> None:
         input(DIM + "press Enter to close" + RESET)
     except EOFError:
         pass
+
+
+def _close_own_tab(args) -> None:
+    """Interactive runs close their own cmux tab after a successful save (same
+    convention as 1s-survey.py); failures return early and leave the pane
+    open so the error stays readable. Inside dtd's inline-form wrapper
+    (DTD_FORM exports DTD_HDR_FILE) the pane IS dtd's — never close it."""
+    if not args.from_text and not os.environ.get("DTD_HDR_FILE") and shutil.which("cmux"):
+        time.sleep(1.5)
+        try:
+            subprocess.run(["cmux", "close-surface"], capture_output=True, text=True, timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def read_answer() -> str:
@@ -508,10 +712,19 @@ def main(argv=None) -> int:
     ap.add_argument("--from-text", help="non-interactive answer")
     ap.add_argument("--print-script", action="store_true")
     ap.add_argument("--no-mark", action="store_true", help="write X, leave the card open")
+    ap.add_argument("--detach", action="store_true",
+                    help="after the answer, save in a detached child and exit at once (dtd)")
+    ap.add_argument("--from-json", help="write an answers file left by --detach (no sheet read)")
+    ap.add_argument("--unlink-json", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--report-hdr", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--today", help="override today (tests)")
     ap.add_argument("--cell", type=int, default=CELL_W, help="text cell width (chars, default %d)" % CELL_W)
     ap.add_argument("--cols", type=int, help="max text columns (default: as many as fit)")
     args = ap.parse_args(argv)
+
+    if args.from_json:
+        return save_from_json(Path(args.from_json), unlink=args.unlink_json,
+                              report=args.report_hdr)
 
     today = _dt.date.fromisoformat(args.today) if args.today else _dt.date.today()
     target = resolve_target(args.week, today)
@@ -521,6 +734,7 @@ def main(argv=None) -> int:
         print(build_write_script(row, bulletize(args.from_text or "")))
         return 0
 
+    _warn_stale()
     dates = window(target, today)
     print(DIM + "loading %s %s → %s from Ix… (Excel can take a minute when busy)" % (
         SHEET, _mdy(dates[0]), _mdy(dates[-1])) + RESET, flush=True)
@@ -564,11 +778,19 @@ def main(argv=None) -> int:
         return 1
     text = bulletize(answer)
 
+    if args.detach and not args.from_text:
+        label = trec["cells"].get("A", ("",))[0] or "?"
+        if detach(target, trec["row"], label, text, args.no_mark):
+            print("1hcme → saving in the background (log: %s)" % LOG)
+            _close_own_tab(args)
+            return 0
+        print("1hcme → could not start the background save; saving here")
+
     print("Saving to Neon…", flush=True)
     try:
         res = write_answer(trec["row"], text)
     except Exception as e:  # noqa: BLE001
-        rec_dir = Path.home() / ".cache/1hcme-recovery"
+        rec_dir = RECOVERY_DIR
         rec_dir.mkdir(parents=True, exist_ok=True)
         p = rec_dir / ("%s.txt" % target.isoformat())
         p.write_text(text)
@@ -587,16 +809,7 @@ def main(argv=None) -> int:
             _hold_pane(args)
             return 1
 
-    # Interactive runs close their own cmux tab after a successful save (same
-    # convention as 1s-survey.py); failures above return early and leave the
-    # pane open so the error stays readable. Inside dtd's inline-form wrapper
-    # (DTD_FORM exports DTD_HDR_FILE) the pane IS dtd's — never close it.
-    if not args.from_text and not os.environ.get("DTD_HDR_FILE") and shutil.which("cmux"):
-        time.sleep(1.5)
-        try:
-            subprocess.run(["cmux", "close-surface"], capture_output=True, text=True, timeout=10)
-        except Exception:  # noqa: BLE001
-            pass
+    _close_own_tab(args)
     return 0
 
 

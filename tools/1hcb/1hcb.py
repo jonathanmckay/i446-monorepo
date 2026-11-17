@@ -25,11 +25,15 @@ Usage:
   python3 1hcb.py 2026-10-15         # the hcb week containing that date
   python3 1hcb.py --print-context    # show last week's answers, write nothing
   python3 1hcb.py --weight 191.4 --learned "..." --goals "..." [--no-mark]
+  python3 1hcb.py --detach           # dtd: save in a detached child, exit at once
+  python3 1hcb.py --from-json FILE   # write a saved answers file (the --detach
+                                     # child; also how a failed save is replayed)
 """
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import os
 import re
 import sys
@@ -41,6 +45,8 @@ from neon import excel  # noqa: E402
 from neon.weeks import fiscal_week_label  # noqa: E402
 from review_form_writer import run_bounded  # noqa: E402
 from survey_input import read_line, read_multiline  # noqa: E402
+import dtd_hide  # noqa: E402  optimistic dtd row-hide for the card --detach closes
+import form_detach  # noqa: E402  dtd status line + detached child (--detach)
 
 SHEET = "hcbi"
 COLS = {"weight": "BG", "learned": "BH", "goals": "BJ"}
@@ -48,6 +54,10 @@ HABIT = "1 hcb"
 DID_RUN = Path.home() / "i446-monorepo/tools/did/run.py"
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 CLAIMS = Path.home() / "i446-monorepo/tools/did/agent_claims.py"
+# --detach: the answers wait here until the child has written them, and stay
+# here if it could not (not /tmp: macOS reaps it, and nothing else holds them).
+RECOVERY_DIR = Path.home() / ".cache/1hcb-recovery"
+LOG = Path.home() / ".cache/1hcb.log"      # the --detach child's stdout/stderr
 DIM, BOLD, RESET = "\033[2m", "\033[1m", "\033[0m"
 GREEN, RED = "\033[32m", "\033[31m"
 
@@ -282,14 +292,134 @@ def week_analysis(report: list[str], last_goals: str, client=None) -> str:
         return ""
 
 
-def mark_done() -> str:
+def mark_habit() -> tuple[bool, str]:
+    """Complete the `1 hcb` habit through run.py and refresh dtd's cache.
+    (confirmed, run.py's last line): confirmed only when run.py says the
+    Todoist card was closed (or was already), the rule xk887's close_card
+    uses. Raises what run_bounded raises (a timeout)."""
     proc = run_bounded(["/usr/bin/python3", str(DID_RUN), HABIT], timeout=120)
+    out = (proc.stdout or "") + (proc.stderr or "")
     msg = (proc.stdout or proc.stderr or "").strip().splitlines()
     try:
         run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
     except Exception:  # noqa: BLE001
         pass
-    return msg[-1] if msg else "(no output from did run.py)"
+    ok = proc.returncode == 0 and ("todoist closed" in out or "already closed" in out)
+    return ok, (msg[-1] if msg else "(no output from did run.py)")
+
+
+def mark_done() -> str:
+    return mark_habit()[1]
+
+
+def release_claim() -> None:
+    try:
+        run_bounded([sys.executable, str(CLAIMS), "release"], timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def written_cols(learned: str, goals: str) -> str:
+    return ", ".join(COLS[k] for k, v in (("weight", 1), ("learned", learned), ("goals", goals)) if v)
+
+
+# ---------------------------------------------------------------------------
+# --detach (dtd, 2026-11-17): "move saving ... all surveys ... to the
+# background so that the UI is more snappy, and then we can have the bottom
+# notification letting me know when it is saved." After the third answer the
+# form used to hold dtd's screen through three Excel writes, run.py (Excel +
+# Todoist), a cache refresh and the claim release. With --detach it writes
+# the answers to RECOVERY_DIR, starts this script again as a detached child
+# (--from-json FILE --report-hdr) and exits; the child does those same steps
+# in the same order and reports in dtd's status line (lib/form_detach.py).
+# The file is deleted only once Excel has the answers, so a failed save can
+# be replayed with `1hcb.py --from-json FILE`.
+# ---------------------------------------------------------------------------
+
+def pending_path(thu: _dt.date) -> Path:
+    return RECOVERY_DIR / f"pending-{thu.isoformat()}-{os.getpid()}.json"
+
+
+def detach(thu: _dt.date, weight: float, learned: str, goals: str, no_mark: bool) -> bool:
+    """Hand the save to a detached child. False = the hand-off failed and
+    nothing was started: the caller saves inline, as without --detach."""
+    path = pending_path(thu)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"week": thu.isoformat(), "weight": weight, "learned": learned,
+                                   "goals": goals, "no_mark": bool(no_mark)},
+                                  ensure_ascii=False, indent=1))
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    # The child closes the `1 hcb` card: hide its dtd row BEFORE the spawn, so
+    # the child's unhide can never run ahead of it (lib/dtd_hide.py).
+    hid = (not no_mark) and dtd_hide.hide_card()
+    try:
+        form_detach.spawn_detached(
+            [sys.executable, str(Path(__file__).resolve()), "--from-json", str(path), "--report-hdr"],
+            LOG)
+    except OSError:
+        if hid:
+            dtd_hide.unhide_card()
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return False
+    form_detach.hdr(f"⏳ 1 hcb week {md(thu)}: saving in the background …", poke=False)
+    print(f"1 hcb → week {md(thu)}: saving in the background (log {LOG})")
+    return True
+
+
+def save_from_file(path: Path, report_hdr: bool = False, no_mark: bool = False) -> int:
+    """(--from-json) Write a saved answers file: Excel, then the habit, the
+    cache refresh and the claim release, as the inline path does. With
+    report_hdr (the --detach child) the outcome goes to dtd's status line."""
+    def say(msg: str) -> None:
+        print(msg, flush=True)
+        if report_hdr:
+            # After the form has exited and dtd's wrapper has handed the
+            # screen back to fzf, or the repaint request is dropped.
+            form_detach.announce(msg)
+
+    try:
+        data = json.loads(path.read_text())
+        thu = _dt.date.fromisoformat(data["week"])
+        weight = float(data["weight"])
+        learned, goals = str(data.get("learned") or ""), str(data.get("goals") or "")
+        no_mark = no_mark or bool(data.get("no_mark"))
+    except Exception as e:  # noqa: BLE001  missing / unreadable / not an answers file
+        dtd_hide.unhide_card()
+        say(f"✗ 1 hcb: save FAILED (answers file unreadable: {type(e).__name__}) answers in {path}")
+        return 1
+    try:
+        write_week(thu, weight, learned, goals)
+    except Exception as e:  # noqa: BLE001
+        if not no_mark:
+            dtd_hide.unhide_card()      # nothing was closed: show the row again
+        say(f"✗ 1 hcb week {md(thu)}: save FAILED (Excel: {str(e).strip()[:120]}) answers in {path}")
+        return 1
+    try:
+        path.unlink()                   # Excel has them now
+    except OSError:
+        pass
+    msg = f"✓ 1 hcb week {md(thu)} saved ({written_cols(learned, goals)})"
+    if no_mark:
+        say(msg)
+        return 0
+    try:
+        closed, line = mark_habit()
+    except Exception as e:  # noqa: BLE001  run_bounded timeout, missing interpreter
+        closed, line = False, type(e).__name__
+    if not closed:
+        dtd_hide.unhide_card()          # still open in Todoist: show the row again
+        msg += f" · NOT closed: {line.strip()[:120]}"
+    print("habit: " + line, flush=True)
+    release_claim()
+    say(msg)
+    return 0 if closed else 1
 
 
 def ask_multiline(question: str) -> str:
@@ -311,7 +441,25 @@ def main(argv=None) -> int:
     ap.add_argument("--print-context", action="store_true", help="show context only")
     ap.add_argument("--weight"), ap.add_argument("--learned"), ap.add_argument("--goals")
     ap.add_argument("--no-mark", action="store_true", help="don't complete the 1 hcb habit")
+    ap.add_argument("--detach", action="store_true",
+                    help="after the survey, save in a detached child and exit at once (dtd)")
+    ap.add_argument("--from-json", help="write a saved answers file (no survey, no Neon reads)")
+    ap.add_argument("--report-hdr", action="store_true", help=argparse.SUPPRESS)   # the --detach child
     args = ap.parse_args(argv)
+
+    if args.from_json:
+        path = Path(args.from_json)
+        try:
+            return save_from_file(path, report_hdr=args.report_hdr, no_mark=args.no_mark)
+        except Exception as e:  # noqa: BLE001
+            # Whatever went wrong, a hidden card and a "⏳ saving" header must
+            # not be what is left behind: the file may still hold the answers.
+            dtd_hide.unhide_card()
+            msg = f"✗ 1 hcb: save FAILED ({type(e).__name__}: {str(e).strip()[:80]}) answers in {path}"
+            print(msg, flush=True)
+            if args.report_hdr:
+                form_detach.announce(msg)
+            return 1
 
     thu = week_thursday(_dt.date.fromisoformat(args.date) if args.date else _dt.date.today())
     prev = thu - _dt.timedelta(days=7)
@@ -375,6 +523,10 @@ def main(argv=None) -> int:
             print("   a number in pounds, e.g. 191.4")
         learned = bullets(ask_multiline("2. What did you learn from this week?"))
         goals = bullets(ask_multiline("3. Goals for this week?"))
+        # dtd: nothing below (Excel, run.py, the claim) runs in this process.
+        # A hand-off that cannot start falls through to the inline save.
+        if args.detach and detach(thu, weight, learned, goals, args.no_mark):
+            return 0
 
     try:
         write_week(thu, weight, learned, goals)
@@ -382,14 +534,10 @@ def main(argv=None) -> int:
         print(f"✗ Excel write failed: {str(e).strip()[:300]}")
         print(f"answers: weight={weight:g}\nlearned:\n{learned}\ngoals:\n{goals}")
         return 1
-    written = ", ".join(COLS[k] for k, v in (("weight", 1), ("learned", learned), ("goals", goals)) if v)
-    print(f"written to {SHEET} row {md(thu)} ({written})")
+    print(f"written to {SHEET} row {md(thu)} ({written_cols(learned, goals)})")
     if not args.no_mark:
         print("habit: " + mark_done())
-        try:
-            run_bounded([sys.executable, str(CLAIMS), "release"], timeout=30)
-        except Exception:  # noqa: BLE001
-            pass
+        release_claim()
     return 0
 
 

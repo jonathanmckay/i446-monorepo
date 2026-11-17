@@ -1755,13 +1755,13 @@ elif [[ -n "\$id" ]]; then
   _form=""
   case "\$_clean" in
     0l)                               _form="$HOME/i446-monorepo/tools/0s/0s.py --detach" ;;
-    1s)                               _form="$HOME/i446-monorepo/tools/1s/1s-survey.py --no-mark" ;;
+    1s)                               _form="$HOME/i446-monorepo/tools/1s/1s-survey.py --no-mark --detach" ;;
     "1 xk88"|"1 xk87"|"1 xk87 wknd")  _form="$HOME/i446-monorepo/tools/xk887/xk887-survey.py --detach" ;;
     "moral audit"|moralaudit)         _form="$HOME/i446-monorepo/tools/moralaudit/moralaudit.py" ;;
-    "1 hcme")                         _form="$HOME/i446-monorepo/tools/1hcme/1hcme.py" ;;
-    "1 i9")                           _form="$HOME/i446-monorepo/tools/1i9/1i9.py" ;;
-    "1 hcb")                          _form="$HOME/i446-monorepo/tools/1hcb/1hcb.py" ;;
-    "1 f693")                         _form="$HOME/i446-monorepo/tools/f693/1f693.py" ;;
+    "1 hcme")                         _form="$HOME/i446-monorepo/tools/1hcme/1hcme.py --detach" ;;
+    "1 i9")                           _form="$HOME/i446-monorepo/tools/1i9/1i9.py --detach" ;;
+    "1 hcb")                          _form="$HOME/i446-monorepo/tools/1hcb/1hcb.py --detach" ;;
+    "1 f693")                         _form="$HOME/i446-monorepo/tools/f693/1f693.py --detach" ;;
     -1g)                              _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --detach" ;;
     0g)                               _form="$HOME/i446-monorepo/tools/-1g/-1g-form.py --daily --detach" ;;
   esac

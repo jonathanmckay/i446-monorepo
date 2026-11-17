@@ -11,6 +11,8 @@ Usage:
   python3 1i9.py                 # most recent completed week
   python3 1i9.py 2026-10-04      # the week containing that date
   python3 1i9.py --print-context # show the numbers, write nothing
+  python3 1i9.py --detach        # dtd: save in a detached child, exit at once
+  python3 1i9.py --from-json F   # replay an answers file left by --detach
 """
 from __future__ import annotations
 
@@ -18,18 +20,27 @@ import argparse
 import datetime as _dt
 import importlib.util
 import json
+import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import run_bounded  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
+import dtd_hide  # noqa: E402  optimistic dtd row-hide for the card --detach closes
+import form_detach  # noqa: E402  dtd status line + detached child (--detach)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 WEEK_CALC = Path.home() / ".claude/skills/1i9/week_calc.py"
 DID_RUN = Path.home() / "i446-monorepo/tools/did/run.py"
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
+AGENT_CLAIMS = Path.home() / "i446-monorepo/tools/did/agent_claims.py"
+# --detach keeps its pending answers file here (stable, not /tmp) until the
+# sheet write succeeds; the saver child's stdout/stderr go to LOG.
+RECOVERY_DIR = Path.home() / ".cache/1i9-recovery"
+LOG = Path.home() / ".cache/1i9.log"
 CLAUDE_JSON = Path.home() / ".claude.json"
 WORKBOOK = "Neon分v12.2.xlsx"
 I9_SHEET = "i9+m5x2"
@@ -193,14 +204,194 @@ def write_row(row: int, rating: str, done: str, exceed: str, minutes: int,
     return _osa(write_script(row, rating, done, exceed, minutes), timeout=120)
 
 
-def mark_done() -> str:
+def mark_done_checked(unhide: bool = False) -> tuple[str, str]:
+    """Mark the habit done through run.py, refresh dtd's cache. Returns
+    (state, run.py's last line); state is
+      "closed"   the Todoist card was closed (or found already closed),
+      "rolled"   run.py says the habit is already done this week and left
+                 the card alone (it is still open, with a later due),
+      "credited" run.py wrote the 1n+ credit but closed no card (none
+                 matched, or the Todoist call failed): a second /did would
+                 credit the points twice,
+      "failed"   anything else (non-zero exit): nothing is confirmed.
+    unhide=True (the --detach child): on anything but "closed" the card's
+    dtd row is put back BEFORE the cache refresh, so the reload that the
+    refresh triggers already shows it. Raises what run_bounded raises."""
     proc = run_bounded(["/usr/bin/python3", str(DID_RUN), HABIT], timeout=120)
+    out = (proc.stdout or "") + (proc.stderr or "")
     msg = (proc.stdout or proc.stderr or "").strip().splitlines()
+    if proc.returncode == 0 and ("todoist closed" in out or "already closed" in out):
+        state = "closed"
+    elif proc.returncode == 0 and "already done this week" in out:
+        state = "rolled"
+    elif proc.returncode == 0 and "✓" in out:
+        state = "credited"
+    else:
+        state = "failed"
+    if unhide and state != "closed":
+        dtd_hide.unhide_card()
+    _refresh_cache()
+    return state, (msg[-1] if msg else "(no output from did run.py)")
+
+
+def _refresh_cache() -> None:
     try:
         run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
     except Exception:  # noqa: BLE001
         pass
-    return msg[-1] if msg else "(no output from did run.py)"
+
+
+def _unhide() -> None:
+    """Put the card's dtd row back and make dtd reload (its watcher reloads
+    on the cache refresh; the row was also excluded client-side)."""
+    if dtd_hide.unhide_card():
+        _refresh_cache()
+
+
+def stale_pending(min_age: float = 600.0) -> list[Path]:
+    """Answers files a --detach child never finished (killed, reboot, failed
+    write): older than any save can take. Each is replayable with --from-json."""
+    try:
+        files = sorted(RECOVERY_DIR.glob("pending-*.json"))
+    except OSError:
+        return []
+    now = time.time()
+    out = []
+    for f in files:
+        try:
+            if now - f.stat().st_mtime >= min_age:
+                out.append(f)
+        except OSError:
+            pass
+    return out
+
+
+def mark_done() -> str:
+    return mark_done_checked()[1]
+
+
+def release_claim() -> None:
+    try:
+        run_bounded([sys.executable, str(AGENT_CLAIMS), "release"], timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
+# --detach (dtd, 2026-11-17): "move saving the 1xk887 survey (and all surveys
+# for that matter) to the background so that the UI is more snappy, and then
+# we can have the bottom notification letting me know when it is saved."
+# Opened inline from dtd the form held the screen through the i9+m5x2 write,
+# run.py (1n+ credit + Todoist close), the cache refresh and the claim
+# release. With --detach the form process only writes the answers to a file
+# in RECOVERY_DIR and starts ONE detached child (this script, --from-json),
+# which does the same writes in the same order and reports in dtd's status
+# line (lib/form_detach.py). The file is removed only after the sheet write
+# succeeded; a failed write leaves it there and names it in the status line.
+# ---------------------------------------------------------------------------
+
+def spool_path(start: _dt.date) -> Path:
+    return RECOVERY_DIR / ("pending-%s-%d.json" % (start.isoformat(), os.getpid()))
+
+
+def detach(start: _dt.date, row: int, label: str, rating: str, done: str, exceed: str,
+           minutes: int) -> tuple[bool, Path | None]:
+    """Hand the save to a detached child. (True, file) = handed off: this
+    process must do no write and exit. (False, file or None) = the hand-off
+    failed, save inline; a file that could be written is kept until the
+    inline write succeeds, so a failed inline write still leaves the answers
+    replayable."""
+    path = spool_path(start)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"week": start.isoformat(), "row": row, "label": label,
+                                    "rating": rating, "done": done, "exceed": exceed,
+                                    "minutes": int(minutes)}, ensure_ascii=False, indent=1))
+    except OSError:
+        return False, None
+    # The child always closes the `1 i9` card: hide its dtd row NOW, before
+    # the spawn, so the child's unhide can never run ahead of it and the list
+    # that comes back never shows the row (lib/dtd_hide.py).
+    hid = dtd_hide.hide_card()
+    try:
+        form_detach.spawn_detached(
+            [sys.executable, str(Path(__file__).resolve()),
+             "--from-json", str(path), "--unlink-json", "--report-hdr"], LOG)
+    except OSError:
+        if hid:
+            dtd_hide.unhide_card()
+        return False, path
+    # poke=False: this process still owns the screen (fzf is inside execute()).
+    # The child's own line comes from announce(), which waits for us to exit.
+    form_detach.hdr("⏳ 1i9 week %s: saving in the background …" % label, poke=False)
+    return True, path
+
+
+def _short(e) -> str:
+    return " ".join(str(e).split())[:160] or type(e).__name__
+
+
+def save_from_json(path: Path, unlink: bool = False, report: bool = False) -> int:
+    """(--from-json) Write an answers file left by --detach: the sheet row,
+    the habit mark, the claim release, exactly as the inline save. No Toggl
+    or sheet read: the form resolved row, label and minutes. `unlink` removes
+    the file once the answers are in Excel; `report` (the detached child)
+    puts the result in dtd's status line. Any unconfirmed close puts the
+    card's dtd row back."""
+    def say(msg: str) -> None:
+        print(msg, flush=True)
+        if report:
+            form_detach.announce(msg)
+
+    try:
+        data = json.loads(path.read_text())
+        row, minutes = int(data["row"]), int(data["minutes"])
+        rating, done, exceed = str(data["rating"]), str(data["done"]), str(data.get("exceed") or "")
+        if row <= 0 or rating not in RATINGS or not done.strip():
+            raise ValueError("no row/rating/answer in it")
+        label = str(data.get("label") or "")
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        _unhide()
+        say("✗ 1i9 save FAILED (answers file unreadable: %s) answers in %s" % (_short(e), path))
+        return 1
+    try:
+        write_row(row, rating, done, exceed, minutes, label=label or None)
+    except BaseException as e:  # noqa: BLE001  incl. timeouts: the card stays open
+        _unhide()
+        say("✗ 1i9 week %s save FAILED (%s write: %s) answers in %s"
+            % (label or "?", I9_SHEET, _short(e), path))
+        return 1
+    print("written to " + f"{I9_SHEET}!row {row} (B, D, E, F)", flush=True)
+    if unlink:
+        try:
+            path.unlink()   # the answers are in Excel now
+        except OSError:
+            pass
+    try:
+        state, line = mark_done_checked(unhide=True)
+    except BaseException as e:  # noqa: BLE001  TimeoutExpired is the usual one
+        state, line = "failed", _short(e)
+        _unhide()
+    line = line.strip()
+    print("habit: " + line, flush=True)
+    release_claim()
+    if state == "closed":
+        say("✓ 1i9 week %s saved · %s closed" % (label or "?", HABIT))
+        return 0
+    # Not closed: mark_done_checked already put the dtd row back.
+    where = "%s!row %d" % (I9_SHEET, row)
+    if state == "rolled":
+        say("✓ 1i9 week %s saved · %s was already done this week, card left alone"
+            % (label or "?", HABIT))
+        return 0
+    if state == "credited":
+        # run.py credits 1n+ even when it closes no card: /did would credit twice.
+        say("✗ 1i9 week %s saved (%s) and credited, but the %s card is NOT closed: "
+            "close it in Todoist by hand, do not /did it again" % (label or "?", where, HABIT))
+        return 1
+    say("✗ 1i9 week %s saved (%s), but marking %s done FAILED (%s): "
+        "check 1n+ before running /did %s" % (label or "?", where, HABIT, line, HABIT))
+    return 1
 
 
 def ask(prompt: str) -> str:
@@ -239,9 +430,20 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="weekly 1 i9 review")
     ap.add_argument("date", nargs="?", help="YYYY-MM-DD: review the week containing it")
     ap.add_argument("--print-context", action="store_true", help="show numbers only")
+    ap.add_argument("--detach", action="store_true",
+                    help="after the form, save in a detached child and exit at once (dtd)")
+    ap.add_argument("--from-json", help="write an answers file left by --detach (no reads)")
+    ap.add_argument("--unlink-json", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--report-hdr", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
+    if args.from_json:
+        return save_from_json(Path(args.from_json), unlink=args.unlink_json,
+                              report=args.report_hdr)
+
     start, end, row, label = resolve_week(args.date, _dt.date.today())
+    for f in stale_pending():
+        print(f"⚠ unsaved 1i9 answers from an earlier run: {f} (replay: 1i9.py --from-json {f})")
     print(DIM + f"loading i9 week {start}..{end} from Toggl and Ix…" + RESET, flush=True)
     try:
         minutes = i9_minutes(start, end)
@@ -266,18 +468,30 @@ def main(argv=None) -> int:
     if not done:
         print("aborted: no 'got done' answer, nothing written")
         return 1
+    spool = None
+    if args.detach:
+        handed, spool = detach(start, row, sheet_label or label, rating, done, exceed, minutes)
+        if handed:
+            print(f"1i9 → saving in the background (log: {LOG})")
+            return 0
+        print("1i9 → could not start the background save; saving here")
     try:
         write_row(row, rating, done, exceed, minutes, label=sheet_label or label)
     except Exception as e:  # noqa: BLE001
         print(f"✗ Excel write failed: {str(e).strip()[:300]}")
-        print("answers were not saved; rerun /1-i9 to try again")
+        if spool is not None:
+            print(f"answers kept in {spool}; replay with: 1i9.py --from-json {spool}")
+        else:
+            print("answers were not saved; rerun /1-i9 to try again")
         return 1
+    if spool is not None:
+        try:
+            spool.unlink()
+        except OSError:
+            pass
     print("written to " + f"{I9_SHEET}!row {row} (B, D, E, F)")
     print("habit: " + mark_done())
-    try:
-        run_bounded([sys.executable, str(Path.home() / "i446-monorepo/tools/did/agent_claims.py"), "release"], timeout=30)
-    except Exception:  # noqa: BLE001
-        pass
+    release_claim()
     return 0
 
 
