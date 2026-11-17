@@ -51,6 +51,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 import neon_blocks as nb  # noqa: E402
 import dtd_hide  # noqa: E402  optimistic dtd row-hide (DTD_TASK_ID / DTD_HIDE_IDS_FILE)
+import form_detach  # noqa: E402  header repaint request for the detached child
 
 DID_FAST = Path.home() / "i446-monorepo" / "tools" / "did" / "did-fast.py"
 ZEROG_SYNC = Path.home() / "i446-monorepo" / "scripts" / "0g-sync.py"
@@ -163,6 +164,12 @@ def _hdr(msg: str) -> None:
             Path(hdr).write_text(msg + "\n")
         except OSError:
             pass
+        # Nothing watches the header file: from the detached child, once the
+        # form is gone, ask fzf to repaint so "saved" shows without a keypress
+        # (2026-11-17). Never while the form owns the screen.
+        _pp = form_detach.parent_pid()
+        if _pp and not form_detach.pid_alive(_pp):
+            form_detach.poke_dtd()
 
 
 def detach(lines: list[str], block: str, daily: bool = False) -> None:
@@ -186,7 +193,8 @@ def detach(lines: list[str], block: str, daily: bool = False) -> None:
     with open(LOG, "ab") as log:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--from-json", str(tmp),
                           "--block", block, "--unlink-json"] + (["--daily"] if daily else []),
-                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
+                         env=dict(os.environ, **{form_detach.ENV_PARENT: str(os.getpid())}))
     n = sum(1 for l in lines if l.strip())
     _hdr(f"⏳ 0g: saving {n} goal(s)…" if daily else f"⏳ -1g → {block}: saving {n} goal(s)…")
 

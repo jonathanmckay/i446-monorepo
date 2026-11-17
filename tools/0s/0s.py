@@ -37,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
 import dtd_hide  # noqa: E402  optimistic dtd row-hide (DTD_TASK_ID / DTD_HIDE_IDS_FILE)
+import form_detach  # noqa: E402  header repaint request for the detached child
 from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
 
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
@@ -367,6 +368,12 @@ def _hdr(msg: str) -> None:
             Path(hdr).write_text(msg + "\n")
         except OSError:
             pass
+        # Nothing watches the header file: from the detached child, once the
+        # form is gone, ask fzf to repaint so "saved" shows without a keypress
+        # (2026-11-17). Never while the form owns the screen.
+        _pp = form_detach.parent_pid()
+        if _pp and not form_detach.pid_alive(_pp):
+            form_detach.poke_dtd()
 
 
 def detach(answers: dict, target: _dt.date) -> None:
@@ -389,7 +396,8 @@ def detach(answers: dict, target: _dt.date) -> None:
     with open(LOG, "ab") as log:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), target.isoformat(),
                           "--from-json", name, "--unlink-json", "--report-hdr"],
-                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
+                         env=dict(os.environ, **{form_detach.ENV_PARENT: str(os.getpid())}))
     _hdr("0s saving in the background%s …"
          % (" (0l first)" if (answers.get("points_checked") or "").strip() == "1" else ""))
 
