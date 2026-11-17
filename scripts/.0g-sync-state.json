@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-17T08:00:09.650725-08:00"
+  "tasks": {
+    "progress on cos": {
+      "todoist_id": "6j3823WvRCvpGFRR",
+      "minutes": 40
+    },
+    "tasks to 50": {
+      "todoist_id": "6j3823c23HQFMpV2",
+      "minutes": 50
+    },
+    "1n and 2n caught up": {
+      "todoist_id": "6j3823XJqhfJJ5X2",
+      "minutes": 80
+    }
+  },
+  "last_sync": "2026-11-17T10:00:05.019919-08:00"
 }
