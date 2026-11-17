@@ -78,6 +78,10 @@ on the network; the cable is never required again.
 Syncthing carries the trigger to Straylight, where `com.jm.ios-deploy-sync`
 (installed once by `scripts/install-ios-deploy-sync.sh`) runs `deploy.sh` in the
 GUI session. Needed because inbound ssh to Straylight is blocked since 2026-10-28.
+Three reserved verbs are not schemes (2026-11-17): `triage-scan` logs the `.zip`
+names in Straylight's `~/Downloads`, `triage-apply` runs `tools/triage` on
+Downloads, and `noop` is the resting state. Leave the trigger on `noop`: the
+installer kickstarts on any non-empty trigger, so a stale scheme redeploys.
 
 **Must run in a GUI login session on Straylight** (Terminal.app, or Screen
 Sharing) — not SSH. `codesign` needs the unlocked login keychain; over SSH it
