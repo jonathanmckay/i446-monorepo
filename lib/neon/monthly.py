@@ -4,6 +4,9 @@ Block layout (A61:P90): the header row carries '₹' in D and the month numbers
 1..12 in E:P; below it one row per monthly habit: A = due day of month,
 B = habit name, D = target 分, E:P = Jan..Dec actuals. The Σ row and the
 rolling 3-month efficiency row under it feed /3s and /4gneon-s.
+C = expected minutes (2026-11-17). Every row has one recurring Todoist card,
+label 5^2₦, named as col B (or MONTHLY_ALIASES); tools/2neon audits the cards
+and credits the block from Todoist's completion log.
 
 credit_monthly_cell() is the one writer (2026-11-14; /2hci had its own copy,
 whose month lookup `rstrip(".0")` turned "10.0" into "1" and so could not
@@ -26,6 +29,75 @@ def _month_of(v) -> int | None:
     except ValueError:
         return None
     return int(f) if f == int(f) and 1 <= f <= 12 else None
+
+
+LABEL = "5^2₦"                 # every monthly card carries it
+FIRST_ROW, LAST_ROW = 62, 87   # the Σ row sums exactly these
+# Cards whose names are wired into code (agent_claims SKILL_CLAIMS, 2n1
+# CARD_NAME) keep them; every other card is named exactly as col B.
+MONTHLY_ALIASES = {
+    "2n checksum": "5^2 time audit + checksum for prev. month",
+    "5^2 1 n efficiency clearance": "1 ₦ efficiency",
+}
+
+import re as _re
+
+_ANNOT = _re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
+_STAMP = _re.compile(r"\s(\d{1,2})\.(\d{1,2})$")
+
+
+def card_key(content: str) -> tuple[str, int | None]:
+    """(normalised name, month of a deferred copy's M.D stamp or None) for a
+    card's content: (N) [N] {N} and @labels dropped, 'more hair 10.17' → stamp 10."""
+    s = " ".join(w for w in _ANNOT.sub(" ", str(content)).split() if not w.startswith("@"))
+    m = _STAMP.search(s)
+    month = None
+    if m and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31:
+        month, s = int(m.group(1)), s[:m.start()]
+    return _norm(s), month
+
+
+def row_name_for(content: str, names) -> tuple[str | None, int | None]:
+    """The block row (col B, as written) a card's content belongs to, plus the
+    deferred-copy month. Strict equality on the normalised name, or an alias."""
+    key, month = card_key(content)
+    key = _norm(MONTHLY_ALIASES.get(key, key))
+    for n in names:
+        if _norm(n) == key:
+            return n, month
+    return None, month
+
+
+def _num(v):
+    try:
+        f = float(str(v).strip())
+    except ValueError:
+        return None
+    return int(f) if f == int(f) else f
+
+
+def block_rows() -> list[dict]:
+    """The block's definitions and actuals: [{"row", "day", "name", "minutes",
+    "points", "actuals": {month: value}}], one per named row. Raises on a
+    failed read so callers never act on an empty block."""
+    from neon import excel
+    rng = excel.read_range(SHEET, MONTHLY_RANGE)
+    if not rng.get("ok"):
+        raise RuntimeError(rng.get("error", "read_range failed"))
+    first = rng.get("row", MONTHLY_HEADER_ROW)
+    rows = rng["rows"]
+    hdr = rows[MONTHLY_HEADER_ROW - first]
+    months = {i: _month_of(v) for i, v in enumerate(hdr) if i >= 4 and _month_of(v)}
+    out = []
+    for i, r in enumerate(rows):
+        n = first + i
+        r = list(r) + [""] * (16 - len(r))
+        if not (FIRST_ROW <= n <= LAST_ROW) or not str(r[1]).strip():
+            continue
+        out.append({"row": n, "day": _num(r[0]), "name": str(r[1]).replace("\xa0", " ").strip(),
+                    "minutes": _num(r[2]), "points": _num(r[3]),
+                    "actuals": {m: _num(r[c]) for c, m in months.items()}})
+    return out
 
 
 def credit_monthly_cell(habit: str, month: int, points: int | None = None,
