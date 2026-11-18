@@ -1693,6 +1693,16 @@ def route_items(items: list[ParsedItem], headers: dict, tq: dict,
             ONENEON_ALIASES.get(item.name.lower(), item.name.lower())))
         if _base_0n:
             item.name = _base_0n
+        # A card's own text keeps its "(N)" estimate ("1g (20) [20]" parses to
+        # the name "1g (20)"), and /fin passes the card text. Drop the
+        # estimate when what is left is a habit column. Bug 2026-11-15: /fin
+        # on the 1g card credited 20 as a plain task and never marked 1n+.
+        _bare = re.sub(r"\s*\(\d+\)$", "", item.name.strip())
+        if _bare != item.name:
+            _bl = _bare.lower()
+            if (header_normalize(ZERO_N_ALIASES.get(_bl, _bare)) in h0n_norm
+                    or header_normalize(ONENEON_ALIASES.get(_bl, _bl)) in h1n_norm):
+                item.name = _bare
         name_lower = item.name.lower()
 
         # 分 log ("+90 @m5x2 monthly sync", "-10 0g"): straight to a domain
