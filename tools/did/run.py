@@ -350,6 +350,17 @@ def _word_overlap(query: str, content: str) -> float:
     return len(qt & ct) / len(qt)
 
 
+_MATCH_ANNOT_RE = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
+
+
+def _extra_words(query: str, content: str) -> int:
+    """Words in the card name (its (N)/[N]/{N} annotations dropped) that the
+    query does not have: 0 for an exact name, 1 for "1 xk87 wknd" vs "1 xk87"."""
+    qt = set(re.findall(r"\w+", query.lower()))
+    ct = set(re.findall(r"\w+", _MATCH_ANNOT_RE.sub(" ", content.lower())))
+    return len(ct - qt)
+
+
 # Mirrors did-fast.py's ADVANCE_ALLOWED: daily habits that may be completed
 # one day early (their card may be due tomorrow when closed).
 ADVANCE_ALLOWED_0N = {"新闻", "stats i9", "m5x2 stats", "push", "hiit"}
@@ -378,11 +389,19 @@ def _find_and_close_todoist(label: str, query: str, aliases: list,
     best = None
     best_score = 0.0
     queries = [query] + aliases
+    best_extra = 0
     for t in candidates:
         for q in queries:
             score = _word_overlap(q, t.get("content", ""))
-            if score > best_score:
-                best, best_score = t, score
+            # Tie on overlap goes to the card with the fewest words the query
+            # does not have. Bug 2026-11-17: "1 xk87" scored 1.0 against both
+            # "1 xk87 (20) [45]" and "1 xk87 wknd (20) [20]", the first one
+            # listed won, and the xk887 survey closed the weekend card while
+            # crediting 1 xk87.
+            extra = _extra_words(q, t.get("content", ""))
+            if score > best_score or (score == best_score and score > 0
+                                      and extra < best_extra):
+                best, best_score, best_extra = t, score, extra
     if best and best_score >= 0.6:
         due = ((best.get("due") or {}).get("date") or "")[:10]
         if not_due_after and due and due > not_due_after.isoformat():
