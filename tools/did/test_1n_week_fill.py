@@ -118,3 +118,10 @@ def test_survey_note_fills_blank_last_week():
     assert m.target(both, "11.1", "10.4") == ("10.4", 44, "")
     assert m.target({"PREV": (44, "x"), "CUR": (45, "")}, "11.1", "10.4") == ("11.1", 45, "")
     assert m.target(both, "1.1", "12.5") == ("1.1", 45, "")
+
+
+def test_family_survey_cards_always_take_this_week():
+    # JM 2026-11-17: the xk887 survey put 1 xk88 on a blank 11.2 instead of
+    # 11.3 ("Should fill this week's cell ... And also 1 xk87 weekend").
+    for card in ("1 xk88", "1 xk87", "1 xk87 wknd"):
+        assert wf.resolve(card, T, THU, sheet()) is None

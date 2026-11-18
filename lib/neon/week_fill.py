@@ -5,8 +5,8 @@ cell is blank; an explicit 0 is N/A and does not count as blank. A card that
 missed a week therefore trails by one until it is done twice in a week. Points
 stay on the completion day; only the week cell moves.
 
-Off for past-date completions, rate cards (row 5 "1/m"), cumulative cards and
-EXEMPT. A failed sheet read falls back to the natural week.
+Off for past-date completions, rate cards (row 5 "1/m"), cumulative cards,
+EXEMPT and THIS_WEEK. A failed sheet read falls back to the natural week.
 
 A shifted choice is remembered for MEMO_TTL, so a retry after a killed run
 (dtd's queue) or a duplicate in one batch hits the same cell. Without it the
@@ -31,6 +31,10 @@ FIRST_COL = 2  # B
 FIRST_LABEL = "1.1"  # last year's row 12.5 is not last week
 # Not once-a-week obligations: a blank week is normal for these.
 EXEMPT = {"nails", "groceries", "1 kids nature"}  # 2 hci left the weekly columns 2026-11-09
+# Always this week's cell (JM 2026-11-17, after the xk887 survey put 1 xk88 on
+# 11.2: "Should fill this week's cell"). The survey that closes these reviews
+# the family week as a whole, so a skipped week stays blank.
+THIS_WEEK = {"1 xk88", "1 xk87", "1 xk87 wknd"}
 MEMO = Path.home() / ".cache/jm/1n-week-fill.json"
 MEMO_TTL = 600
 
@@ -113,7 +117,7 @@ def resolve(name: str, col: str, d: dt.date, sheet: Optional[Sheet] = None,
     """Where a completion of card `name` (1n+ column `col`) on `d` lands, or
     None when the rule does not apply and the natural week stands."""
     sheet = sheet or load()
-    if sheet is None or _norm(name) in EXEMPT or sheet.rate_card(col):
+    if sheet is None or _norm(name) in EXEMPT | THIS_WEEK or sheet.rate_card(col):
         return None
     natural = weeks.habit_week_label(name, d)
     if natural not in sheet.weeks:
