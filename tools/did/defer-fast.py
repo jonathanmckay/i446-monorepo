@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import calendar
 import re
 import socket
 import sys
@@ -60,6 +61,11 @@ DEFAULT_CLAIMED_POINTS = 2
 # stale undated "AoS (15) [15]" copies caused the 2026-07-24 dtd same-name
 # mess. The date stamp keeps every deferred copy distinct.
 HABIT_LABELS = {"0neon", "夜neon", "1neon"}
+# 5^2₦ (monthly) copies are stamped too (2026-11-17): tools/2neon credits the
+# 1n+ monthly block from Todoist's completion log, and the M.D stamp is how a
+# copy finished in November still credits October. Kept apart from
+# HABIT_LABELS, which also drives the daily-habit hide marker.
+DATED_COPY_LABELS = HABIT_LABELS | {"5^2₦"}
 
 
 def deferred_marker_path(when: date | None = None) -> Path:
@@ -177,7 +183,20 @@ def next_instance(due_string: str, current_due: date) -> date:
         return d
     if re.search(r"\bevery week\b", s) or "weekly" in s:
         return current_due + timedelta(days=7)
-    # "every month", "every 15th", "every last day"
+    # A fixed day of the month (2026-11-17, the 5^2₦ cards): the next such
+    # day strictly after current_due, not "one month on", so a card deferred
+    # on the 17th goes back to the 7th. "every 31st" clamps to month end.
+    m = re.search(r"every (\d+)(st|nd|rd|th)\b", s)
+    last = "every last day" in s
+    if m or last:
+        want = 31 if last else int(m.group(1))
+        y, mo = current_due.year, current_due.month
+        while True:
+            d = date(y, mo, min(want, calendar.monthrange(y, mo)[1]))
+            if d > current_due:
+                return d
+            y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    # "every month"
     if "every month" in s or "monthly" in s or re.search(r"every \d+(st|nd|rd|th)", s):
         return _add_months(current_due, 1)
     if "every year" in s or "yearly" in s or "annually" in s:
@@ -512,7 +531,7 @@ def handle_recurring(task: dict, target_date: str,
     if skip_copy:
         target_date = next_date
     else:
-        if HABIT_LABELS & set(labels):
+        if DATED_COPY_LABELS & set(labels):
             copy_content = _dated_copy_content(content, current_due)
         copy = create_task(copy_content, labels, project_id, target_date, priority)
 

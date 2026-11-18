@@ -38,23 +38,38 @@ FIRST_ROW, LAST_ROW = 62, 87   # the Σ row sums exactly these
 MONTHLY_ALIASES = {
     "2n checksum": "5^2 time audit + checksum for prev. month",
     "5^2 1 n efficiency clearance": "1 ₦ efficiency",
+    # Names three cards had before 2026-11-17, kept so their completion
+    # history still credits the right row.
+    "5^2 f693 org checkin": "5^2 org",
+    "cashflow and deal check -> 5^4 g": "dealflow + 现金",
+    "special days are special check for next month and plan": "Plan下月特日",
+    "streamline bag": "streamline bags",
 }
+# Aliases that are a card's CURRENT name: tools/2neon must not rename these.
+WIRED_CARD_NAMES = ("2n checksum", "5^2 1 n efficiency clearance")
 
 import re as _re
 
-_ANNOT = _re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
-_STAMP = _re.compile(r"\s(\d{1,2})\.(\d{1,2})$")
+# Only numeric annotations: "(15)", "[60]", "{60}", "[0G]". Row names carry
+# their own parentheses ("5^2 s (上月的)", "Special Event (s)").
+_ANNOT = _re.compile(r"[\(\[\{]\s*\d+[A-Za-z]?\s*[\)\]\}]")
+_STAMP = _re.compile(r"^(\d{1,2})\.(\d{1,2})$")
 
 
 def card_key(content: str) -> tuple[str, int | None]:
     """(normalised name, month of a deferred copy's M.D stamp or None) for a
-    card's content: (N) [N] {N} and @labels dropped, 'more hair 10.17' → stamp 10."""
-    s = " ".join(w for w in _ANNOT.sub(" ", str(content)).split() if not w.startswith("@"))
-    m = _STAMP.search(s)
-    month = None
-    if m and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31:
-        month, s = int(m.group(1)), s[:m.start()]
-    return _norm(s), month
+    card's content: (N) [N] {N} and @labels dropped. defer-fast puts the stamp
+    before the first bracket, so it can sit mid-name: '5^2 s 10.3 (上月的)'."""
+    month, words = None, []
+    for w in _ANNOT.sub(" ", str(content)).split():
+        m = _STAMP.match(w)
+        if w.startswith("@"):
+            continue
+        if m and month is None and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31:
+            month = int(m.group(1))
+            continue
+        words.append(w)
+    return _norm(" ".join(words)), month
 
 
 def row_name_for(content: str, names) -> tuple[str | None, int | None]:

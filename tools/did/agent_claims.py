@@ -911,6 +911,7 @@ SKILL_CLAIMS = {
 SKILL_RELEASES = {"0t", "notes", "0g", "早餐", "1i9", "1m5x2", "1hcme", "1hcmc", "1-2g", "2hci", "2n1"}
 # Skills JM decided NOT to link (2026-10-11), so /1-i446 stops asking.
 SKILL_NO_CLAIM = {
+    "2neon": "status/audit/sync over every 5^2₦ card; it performs none of them",
     "s": "/salat alias; the '1s' card is the weekly review",
     "s897": "people-db editor; the 's897' / '1 s897' cards are social time and the weekly review",
     "mealplan": "only the planning half of '1 groceries'",
