@@ -396,6 +396,18 @@
     "rent": "1295.00"
   },
   {
+    "unit_id": 420,
+    "property_name": "ps17",
+    "unit": "B6",
+    "tenant_name": "Dreyer, Madison V.",
+    "status": "Eligible",
+    "lease_sign_date": "2025-12-29",
+    "move_in": "2026-01-20",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "910.00"
+  },
+  {
     "unit_id": 379,
     "property_name": "ps25",
     "unit": "C21",
@@ -862,18 +874,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-10-01",
     "rent": "1075.00"
-  },
-  {
-    "unit_id": 420,
-    "property_name": "ps17",
-    "unit": "B6",
-    "tenant_name": "Dreyer, Madison V.",
-    "status": "Eligible",
-    "lease_sign_date": "2025-12-29",
-    "move_in": "2026-01-20",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "910.00"
   },
   {
     "unit_id": 580,
