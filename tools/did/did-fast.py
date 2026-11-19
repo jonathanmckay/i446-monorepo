@@ -166,7 +166,8 @@ TAG_1N_HABITS: dict[str, str] = {"业写": "业写"}
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
 # Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
 # Keys are header_normalize()d (lowercase).
-VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
+# 业写 is 4/3 a minute (60 min → 80分; JM 2026-11-19, sheet row 5 "1.3333/m").
+VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5, "业写": 4 / 3}
 # Habits whose 1n+ week cell records the BASE points per occurrence, not the
 # minutes (2026-10-24, JM: "if I do /did on 一起饭 I want 15分 to go to the 1n
 # ... and then the number of minutes goes direct on the day in the xk87

@@ -53,7 +53,7 @@ def test_tagged_range_task_keeps_its_points_and_earns_the_habit(df):
     assert c.step == "1n" and c.is_variable_1n
     assert c.col_letter == "AB"
     assert c.write_value == 110                    # minutes in the week cell
-    assert c.variable_value == 110                 # 1/m
+    assert c.variable_value == 147                 # 4/3 a minute
     assert c.fen_col == "R"                        # 业写 pays i9
     assert c.item.tag_companion_of == "strategy deck"
 
@@ -61,7 +61,7 @@ def test_tagged_range_task_keeps_its_points_and_earns_the_habit(df):
 def test_typed_minutes_work_without_a_range(df):
     _, comps = _run(df, "roadmap doc 45 @i9 #业写")
     (c,) = comps
-    assert c.write_value == 45 and c.variable_value == 45
+    assert c.write_value == 45 and c.variable_value == 60
 
 
 def test_untagged_and_meta_tagged_items_earn_nothing_extra(df):
@@ -120,10 +120,11 @@ def test_two_tagged_sessions_in_a_day_are_two_credits(df):
 
 
 def test_split_per_block_keeps_minutes_and_points_whole(df):
-    """110 分 over 戌/亥 splits like any per-minute result: segment minutes
+    """147 分 over 戌/亥 splits like any per-minute result: segment minutes
     append to the same week cell, segment points to R, nothing doubled."""
     _, comps = _run(df, "strategy deck 1955-2145 @i9 #业写 [100]")
     parts = df.split_results_by_block(comps)
     assert sum(p.write_value for p in parts) == 110
-    assert sum(p.variable_value for p in parts) == 110
+    assert len(parts) == 2
+    assert sum(p.variable_value for p in parts) == 147
     assert all(p.item.tag_companion_of for p in parts)

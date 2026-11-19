@@ -2,7 +2,8 @@
 """Feature (2026-07-25): 1n+ variable habits follow the sheet's row-5 points
 formulas (base + rate×minutes), and "long o314" aliases to the 长o314 header.
 
-Sheet source (1n+ row 5): 业写/s897/family/relax/s+hcbp = "1/m";
+Sheet source (1n+ row 5): s897/family/relax/s+hcbp = "1/m"; 业写 = "1.3333/m"
+(4/3, JM 2026-11-19);
 长冥想/长o314 = ".5/m"; 一起饭/AoS = "15+1/m". Fixed-point columns are
 untouched. Both value paths must agree: route_items (explicit "<habit> N"
 minutes) and apply_timer_minutes (minutes from the stopped Toggl timer).
@@ -48,7 +49,8 @@ def _route_one(df, text):
     ("长o314", 30, 15),     # .5/m
     ("aos", 45, 60),        # 15 + 1/m
     ("一起饭", 90, 105),    # 15 + 1/m
-    ("业写", 60, 60),       # 1/m (default rate)
+    ("业写", 60, 80),       # 4/3 a minute (2026-11-19)
+    ("业写", 110, 147),
     ("s897", 120, 120),     # 1/m
 ])
 def test_formula(df, habit, minutes, expected):
@@ -226,7 +228,7 @@ def test_non_threshold_variable_still_records_minutes(df):
     r = _route_one(df, "业写 60")
     assert r.step == "1n"
     assert r.write_value == 60             # minutes in the cell
-    assert r.variable_value == 60          # 1/m
+    assert r.variable_value == 80          # 4/3 a minute
 
 
 def test_timer_path_threshold_writes_points(df):

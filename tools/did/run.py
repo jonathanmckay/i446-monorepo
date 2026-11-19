@@ -78,7 +78,7 @@ _MC_SPEC.loader.exec_module(mc)  # type: ignore[union-attr]
 # instead of 15 + minutes). Habits not in either dict fall back to the
 # registry's flat cumulative_increment.
 _VARIABLE_1N_BASES: dict[str, int] = {"一起饭": 15, "aos": 15}
-_VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5}
+_VARIABLE_1N_RATES: dict[str, float] = {"长冥想": 0.5, "长o314": 0.5, "业写": 4 / 3}
 # Mirrors did-fast.py's BASE_IN_CELL_1N (2026-10-24): the week cell gets the
 # base points per occurrence, the day gets base + minutes as "+15+30".
 _BASE_IN_CELL_1N = {"一起饭"}
