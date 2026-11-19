@@ -47,6 +47,44 @@ enum WhereBeacon {
     }
 }
 
+/// Is this phone on the tailnet? (2026-11-19: Tailscale was off for a day and
+/// dtd showed an empty list, then "timed out" 45 s later.) A Tailscale tunnel
+/// is a utun interface holding a 100.64.0.0/10 address; without one, a request
+/// to Ix's 100.x address or its ts.net name can only hang. utun only: carriers
+/// hand out the same CGNAT range on the cellular interface. Advisory: callers
+/// label the failure with it and still send the request, so a wrong "down"
+/// can never lock the app out.
+enum Tailnet {
+    static let message = "not on Tailscale"
+
+    /// True when `base` is only reachable over the tailnet and no tunnel is up.
+    static func missing(for base: String) -> Bool { needs(base) && !isUp() }
+
+    static func needs(_ base: String) -> Bool {
+        guard let host = URL(string: base)?.host?.lowercased() else { return false }
+        if host.hasSuffix(".ts.net") { return true }
+        let o = host.split(separator: ".").compactMap { UInt32($0) }
+        return o.count == 4 && o[0] == 100 && (64...127).contains(o[1])
+    }
+
+    static func isUp() -> Bool {
+        var ifap: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifap) == 0, let first = ifap else { return true }   // can't tell: don't accuse
+        defer { freeifaddrs(ifap) }
+        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let i = p.pointee
+            guard let sa = i.ifa_addr, sa.pointee.sa_family == sa_family_t(AF_INET),
+                  (Int32(i.ifa_flags) & IFF_UP) != 0,
+                  String(cString: i.ifa_name).hasPrefix("utun") else { continue }
+            let a = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                UInt32(bigEndian: $0.pointee.sin_addr.s_addr)
+            }
+            if a & 0xFFC0_0000 == 0x6440_0000 { return true }
+        }
+        return false
+    }
+}
+
 #if canImport(Network)
 import Network
 #endif

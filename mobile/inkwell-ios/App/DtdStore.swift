@@ -188,6 +188,9 @@ final class DtdStore: ObservableObject {
     func load(refresh: Bool, reveal newId: String? = nil) async {
         await flushOutbox()
         loading = true
+        // Say so at once instead of an empty list for the 45 s the request
+        // takes to time out; the request still goes, and a success clears it.
+        if Tailnet.missing(for: base) { lastError = Tailnet.message }
         let url = base + "/api/tasks" + (refresh ? "?refresh=1" : "")
         switch await api.get(url) {
         case .ok(let j):
@@ -206,7 +209,7 @@ final class DtdStore: ObservableObject {
             noteActive(scrollIfChanged: newId == nil)
             if let newId { reveal(newId) }
         case .error(let m):
-            lastError = m
+            lastError = Tailnet.missing(for: base) ? Tailnet.message : m
         }
         loading = false
     }
