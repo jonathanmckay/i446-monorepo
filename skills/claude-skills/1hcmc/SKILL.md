@@ -106,6 +106,22 @@ Anything that is not a book (films, podcasts, articles, shows) is not a
 so the week's record still shows it. Then rerun Step 2 so the report reflects
 the additions before Step 3. A "no" or "nothing" moves straight on.
 
+### Step 2c3: Review todos (2026-11-19)
+
+Every book finished in this run or in the target week and not yet reviewed
+gets one Todoist task, so the review does not depend on JM remembering it.
+That is the Step 2 `FINISHED` lines, anything Step 2c2 just finished, and
+whatever `hcmc-survey.py --books` still lists. Do it without asking:
+
+- Dedup first: `find-tasks` with `searchText: "write review"`; skip a book
+  whose title is already in an open task.
+- `add-tasks`: content `write review: <Title> (/bookreview) (20) [10]`,
+  label `hcmc`, `dueString: "today"`, `duration: "20m"`, priority `p4`.
+  Description: `vault: hcmc/reviews/<year>/<slug>.md`, plus `N stars` when JM
+  gave a rating in chat (`***` = 3 stars). Never set the rating on Goodreads
+  or in the review file here; that is `/bookreview`.
+- Add one `+ write review: <Title>` line per task to the Step 3 report.
+
 ### Step 2d: Media survey (the card's manual part, 2026-10-17)
 
 The weekly media note lives in Neon `1分+1s` column **AO** (the "Notes" cell
