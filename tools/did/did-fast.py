@@ -2591,12 +2591,13 @@ def _idem_key(tag: str, r, target_date: str, col: str) -> Optional[str]:
     the daemon drops the replay (bug 2026-10-12: +25 x3 in 0分!U). Name-only
     items (no task id) get none: repeats of those are legitimate."""
     tid = (r.todoist_task or {}).get("id") if r is not None else None
-    if tid and r.item.tag_companion_of:
+    _comp_of = getattr(getattr(r, "item", None), "tag_companion_of", None)
+    if tid and _comp_of:
         # A tag companion (TAG_1N_HABITS) credits once per tagged SESSION, not
         # once per card per day: two tagged tasks on one day are two credits,
         # and the weekly card they share must not make the second a "replay".
         _rng = "-".join(r.item.time_range) if r.item.time_range else r.item.time_value
-        return f"{tag}:{tid}@{target_date}:{col}#{r.item.tag_companion_of}:{_rng}"
+        return f"{tag}:{tid}@{target_date}:{col}#{_comp_of}:{_rng}"
     return f"{tag}:{tid}@{target_date}:{col}" if tid else None
 
 

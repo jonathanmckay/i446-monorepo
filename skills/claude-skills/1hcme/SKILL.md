@@ -26,10 +26,15 @@ whose week is the next 7 days.
    characters (default 24, ellipsis on the cut); as many text columns as fit
    the terminal width are shown and the rest are named in a footer. `--cols
    N` caps the text columns. White fills render as terminal default; blank
-   cells are `·`.    **0s gate (2026-11-19):** if any day of the window before today has no 0s
-   survey (E/F/G/H/I/P/Q/R all blank, or no row), it lists each day with its
-   `/0s YYYY-MM-DD` command and exits 1: no question, nothing written, card
-   left open. Fill them and rerun. Today is never required.
+   cells are `·`.    **0l gate (2026-11-19):** the 0l habit on day H is the 0s survey about
+   H-1. For every reviewed day whose 0l (`0n!S` on the next day) is blank it
+   creates one Todoist card, `0l 11.16 (8) [20]` (labels 0neon + g245, due
+   today, skipped when already open), lists them and exits 1: no question,
+   nothing written, `1 hcme` left open. Rerun once the cards are done. Today's
+   0l is the live card and is never required; an unreadable cell does not
+   block. Completing a dated card marks 0l on ITS day and credits today
+   (did-fast's dated-0l path → `0n-backfill.py`); Enter on it in dtd opens the
+   0s form for the day before its stamp.
 3. Asks: **What did I learn this week about my emotions that I should
    remember?** One thought per line; Enter on an empty line or `Ctrl+S` saves
    and exits (`^D` too); `Ctrl+C` or an empty answer aborts without writing.
@@ -90,7 +95,7 @@ card closed, then dtd returns. The script skips its cmux tab-close when
 - `--from-text "…"` — non-interactive answer (still writes + marks; pane not closed).
 - `--print-script --from-text "…"` — print the write AppleScript (`HCME_ROW` env sets the row).
 - `--no-mark` — write X but leave the `1 hcme` card open.
-- `--skip-0s-check` — ask even when a day has no 0s survey. Only when JM asks for it.
+- `--skip-0s-check` — ask even when a day's 0l is blank; creates no cards. Only when JM asks for it.
 - `--today YYYY-MM-DD` — override today for tests.
 - `--cell N` / `--cols N` — text cell width / max text columns.
 
