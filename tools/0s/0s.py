@@ -30,12 +30,14 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import BackgroundWriter, run_bounded  # noqa: E402
+import state_paths  # noqa: E402  TASK_QUEUE: dtd's task cache
 import dtd_hide  # noqa: E402  optimistic dtd row-hide (DTD_TASK_ID / DTD_HIDE_IDS_FILE)
 import form_detach  # noqa: E402  header repaint request for the detached child
 from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
@@ -110,6 +112,62 @@ def _review_date(arg: str | None) -> _dt.date:
     if arg:
         return _parse_date(arg)
     return _dt.date.today() - _dt.timedelta(days=1)
+
+
+# A dated 0l catch-up card ("0l 11.16 (8) [20]", made by /1hcme for a day
+# whose 0l was skipped, or by a defer) stands for the 0l habit on 11/16,
+# i.e. the survey ABOUT 11/15 (JM 2026-11-19).
+_DATED_0L_RE = re.compile(r"^\s*(?:😈\s*)?0l\s+(\d{1,2})\.(\d{1,2})(?=\s|$)", re.I)
+LATE_0L_TIMEOUT = 420   # did-fast's dated-0l path runs 0n-backfill (up to ~330s)
+
+
+def dated_card_review_date(today: _dt.date | None = None) -> _dt.date | None:
+    """Opened from dtd on a dated 0l card (DTD_TASK_ID): the day that card's
+    survey is about, the day before its stamp. None for the live 0l card, no
+    dtd, or an unreadable cache; the caller then reviews yesterday as usual.
+    Read from dtd's own task cache: no network before the form paints."""
+    tid = os.environ.get("DTD_TASK_ID")
+    if not tid:
+        return None
+    today = today or _dt.date.today()
+    try:
+        cache = json.loads(state_paths.TASK_QUEUE.read_text())
+    except (OSError, ValueError):
+        return None
+    for bucket in cache.values():
+        if not isinstance(bucket, list):
+            continue
+        for t in bucket:
+            if not isinstance(t, dict) or str(t.get("id")) != str(tid):
+                continue
+            m = _DATED_0L_RE.match(t.get("content") or "")
+            if not m:
+                return None
+            for year in (today.year, today.year - 1):
+                try:
+                    day = _dt.date(year, int(m.group(1)), int(m.group(2)))
+                except ValueError:
+                    return None
+                if 0 < (today - day).days <= 90:
+                    return day - _dt.timedelta(days=1)
+            return None
+    return None
+
+
+def late_0l_args(target: _dt.date, today: _dt.date | None = None) -> list[str]:
+    """did-fast arguments that mark 0l for a survey filled LATE. The habit day
+    is the day after the reviewed one; when that is already past, did-fast's
+    dated path marks that day's 0n row and credits today (and closes the
+    dated card, by dtd's row id when there is one). [] = the normal run:
+    plain `did-fast 0l` marks today."""
+    today = today or _dt.date.today()
+    habit_day = target + _dt.timedelta(days=1)
+    if habit_day >= today:
+        return []
+    args = ["0l %d.%d" % (habit_day.month, habit_day.day)]
+    if os.environ.get("DTD_TASK_ID"):
+        args += ["--task-id", os.environ["DTD_TASK_ID"]]
+    return args
 
 
 def _is_num(s: str) -> bool:
@@ -415,6 +473,8 @@ def main() -> int:
     args = ap.parse_args()
 
     target = _review_date(args.date)  # default: yesterday (accrual/retrospective)
+    if not args.date and not args.from_json:
+        target = dated_card_review_date() or target   # Enter on a dated 0l card
 
     if args.from_json:
         answers = json.loads(Path(args.from_json).read_text())
@@ -470,9 +530,15 @@ def main() -> int:
             # that internal ceiling still cut 0l off before it finished, so
             # stdout came back empty. Override it to match this call's budget.
             env = dict(os.environ, DIDFAST_WATCHDOG_SECS="110")
+            late = late_0l_args(target)   # [] unless the survey is for an older day
             try:
-                proc = run_bounded(["/usr/bin/python3", str(DID_FAST), "0l"],
-                                   timeout=120, env=env)
+                if late:
+                    proc = run_bounded(["/usr/bin/python3", str(DID_FAST), *late],
+                                       timeout=LATE_0L_TIMEOUT,
+                                       env=dict(env, DIDFAST_WATCHDOG_SECS=str(LATE_0L_TIMEOUT - 10)))
+                else:
+                    proc = run_bounded(["/usr/bin/python3", str(DID_FAST), "0l"],
+                                       timeout=120, env=env)
             except BaseException:
                 # Timeout (run_bounded raises TimeoutExpired -- the historical
                 # 0l failure, 2026-08-04/11) or any other blow-up: the card is

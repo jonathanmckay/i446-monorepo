@@ -157,6 +157,12 @@ VARIABLE_0N = {"xk20", "xk22", "xk26", "xk88", "冥想", "o314", "hcmr", "其他
 PAST_DATE_ALLOWED_0N = {"night hcmc", "evening hcmc"}
 VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
                "长冥想", "长o314", "aos", "1 kids nature"}
+# Toggl tag → per-minute 1n+ habit it also earns (JM 2026-11-19: "make it so
+# the tag is worth additional points when the did command is run"). An item
+# typed "strategy deck 1955-2145 @i9 #业写 [100]" keeps its own [100] AND
+# credits 业写 for the 110 minutes, as if ", 业写 110" had been typed with it.
+# See tag_habit_companions.
+TAG_1N_HABITS: dict[str, str] = {"业写": "业写"}
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
 # Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
 # Keys are header_normalize()d (lowercase).
@@ -750,6 +756,10 @@ class ParsedItem:
     # into the 分 log (neon ledger src + completed-today); no Todoist task,
     # no posthoc card, no timer stop (user request 2026-09-18).
     points_log: bool = False
+    # Set on the 1n+ habit item synthesized from a #tag (TAG_1N_HABITS): the
+    # name of the tagged item whose minutes it carries. It shares that item's
+    # range but must never create, trim or stop a Toggl entry of its own.
+    tag_companion_of: Optional[str] = None
 
 
 def parse_input(raw: str) -> list[ParsedItem]:
@@ -2581,6 +2591,12 @@ def _idem_key(tag: str, r, target_date: str, col: str) -> Optional[str]:
     the daemon drops the replay (bug 2026-10-12: +25 x3 in 0分!U). Name-only
     items (no task id) get none: repeats of those are legitimate."""
     tid = (r.todoist_task or {}).get("id") if r is not None else None
+    if tid and r.item.tag_companion_of:
+        # A tag companion (TAG_1N_HABITS) credits once per tagged SESSION, not
+        # once per card per day: two tagged tasks on one day are two credits,
+        # and the weekly card they share must not make the second a "replay".
+        _rng = "-".join(r.item.time_range) if r.item.time_range else r.item.time_value
+        return f"{tag}:{tid}@{target_date}:{col}#{r.item.tag_companion_of}:{_rng}"
     return f"{tag}:{tid}@{target_date}:{col}" if tid else None
 
 
@@ -3826,6 +3842,115 @@ def _credit_ritual_p(new_text: str, pts: int, block: str, nb) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Dated 0l catch-up cards ("0l 11.16"), JM 2026-11-19
+# ---------------------------------------------------------------------------
+
+ON_BACKFILL = Path(__file__).with_name("0n-backfill.py")
+# 0n-backfill budgets 60s read + 90s recalc + 15s save + 120s dashboard
+# refresh; the 120s default watchdog would kill it between the mark and the
+# move, leaving the past day marked with its points still on that day.
+DATED_0L_BUDGET_SECS = 330
+_DATED_0L_RE = re.compile(r"^\s*(?:😈\s*)?0l\s+(\d{1,2})\.(\d{1,2})(?=\s|$)", re.I)
+
+
+def dated_0l_day(name: str, today: Optional[date] = None) -> Optional[date]:
+    """The 0n row a dated 0l card stands for: "0l 11.16 (8) [20]" → the most
+    recent Nov 16 in the last 90 days (so a January card can name December).
+    None for the live card ("0l"), any other habit, an impossible date, today
+    (the recurring card's job) or a date not in that window."""
+    m = _DATED_0L_RE.match(name or "")
+    if not m:
+        return None
+    today = today or _daytime.today()
+    for year in (today.year, today.year - 1):
+        try:
+            d = date(year, int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
+        if 0 < (today - d).days <= 90:   # a stale card must not mark last year's row
+            return d
+    return None
+
+
+def _dated_0l_task(day: date, tq: dict, task_id: Optional[str]) -> Optional[dict]:
+    """The open Todoist card for this exact day. Never a fuzzy match:
+    match_todoist_task scores "0l 11.16" against a sibling "0l 11.18" at 2/3
+    and would close the wrong day's card. By id when dtd gave one (and its
+    content names the same day), else an exact name in the cache."""
+    if task_id:
+        t = _fetch_task_by_id(task_id)
+        if t and dated_0l_day(t.get("content", "")) == day:
+            return t
+    for bucket in (tq or {}).values():
+        if not isinstance(bucket, list):
+            continue
+        for t in bucket:
+            if isinstance(t, dict) and dated_0l_day(t.get("content", "")) == day:
+                if not task_id or str(t.get("id")) != str(task_id):
+                    return t
+    return None
+
+
+def run_dated_0l(name: str, day: date, tq: dict, task_id: Optional[str] = None) -> dict:
+    """Complete a dated 0l card: mark 0l on ITS day's 0n row and credit the
+    points today (0n-backfill, the /0n primitive), then close that card.
+    Replaces the generic "[N] to 0分 today" credit a dated copy used to get,
+    which never marked the past row. The card closes only when the mark
+    landed (or was already there); a failed or half-done backfill leaves it
+    open with the error. Never raises."""
+    out: dict = {"name": name, "step": "0n_backfill", "date": day.isoformat(),
+                 "0n_write": {"ok": False}, "todoist": {"closed": False}}
+    try:
+        signal.alarm(DATED_0L_BUDGET_SECS + 60)   # replaces the 120s watchdog
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(ON_BACKFILL), "0l", day.isoformat()],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=DATED_0L_BUDGET_SECS)
+    except Exception as e:  # noqa: BLE001 — timeout or spawn failure
+        out["0n_write"]["error"] = out["error"] = f"0n-backfill did not finish: {e}"[:200]
+        return out
+    try:
+        bf = json.loads(proc.stdout or "")
+    except ValueError:
+        bf = {}
+    out["backfill"] = bf
+    if proc.returncode != 0:
+        # rc 1: nothing landed (or was reverted). rc 2: the mark landed and the
+        # move of its points to today failed; its `recovery` says how to finish.
+        why = (bf.get("recovery") or bf.get("error") or proc.stderr or proc.stdout
+               or f"exit {proc.returncode}")
+        out["0n_write"]["error"] = out["error"] = (
+            f"0n-backfill 0l {day.month}/{day.day} failed (rc {proc.returncode}): "
+            + str(why).strip()[:300])
+        return out
+    out["0n_write"] = {"ok": True, "already": bool(bf.get("already_credited"))}
+    out["points"] = bf.get("points_awarded", sum(
+        (m.get("pts") or 0) for m in (bf.get("moves") or []) if isinstance(m, dict)))
+    task = _dated_0l_task(day, tq, task_id)
+    if task:
+        tid = str(task["id"])
+        _tid, ok, err = close_todoist_task(tid, expected_due=task.get("due") or None)
+        # No top-level todoist.id on purpose (same reason as ritual entries):
+        # undo-fast would reopen the card without unmarking the 0n row.
+        out["todoist"] = {"closed": bool(ok), "content": task.get("content", name)}
+        if err:
+            out["todoist"]["error"] = err
+        if ok:
+            try:
+                mc.append_names([task.get("content", name)],
+                                ids={task.get("content", name): tid})
+            except Exception as e:  # noqa: BLE001 — never fail on a log write
+                out["completed_today_error"] = str(e)
+    else:
+        out["todoist"]["note"] = "no open card for this day"
+    return out
+
+
+
+# ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
@@ -4009,6 +4134,65 @@ def _is_later_split_part(r) -> bool:
     entry and block credit, but the Todoist task and the posthoc record
     belong to the first segment only."""
     return bool(r.item.split_part and r.item.split_part[0] > 0)
+
+
+def tag_habit_companions(routes: list, headers: dict, tq: dict, *,
+                         skip_todoist: bool = False, past_ok: bool = False,
+                         past_target: bool = False) -> list:
+    """Extra 1n+ results for items tagged with a TAG_1N_HABITS tag.
+
+    Each tagged item that LANDED (a refused / needs_agent / skipped parent
+    earns nothing, so neither does its tag) and has minutes (its HHMM-HHMM
+    range, else typed minutes) gets one companion routed exactly like a typed
+    "<habit> <minutes>": minutes into the week cell, rate×minutes into the
+    habit's 0分 column, the weekly card closed. Skipped when the batch
+    already holds that habit: janus's log_entry appends ", <tag> <minutes>"
+    itself (mobile.py habit_tags), and crediting both would double it.
+    No minutes (a timer whose length arrives later from the Toggl stop) means
+    no companion, with a warning: the stop is matched by the parent's name
+    and never reaches a second item."""
+    have = {header_normalize(ONENEON_ALIASES.get(r.item.name.lower(), r.item.name.lower()))
+            for r in routes}
+    out: list = []
+    for r in routes:
+        it = r.item
+        if r.step not in ("0n", "todoist", "1n", "variable") or it.tag_companion_of:
+            continue
+        for tag in it.toggl_tags or []:
+            habit = TAG_1N_HABITS.get(tag)
+            if not habit or header_normalize(habit) in have:
+                continue
+            minutes = (time_range_minutes(*it.time_range) if it.time_range
+                       else it.time_value)
+            if not minutes or minutes <= 0:
+                print(f"⚠ {it.name}: #{tag} earns {habit} per minute but this "
+                      f"item has no range or minutes — {habit} NOT credited; "
+                      f"log it with `{habit} <minutes>`", file=sys.stderr)
+                continue
+            comp = ParsedItem(raw=f"#{tag} ← {it.name}", name=habit,
+                              target_date=it.target_date,
+                              time_range=it.time_range,
+                              time_value=None if it.time_range else minutes,
+                              tag_companion_of=it.name)
+            infer_range_blocks([comp])
+            routed = route_items([comp], headers, tq, skip_todoist=skip_todoist,
+                                 past_ok=past_ok)
+            landed = [c for c in routed if c.step == "1n"]
+            if not landed:
+                print(f"⚠ {it.name}: #{tag} → {habit} did not route "
+                      f"({'; '.join(c.error or c.step for c in routed)})",
+                      file=sys.stderr)
+                continue
+            if past_target and it.target_date:
+                # A past WEEK's session must not close this week's card.
+                _td = date.fromisoformat(target_date_iso(it.target_date, _daytime.today()))
+                if (neon_weeks.habit_week_label(habit, _td)
+                        != neon_weeks.habit_week_label(habit, _daytime.today())):
+                    for c in landed:
+                        c.todoist_task = None
+            have.add(header_normalize(habit))
+            out.extend(landed)
+    return out
 
 
 def split_results_by_block(fast: list) -> list:
@@ -4291,6 +4475,36 @@ def main():
             _emit({"results": ritual_entries, "agent_needed": []})
             return
 
+    # 1c. Dated 0l catch-up cards ("0l 11.16", made by /1hcme or a defer):
+    # mark THAT day's 0n row and credit today, instead of the generic credit
+    # below, which closes the card without ever marking the row.
+    dated_entries: list[dict] = []
+    if not points_only and not past_ok:
+        _dated = [(it, dated_0l_day(it.name)) for it in items]
+        if any(d for _it, d in _dated):
+            _tq0 = load_task_queue()
+            _only = len(_dated) == 1
+            for it, d in _dated:
+                if d:
+                    dated_entries.append(run_dated_0l(
+                        it.name, d, _tq0, task_id_override if _only else None))
+            items = [it for it, d in _dated if not d]
+            if not _defer_refresh():
+                try:
+                    refresh_task_queue(block=True)
+                except Exception as e:  # noqa: BLE001
+                    print(f"cache refresh failed: {e}", file=sys.stderr)
+            if not items:
+                try:
+                    stop_matching_toggl([e["name"] for e in dated_entries])
+                except Exception as e:  # noqa: BLE001 — never fail on Toggl
+                    print(f"toggl stop failed: {e}", file=sys.stderr)
+                _emit({"results": ritual_entries + dated_entries, "agent_needed": [],
+                       "0n_write": dated_entries[0]["0n_write"]})
+                if any(e.get("error") for e in dated_entries):
+                    sys.exit(1)
+                return
+
     # 2. Load caches
     headers = load_headers()
     tq = load_task_queue()
@@ -4299,6 +4513,9 @@ def main():
     routes = route_items(items, headers, tq, skip_todoist=points_only,
                          preferred_id=(task_id_override if len(items) == 1 else None),
                          past_ok=past_ok)
+    # #业写 on a task also earns the 业写 weekly habit for its minutes.
+    routes += tag_habit_companions(routes, headers, tq, skip_todoist=points_only,
+                                   past_ok=past_ok, past_target=past_target)
 
     # Separate fast-path from agent-required
     fast = [r for r in routes if r.step in ("0n", "todoist", "1n", "variable")]
@@ -4334,7 +4551,8 @@ def main():
     # 3b. Stop matching Toggl timer; backfill variable-task values from
     # the timer's elapsed minutes (dtd: no need to type the time when a
     # matching timer is running)
-    all_names = [r.item.name for r in fast] + [e["name"] for e in ritual_entries]
+    all_names = ([r.item.name for r in fast if not r.item.tag_companion_of]
+                 + [e["name"] for e in ritual_entries + dated_entries])
     all_ids = [str(r.todoist_task["id"]) for r in fast
                if getattr(r, "todoist_task", None) and r.todoist_task.get("id")]
     toggl_stop = (stop_matching_toggl(all_names, all_ids)
@@ -4831,7 +5049,7 @@ def main():
                     r.item.target_date,
                     r.item.toggl_tags or [],
                     r.item.split_of)
-                   for r in fast if r.item.time_range]
+                   for r in fast if r.item.time_range and not r.item.tag_companion_of]
     if toggl_items:
         def _range_dts(tr, td):
             today_str = _daytime.today_iso()
@@ -5023,7 +5241,7 @@ def main():
                         ids=completed_ids or None)
 
     # 8. Build output (ritual-card entries from step 1b lead the list)
-    output = {"results": list(ritual_entries) + d359_met_entries, "agent_needed": []}
+    output = {"results": list(ritual_entries) + dated_entries + d359_met_entries, "agent_needed": []}
 
     # Pre-image maps for undo (captured by the write scripts themselves)
     pre_0n = parse_pre_lines(on_result.stdout) if on_result and on_result.returncode == 0 else {}

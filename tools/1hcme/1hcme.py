@@ -52,6 +52,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 from review_form_writer import run_bounded  # noqa: E402
 from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (journaled writes)
+import state_paths  # noqa: E402  TASK_QUEUE: dtd's task cache
 import dtd_hide  # noqa: E402  optimistic dtd row-hide for the card --detach closes
 import form_detach  # noqa: E402  dtd status line + detached child (--detach)
 
@@ -85,10 +86,12 @@ TEXT_COLS = [  # (col, header) in priority order
     ("N", "Body"),
 ]
 DAY_ABBR = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]  # weekday() order
-# A day's 0s survey counts as filled when any of these is non-blank. D
-# (motivation) is left out on purpose: it is written by the PREVIOUS day's
-# survey, so an unfilled day still has it.
-SURVEY_COLS = ["E", "F", "G", "H", "I", "P", "Q", "R"]
+# 0l catch-up cards (2026-11-19). The 0l habit on day H is the 0s survey
+# ABOUT H-1, so a reviewed day D is complete when 0n!S on D+1 is filled.
+DEFER_FAST = Path.home() / "i446-monorepo/tools/did/defer-fast.py"
+ZERO_L_SHEET, ZERO_L_COL = "0n", "S"
+ZERO_L_CARD = "0l %d.%d (8) [20]"          # same shape as a deferred 0l copy
+ZERO_L_LABELS = ["0neon", "g245"]
 
 
 # ---------------------------------------------------------------------------
@@ -149,17 +152,70 @@ def window(target: _dt.date, today: _dt.date) -> list[_dt.date]:
     return [start + _dt.timedelta(days=i) for i in range((end - start).days + 1)]
 
 
-def missing_0s(dates: list[_dt.date], recs: dict[int, dict], today: _dt.date) -> list[_dt.date]:
-    """Days of the week under review with no 0s survey (JM 2026-11-19: "/1hcme
-    enforces that all the 0s are filled out"). Today is never required: 0s is
-    filled the day after, so today's row is blank by design."""
+def read_0l(day: _dt.date) -> str | None:
+    """0n!S on `day`: "" = not done, anything else = done or N/A (explicit 0).
+    None = could not tell (daemon down, no row); the gate then lets it pass
+    rather than block a check-in on a read failure."""
+    try:
+        r = neon_excel.read(ZERO_L_SHEET, ZERO_L_COL, date="%d/%d" % (day.month, day.day))
+    except Exception:  # noqa: BLE001
+        return None
+    if not r.get("ok"):
+        return None
+    return str(r.get("formula") or r.get("value") or "").strip()
+
+
+def missing_0l(dates: list[_dt.date], today: _dt.date) -> list[_dt.date]:
+    """0l habit days of the week under review that are still blank (JM
+    2026-11-19: "/1hcme enforces that all the 0s are filled out", then "create
+    tasks for the days that I need to finish 0l"). Returned as the HABIT day
+    (reviewed day + 1), which is what the catch-up card is named for. Today is
+    left out: its 0l is the live recurring card."""
     out = []
-    for i, d in enumerate(dates):
-        if d >= today:
+    for d in dates:
+        habit_day = d + _dt.timedelta(days=1)
+        if habit_day >= today:
             continue
-        cells = (recs.get(i) or {}).get("cells", {})
-        if not any((cells.get(c) or ("",))[0].strip() for c in SURVEY_COLS):
-            out.append(d)
+        if read_0l(habit_day) == "":
+            out.append(habit_day)
+    return out
+
+
+def _open_task_names() -> set[str]:
+    try:
+        cache = json.loads(state_paths.TASK_QUEUE.read_text())
+    except (OSError, ValueError):
+        return set()
+    return {(t.get("content") or "").strip() for b in cache.values() if isinstance(b, list)
+            for t in b if isinstance(t, dict)}
+
+
+def ensure_0l_cards(habit_days: list[_dt.date], today: _dt.date) -> list[tuple[_dt.date, str]]:
+    """One open Todoist card per blank 0l day, due today: `0l 11.16 (8) [20]`.
+    Completing it (dtd Enter = the 0s form for that day, or ⌥⏎ / /did) marks
+    0l on THAT day's 0n row and credits today: did-fast's dated-0l path. A day
+    that already has its card is left alone. → [(day, "created" | "exists" |
+    "error: …")]. The blank 0n cell is what makes a day missing, so a
+    completed card is never recreated."""
+    import importlib.util
+    have = _open_task_names()
+    out, df = [], None
+    for day in habit_days:
+        content = ZERO_L_CARD % (day.month, day.day)
+        if content in have:
+            out.append((day, "exists"))
+            continue
+        try:
+            if df is None:
+                spec = importlib.util.spec_from_file_location("defer_fast_1hcme", DEFER_FAST)
+                df = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(df)
+            df.create_task(content, ZERO_L_LABELS, None, today.isoformat())
+            out.append((day, "created"))
+        except Exception as e:  # noqa: BLE001
+            out.append((day, "error: " + str(e)[:120]))
+    if any(st == "created" for _d, st in out):
+        _refresh_cache()
     return out
 
 
@@ -736,7 +792,7 @@ def main(argv=None) -> int:
     ap.add_argument("--unlink-json", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--report-hdr", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--skip-0s-check", action="store_true",
-                    help="ask even when a day of the week has no 0s survey")
+                    help="ask even when a day of the week has no 0l")
     ap.add_argument("--today", help="override today (tests)")
     ap.add_argument("--cell", type=int, default=CELL_W, help="text cell width (chars, default %d)" % CELL_W)
     ap.add_argument("--cols", type=int, help="max text columns (default: as many as fit)")
@@ -789,13 +845,18 @@ def main(argv=None) -> int:
         print(DIM + "a new answer REPLACES it" + RESET)
         print()
 
-    missing = [] if args.skip_0s_check else missing_0s(dates, recs, today)
+    missing = [] if args.skip_0s_check else missing_0l(dates, today)
     if missing:
-        print(BOLD + "✗ 0s not filled for %d day%s of this week:" % (
+        made = {} if args.print_context else dict(ensure_0l_cards(missing, today))
+        print(BOLD + "✗ 0l not done for %d day%s of this week:" % (
             len(missing), "" if len(missing) == 1 else "s") + RESET)
-        for d in missing:
-            print("  %s %d/%d   /0s %s" % (DAY_ABBR[d.weekday()], d.month, d.day, d.isoformat()))
-        print("fill them, then run /1hcme again — nothing written; %s card left open" % HABIT)
+        for h in missing:
+            about = h - _dt.timedelta(days=1)
+            print("  0l %d.%d  (0s about %s %d/%d)  %s" % (
+                h.month, h.day, DAY_ABBR[about.weekday()], about.month, about.day,
+                {"created": "card created", "exists": "card already open"}.get(
+                    made.get(h, ""), made.get(h, ""))))
+        print("finish those cards, then run /1hcme again — nothing written; %s card left open" % HABIT)
         if not args.print_context:
             _hold_pane(args)
             return 1

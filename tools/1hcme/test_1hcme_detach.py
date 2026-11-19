@@ -58,17 +58,21 @@ class Env:
             monkeypatch.setenv("DTD_TASK_ID", "T1")
             monkeypatch.setenv("DTD_HIDE_IDS_FILE", str(self.hide))
         trec = {"row": 300, "cells": {"A": ("11.1", (255, 255, 255), (0, 0, 0))}}
-        self.blank_days = set()  # window indexes whose 0s survey is empty
-        white = ((255, 255, 255), (0, 0, 0))
+        monkeypatch.setattr(hm, "load", lambda target, today: (
+            hm.window(target, today), {0: trec}, None, trec))
+        self.blank_0l = set()    # habit days whose 0n!S is blank
+        self.unreadable = set()  # habit days the daemon could not read
+        self.read_days = []
+        self.made = []           # ensure_0l_cards calls
 
-        def _load(target, today):
-            dates = hm.window(target, today)
-            recs = {i: {"row": 300 + i, "cells": {
-                "A": ("11.1",) + white,
-                "E": ("" if i in self.blank_days else "a title",) + white}}
-                for i in range(len(dates))}
-            return dates, recs, None, recs[0]
-        monkeypatch.setattr(hm, "load", _load)
+        def _read_0l(day):
+            self.read_days.append(day)
+            if day in self.unreadable:
+                return None
+            return "" if day in self.blank_0l else "1"
+        monkeypatch.setattr(hm, "read_0l", _read_0l)
+        monkeypatch.setattr(hm, "ensure_0l_cards", lambda days, today: (
+            self.made.append(list(days)) or [(d, "created") for d in days]))
         monkeypatch.setattr(hm, "read_answer", lambda: self.answer)
         monkeypatch.setattr(hm, "write_answer", self._write)
         monkeypatch.setattr(hm, "run_bounded", self._run)
@@ -329,40 +333,65 @@ def test_stale_pending_files_are_named_at_the_next_run(env, capsys):
     assert "--from-json %s" % path in capsys.readouterr().out
 
 
-# ── 0s gate (2026-11-19): "/1hcme enforces that all the 0s are filled out" ──
+# ── 0l gate (2026-11-19): "/1hcme enforces that all the 0s are filled out",
+# then "create tasks for the days that I need to finish 0l". The --today
+# 2026-11-05 run reviews 10/29-11/4, so the 0l habit days are 10/30-11/5. ────
 
-def test_a_day_without_0s_blocks_the_check_in_and_names_the_day(env, capsys):
-    env.blank_days = {3}                       # Su 11/1 of the 10/29-11/4 window
+D = dt.date
+
+
+def test_a_blank_0l_day_blocks_the_check_in_and_gets_a_card(env, capsys):
+    env.blank_0l = {D(2026, 11, 2)}
     assert env.form("--from-text", "calm") == 1
-    assert env.calls == [] and env.spawned == []
+    assert env.calls == [] and env.spawned == []          # nothing written, nothing marked
+    assert env.made == [[D(2026, 11, 2)]]
     out = capsys.readouterr().out
-    assert "/0s 2026-11-01" in out and "card left open" in out
+    assert "0l 11.2" in out and "0s about Su 11/1" in out and "card created" in out
+    assert "card left open" in out
 
 
-def test_all_days_filled_saves_as_before(env):
+def test_all_0l_done_saves_as_before_and_makes_no_card(env):
     assert env.form("--from-text", "calm") == 0
-    assert env.kinds()[0] == "write"
+    assert env.kinds()[0] == "write" and env.made == []
 
 
-def test_skip_0s_check_asks_anyway(env):
-    env.blank_days = {3}
+def test_todays_0l_is_the_live_cards_job(env):
+    env.blank_0l = {D(2026, 11, 5)}                       # 0s about We 11/4, due today
+    assert env.form("--from-text", "calm") == 0
+    assert D(2026, 11, 5) not in env.read_days and env.made == []
+
+
+def test_an_unreadable_day_does_not_block(env):
+    env.unreadable = {D(2026, 11, 2)}
+    assert env.form("--from-text", "calm") == 0 and env.made == []
+
+
+def test_skip_0s_check_asks_anyway_and_makes_no_card(env):
+    env.blank_0l = {D(2026, 11, 2)}
     assert env.form("--skip-0s-check", "--from-text", "calm") == 0
-    assert env.kinds()[0] == "write"
+    assert env.kinds()[0] == "write" and env.made == [] and env.read_days == []
 
 
-def test_print_context_reports_missing_days_without_failing(env, capsys):
-    env.blank_days = {0, 6}
+def test_print_context_reports_without_creating_cards(env, capsys):
+    env.blank_0l = {D(2026, 10, 30), D(2026, 11, 4)}
     assert env.form("--print-context") == 0
     out = capsys.readouterr().out
-    assert "/0s 2026-10-29" in out and "/0s 2026-11-04" in out
+    assert "0l 10.30" in out and "0l 11.4" in out and env.made == []
 
 
-def test_today_and_a_motivation_only_row_rules(mod):
-    d0 = dt.date(2026, 11, 12)
-    dates = [d0 + dt.timedelta(days=i) for i in range(3)]
-    cell = lambda v: (v, (255, 255, 255), (0, 0, 0))
-    recs = {0: {"row": 1, "cells": {"D": cell("motivation only")}},   # prior day's survey wrote D
-            1: {"row": 2, "cells": {"P": cell("7.5")}},
-            2: {"row": 3, "cells": {}}}
-    assert mod.missing_0s(dates, recs, today=dates[2]) == [dates[0]]   # today (index 2) not required
-    assert mod.missing_0s(dates, {}, today=dates[2] + dt.timedelta(days=1)) == dates  # no row = missing
+def test_cards_are_made_once_and_shaped_like_a_deferred_0l(mod, tmp_path, monkeypatch):
+    cache = tmp_path / "task-queue.json"
+    cache.write_text(json.dumps({"updated": "x", "today": [
+        {"id": "1", "content": "0l 11.16 (8) [20]"}, {"id": "2", "content": "0l (8) [20]"}]}))
+    monkeypatch.setattr(mod.state_paths, "TASK_QUEUE", cache)
+    created, refreshed = [], []
+    fake = types.SimpleNamespace(create_task=lambda *a: created.append(a))
+    monkeypatch.setattr(importlib.util, "spec_from_file_location",
+                        lambda name, path: types.SimpleNamespace(
+                            loader=types.SimpleNamespace(exec_module=lambda m: None)))
+    monkeypatch.setattr(importlib.util, "module_from_spec", lambda spec: fake)
+    monkeypatch.setattr(mod, "_refresh_cache", lambda: refreshed.append(1))
+    res = mod.ensure_0l_cards([D(2026, 11, 16), D(2026, 11, 18)], D(2026, 11, 19))
+    assert res == [(D(2026, 11, 16), "exists"), (D(2026, 11, 18), "created")]
+    assert created == [("0l 11.18 (8) [20]", ["0neon", "g245"], None, "2026-11-19")]
+    assert refreshed == [1]

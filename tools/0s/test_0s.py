@@ -369,3 +369,55 @@ def test_mark_0l_unhides_on_timeout_and_on_unclosed_card(monkeypatch, tmp_path):
     assert dtd_hide.did_fast_closed(_j.dumps({"results": [{"todoist": {"closed": True}}]})) is True
     assert dtd_hide.unhide_card() is True and f.read_text() == ""
     assert isinstance(_sp.TimeoutExpired("x", 1), BaseException)
+
+
+# ── dated 0l catch-up cards (2026-11-19) ────────────────────────────────────
+# "those tasks should fill out the habit for the correct day if I mark them
+# done": a card named `0l 11.16` stands for the 0l habit on 11/16, i.e. the
+# survey about 11/15.
+
+def _cache(tmp_path, monkeypatch, tasks, tid="T16"):
+    import json
+    p = tmp_path / "task-queue.json"
+    p.write_text(json.dumps({"updated": "x", "today": tasks}))
+    monkeypatch.setattr(z.state_paths, "TASK_QUEUE", p)
+    if tid is None:
+        monkeypatch.delenv("DTD_TASK_ID", raising=False)
+    else:
+        monkeypatch.setenv("DTD_TASK_ID", tid)
+
+
+def test_enter_on_a_dated_0l_card_reviews_the_day_before_its_stamp(monkeypatch, tmp_path):
+    _cache(tmp_path, monkeypatch, [{"id": "T16", "content": "0l 11.16 (8) [20]"}])
+    assert z.dated_card_review_date(dt.date(2026, 11, 19)) == dt.date(2026, 11, 15)
+
+
+def test_the_live_0l_card_and_no_dtd_still_review_yesterday(monkeypatch, tmp_path):
+    _cache(tmp_path, monkeypatch, [{"id": "T16", "content": "0l (8) [20]"}])
+    assert z.dated_card_review_date(dt.date(2026, 11, 19)) is None
+    _cache(tmp_path, monkeypatch, [{"id": "T16", "content": "0l 11.16 (8) [20]"}], tid=None)
+    assert z.dated_card_review_date(dt.date(2026, 11, 19)) is None
+    monkeypatch.setenv("DTD_TASK_ID", "T16")
+    monkeypatch.setattr(z.state_paths, "TASK_QUEUE", tmp_path / "missing.json")
+    assert z.dated_card_review_date(dt.date(2026, 11, 19)) is None
+
+
+def test_a_late_survey_marks_0l_on_its_own_day_not_today(monkeypatch):
+    monkeypatch.setenv("DTD_TASK_ID", "T16")
+    assert z.late_0l_args(dt.date(2026, 11, 15), dt.date(2026, 11, 19)) == [
+        "0l 11.16", "--task-id", "T16"]
+    monkeypatch.delenv("DTD_TASK_ID")
+    assert z.late_0l_args(dt.date(2026, 11, 15), dt.date(2026, 11, 19)) == ["0l 11.16"]   # /0s <date>
+
+
+def test_the_normal_next_day_survey_keeps_plain_did_fast_0l():
+    assert z.late_0l_args(dt.date(2026, 11, 18), dt.date(2026, 11, 19)) == []
+    assert z.late_0l_args(dt.date(2026, 11, 19), dt.date(2026, 11, 19)) == []
+
+
+def test_late_mark_gets_the_long_timeout_and_the_form_asks_the_card():
+    import inspect
+    m = inspect.getsource(z.main)
+    assert "str(DID_FAST), *late]" in m and "timeout=LATE_0L_TIMEOUT" in m
+    assert z.LATE_0L_TIMEOUT >= 400          # 0n-backfill budgets ~330s
+    assert "dated_card_review_date() or target" in m
