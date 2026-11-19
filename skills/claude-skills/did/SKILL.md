@@ -248,6 +248,8 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 2. Append cell reference `+'1n+'!{col}{weekRow}` to 0分. Map column via `g245/1-neon-meta.md`, resolved through `cols.domain_col("0分", domain)` (not a hardcoded letter). For 一起饭 → domain xk87/xk88 → 0分 column X (xk), as `+15+<minutes>`.
 3. Search `1neon`-labeled Todoist tasks. Close if found. Error if not found (but still complete steps 1–2).
 
+**Habit tag (`TAG_1N_HABITS`, JM 2026-11-19):** `#业写` on any item also earns 业写 for that item's minutes, in the same call: `strategy deck 1955-2145 @i9 #业写 [100]` credits the deck's 100 and runs this step as if `业写 110` had been typed (minutes to the week cell, rate × minutes to the i9 column, weekly card closed, no second Toggl entry). So `[N]` is the task's own value only; never fold the habit into it. Needs a range or typed minutes: a bare timer `/fin` warns and credits nothing, log `业写 <minutes>` then. did-fast does this itself (`tag_habit_companions`); do not add a second 业写 item.
+
 ## Step 6b: Posthoc Habit
 
 0₦ match + past date. No Neon write. Create posthoc Todoist task (same as Step 6.3 but with labels `["posthoc", "0neon"]`).
@@ -271,6 +273,7 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | Input | Expected | Must NOT happen |
 |-------|----------|-----------------|
 | `/did 0g 2` — 0₦ match | Steps 1–4, writes to 0₦ | Must NOT search all Todoist tasks |
+| `/did strategy deck 1955-2145 @i9 #业写 [100]` — habit tag | deck +100 to i9, plus 业写 110m in the 1n+ week cell and +110 to i9 | Must NOT need a separate `业写` call, double-credit when `, 业写 110` is also present, or create a Toggl entry named 业写 |
 | `/did bigs 26` — split habit | Two 0₦ writes: xk20 +13, xk22 +13 | Must NOT write 26 to a single column or route to variable/Todoist |
 | `/did 0l 2 4/1` — past date | Step 6b posthoc | Must NOT write to 0₦ |
 | `/did ibx - s897` — Todoist is "ibx s897 [6]" | Step 3 dash-norm matches | Must NOT skip Todoist close |
