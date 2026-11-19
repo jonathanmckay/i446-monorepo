@@ -13,8 +13,10 @@ Per run: one live `read_range` of today's 0分 row D..Y, one strict
 shadow-summary.json (per day: boundaries, clean boundaries, columns that
 ever disagreed) that the 11-14 cutover check reads. NO Excel writes.
 
-A boundary is "clean" when every point column with no unknown inputs agrees
-with Excel within rules.TOL. Columns with unknown inputs are reported, not
+A boundary is "clean" when the day's 03:50 baseline is in the ledger and every
+point column with no unknown inputs agrees with Excel within rules.TOL. With no
+baseline yet (ledger.has_baseline) nothing is judged and would_write is null;
+the boundary is counted under no_baseline, not clean. Columns with unknown inputs are reported, not
 judged (same rule as the nightly diff).
 
   shadow_apply.py [--date YYYY-MM-DD] [--hour HH] [--print]
@@ -63,6 +65,15 @@ def compare(derived: dict, excel_row: dict, tol: float = rules.TOL) -> list:
     return out
 
 
+def unbaselined(recs: list) -> list:
+    """Before the 03:50 reconcile has observed the day's 0分 row the ledger
+    does not know its opening state (ledger.has_baseline), so nothing is
+    judged and nothing would be written: a block-job apply must skip such a
+    boundary, or it would overwrite the row's formula floor with 0
+    (2026-11-15..19: 个 4 and hcb -50 at 03:50)."""
+    return [{**r, "judged": False, "agree": None, "would_write": None} for r in recs]
+
+
 def read_excel_row(date_iso: str) -> tuple[int | None, dict]:
     d = _dt.date.fromisoformat(date_iso)
     row = excel.lookup_row("0分", "%d/%d" % (d.month, d.day))
@@ -81,17 +92,21 @@ def run(date_iso: str, hour: int, print_out: bool = False) -> dict:
     c = ledger.connect()
     try:
         day = rules.derive_day(date_iso, c, strict=True)
+        baseline = ledger.has_baseline(date_iso, c)
     finally:
         c.close()
     row, xrow = read_excel_row(date_iso)
     recs = compare(day["cols"], xrow)
+    if not baseline:
+        recs = unbaselined(recs)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     with (OUT_DIR / f"{date_iso}.jsonl").open("a") as f:
         for r in recs:
             f.write(json.dumps({"ts": ts, "hour": hour, "row": row, **r}, ensure_ascii=False) + "\n")
     judged = [r for r in recs if r["judged"]]
     clean = bool(xrow) and all(r["agree"] for r in judged)
-    boundary = {"ts": ts, "hour": hour, "excel_read": bool(xrow), "clean": clean,
+    boundary = {"ts": ts, "hour": hour, "excel_read": bool(xrow), "clean": clean and baseline,
+                "no_baseline": not baseline,
                 "disagree": sorted(r["col"] for r in judged if not r["agree"]),
                 "unjudged": sorted(r["col"] for r in recs if not r["judged"])}
     _update_summary(date_iso, boundary)
@@ -115,6 +130,7 @@ def _update_summary(date_iso: str, boundary: dict) -> None:
                                         "ever_disagreed": [], "last": None})
     d["boundaries"] += 1
     d["clean"] += 1 if boundary["clean"] else 0
+    d["no_baseline"] = d.get("no_baseline", 0) + (1 if boundary.get("no_baseline") else 0)
     d["excel_unreachable"] += 0 if boundary["excel_read"] else 1
     d["ever_disagreed"] = sorted(set(d["ever_disagreed"]) | set(boundary["disagree"]))
     d["last"] = boundary

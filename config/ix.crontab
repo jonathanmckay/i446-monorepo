@@ -61,10 +61,13 @@
 30 22 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/sameday.py >> $HOME/.cache/neon-rules/sameday.log 2>&1
 # neon shadow apply (Neon off Excel step 4, shadow phase, 2026-11-11): ledger-derived 0分 row vs live Excel,
 # 10 min before each lock-and-mark fire (clear of its Excel health probe). No writes. Log + shadow-summary.json in ~/.cache/neon-rules/shadow-apply/
-50 3,5,7,9,11,13,15,17,19,21 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/shadow_apply.py >> $HOME/.cache/neon-rules/shadow-apply.log 2>&1
+# The first run is at 03:54, not 03:50: the 03:50 neon-reconcile writes the day's baseline at about 03:50:15-26,
+# and a shadow run before it has no opening state to judge (2026-11-19; it also records no_baseline if the reconcile failed).
+54 3 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/shadow_apply.py >> $HOME/.cache/neon-rules/shadow-apply.log 2>&1
+50 5,7,9,11,13,15,17,19,21 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/neon-ledger/shadow_apply.py >> $HOME/.cache/neon-rules/shadow-apply.log 2>&1
 # 2neon sync: credit the 1n+ monthly block (rows 62-87) from Todoist completions of 5^2₦ cards
 40 3 * * * python3 $HOME/i446-monorepo/tools/2neon/2neon.py sync >> $HOME/i446-monorepo/tools/2neon/.sync.log 2>&1 || $HOME/bin/cron-alert.sh 2neon sync_failed "2neon sync exited non-zero (see tools/2neon/.sync.log)"
-# neon ledger DB nightly copy (Durability): VACUUM INTO ~/files/i447/neon-backups, keep 14
+# neon ledger DB nightly copy (Durability): VACUUM INTO ~/.local/share/neon/backups, keep 14 (cron is the only scheduler; no launchd twin)
 20 4 * * * $HOME/bin/neon_db_backup.sh
 # OneDrive (personal) cloud→disk copy onto the Ix Backup SSD; Time Machine only sees what is downloaded
 30 1 * * * bash $HOME/i446-monorepo/bin/onedrive-backup.sh >/dev/null 2>&1

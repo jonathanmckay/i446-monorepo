@@ -44,6 +44,7 @@ def test_day_view_uses_derived_and_locks(db, monkeypatch):
     for e in (_lock("H", 12, "2026-10-18T08:00:10"), _lock("I", 395.571, "2026-10-18T10:00:10")):
         ledger.record(e, db)
     now = dt.datetime(2026, 10, 18, 11, 30)
+    ledger.record(_baseline("2026-10-18T03:50:15"), db)         # no baseline, no ledger view
     v = view.day_view("2026-10-18", db, now=now)
     assert v["total"] == 513.0
     assert v["cols"]["R"] == 403.0 and "S" in v["pending"]
@@ -56,11 +57,17 @@ def test_day_view_uses_derived_and_locks(db, monkeypatch):
     assert v["through"] == "2026-10-18T10:00:10"
 
 
+def _baseline(ts, date="10/18"):
+    return _e(ts=ts, kind="baseline", sheet="0分", col="T", date=date, value="4", before="", after="=4",
+              after_value="4.0", before_value="", src="reconcile")
+
+
 def test_past_day_has_no_live_residual(db, monkeypatch):
     monkeypatch.setattr(view.rules, "derive_day", lambda d, c=None, strict=False: {
         "date": d, "cols": {c: {"derived": 1.0, "unknown": []} for c in view.rules.POINT_COLS + ["D"]},
         "blocks": {"卯": {"lock": 1.0, "observed": 1.0}}, "weights_known": 1, "strict": True})
-    ledger.record(_lock("G", 1.0, "2026-10-18T06:00:10"), db)   # the day has an event (see the test below)
+    ledger.record(_baseline("2026-10-18T03:50:15"), db)         # the day has its baseline (see the tests below)
+    ledger.record(_lock("G", 1.0, "2026-10-18T06:00:10"), db)
     v = view.day_view("2026-10-18", db, now=dt.datetime(2026, 10, 19, 11, 30))
     assert v["live_block"] is None and v["blocks"] == {"卯": 1.0}
 
@@ -77,6 +84,22 @@ def test_day_with_no_events_yet_has_no_ledger_view(db, monkeypatch):
     assert view.day_view("2026-11-14", db, now=dt.datetime(2026, 11, 14, 0, 0, 7)) is None
     assert view.pick(-46, None) == -46
     assert view.log_reader_diff("dtd", "2026-11-14", -46, None) is False
+
+
+def test_day_with_events_but_no_baseline_has_no_ledger_view(db, monkeypatch):
+    """2026-11-19: the guard above never fired on real data, because a 0n set
+    lands at 00:15 every night (allcolors handicap) and the readers kept
+    logging -46 vs 0. The test is the 0分 baseline, not "any event"."""
+    monkeypatch.setattr(view.rules, "derive_day", lambda d, c=None, strict=False: {
+        "date": d, "cols": {c: {"derived": 0.0, "unknown": []} for c in view.rules.POINT_COLS + ["D"]},
+        "blocks": {}, "weights_known": 43, "strict": True})
+    ledger.record(_e(ts="2026-11-19T00:15:09", kind="write", sheet="0n", col="AH", row=324, date="11/19",
+                     value="1", before="", after="1", after_value="1.0", before_value="",
+                     src="allcolors auto: handicap"), db)
+    assert db.execute("SELECT COUNT(*) FROM events WHERE date='2026-11-19'").fetchone()[0] == 1
+    assert view.day_view("2026-11-19", db, now=dt.datetime(2026, 11, 19, 0, 15, 30)) is None
+    ledger.record(_baseline("2026-11-19T03:50:15", date="11/19"), db)
+    assert view.day_view("2026-11-19", db, now=dt.datetime(2026, 11, 19, 3, 51)) is not None
 
 
 def test_missing_db_returns_none_without_creating_it(tmp_path, monkeypatch):

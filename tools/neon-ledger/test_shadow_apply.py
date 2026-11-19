@@ -43,6 +43,55 @@ def test_compare_flags_a_real_disagreement():
     assert recs["T"]["judged"] and recs["T"]["agree"] is False and recs["T"]["delta"] == -45.0
 
 
+def test_no_baseline_judges_and_writes_nothing():
+    """2026-11-19: the 03:50 shadow run raced the 03:50 reconcile every day and
+    judged ledger 0 against Excel's formula floor (个 4, hcb -50); a block-job
+    apply would have written those zeros. Without the baseline nothing is
+    judged and would_write is null, even when Excel and the ledger differ."""
+    excel = {c: 0.0 for c in sa.rules.POINT_COLS + ["D"]}
+    excel.update(T=4.0, W=-50.0, D=-46.0)
+    recs = sa.unbaselined(sa.compare(_cols(), excel))
+    assert all(r["judged"] is False and r["agree"] is None and r["would_write"] is None for r in recs)
+    assert {r["col"]: r["delta"] for r in recs}["W"] == 50.0      # the gap stays visible in the log
+
+
+def test_run_without_baseline_is_not_clean_and_counts_it(tmp_path, monkeypatch):
+    """The real night: a 0n set exists at 00:15 (allcolors handicap), so "any
+    event" is true, but the 0分 baseline has not landed."""
+    db = tmp_path / "neon.db"
+    c = sa.ledger.connect(db)
+    sa.ledger.record({"ts": "2026-11-19T00:15:09", "kind": "write", "sheet": "0n", "col": "AH", "row": 324,
+                      "date": "11/19", "value": "1", "before": "", "after": "1", "after_value": "1.0",
+                      "before_value": "", "src": "allcolors auto: handicap", "chain": "ok"}, c)
+    assert c.execute("SELECT COUNT(*) FROM events WHERE date='2026-11-19'").fetchone()[0] == 1
+    assert sa.ledger.has_baseline("2026-11-19", c) is False
+    c.commit()
+    c.close()
+    monkeypatch.setattr(sa.ledger, "catch_up", lambda *a, **k: None)
+    monkeypatch.setattr(sa.ledger, "connect", lambda *a, **k: __import__("sqlite3").connect(db))
+    monkeypatch.setattr(sa.rules, "derive_day", lambda d, c=None, strict=False: {"cols": _cols(), "blocks": {}})
+    excel = {c: 0.0 for c in sa.rules.POINT_COLS + ["D"]}
+    excel.update(T=4.0, W=-50.0, D=-46.0)
+    monkeypatch.setattr(sa, "read_excel_row", lambda d: (321, excel))
+    monkeypatch.setattr(sa, "OUT_DIR", tmp_path / "out")
+    monkeypatch.setattr(sa, "SUMMARY", tmp_path / "out" / "shadow-summary.json")
+    b = sa.run("2026-11-19", 4)
+    assert b["no_baseline"] is True and b["clean"] is False and b["disagree"] == []
+    import json
+    s = json.loads((tmp_path / "out" / "shadow-summary.json").read_text())
+    assert s["days"]["2026-11-19"]["no_baseline"] == 1 and s["days"]["2026-11-19"]["clean"] == 0
+
+    # once the reconcile has observed the row, the same run judges again
+    c = sa.ledger.connect(db)
+    sa.ledger.record({"ts": "2026-11-19T03:50:15", "kind": "baseline", "sheet": "0分", "col": "T", "row": 321,
+                      "date": "11/19", "value": "4", "after": "=4", "after_value": "4.0", "src": "reconcile"}, c)
+    assert sa.ledger.has_baseline("2026-11-19", c) is True
+    c.commit()
+    c.close()
+    b = sa.run("2026-11-19", 4)
+    assert b["no_baseline"] is False and b["disagree"] == ["D", "T", "W"]
+
+
 def test_compare_with_no_excel_row_judges_nothing():
     recs = sa.compare(_cols(), {})
     assert all(r["judged"] is False for r in recs)

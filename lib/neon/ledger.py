@@ -485,6 +485,26 @@ def credits(date_iso: str, sheet: str = "0分", conn: Optional[sqlite3.Connectio
             c.close()
 
 
+def has_baseline(date_iso: str, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """True once the day's 0分 row has been observed by the 03:50 reconcile.
+
+    Until then the ledger does not know the row's opening state: Excel's
+    formulas already give it a floor (2026-11: 个 +4, hcb -50) while
+    derive_day yields 0 for those columns. "Any event for the date" is the
+    wrong test, because a 0n set lands at 00:15 every night (allcolors
+    handicap). Readers, the shadow apply and the block-job apply all use this
+    one check: no baseline → no ledger value, and nothing to write."""
+    own = conn is None
+    c = conn or connect()
+    try:
+        return c.execute(
+            """SELECT 1 FROM events WHERE date=? AND sheet='0分'
+                  AND kind='observe' AND jsonl_kind='baseline' LIMIT 1""", (date_iso,)).fetchone() is not None
+    finally:
+        if own:
+            c.close()
+
+
 def recent(n: int = 20, conn: Optional[sqlite3.Connection] = None) -> list:
     own = conn is None
     c = conn or connect()

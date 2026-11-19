@@ -1,13 +1,18 @@
 #!/bin/bash
 # Nightly copy of the Neon ledger DB (Neon off Excel, Durability) — Ix cron 04:20,
-# after the 04:05 rules diff. Time Machine on Ix already includes ~/.local/share;
-# this is the second, Syncthing-carried copy in ~/files/i447/neon-backups.
+# after the 04:05 rules diff. Dated, integrity-checked restore points beside the
+# DB in ~/.local/share/neon/backups (Time Machine on Ix covers ~/.local/share).
+# NOT ~/files: that is a symlink to the external volume "Ix Files", which
+# background jobs cannot write (every scheduled run failed 2026-11-15..19 with
+# sqlite "unable to open database (14)" while the same script passed by hand).
+# The synced, off-disk record is the vault JSONL (g245/neon-ledger); the DB is a
+# rebuildable projection of it (neon.py import-jsonl).
 #
 #   VACUUM INTO a .tmp, then mv (no torn file if the job dies mid-write);
 #   keep the newest 14; alert via bin/cron-alert.sh on failure.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin"
 DB="$HOME/.local/share/neon/neon.db"
-DEST="$HOME/files/i447/neon-backups"
+DEST="$HOME/.local/share/neon/backups"
 LOGDIR="$HOME/.cache/neon-rules"; mkdir -p "$LOGDIR" "$DEST"
 LOG="$LOGDIR/db-backup.log"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }

@@ -102,13 +102,14 @@ def day_view(date_iso: str, conn=None, now: Optional[_dt.datetime] = None) -> Op
 
         row = c.execute("SELECT MAX(ts) FROM events WHERE date=?", (date_iso,)).fetchone()
         through = row[0] if row else None
-        # No event for this date yet (00:00 to the 03:50 baseline, before any
-        # credit): the ledger knows nothing about the day, so there is no
-        # ledger value. Returning 0 here made every reader log a disagreement
-        # at midnight (2026-11-12..14: Excel -46 = W -50 + T 4 from the row's
-        # formulas, ledger 0) that vanished at 03:50. None → pick() shows
-        # Excel and log_reader_diff() stays quiet.
-        if through is None:
+        # No 03:50 baseline for this date yet: the ledger does not know the
+        # row's opening state, so there is no ledger value. Returning 0 here
+        # made every reader log a disagreement at midnight (2026-11-12..14:
+        # Excel -46 = W -50 + T 4 from the row's formulas, ledger 0) that
+        # vanished at 03:50. None → pick() shows Excel and log_reader_diff()
+        # stays quiet. Keyed on the baseline, not on "any event" (2026-11-19):
+        # a 0n set at 00:15 every night made the first version a no-op.
+        if through is None or not ledger.has_baseline(date_iso, c):
             return None
         return {"date": date_iso, "total": total, "cols": cols, "blocks": out_blocks,
                 "live_block": live, "unknown": sorted(set(unknown)), "pending": pending,
