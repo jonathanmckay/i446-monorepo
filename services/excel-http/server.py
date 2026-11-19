@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.12.0"
+VERSION = "1.12.1"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -541,7 +541,7 @@ def _journal_and_respond(kind: str, req: dict, row: int,
         # With the previous entry's after_value, a broken chain's
         # before_value - expected value is the outside (Excel) edit in points.
         entry["before_value"] = before_value
-    for k in ("source", "via", "idem", "week"):  # source/via: JM Dash dimension (lib/jmsource)
+    for k in ("source", "via", "idem", "week", "mode"):  # source/via: JM Dash dimension (lib/jmsource)
         if req.get(k):
             entry[k] = req[k]
     if state == "broken":
@@ -682,6 +682,12 @@ end tell
         sub = {"sheet": sheet, "col": col, "row": row, "date": req.get("date"),
                "value": value, "src": w.get("src") or req.get("src"),
                "source": req.get("source"), "via": req.get("via")}
+        if mode in ("add", "text"):
+            # Journal the write mode (2026-11-19, Neon off Excel 4b): a mode
+            # "add" request for N lands as old + N, so without the mode the
+            # journal cannot be replayed (tools/neon-ledger/replay_check.py
+            # "needs_mode"). "set" and "append" are already told apart by kind.
+            sub["mode"] = mode
         if sheet in LABEL_SHEETS:
             # The "date" that resolved the row is a week label ("10.3"), not
             # an M/D: journal row-anchored like every existing 1n+ entry

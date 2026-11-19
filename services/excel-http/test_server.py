@@ -376,6 +376,10 @@ class TestBatchWrite:
         ae, aj = resp["results"]
         assert ae["value"] == "1" and ae["before_value"] == "" and ae["mode"] == "set"
         assert aj["value"] == "45" and aj["before_value"] == "30" and aj["mode"] == "add"
+        # 2026-11-19: the journal says which write was an add, so it can be replayed
+        import glob, json
+        lines = [json.loads(l) for p in glob.glob(srv.LEDGER_DIR + "/*.jsonl") for l in open(p)]
+        assert [(e["col"], e["value"], e.get("mode")) for e in lines] == [("AE", "1", None), ("AJ", "15", "add")]
 
     def test_each_cell_is_journaled_and_in_the_semantic_ledger(self, srv, monkeypatch):
         req = {"sheet": "0n", "date": "10/19", "src": "did hiit",
