@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.12.1"
+VERSION = "1.13.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -89,6 +89,37 @@ except Exception as _e:  # pragma: no cover - import environment
     neon_ledger = None
     LEDGER_DB_STATE = {"ok": False, "error": f"{type(_e).__name__}: {_e}", "errors": 0}
     sys.stderr.write(f"semantic ledger import failed: {_e}\n")
+try:
+    from neon import replay as neon_replay  # noqa: E402  — the shared replay model
+except Exception as _e:  # pragma: no cover - import environment
+    neon_replay = None
+    sys.stderr.write(f"replay model import failed: {_e}\n")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import intents as intents_store  # noqa: E402
+
+# ── Write queue (Neon off Excel step 4b, 2026-11-19) ─────────────────────────
+# With NEON_WRITE_QUEUE=1 every write request is recorded durably BEFORE Excel
+# is touched (intents.py), applied at once when Excel is healthy (callers see
+# exactly today's response), and replayed in order by drain_locked() when it
+# is not. Off by default: with the flag unset nothing below changes behaviour.
+QUEUE_ENABLED = os.environ.get("NEON_WRITE_QUEUE") == "1"
+INTENTS_PATH = os.environ.get("NEON_WRITE_INTENTS",
+                              os.path.expanduser("~/.local/share/neon/write-intents.jsonl"))
+INTENTS: "intents_store.Intents | None" = None
+WRITE_PATHS = {"/append", "/write", "/batch", "/batch_write"}
+# (intent id, item index) of every journaled entry that carries an intent: the
+# one authoritative "this request already reached Excel" test.
+APPLIED: set[tuple[str, int]] = set()
+MAX_ATTEMPTS = 4        # dispatches before an intent is set aside (held) with an alert
+STABLE_DELAY = 1.5      # seconds between the two reads that must agree before a replay decision
+DRAIN_INTERVAL = 20     # seconds between idle drain passes
+DRAIN_BUDGET = 25       # seconds one drain pass may hold EXCEL_LOCK
+ALERT_SH = os.path.expanduser("~/bin/cron-alert.sh")
+# osascript failures that mean "Excel is not answering", as opposed to a bad
+# request: the intent stays pending instead of being rejected.
+_TRANSIENT = re.compile(r"-600\b|-609\b|-1712\b|-1728\b|not running|Connection is invalid|"
+                        r"timed out|Can.t get workbook|echo_mismatch", re.I)
+
 # (sheet, col, anchor) → last after_formula the ledger recorded for that cell.
 CHAIN_INDEX: dict[tuple[str, str, str], str] = {}
 # idem key → after-formula of the append that first carried it. A caller that
@@ -139,8 +170,11 @@ def seed_chain_index() -> None:
     prev = (now.replace(day=1) - datetime.timedelta(days=1))
     CHAIN_INDEX.clear()
     IDEM_INDEX.clear()
+    APPLIED.clear()
     for p in (ledger_path(prev), ledger_path(now)):
         for e in iter_ledger(p):
+            if e.get("intent"):
+                APPLIED.add((e["intent"], int(e.get("item") or 0)))
             after = e.get("after")
             if after is not None:
                 CHAIN_INDEX[entry_key(e)] = after
@@ -175,6 +209,8 @@ def journal(entry: dict) -> None:
             CHAIN_INDEX[entry_key(entry)] = entry["after"]
             if entry.get("idem"):
                 IDEM_INDEX[entry["idem"]] = entry["after"]
+        if entry.get("intent"):
+            APPLIED.add((entry["intent"], int(entry.get("item") or 0)))
     except Exception as e:
         sys.stderr.write(f"ledger journal failed: {e}\n")
     double_write(entry)
@@ -544,6 +580,19 @@ def _journal_and_respond(kind: str, req: dict, row: int,
     for k in ("source", "via", "idem", "week", "mode"):  # source/via: JM Dash dimension (lib/jmsource)
         if req.get(k):
             entry[k] = req[k]
+    if req.get("_intent"):
+        # Write queue: which request this entry applied (APPLIED), when it was
+        # asked for if the drain applied it later, and whether it was recorded
+        # after the fact because the original attempt had landed unjournaled.
+        entry["intent"], entry["item"] = req["_intent"], int(req.get("_item") or 0)
+        for k, v in (("requested_ts", req.get("_requested_ts")), ("recovered", req.get("_recovered"))):
+            if v:
+                entry[k] = v
+        if state == "broken" and (req.get("_reapply") or req.get("_recovered")):
+            # A set re-applied after a timed-out attempt finds its own value
+            # already in the cell: that is the queue's doing, not an outside edit.
+            state = entry["chain"] = "ok"
+            entry["recovered"] = True
     if state == "broken":
         entry["chain_expected"] = expected
     journal(entry)
@@ -571,12 +620,14 @@ def do_batch(req: dict) -> dict:
         if row is None:
             return {"ok": False, "error": "date_not_found_or_missing_target"}
     results = []
-    for item in appends:
+    for n, item in enumerate(appends):
         sub = {"sheet": sheet, "col": item.get("col"), "row": row,
                "date": req.get("date"), "value": item.get("value"),
                "idem": item.get("idem"),
                "src": item.get("src") or req.get("src"),
-               "source": req.get("source"), "via": req.get("via")}
+               "source": req.get("source"), "via": req.get("via"),
+               "_intent": req.get("_intent"), "_item": n,
+               "_requested_ts": req.get("_requested_ts"), "_reapply": req.get("_reapply")}
         if not sub["col"]:
             results.append({"ok": False, "error": "missing_col"})
             continue
@@ -637,6 +688,13 @@ def do_batch_write(req: dict) -> dict:
         if not col or not re.fullmatch(r"[A-Za-z]{1,3}", str(col)):
             return {"ok": False, "error": f"bad_col:{col!r}"}
         items.append((str(col).upper(), w.get("value", ""), (w.get("mode") or "set"), w))
+    index = list(range(len(items)))
+    if req.get("_intent"):
+        # A replayed batch skips the cells its first attempt already journaled.
+        index = [k for k in index if (req["_intent"], k) not in APPLIED]
+        if not index:
+            return {"ok": True, "row": row, "results": [], "skipped": "applied"}
+        items = [items[k] for k in index]
     blocks = []
     for col, value, mode, _ in items:
         setter = _as_setter(value)
@@ -677,11 +735,13 @@ end tell
     if len(cells) != len(items):
         return {"ok": False, "error": f"echo_mismatch:{len(cells)}/{len(items)}", "raw": out[:200]}
     results = []
-    for (col, value, mode, w), cell in zip(items, cells):
+    for k, ((col, value, mode, w), cell) in zip(index, zip(items, cells)):
         before, before_value, new_value, formula = (cell.split("\t", 3) + ["", "", ""])[:4]
         sub = {"sheet": sheet, "col": col, "row": row, "date": req.get("date"),
                "value": value, "src": w.get("src") or req.get("src"),
-               "source": req.get("source"), "via": req.get("via")}
+               "source": req.get("source"), "via": req.get("via"),
+               "_intent": req.get("_intent"), "_item": k,
+               "_requested_ts": req.get("_requested_ts"), "_reapply": req.get("_reapply")}
         if mode in ("add", "text"):
             # Journal the write mode (2026-11-19, Neon off Excel 4b): a mode
             # "add" request for N lands as old + N, so without the mode the
@@ -804,7 +864,13 @@ def _append_setters(val: str) -> tuple[str, str]:
     return empty_set, nonempty_set
 
 
+def _already_applied(req: dict) -> bool:
+    return bool(req.get("_intent")) and (req["_intent"], int(req.get("_item") or 0)) in APPLIED
+
+
 def do_append(req: dict) -> dict:
+    if _already_applied(req):
+        return {"ok": True, "col": req.get("col"), "skipped": "applied"}
     addr = cell_addr(req)
     if not addr:
         return {"ok": False, "error": "date_not_found_or_missing_target"}
@@ -841,6 +907,8 @@ end tell
 
 
 def do_write(req: dict) -> dict:
+    if _already_applied(req):
+        return {"ok": True, "col": req.get("col"), "skipped": "applied"}
     addr = cell_addr(req)
     if not addr:
         return {"ok": False, "error": "date_not_found_or_missing_target"}
@@ -1119,6 +1187,224 @@ def do_lookup(req: dict) -> dict:
     return {"ok": True, "row": r} if r else {"ok": False, "error": "date_not_found"}
 
 
+# ── Write queue: intent first, Excel when it answers ─────────────────────────
+
+def alert(reason: str, detail: str) -> None:
+    """One line in the alert sink (vault/z_ibx/alerts.jsonl). Never raises."""
+    try:
+        subprocess.Popen([ALERT_SH, "excel_http_queue", reason, detail],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"queue alert failed: {e}\n")
+
+
+def _queued(intent: dict, error: str, **extra) -> dict:
+    """Body for "recorded, not in Excel yet". ok stays False and the HTTP
+    status stays today's 504/503 on purpose: callers that predate the queue
+    read ok:true-without-an-echo as "fall back to raw AppleScript" (did-fast),
+    which would apply the write twice once the drain replays it."""
+    return {"ok": False, "error": error, "queued": True, "intent": intent["id"], **extra}
+
+
+def _errors(result: dict) -> list[str]:
+    out = [str(result.get("error") or "")]
+    out += [str(r.get("error") or "") for r in result.get("results") or [] if isinstance(r, dict)]
+    return [e for e in out if e]
+
+
+def _attempt(intent: dict, replay: bool = False) -> tuple[int, dict]:
+    """Dispatch one intent to its handler. Caller holds EXCEL_LOCK.
+    → (HTTP status, body). 200/400 mean the intent reached a terminal state;
+    503/504 mean it is still pending."""
+    iid = intent["id"]
+    attempts = INTENTS.attempting(iid)                    # durable, before Excel is touched
+    body = dict(intent["body"])
+    body["_intent"] = iid
+    if replay:
+        body["_requested_ts"] = intent["ts"]
+    if attempts > 1:
+        body["_reapply"] = True
+    try:
+        result = ROUTES[intent["path"]](body)
+    except subprocess.TimeoutExpired:
+        return 504, _queued(intent, "osascript_timeout")
+    except ExcelError as e:
+        return 503, _queued(intent, "excel_error", detail=str(e))
+    except Exception as e:  # noqa: BLE001 — a handler bug must not replay forever
+        INTENTS.finish(iid, "rejected", f"{type(e).__name__}: {e}")
+        return 500, {"ok": False, "error": f"{type(e).__name__}: {e}", "intent": iid}
+    if result.get("ok"):
+        INTENTS.finish(iid, "done")
+        return 200, result
+    errs = _errors(result)
+    if any(_TRANSIENT.search(e) for e in errs):
+        return 503, {**result, "queued": True, "intent": iid}
+    # A bad request (unknown column, date not in the sheet, …): final. Items of
+    # a batch that did land are journaled and stay applied.
+    INTENTS.finish(iid, "rejected", "; ".join(errs)[:300])
+    return 400, result
+
+
+def excel_probe() -> bool:
+    """Is Excel answering AppleEvents with the workbook open?"""
+    try:
+        rc, _, _ = osascript(f'tell application "Microsoft Excel" to return name of workbook "{WORKBOOK}"')
+    except subprocess.TimeoutExpired:
+        return False
+    return rc == 0
+
+
+def _stable_read(sheet: str, col: str, row: int) -> tuple[str, str] | None:
+    """(value, formula) once two reads STABLE_DELAY apart agree, else None. A
+    timed-out osascript can leave one AppleEvent in flight; a replay decision
+    on a cell that is still moving would be made against the wrong content."""
+    a = _read_cell(sheet, col, row)
+    if a is None:
+        return None
+    if STABLE_DELAY:
+        time.sleep(STABLE_DELAY)
+    b = _read_cell(sheet, col, row)
+    return a if b is not None and a == b else None
+
+
+def _gap_items(intent: dict) -> list[tuple[int, dict, str]]:
+    """Non-idempotent items of an intent that are not journaled yet:
+    [(item index, single-cell request, "append" | "add")]. Sets and text
+    writes are left out: re-applying them is harmless."""
+    path, body, iid = intent["path"], intent["body"], intent["id"]
+    base = {k: body.get(k) for k in ("sheet", "date", "row", "source", "via")}
+    out = []
+    if path == "/append":
+        out.append((0, dict(body), "append"))
+    elif path == "/batch":
+        for n, item in enumerate(body.get("appends") or []):
+            out.append((n, {**base, "col": item.get("col"), "value": item.get("value"),
+                            "idem": item.get("idem"), "src": item.get("src") or body.get("src")}, "append"))
+    elif path == "/batch_write":
+        for n, w in enumerate(body.get("writes") or []):
+            mode = w.get("mode") or "set"
+            if mode in ("append", "add"):
+                out.append((n, {**base, "col": str(w.get("col") or "").upper(), "value": w.get("value"),
+                                "mode": mode if mode == "add" else None,
+                                "src": w.get("src") or body.get("src")}, mode))
+    return [(n, sub, mode) for n, sub, mode in out if (iid, n) not in APPLIED and sub.get("col")]
+
+
+def resolve_gaps(intent: dict) -> tuple[str, str]:
+    """An intent that was dispatched before but not finished may have reached
+    Excel without being journaled (timeout, crash between the set and the
+    journal line). Decide per non-idempotent item, against live Excel:
+
+      cell still holds the last journaled content     → not applied; replay it
+      cell holds that content + this request          → it landed; journal it now
+      anything else                                   → cannot tell; hold the intent
+
+    → ("apply" | "wait" | "held", note). "wait": Excel did not answer or the
+    cell is still changing; try again on the next pass."""
+    if neon_replay is None:
+        return "held", "replay model unavailable"
+    for n, sub, mode in _gap_items(intent):
+        sheet = sub["sheet"]
+        try:
+            addr = cell_addr(sub)
+            if not addr:
+                return "apply", ""            # the handler will reject it with the real error
+            col, row = addr
+            cur = _stable_read(sheet, col, row)
+        except (subprocess.TimeoutExpired, ExcelError):
+            return "wait", ""
+        if cur is None:
+            return "wait", ""
+        value, formula = cur
+        last = latest_entry(sheet, col, sub.get("date"), row)
+        if last is None:
+            return "held", f"{sheet}!{col}{row}: no journaled content to compare against"
+        expected = last.get("after") or ""
+        if neon_replay.same(formula, expected):
+            continue                           # untouched: the replay applies it
+        if mode == "append":
+            landed = neon_replay.same(formula, neon_replay.apply(expected, "append", sub.get("value")))
+        else:
+            landed = neon_replay.added(expected, sub.get("value"), formula)
+        if not landed:
+            return "held", (f"{sheet}!{col}{row}: holds `{formula}`, journal expects `{expected}`; "
+                            f"cannot tell whether {sub.get('value')!r} landed")
+        req = {**{k: v for k, v in sub.items() if v is not None}, "_intent": intent["id"], "_item": n,
+               "_requested_ts": intent["ts"], "_recovered": True}
+        _journal_and_respond("append" if mode == "append" else "write", req, row,
+                             expected, value, formula, last.get("after_value"))
+    return "apply", ""
+
+
+def drain_locked(before_seq: int | None = None) -> int:
+    """Replay pending intents, oldest first. Caller holds EXCEL_LOCK. Stops as
+    soon as Excel stops answering; an intent that cannot be resolved or keeps
+    failing while Excel is up is held (set aside with an alert) so it cannot
+    wedge the queue. → number of intents that reached a terminal state."""
+    if INTENTS is None:
+        return 0
+    pending = INTENTS.pending(before_seq)
+    if not pending or not excel_probe():
+        return 0
+    settled, deadline = 0, time.monotonic() + DRAIN_BUDGET
+    for it in pending:
+        if time.monotonic() > deadline:
+            break
+        if it["attempts"] >= MAX_ATTEMPTS:
+            INTENTS.finish(it["id"], "held", f"{it['attempts']} attempts while Excel was answering")
+            alert("held", f"{it['path']} intent {it['id']} failed {it['attempts']} times; body {json.dumps(it['body'], ensure_ascii=False)[:300]}")
+            settled += 1
+            continue
+        if it["attempts"] > 0:
+            verdict, note = resolve_gaps(it)
+            if verdict == "wait":
+                break
+            if verdict == "held":
+                INTENTS.finish(it["id"], "held", note)
+                alert("held", f"{it['path']} intent {it['id']}: {note}")
+                settled += 1
+                continue
+        status, _ = _attempt(it, replay=True)
+        if status in (503, 504):
+            if not excel_probe():
+                break                          # Excel went away again
+            continue                           # Excel is up, this intent is the problem: next pass counts it
+        settled += 1
+    return settled
+
+
+def queued_write(path: str, body: dict) -> tuple[int, dict]:
+    """A write request with the queue on: record it, then apply it now if
+    nothing older is waiting and Excel answers."""
+    intent, dup = INTENTS.add(path, body)
+    if dup:
+        return 503, _queued(intent, "excel_error", detail="already queued (same idem key)", dup=True)
+    with EXCEL_LOCK:
+        drain_locked(before_seq=intent["seq"])
+        if INTENTS.pending(before_seq=intent["seq"]):
+            return 503, _queued(intent, "excel_error", detail="queued behind earlier writes Excel has not taken")
+        return _attempt(intent)
+
+
+def drain_loop() -> None:
+    """Idle drain: a queued write is normally replayed by the next request
+    (queued_write / do_POST drain first); this covers a quiet stretch."""
+    while True:
+        time.sleep(DRAIN_INTERVAL)
+        try:
+            if INTENTS is not None and INTENTS.pending():
+                with EXCEL_LOCK:
+                    drain_locked()
+        except Exception as e:  # noqa: BLE001 — never let the thread die
+            sys.stderr.write(f"drain_loop: {e!r}\n")
+
+
+def queue_state() -> dict:
+    if not QUEUE_ENABLED or INTENTS is None:
+        return {"enabled": False}
+    return {"enabled": True, **INTENTS.stats()}
+
+
 ROUTES = {
     "/append": do_append,
     "/write":  do_write,
@@ -1159,7 +1445,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
             return self._send(200, {"ok": True, "version": VERSION, "macro": MACRO_STATE,
-                                    "ledger": LEDGER_DB_STATE})
+                                    "ledger": LEDGER_DB_STATE, "queue": queue_state()})
         return self._send(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self):  # noqa: N802
@@ -1177,8 +1463,15 @@ class Handler(BaseHTTPRequestHandler):
             # threaded so a stalled connection can't block other requests.
             if self.path in NO_EXCEL:
                 result = handler(body)
+            elif QUEUE_ENABLED and INTENTS is not None and self.path in WRITE_PATHS:
+                status, result = queued_write(self.path, body)
+                return self._send(status, result)
             else:
                 with EXCEL_LOCK:
+                    if QUEUE_ENABLED and INTENTS is not None:
+                        # A read must not see Excel without the writes still
+                        # queued for it: replay them first if Excel answers.
+                        drain_locked()
                     result = handler(body)
         except subprocess.TimeoutExpired:
             return self._send(504, {"ok": False, "error": "osascript_timeout"})
@@ -1193,6 +1486,11 @@ def main():
     seed_chain_index()
     print(f"ledger chain index seeded: {len(CHAIN_INDEX)} cells", flush=True)
     threading.Thread(target=save_loop, daemon=True).start()
+    if QUEUE_ENABLED:
+        global INTENTS
+        INTENTS = intents_store.Intents(INTENTS_PATH)
+        threading.Thread(target=drain_loop, daemon=True).start()
+        print(f"write queue ON: {INTENTS_PATH} ({INTENTS.stats()})", flush=True)
     # ThreadingHTTPServer so one stuck/slow request (a stalled client, a slow
     # Excel call) can't block every other request behind it — see Handler.timeout.
     srv = ThreadingHTTPServer(ADDR, Handler)
