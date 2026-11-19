@@ -115,8 +115,14 @@ whatever `hcmc-survey.py --books` still lists. Do it without asking:
 
 - Dedup first: `find-tasks` with `searchText: "write review"`; skip a book
   whose title is already in an open task.
-- `add-tasks`: content `write review: <Title> (/bookreview) (20) [10]`,
-  label `hcmc`, `dueString: "today"`, `duration: "20m"`, priority `p4`.
+- **Points come from the 分 doc, never a guess**: read the `## hcmc` table in
+  `~/vault/g245/neon-habit-principles/fen.md` (book review, by star rating)
+  each run and use its value for the book's rating as `[N]`. On 2026-11-19
+  it read 5★ 60, 4★ 35, 3★ 15, 2★ 10; the doc wins if it has changed. No
+  rating from JM yet: ask for the stars with the Step 2c2 question; if he
+  skips, or the rating has no row (1★), leave `[N]` off and say so.
+- `add-tasks`: content `write review: <Title> (/bookreview) (15) [N]`,
+  label `hcmc`, `dueString: "today"`, `duration: "15m"`, priority `p4`.
   Description: `vault: hcmc/reviews/<year>/<slug>.md`, plus `N stars` when JM
   gave a rating in chat (`***` = 3 stars). Never set the rating on Goodreads
   or in the review file here; that is `/bookreview`.
