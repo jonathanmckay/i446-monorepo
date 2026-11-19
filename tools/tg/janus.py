@@ -5962,6 +5962,7 @@ def run_tg_fast(text: str) -> str:
         proc = subprocess.run(
             ["python3", TG_FAST, text],
             capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL,
         )
         out = (proc.stdout or proc.stderr or "").strip().splitlines()
         return out[-1] if out else "(no output)"
@@ -6504,6 +6505,7 @@ def run_did_fast_data(text: str, flags: tuple[str, ...] | None = None) -> tuple[
         proc = subprocess.run(
             _did_argv(text, flags), env=janus_done.did_env(),
             capture_output=True, text=True, timeout=janus_done.DID_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
         )
         if proc.stdout and "{" in proc.stdout:
             try:
@@ -6880,7 +6882,7 @@ def _spawn_d357_stop() -> None:
     try:
         subprocess.Popen(_d357_argv("stop"),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
+                         start_new_session=True, stdin=subprocess.DEVNULL)
     except Exception as e:  # noqa: BLE001
         flash(f"d357 stop failed to launch: {e}", 8.0)
 
@@ -7081,7 +7083,7 @@ def _convert_selected_event(ev: dict, app) -> None:
             if ev_minutes:
                 args = _d357_argv("start", title, "--minutes", str(ev_minutes + 5))
             r = await asyncio.to_thread(
-                subprocess.run, args, capture_output=True, text=True, timeout=60)
+                subprocess.run, args, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
             out = (r.stdout or "").strip().splitlines()
             line = out[-1] if out else ""
             if line.startswith("REC|"):
@@ -8800,7 +8802,7 @@ async def main():
     # latency to the first paint.
     try:
         subprocess.Popen(["bash", str(Path.home() / "i446-monorepo/scripts/term-color.sh"), "reset"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
     except Exception:  # noqa: BLE001
         pass
 

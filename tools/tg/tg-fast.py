@@ -201,6 +201,7 @@ def _project_from_task_cache(content: str) -> str:
         subprocess.run(
             ["python3", DID_FAST, "--refresh-cache"],
             capture_output=True, timeout=30,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return ""
@@ -211,6 +212,7 @@ def _run_cli(*args):
     r = subprocess.run(
         ["python3", CLI, *args],
         capture_output=True, text=True, timeout=30,
+        stdin=subprocess.DEVNULL,
     )
     out = (r.stdout.strip() + "\n" + r.stderr.strip()).strip()
     return out
@@ -261,6 +263,7 @@ def resolve_do_session():
         result = subprocess.run(
             ["python3", DID_FAST, f"{task} {duration_min}"],
             capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL,
         )
         print(f"Resolved /do: {task} → {duration_min}min", file=sys.stderr)
         DO_SESSION.unlink(missing_ok=True)

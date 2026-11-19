@@ -100,6 +100,7 @@ def _curl_ex(path: str, body: dict | None = None, *,
             argv,
             capture_output=True, text=True,
             timeout=DAEMON_TIMEOUT,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return None, True
@@ -341,7 +342,7 @@ def _journal_fallback(op: str, sheet: str, col: str, row: int | None,
     cmd = f"mkdir -p {shlex.quote(LEDGER_DIR)} && printf '%s\\n' {shlex.quote(line)} >> {shlex.quote(path)}"
     argv = ["sh", "-c", cmd] if IS_IX else ["ssh", DAEMON_HOST, cmd]
     try:
-        subprocess.run(argv, capture_output=True, text=True, timeout=20)
+        subprocess.run(argv, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
     except Exception:
         pass  # journaling must never fail the write it describes
 
@@ -380,6 +381,7 @@ def _ssh_fallback(op: str, sheet: str, col: str,
         r = subprocess.run(
             ["ssh", DAEMON_HOST, f"osascript -e {shlex.quote(lookup_script)}"],
             capture_output=True, text=True, timeout=45,
+            stdin=subprocess.DEVNULL,
         )
         try:
             row = int(r.stdout.strip())
@@ -461,6 +463,7 @@ def _ssh_fallback(op: str, sheet: str, col: str,
     r = subprocess.run(
         ["sh", "-c", osa] if IS_IX else ["ssh", DAEMON_HOST, osa],
         capture_output=True, text=True, timeout=45,
+        stdin=subprocess.DEVNULL,
     )
     if r.returncode != 0:
         return {"ok": False, "error": r.stderr.strip(), "fallback": True}

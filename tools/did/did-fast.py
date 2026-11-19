@@ -3007,6 +3007,7 @@ def stop_matching_toggl(item_names: list[str], task_ids: Optional[list[str]] = N
         proc = subprocess.run(
             ["python3", str(TOGGL_CLI), "current"],
             capture_output=True, text=True, timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         if proc.returncode != 0 or not proc.stdout.strip():
             return None
@@ -3050,6 +3051,7 @@ def stop_matching_toggl(item_names: list[str], task_ids: Optional[list[str]] = N
         stop_proc = subprocess.run(
             ["python3", str(TOGGL_CLI), "stop"],
             capture_output=True, text=True, timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         _id = re.search(r"\[id:(\d+)\]", line)
         return {"description": desc, "stopped": stop_proc.returncode == 0,
@@ -3334,7 +3336,7 @@ def run_d359_met(item_name: str, slug: str) -> dict:
     try:
         proc = subprocess.run(
             ["python3", str(S897_UPDATE), f"{name_guess} met"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
         ok = proc.returncode == 0
         out = (proc.stdout or proc.stderr or "").strip()
     except Exception as e:  # noqa: BLE001
@@ -5102,7 +5104,7 @@ def main():
                 cmd.extend(["--tag", tag])
             cmd.extend(["--date", today_str])
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
                 out = proc.stdout.strip()
                 # The entry id(s) the CLI printed ("[id:N]"; two across
                 # midnight) — mobile janus ledgers them (its logged-entry
@@ -5445,6 +5447,7 @@ def main():
                  "http://ix:5558/api/refresh"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                stdin=subprocess.DEVNULL,
             )
         except Exception:
             pass
@@ -5462,6 +5465,7 @@ def main():
                      str(Path(__file__).resolve().parents[1] / "allcolors" / "allcolors.py"),
                      "--live"],
                     stdout=_aclog, stderr=_aclog, start_new_session=True,
+                    stdin=subprocess.DEVNULL,
                 )
         except Exception:
             pass
@@ -5487,6 +5491,7 @@ def main():
                              str(Path(__file__).resolve().parents[1] / "hci" / "selfie_check.py"),
                              "--apply"],
                             stdout=_sl, stderr=_sl, start_new_session=True,
+                            stdin=subprocess.DEVNULL,
                         )
                 except Exception:
                     pass
