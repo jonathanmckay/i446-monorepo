@@ -10,12 +10,23 @@ without a rebuild.
 
 | app     | bundle id          | compile flag | server                                        |
 |---------|--------------------|--------------|-----------------------------------------------|
-| dtd     | com.mckay.dtd      | APP_DTD      | `tools/dtd/dtd.py` (5560) `http://100.114.46.109:5560` |
+| dtd     | com.mckay.dtd      | APP_DTD      | `tools/dtd/dtd.py` via the Funnel: `https://ix.tail9c51d5.ts.net:8443/dtd` (bearer token; works with the VPN off, 2026-11-19) |
 | janus   | com.mckay.janus    | APP_JANUS    | `tools/janus/mobile.py` (5561) `http://100.114.46.109:5561` |
 | Inkwell | com.mckay.inkwell  | APP_INKWELL  | vault: `tools/vault-mobile` (Funnel :8443/vault); dash: `https://ix.tail9c51d5.ts.net/personal/` (WKWebView) |
 | vault     | `tools/vault-mobile` (5571)      | `https://ix.tail9c51d5.ts.net:8443/vault` (Funnel, bearer token; works with the VPN off) |
 
-HTTPS alternatives via `tailscale serve` on Ix: `https://ix.tail9c51d5.ts.net:8560`
+**dtd over the Funnel (2026-11-19).** A managed VPN (Defender) keeps taking the
+iPhone's one VPN slot, so dtd no longer depends on Tailscale. The Funnel route
+`:8443/dtd` proxies to a second, loopback-only listener in `dtd.py` (port 15560,
+`FunnelGate`): `/api/*` only, and every request must carry the device's
+vault-mobile token (`VaultSecrets.token`, allowlist `FUNNEL_DEVICES`). The app
+sends the token only to `https://ix.tail9c51d5.ts.net:8443`. Port 5560 stays
+unauthenticated and must never be a Funnel target. Re-create the route with
+`tailscale funnel --bg --https=8443 --set-path /dtd http://127.0.0.1:15560`;
+remove it with `tailscale funnel --https=8443 --set-path /dtd off`. janus is
+still tailnet-only; a tailnet-only base with no tunnel shows "not on Tailscale".
+
+Tailnet alternatives via `tailscale serve` on Ix: `https://ix.tail9c51d5.ts.net:8560`
 (dtd) and `:8561` (janus). Not 5560/5561: tailscaled binding the Tailscale IP on
 the same port stops Flask from re-binding `0.0.0.0` after a restart (2026-10-19).
 Long-press any header to change endpoints (persisted in UserDefaults).

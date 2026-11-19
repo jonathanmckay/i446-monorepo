@@ -5,6 +5,7 @@ tasks; **swipe a card right → runs the real `/did`** (`did-fast.py`): closes t
 Todoist task *and* writes its `[N]`/`{N}` points to Neon.
 
 - **URL (phone):** http://ix:5560  · HTTPS via tailscale serve: https://ix.tail9c51d5.ts.net:8560 (not :5560 — tailscaled on the same port blocks Flask's rebind)  (same access path as the personal dashboard)
+- **URL (iOS app, VPN off):** https://ix.tail9c51d5.ts.net:8443/dtd through Tailscale Funnel → loopback listener :15560 behind `FunnelGate` (bearer token, `/api/*` only, 2026-11-19). Port 15560 is reserved for it; never point the Funnel at 5560. Test: `python3 test_dtd_funnel_gate.py`.
 - **Runs on:** Ix, LaunchAgent `com.jm.dtd` (KeepAlive, RunAtLoad), logs `/tmp/dtd.{log,err}`
 - **Source:** `~/i446-monorepo/tools/dtd/dtd.py` (single file, embedded HTML, no deps beyond Flask)
 
