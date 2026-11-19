@@ -72,6 +72,18 @@
     "rent": "1354.00"
   },
   {
+    "unit_id": 1299,
+    "property_name": "c702",
+    "unit": "B301",
+    "tenant_name": "McKay, Jonathan",
+    "status": "Eligible",
+    "lease_sign_date": null,
+    "move_in": "2026-11-18",
+    "renewal_start_date": null,
+    "last_lease_renewal": null,
+    "rent": "1595.00"
+  },
+  {
     "unit_id": 102,
     "property_name": "h604",
     "unit": null,

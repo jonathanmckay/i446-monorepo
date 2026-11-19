@@ -55,6 +55,11 @@ public final class Outbox {
         message == "offline" || message.hasPrefix("unreachable")
     }
 
+    /// dtd.py FunnelGate's 401 / 429 bodies.
+    public static func isGateRefusal(_ message: String) -> Bool {
+        message == "unauthorized" || message == "rate limited"
+    }
+
     /// Replay in order. Stops at the first still-offline item (keeps it and
     /// everything after); a server-side rejection drops that item and reports
     /// it, since retrying a refused write forever would wedge the queue.
@@ -80,12 +85,16 @@ public final class Outbox {
                 guard let s = v as? String, s.hasPrefix("$ref:") else { continue }
                 if let id = ids[String(s.dropFirst(5))], !id.isEmpty { body[k] = id } else { body.removeValue(forKey: k) }
             }
-            switch await api.post(it.url, body) {
+            switch await api.post(InkwellConfig.migrated(it.url), body) {
             case .ok(let j):
                 sent += 1
                 if let r = it.ref { ids[r] = j.string("id") }
             case .error(let m):
-                if Outbox.isOffline(m) || m == "timed out" { save(queue); return (sent, rejected, refs) }
+                // The Funnel gate's refusals are about the token, not the
+                // write: keep the queue, or a bad token would eat it.
+                if Outbox.isOffline(m) || m == "timed out" || Outbox.isGateRefusal(m) {
+                    save(queue); return (sent, rejected, refs)
+                }
                 rejected.append("\(it.label): \(m)")
             }
             if let r = it.ref { refs.append(r) }

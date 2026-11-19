@@ -37,7 +37,7 @@ struct SettingsView: View {
                         dtd = InkwellConfig.dtdBase; janus = InkwellConfig.janusBase; dash = InkwellConfig.dashboardURL
                     }
                 } footer: {
-                    Text("http://100.x = direct over Tailscale. https://ix.tail9c51d5.ts.net:8560 / :8561 = via tailscale serve. Vault default is the Funnel (:8443/vault), so it works with the VPN off.")
+                    Text("dtd and vault default to the Funnel (:8443/dtd, :8443/vault), so they work with the VPN off. https://ix.tail9c51d5.ts.net:8560 / :8561 = via tailscale serve, http://100.x = direct; both need Tailscale.")
                 }
             }
             .navigationTitle("endpoints")

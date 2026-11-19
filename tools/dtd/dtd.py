@@ -13,6 +13,7 @@ Open:  http://ix:5560            (from the phone, same as the dashboard)
 from __future__ import annotations
 
 import datetime as _dt
+import hmac
 import json
 import os
 import re
@@ -1498,7 +1499,15 @@ def api_where():
     Tailscale device behind the request IP. Non-Tailscale IPs are ignored."""
     import where
     tz = (request.get_json(silent=True) or {}).get("tz", "")
-    dev = where.record_peer(_peer_ip(), str(tz))
+    # Through the Funnel the request has a public IP, so the device comes from
+    # the bearer token the gate already verified (FunnelGate), not the peer IP.
+    funnel_dev = request.environ.get("dtd.funnel_device")
+    if funnel_dev:
+        dev = funnel_dev if funnel_dev in where.PHONES else None
+        if dev:
+            where.record(dev, str(tz))
+    else:
+        dev = where.record_peer(_peer_ip(), str(tz))
     return jsonify({"ok": bool(dev), "device": dev})
 
 def _peer_ip() -> str:
@@ -2393,6 +2402,105 @@ load(false);
 
 _SRC_MTIME = os.path.getmtime(__file__)
 
+# ---------------------------------------------------------------------------
+# Funnel gate (2026-11-19): the phone's dtd app with the VPN off
+# ---------------------------------------------------------------------------
+# A managed VPN keeps taking the iPhone's one VPN slot, so Tailscale cannot be
+# relied on there. The JSON API is therefore also served to the public
+# internet through Tailscale Funnel (https://ix.tail9c51d5.ts.net:8443/dtd),
+# but ONLY via this second, loopback-only listener, where every request must
+# carry the phone's bearer token. The Funnel must never point at PORT (5560):
+# that listener is unauthenticated by design (tailnet / LAN only).
+#   tailscale funnel --bg --https=8443 --set-path /dtd http://127.0.0.1:15560
+# FUNNEL_PORT is reserved for this: anything else that binds it would be
+# published by the Funnel route whenever dtd is down.
+FUNNEL_PORT = 15560
+FUNNEL_DEVICES = {"imago-c"}           # tokens.json devices allowed in; fail closed
+FUNNEL_TOKENS = Path(os.environ.get(
+    "VAULT_MOBILE_TOKENS", Path.home() / ".config" / "vault-mobile" / "tokens.json"))
+FUNNEL_FAILS_PER_MIN = 10
+
+
+def _funnel_device(presented: str) -> str | None:
+    """The allowed device whose vault-mobile token this is, else None. Same
+    per-device token the vault tab uses (tools/vault-mobile/server.py), so the
+    app needs no second secret; compared in constant time across the set."""
+    try:
+        toks = json.loads(FUNNEL_TOKENS.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(toks, dict) or not presented:
+        return None
+    found = None
+    for dev, tok in toks.items():
+        if (dev in FUNNEL_DEVICES and isinstance(tok, str) and tok
+                and hmac.compare_digest(tok.encode(), presented.encode())):
+            found = dev
+    return found
+
+
+class FunnelGate:
+    """WSGI wrapper for the Funnel listener: /api/* only, bearer token
+    required, failed attempts rate-limited per client. Rejects before the app
+    (or the request body) is touched."""
+
+    def __init__(self, wsgi):
+        self.wsgi = wsgi
+        self._fails: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def _deny(self, start_response, status: str, error: str):
+        body = json.dumps({"ok": False, "error": error}).encode()
+        start_response(status, [("Content-Type", "application/json"),
+                                ("Content-Length", str(len(body))),
+                                ("Connection", "close")])
+        return [body]
+
+    def _recent_fails(self, client: str, add: bool = False) -> int:
+        now = time.monotonic()
+        with self._lock:
+            if len(self._fails) > 2048:      # bounded: a flood of sources can't grow it
+                self._fails.clear()
+            q = [t for t in self._fails.get(client, []) if now - t < 60]
+            if add:
+                q.append(now)
+            if q:
+                self._fails[client] = q
+            else:
+                self._fails.pop(client, None)
+            return len(q)
+
+    def __call__(self, environ, start_response):
+        if not (environ.get("PATH_INFO") or "").startswith("/api/"):
+            return self._deny(start_response, "404 Not Found", "not found")
+        # Loopback-only listener: X-Forwarded-For is whatever tailscaled set.
+        client = (environ.get("HTTP_X_FORWARDED_FOR") or environ.get("REMOTE_ADDR") or "?")
+        client = client.split(",")[0].strip()[:64]
+        if self._recent_fails(client) >= FUNNEL_FAILS_PER_MIN:
+            return self._deny(start_response, "429 Too Many Requests", "rate limited")
+        hdr = environ.get("HTTP_AUTHORIZATION") or ""
+        dev = _funnel_device(hdr[7:].strip()) if hdr.startswith("Bearer ") else None
+        if dev is None:
+            self._recent_fails(client, add=True)
+            return self._deny(start_response, "401 Unauthorized", "unauthorized")
+        environ["dtd.funnel_device"] = dev
+        return self.wsgi(environ, start_response)
+
+
+def _serve_funnel():
+    """Run the gated listener beside the main one. A failed bind is retried,
+    never fatal: the tailnet server must stay up regardless."""
+    from werkzeug.serving import make_server
+    while True:
+        try:
+            srv = make_server("127.0.0.1", FUNNEL_PORT, FunnelGate(app.wsgi_app), threaded=True)
+        except OSError as e:
+            print(f"WARN funnel listener :{FUNNEL_PORT}: {e}", file=sys.stderr, flush=True)
+            time.sleep(15)
+            continue
+        srv.serve_forever()
+
+
 def _watch_own_source():
     """Exit when dtd.py changes on disk so launchd (KeepAlive=true) relaunches
     a FRESH process — the durable fix for the recurring "server is stale" bug
@@ -2416,6 +2524,7 @@ def _watch_own_source():
 
 if __name__ == "__main__":
     threading.Thread(target=_watch_own_source, daemon=True).start()
+    threading.Thread(target=_serve_funnel, daemon=True).start()
     # threaded=True: Werkzeug's dev server is single-threaded by default, so
     # a single slow request (a force=True refresh, or /api/done's did-fast
     # subprocess) blocked every OTHER client's request behind it too —

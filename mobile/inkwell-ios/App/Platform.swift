@@ -61,7 +61,8 @@ enum Tailnet {
     static func missing(for base: String) -> Bool { needs(base) && !isUp() }
 
     static func needs(_ base: String) -> Bool {
-        guard let host = URL(string: base)?.host?.lowercased() else { return false }
+        guard let url = URL(string: base), let host = url.host?.lowercased() else { return false }
+        if InkwellConfig.isFunnel(url) { return false }           // public: works with the VPN off
         if host.hasSuffix(".ts.net") { return true }
         let o = host.split(separator: ".").compactMap { UInt32($0) }
         return o.count == 4 && o[0] == 100 && (64...127).contains(o[1])

@@ -38,7 +38,11 @@ public final class Api {
         return await run(req)
     }
 
-    private func run(_ req: URLRequest) async -> ApiResult {
+    private func run(_ request: URLRequest) async -> ApiResult {
+        var req = request
+        if let u = req.url, let token = InkwellConfig.bearer(for: u) {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         do {
             let (data, resp) = try await session.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0

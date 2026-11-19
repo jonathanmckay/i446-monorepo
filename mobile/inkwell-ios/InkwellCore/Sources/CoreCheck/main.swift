@@ -269,6 +269,29 @@ do {
     InkwellConfig.resetToDefaults()
 }
 
+// dtd over the Funnel (2026-11-19): token only to Ix's Funnel listener, the old
+// default is retired, and writes queued against it follow the new base
+do {
+    InkwellConfig.resetToDefaults()
+    InkwellConfig.bearer = "tok"
+    let u = { (s: String) in URL(string: s)! }
+    eq(InkwellConfig.bearer(for: u(InkwellConfig.defaultDtd + "/api/tasks")), "tok", "bearer goes to the Funnel route")
+    check(InkwellConfig.bearer(for: u("https://ix.tail9c51d5.ts.net:8560/api/tasks")) == nil, "not to the tailnet serve port")
+    check(InkwellConfig.bearer(for: u("https://evil.tail0000.ts.net:8443/dtd/api/tasks")) == nil, "not to another tailnet's host")
+    check(InkwellConfig.bearer(for: u("http://ix.tail9c51d5.ts.net:8443/dtd/api/tasks")) == nil, "never over plain http")
+    check(InkwellConfig.bearer(for: u("http://100.114.46.109:5560/api/tasks")) == nil, "not to the direct IP")
+    InkwellConfig.bearer = ""
+    check(InkwellConfig.bearer(for: u(InkwellConfig.defaultDtd + "/api/tasks")) == nil, "no token, no header")
+    InkwellConfig.dtdBase = InkwellConfig.legacyDtd + "/"
+    eq(InkwellConfig.dtdBase, InkwellConfig.defaultDtd, "a stored copy of the old default counts as unset")
+    eq(InkwellConfig.migrated(InkwellConfig.legacyDtd + "/api/done"), InkwellConfig.defaultDtd + "/api/done", "queued write follows the new base")
+    eq(InkwellConfig.migrated("http://100.114.46.109:5561/api/log"), "http://100.114.46.109:5561/api/log", "janus URLs untouched")
+    InkwellConfig.dtdBase = "https://ix.tail9c51d5.ts.net:8560"
+    eq(InkwellConfig.migrated(InkwellConfig.legacyDtd + "/api/done"), "https://ix.tail9c51d5.ts.net:8560/api/done", "…or a hand-set base")
+    check(Outbox.isGateRefusal("unauthorized") && Outbox.isGateRefusal("rate limited") && !Outbox.isGateRefusal("HTTP 500"), "gate refusals hold the queue")
+    InkwellConfig.resetToDefaults()
+}
+
 // markdown list autofill continues / breaks out like Obsidian
 do {
     // Insert at caret (end of line): continue the marker on the next line.
