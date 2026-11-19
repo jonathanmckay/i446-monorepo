@@ -252,3 +252,84 @@ if __name__ == "__main__":
     import sys
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── Score before lock (2026-11-19) ────────────────────────────────────────
+# The lock ran before the -1n reconcile, so a block's own ritual score was
+# written to P after its cell froze and landed in the next block's residual
+# (卯 blank with 13 -1n 分, the 13 sitting in 辰).
+
+def _fire_src():
+    i = SRC.index("# Score BEFORE locking")
+    return SRC[i:SRC.index("run_block_ritual_cards(hour, dry_run=dry_run, live=live)", i)]
+
+
+def test_fire_scores_and_syncs_before_the_lock_and_notifies_after():
+    src = _fire_src()
+    lock = src.index("neon_lock_cell_with_retry(today, lock_col")
+    assert src.index("reconcile_p_for_day(today, hour") < lock
+    assert src.index("run_toggl_point_sync(dry_run=dry_run)") < lock
+    assert lock < src.index("annotate_block_fired(hour")
+    assert lock < src.index("notify_block_score(block_name")
+    assert "floor=score" in src[lock:lock + 120]
+
+
+def test_lock_still_runs_when_scoring_raises():
+    mod = _load_daemon()
+    order = []
+    with patch.object(mod, "ensure_excel_ready"), \
+         patch.object(mod, "evaluate_and_mark_block", side_effect=RuntimeError("toggl down")), \
+         patch.object(mod, "run_toggl_point_sync", side_effect=lambda **k: order.append("sync")), \
+         patch.object(mod, "neon_lock_cell_with_retry",
+                      side_effect=lambda *a, **k: order.append(("lock", a[1], k.get("floor")))), \
+         patch.object(mod, "self_heal_unlocked_blocks", side_effect=lambda *a, **k: order.append("heal")), \
+         patch.object(mod, "annotate_block_fired", side_effect=lambda *a, **k: order.append("annotate")), \
+         patch.object(mod, "notify_block_score", side_effect=lambda *a, **k: order.append("notify")), \
+         patch.object(mod, "run_block_ritual_cards", side_effect=lambda *a, **k: order.append("cards")):
+        mod.run_lock_and_mark(dry_run=True, force_hour=6)
+    assert order == ["sync", ("lock", "G", 0), "heal", "cards"], order
+
+
+def test_fire_passes_the_block_score_as_the_lock_floor():
+    mod = _load_daemon()
+    order = []
+    with patch.object(mod, "ensure_excel_ready"), \
+         patch.object(mod, "evaluate_and_mark_block", return_value={}), \
+         patch.object(mod, "score_block_from_emojis", return_value=13), \
+         patch.object(mod, "reconcile_p_for_day", side_effect=lambda *a, **k: order.append("reconcile")), \
+         patch.object(mod, "run_toggl_point_sync", side_effect=lambda **k: order.append("sync")), \
+         patch.object(mod, "neon_lock_cell_with_retry",
+                      side_effect=lambda *a, **k: order.append(("lock", a[1], k.get("floor")))), \
+         patch.object(mod, "self_heal_unlocked_blocks", side_effect=lambda *a, **k: order.append("heal")), \
+         patch.object(mod, "annotate_block_fired", side_effect=lambda *a, **k: order.append("annotate")), \
+         patch.object(mod, "notify_block_score", side_effect=lambda *a, **k: order.append("notify")), \
+         patch.object(mod, "run_block_ritual_cards", side_effect=lambda *a, **k: order.append("cards")):
+        mod.run_lock_and_mark(dry_run=True, force_hour=6)
+    assert order == ["reconcile", "sync", ("lock", "G", 13), "heal",
+                     "annotate", "notify", "cards"], order
+
+
+def test_floor_credits_the_block_its_score_when_penalties_drag_the_residual_under():
+    # 06:00: D = -46 of 0n penalties + 13 of 卯 rituals. Without the floor
+    # the clamp blanks 卯 and the 13 stays in 辰's residual.
+    mod = _load_daemon()
+    writes, fills = [], []
+    with patch.object(mod.neon_excel, "read", return_value={
+            "ok": True, "row": 220, "col": "G", "value": "-33", "formula": "=D220-x"}), \
+         patch.object(mod.neon_excel, "write",
+                      side_effect=lambda *a, **k: writes.append(k) or {"ok": True}), \
+         patch.object(mod, "_fill_cell", side_effect=lambda r, c, rgb: fills.append((r, c, rgb))):
+        out = mod.neon_lock_cell(dt.date(2026, 11, 19), "G", floor=13)
+    assert out == "LOCKED 13" and writes[0]["value"] == "13" and fills == []
+
+
+def test_floor_never_lowers_a_larger_residual():
+    mod = _load_daemon()
+    writes = []
+    with patch.object(mod.neon_excel, "read", return_value={
+            "ok": True, "row": 220, "col": "H", "value": "87", "formula": "=D220-x"}), \
+         patch.object(mod.neon_excel, "write",
+                      side_effect=lambda *a, **k: writes.append(k) or {"ok": True}), \
+         patch.object(mod, "_fill_cell"):
+        out = mod.neon_lock_cell(dt.date(2026, 11, 19), "H", floor=13)
+    assert out == "LOCKED 87"

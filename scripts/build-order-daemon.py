@@ -566,9 +566,15 @@ def _date_str(d: dt.date) -> str:
     return f"{d.month}/{d.day}"
 
 
-def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str:
+def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False,
+                   floor: float = 0) -> str:
     """Read computed value of `col` for target_date, write back as literal.
     No-op if the cell is not currently a formula. Returns status string.
+
+    `floor` is the block's own -1n score: the lock never freezes less than
+    that, so a residual dragged under it by live 0n penalties (the 06:00
+    case below) still credits 卯 its rituals instead of blanking the block
+    and leaving them in 辰's residual (JM 2026-11-19).
 
     Negative residuals clamp to 0: D includes live 0n penalty rollups that sit
     negative until the morning habits are logged, so the 06:00 fire would
@@ -597,6 +603,8 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False) -> str
             v = 0.0
         if v < 0:
             v = 0.0
+        if floor and v < floor:
+            v = float(floor)
         if v == int(v):
             v = int(v)
         if v == 0:
@@ -653,7 +661,7 @@ end tell
 
 def neon_lock_cell_with_retry(target_date: dt.date, col: str,
                               dry_run: bool = False, attempts: int = 3,
-                              retry_wait: int = 15) -> str:
+                              retry_wait: int = 15, floor: float = 0) -> str:
     """neon_lock_cell, retried on transient failure.
 
     A single osascript_timeout at fire time used to be terminal: the fire
@@ -667,7 +675,8 @@ def neon_lock_cell_with_retry(target_date: dt.date, col: str,
     """
     status = "ERROR"
     for attempt in range(1, attempts + 1):
-        status = neon_lock_cell(target_date, col, dry_run=dry_run)
+        kw = {"floor": floor} if floor else {}
+        status = neon_lock_cell(target_date, col, dry_run=dry_run, **kw)
         # Only transient outcomes are worth retrying. EMPTY/ALREADY_LOCKED/
         # LOCKED/DRY_RUN are all final.
         if not (status == "FAILED" or status == "ERROR" or status.startswith("ERROR")):
@@ -1651,42 +1660,52 @@ def run_lock_and_mark(dry_run=False, force_hour=None):
     # the 20s probe cost buy back the whole fire's writes.
     ensure_excel_ready(dry_run=dry_run)
 
-    lock_col = LOCK_AT_FIRE_HOUR.get(hour)
-    if lock_col:
-        neon_lock_cell_with_retry(today, lock_col, dry_run=dry_run)
-    # Backstop: lock any earlier block whose own fire's lock failed all
-    # retries (a still-live residual corrupts every later block's split).
-    self_heal_unlocked_blocks(today, hour, dry_run=dry_run)
-
-    # Phase 1: evaluate daemon-checkable habits and write emojis
+    # Score BEFORE locking (JM 2026-11-19). The lock used to run first, so a
+    # block's own -1n score reached P after its cell was frozen and landed in
+    # the NEXT block's residual (卯 blank, its 13 inside 辰). Everything that
+    # credits the just-ended block now writes first; the lock follows and
+    # must run even if scoring fails, since an unlocked block corrupts the
+    # whole day's split.
     live = None
+    score = 0
+    scored = False
     if block_name:
-        live = evaluate_and_mark_block(block_name, hour, today, dry_run=dry_run)
+        try:
+            # Phase 1: evaluate daemon-checkable habits and write emojis
+            live = evaluate_and_mark_block(block_name, hour, today, dry_run=dry_run)
 
-        # Phase 2: score from header emojis, validated against this run's live
-        # results so stale markers from prior days don't award phantom points
-        score = score_block_from_emojis(block_name, live=live)
-        log(f"lock-and-mark: {block_name} scored {score}/13")
+            # Phase 2: score from header emojis, validated against this run's
+            # live results so stale markers don't award phantom points
+            score = score_block_from_emojis(block_name, live=live)
+            log(f"lock-and-mark: {block_name} scored {score}/13")
 
-        # Phase 3: reconcile -1₦ (P) to the validated total of ALL fired blocks.
-        # SET (not append) so it's idempotent and self-heals late markers (e.g. a
-        # prayer logged after its block's boundary) that the old per-block append
-        # dropped forever — the cause of P (53) drifting below the header (79).
-        reconcile_p_for_day(today, hour, current_live=live, dry_run=dry_run)
-        annotate_block_fired(hour, dry_run=dry_run)
-
-        # Phase 4: notify with score breakdown
-        notify_block_score(block_name, score, dry_run=dry_run, live=live)
+            # Phase 3: reconcile -1₦ (P) to the validated total of ALL fired
+            # blocks. SET (not append) so it's idempotent and self-heals late
+            # markers (e.g. a prayer logged after its block's boundary).
+            reconcile_p_for_day(today, hour, current_live=live, dry_run=dry_run)
+            scored = True
+        except Exception as e:  # noqa: BLE001 — scoring must never skip the lock
+            log(f"lock-and-mark: scoring failed before the lock: {e}")
     else:
         log(f"lock-and-mark: hour={hour:02d} has no block to score (day start)")
 
-    # Toggl #xk88 -> 0分 points (same 2h cadence). The 0n value-tag MINUTE
-    # totals (-1/-2/-3 -> AV/AW/AX) are no longer synced here: they are
-    # credited once, at timer stop, by mcp/toggl_server/tag_credits.py
-    # (JM 2026-09-17). The old absolute SET bucketed entries by UTC date
-    # (yesterday 17:00+ PDT landed on today's row) and clobbered AX's
-    # =N+O formula every cycle.
-    run_toggl_point_sync(dry_run=dry_run)
+    # Toggl #xk88 -> 0分 points for the just-ended block, also before its lock.
+    # (0n value-tag minutes are credited at timer stop by tag_credits.py.)
+    try:
+        run_toggl_point_sync(dry_run=dry_run)
+    except Exception as e:  # noqa: BLE001 — never skip the lock
+        log(f"lock-and-mark: toggl point sync failed before the lock: {e}")
+
+    lock_col = LOCK_AT_FIRE_HOUR.get(hour)
+    if lock_col:
+        neon_lock_cell_with_retry(today, lock_col, dry_run=dry_run, floor=score)
+    # Backstop: lock any earlier block whose own fire's lock failed.
+    self_heal_unlocked_blocks(today, hour, dry_run=dry_run)
+
+    if scored:
+        annotate_block_fired(hour, dry_run=dry_run)
+        # Phase 4: notify with score breakdown (slow; after the lock)
+        notify_block_score(block_name, score, dry_run=dry_run, live=live)
 
     # -1neon card lifecycle: retire the just-ended block's leftover cards
     # (auto -1t/-1l close-if-earned per `live`) and spawn the new block's full
