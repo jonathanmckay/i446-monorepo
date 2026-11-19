@@ -26,7 +26,11 @@ whose week is the next 7 days.
    characters (default 24, ellipsis on the cut); as many text columns as fit
    the terminal width are shown and the rest are named in a footer. `--cols
    N` caps the text columns. White fills render as terminal default; blank
-   cells are `·`. 3. Asks: **What did I learn this week about my emotions that I should
+   cells are `·`.    **0s gate (2026-11-19):** if any day of the window before today has no 0s
+   survey (E/F/G/H/I/P/Q/R all blank, or no row), it lists each day with its
+   `/0s YYYY-MM-DD` command and exits 1: no question, nothing written, card
+   left open. Fill them and rerun. Today is never required.
+3. Asks: **What did I learn this week about my emotions that I should
    remember?** One thought per line; Enter on an empty line or `Ctrl+S` saves
    and exits (`^D` too); `Ctrl+C` or an empty answer aborts without writing.
 4. Writes the answer (one `• ` bullet per line, matching the existing cells)
@@ -86,6 +90,7 @@ card closed, then dtd returns. The script skips its cmux tab-close when
 - `--from-text "…"` — non-interactive answer (still writes + marks; pane not closed).
 - `--print-script --from-text "…"` — print the write AppleScript (`HCME_ROW` env sets the row).
 - `--no-mark` — write X but leave the `1 hcme` card open.
+- `--skip-0s-check` — ask even when a day has no 0s survey. Only when JM asks for it.
 - `--today YYYY-MM-DD` — override today for tests.
 - `--cell N` / `--cols N` — text cell width / max text columns.
 

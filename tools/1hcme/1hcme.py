@@ -85,6 +85,10 @@ TEXT_COLS = [  # (col, header) in priority order
     ("N", "Body"),
 ]
 DAY_ABBR = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]  # weekday() order
+# A day's 0s survey counts as filled when any of these is non-blank. D
+# (motivation) is left out on purpose: it is written by the PREVIOUS day's
+# survey, so an unfilled day still has it.
+SURVEY_COLS = ["E", "F", "G", "H", "I", "P", "Q", "R"]
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +147,20 @@ def window(target: _dt.date, today: _dt.date) -> list[_dt.date]:
     if end < start:
         end = start
     return [start + _dt.timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+def missing_0s(dates: list[_dt.date], recs: dict[int, dict], today: _dt.date) -> list[_dt.date]:
+    """Days of the week under review with no 0s survey (JM 2026-11-19: "/1hcme
+    enforces that all the 0s are filled out"). Today is never required: 0s is
+    filled the day after, so today's row is blank by design."""
+    out = []
+    for i, d in enumerate(dates):
+        if d >= today:
+            continue
+        cells = (recs.get(i) or {}).get("cells", {})
+        if not any((cells.get(c) or ("",))[0].strip() for c in SURVEY_COLS):
+            out.append(d)
+    return out
 
 
 def load(target: _dt.date, today: _dt.date):
@@ -717,6 +735,8 @@ def main(argv=None) -> int:
     ap.add_argument("--from-json", help="write an answers file left by --detach (no sheet read)")
     ap.add_argument("--unlink-json", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--report-hdr", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--skip-0s-check", action="store_true",
+                    help="ask even when a day of the week has no 0s survey")
     ap.add_argument("--today", help="override today (tests)")
     ap.add_argument("--cell", type=int, default=CELL_W, help="text cell width (chars, default %d)" % CELL_W)
     ap.add_argument("--cols", type=int, help="max text columns (default: as many as fit)")
@@ -768,6 +788,17 @@ def main(argv=None) -> int:
             print("  " + ln)
         print(DIM + "a new answer REPLACES it" + RESET)
         print()
+
+    missing = [] if args.skip_0s_check else missing_0s(dates, recs, today)
+    if missing:
+        print(BOLD + "✗ 0s not filled for %d day%s of this week:" % (
+            len(missing), "" if len(missing) == 1 else "s") + RESET)
+        for d in missing:
+            print("  %s %d/%d   /0s %s" % (DAY_ABBR[d.weekday()], d.month, d.day, d.isoformat()))
+        print("fill them, then run /1hcme again — nothing written; %s card left open" % HABIT)
+        if not args.print_context:
+            _hold_pane(args)
+            return 1
 
     if args.print_context:
         return 0

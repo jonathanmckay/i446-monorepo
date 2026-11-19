@@ -58,8 +58,17 @@ class Env:
             monkeypatch.setenv("DTD_TASK_ID", "T1")
             monkeypatch.setenv("DTD_HIDE_IDS_FILE", str(self.hide))
         trec = {"row": 300, "cells": {"A": ("11.1", (255, 255, 255), (0, 0, 0))}}
-        monkeypatch.setattr(hm, "load", lambda target, today: (
-            hm.window(target, today), {0: trec}, None, trec))
+        self.blank_days = set()  # window indexes whose 0s survey is empty
+        white = ((255, 255, 255), (0, 0, 0))
+
+        def _load(target, today):
+            dates = hm.window(target, today)
+            recs = {i: {"row": 300 + i, "cells": {
+                "A": ("11.1",) + white,
+                "E": ("" if i in self.blank_days else "a title",) + white}}
+                for i in range(len(dates))}
+            return dates, recs, None, recs[0]
+        monkeypatch.setattr(hm, "load", _load)
         monkeypatch.setattr(hm, "read_answer", lambda: self.answer)
         monkeypatch.setattr(hm, "write_answer", self._write)
         monkeypatch.setattr(hm, "run_bounded", self._run)
@@ -318,3 +327,42 @@ def test_stale_pending_files_are_named_at_the_next_run(env, capsys):
     env.answer = ""
     env.form()
     assert "--from-json %s" % path in capsys.readouterr().out
+
+
+# ── 0s gate (2026-11-19): "/1hcme enforces that all the 0s are filled out" ──
+
+def test_a_day_without_0s_blocks_the_check_in_and_names_the_day(env, capsys):
+    env.blank_days = {3}                       # Su 11/1 of the 10/29-11/4 window
+    assert env.form("--from-text", "calm") == 1
+    assert env.calls == [] and env.spawned == []
+    out = capsys.readouterr().out
+    assert "/0s 2026-11-01" in out and "card left open" in out
+
+
+def test_all_days_filled_saves_as_before(env):
+    assert env.form("--from-text", "calm") == 0
+    assert env.kinds()[0] == "write"
+
+
+def test_skip_0s_check_asks_anyway(env):
+    env.blank_days = {3}
+    assert env.form("--skip-0s-check", "--from-text", "calm") == 0
+    assert env.kinds()[0] == "write"
+
+
+def test_print_context_reports_missing_days_without_failing(env, capsys):
+    env.blank_days = {0, 6}
+    assert env.form("--print-context") == 0
+    out = capsys.readouterr().out
+    assert "/0s 2026-10-29" in out and "/0s 2026-11-04" in out
+
+
+def test_today_and_a_motivation_only_row_rules(mod):
+    d0 = dt.date(2026, 11, 12)
+    dates = [d0 + dt.timedelta(days=i) for i in range(3)]
+    cell = lambda v: (v, (255, 255, 255), (0, 0, 0))
+    recs = {0: {"row": 1, "cells": {"D": cell("motivation only")}},   # prior day's survey wrote D
+            1: {"row": 2, "cells": {"P": cell("7.5")}},
+            2: {"row": 3, "cells": {}}}
+    assert mod.missing_0s(dates, recs, today=dates[2]) == [dates[0]]   # today (index 2) not required
+    assert mod.missing_0s(dates, {}, today=dates[2] + dt.timedelta(days=1)) == dates  # no row = missing
