@@ -217,6 +217,8 @@ DTD_TIMER="/tmp/dtd-$DTD_ID.timer"
 # POSTs change-footer to it ~10x/s. See dtd-ticker.py.
 DTD_PORT="/tmp/dtd-$DTD_ID.port"
 DTD_HDRGEN="/tmp/dtd-$DTD_ID.hdrgen"
+# Stuck-tty guard, POSTed by the watcher as transform($DTD_TTYGUARD) (see the tty guard note there).
+DTD_TTYGUARD="python3 '$HOME/i446-monorepo/tools/did/dtd_tty_guard.py' --check --log '$STATE_DIR/dtd-tty-stuck.log' --timing '$DTD_TIMING' --events '$DTD_EVENTS' --id '$DTD_ID' --hdr '$DTD_HDR' --hdrgen '$DTD_HDRGEN'"
 # Day tally ("<points> 分 · <done> done") for the header. A background loop pulls
 # it from the Ix mobile server's /api/summary (the single cross-machine
 # computation) into this file; the header generator reads the file (no network
@@ -4153,6 +4155,30 @@ TALLY_PID=$!
       # JM's own timer running: 1s cadence so the top row's glyph moves (2026-10-16).
       (( _acw >= 2 )) && [[ -s "$DTD_TIMER" ]] && break
     done
+    # tty guard (bug 2026-11-19, "dtd froze"): fzf alive and idle, but the tty
+    # was back in cooked mode (icanon isig -echo, intr undef: the edit script's
+    # exit state), so no key reached fzf until Enter. Cause not found (six pty
+    # repros stayed raw; see dtd_tty_guard.py), so detect and recover: when the
+    # tty shows icanon, POST the guard as a transform(). fzf runs POSTed actions
+    # from its own loop, so the check queues behind any execute() child that
+    # owns a cooked tty on purpose (edit form, prompts, surveys) and only heals
+    # a tty that is cooked while fzf is idle. It logs evidence to
+    # $STATE_DIR/dtd-tty-stuck.log for the next round of root-causing.
+    # Throttled: a form open for minutes is cooked on every cycle. Detached,
+    # because fzf holds the HTTP reply until its loop is free.
+    if [[ "$(stty -a < /dev/tty 2>/dev/null)" == *" icanon "* ]]; then
+      _tgp=$(cat "$DTD_PORT" 2>/dev/null)
+      if [[ -n "$_tgp" ]] && (( EPOCHSECONDS - ${last_ttyguard:-0} >= 20 )); then
+        last_ttyguard=$EPOCHSECONDS
+        if [[ -n "$FZF_API_KEY" ]]; then
+          ( curl -s -m 5 -H "X-API-Key: $FZF_API_KEY" -XPOST "localhost:$_tgp" --data "transform($DTD_TTYGUARD)" </dev/null >/dev/null 2>&1 & )
+        else
+          ( curl -s -m 5 -XPOST "localhost:$_tgp" --data "transform($DTD_TTYGUARD)" </dev/null >/dev/null 2>&1 & )
+        fi
+      fi
+    else
+      last_ttyguard=0
+    fi
     # Ix sessions claim into Ix's store, which nothing sends here (2026-11-02:
     # /1-1n claimed on Ix, sat at #20 in Straylight's dtd). Pull it into
     # remote/ix/ every ~2s; the mtime watch above picks up the change. No-op on Ix.
