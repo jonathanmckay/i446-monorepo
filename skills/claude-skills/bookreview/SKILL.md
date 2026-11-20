@@ -167,6 +167,23 @@ git commit -m "Add review: <Title>"
 git push
 ```
 
+**On Ix the blog folder has no `.git`** (it is a Syncthing copy; `git` there
+resolves to the vault repo and fails with "is in submodule"). Publish through
+a scratch clone instead (2026-11-20):
+
+```bash
+git clone -q --depth 1 --recurse-submodules --shallow-submodules git@github.com:jonathanmckay/o315-blog-v3.git "$SCRATCH/blogclone"
+cp /Users/mckay/vault/hcmp/o315/blog/content/reviews/<slug>.md "$SCRATCH/blogclone/content/reviews/"
+cd "$SCRATCH/blogclone" && git add content/reviews/<slug>.md && git commit -m "Add review: <Title>" && git push origin HEAD:main
+```
+
+**Links between reviews:** in the vault, link another review by relative
+path (`[text](other-review.md)`, or `../2025/other-review.md` across years)
+so Obsidian follows it. The sync rewrites it to `/reviews/<slug>/` in the blog
+copy when the target review has a frontmatter `slug`
+(`rewrite_review_links`, `scripts/test_review_links.py`). Never pass `--prune`
+to the sync: ~690 blog reviews have no vault source.
+
 Then wait for the GitHub Actions deploy to complete:
 
 ```bash
@@ -184,7 +201,12 @@ If the deploy fails, check `gh run view <run_id> --repo jonathanmckay/o315-blog-
 curl -s -o /dev/null -w "%{http_code}" "https://jonathanmckay.com/reviews/<slug>/"
 ```
 
-If the response is `200`, open it in Chrome for the user to see:
+If the response is `200`, always open it in Chrome and look at it (JM
+2026-11-20: by default when publishing). Use the Chrome JM is sitting at, via
+`mcp__claude-in-chrome__*` (`tabs_context_mcp` → `navigate` → one
+`screenshot`), check the title, body and any links render, and leave the tab
+open for him. `open -a "Google Chrome"` on Ix opens a window he cannot see;
+use it only when the extension is not connected:
 
 ```bash
 open -a "Google Chrome" "https://jonathanmckay.com/reviews/<slug>/"
