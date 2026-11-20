@@ -26,6 +26,15 @@ class Neg1nComplicationService : SuspendingComplicationDataSourceService() {
 
     override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationData? {
         val status = DataLayerReader.readLatest(applicationContext)
+        // The 30-minute nudge rides this refresh too: it re-arms the alarm
+        // (lost on reboot/update) and delivers or clears a nudge the alarm
+        // itself could not settle. Never allowed to break the render.
+        try {
+            NudgeScheduler.arm(applicationContext)
+            NudgeCheck.onStatus(applicationContext, status)
+        } catch (e: Exception) {
+            android.util.Log.e("Neg1n", "Neg1nComplicationService: nudge hook failed", e)
+        }
         return buildData(request.complicationType, status)
     }
 

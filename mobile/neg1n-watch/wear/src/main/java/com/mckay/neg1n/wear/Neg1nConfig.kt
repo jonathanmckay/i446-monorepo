@@ -13,6 +13,18 @@ object Neg1nConfig {
 
     const val PREFS_NAME = "neg1n_wear_prefs"
 
+    /** Block start hour -> glyph, each block BLOCK_HOURS_LONG hours. Mirrors
+     * BLOCK_HOURS in tools/watch/neg1n_status.py, which reads the clock on
+     * Ix: the watch pins the same zone, so a trip to another timezone can't
+     * make its idea of the current block disagree with the server's (the
+     * 30-minute nudge compares the two, see NudgeLogic). */
+    val BLOCK_HOURS: List<Pair<Int, String>> = listOf(
+        4 to "卯", 6 to "辰", 8 to "巳", 10 to "午", 12 to "未",
+        14 to "申", 16 to "酉", 18 to "戌", 20 to "亥",
+    )
+    const val BLOCK_HOURS_LONG = 2
+    val ZONE: java.time.ZoneId = java.time.ZoneId.of("America/Los_Angeles")
+
     // --- day-points, hcb, hcmp complications (added alongside -1n) ---
     const val DATA_PATH_DAY_POINTS = "/neg1n_day_points"
     const val DATA_PATH_HCB = "/neg1n_hcb"

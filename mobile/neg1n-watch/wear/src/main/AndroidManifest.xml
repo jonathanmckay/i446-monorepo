@@ -4,6 +4,15 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 30-minute -1n nudge (NudgeCheck.kt): a local notification from an
+         exact alarm. USE_EXACT_ALARM is granted at install on API 33+ (this
+         app is sideloaded, so the Play restriction on it does not apply);
+         SCHEDULE_EXACT_ALARM covers API 31-32. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:allowBackup="true"
@@ -135,6 +144,17 @@
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
                 android:value="900" />
         </service>
+
+        <!-- Alarm target for the 30-minute nudge; the two system actions
+             only re-arm the alarm, which a reboot or an update clears. -->
+        <receiver
+            android:name=".NudgeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Reacts to the phone pushing a fresh status over the Data Layer.
              All 4 paths (bug found 2026-09-08: this only ever matched

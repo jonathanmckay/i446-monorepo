@@ -58,6 +58,8 @@ class RitualListActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_ritual_list)
+        NudgeScheduler.arm(applicationContext)
+        requestNudgePermissionIfNeeded()
 
         emptyText = findViewById(R.id.emptyText)
         pendingCompletions = PendingCompletions.fromPrefs(applicationContext)

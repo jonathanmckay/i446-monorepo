@@ -20,6 +20,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        NudgeScheduler.arm(applicationContext)
+        requestNudgePermissionIfNeeded()
         val textView = findViewById<TextView>(R.id.statusText)
         textView.text = "-1n\nloading..."
         CoroutineScope(Dispatchers.Main).launch {
