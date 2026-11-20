@@ -22,6 +22,7 @@ directory mtime advances; dtd's watcher reloads on that.
 
 Usage:
   agent_claims.py claim <query>   fuzzy-match a task in the dtd cache, claim it
+  agent_claims.py dt [<query>]    /d semantics, plus start the claimed task's timer
   agent_claims.py hook            UserPromptSubmit fast path for `/d <task>: ...`
   agent_claims.py new <task>      create a today task and claim it
   agent_claims.py claim --also <query>   claim another task WITHOUT releasing this session's others
@@ -828,7 +829,7 @@ def push() -> None:
         pass
 
 
-HOOK_RE = __import__("re").compile(r"^\s*/(?:d|claim)(?:\s+(.*))?$", __import__("re").S)
+HOOK_RE = __import__("re").compile(r"^\s*/(?:d|dt|claim)(?:\s+(.*))?$", __import__("re").S)
 # `/d 21 can you look at this?` (2026-10-28): a row number with the request
 # run on after it, no colon. A URL's `https:` is not the task/request colon.
 ROW_PREFIX_RE = __import__("re").compile(r"^(\d{1,3})\s+\S")
@@ -886,6 +887,69 @@ def new_task(content: str) -> dict:
     except OSError:
         pass
     return task
+
+
+def _timer_tools():
+    base = Path(__file__).resolve().parents[2]
+    modules = []
+    for name, path in (("tg_for_claims", base / "tools/tg/tg-fast.py"),
+                       ("toggl_for_claims", base / "mcp/toggl_server/toggl_cli.py")):
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        modules.append(mod)
+    return modules
+
+
+def start_task_timer(task: dict) -> str:
+    """Switch to the resolved task, never parse its title as a /tg command."""
+    import contextlib
+    import io
+
+    tg, cli = _timer_tools()
+    tid = str(task["id"])
+    current = cli.toggl_api.get_current_cached()
+    linked = timer_link(tid, root=CLAIMS_DIR)
+    if current and linked and str(current["id"]) == str(linked["entry_id"]):
+        return f"Timer already running: {current.get('description', '')}"
+
+    clean = " ".join(_did().ANNOT_RE.sub("", task.get("content", "")).replace("😈", "").split())
+    if not clean:
+        raise ValueError("the task has no timer description")
+    labels = [label for label in task.get("labels", []) if label in cli.PROJECT_MAP]
+    if not re.search(r"@\w+", clean) and len(labels) == 1:
+        clean += f" @{labels[0]}"
+    desc, project, tags = tg.resolve(clean)
+    args = [desc, project, *tags, "--task", tid]
+    due = _due_str(task.get("due"))
+    if due:
+        args += ["--due", due]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        cli.cmd_stop([])
+        output.seek(0)
+        output.truncate()
+        cli.cmd_start(args)
+    current = cli.toggl_api.get_current_cached()
+    if not current:
+        raise RuntimeError("Toggl did not return a running timer after start")
+    if not link_timer(tid, current["id"], due, desc, root=CLAIMS_DIR):
+        raise RuntimeError("the running timer could not be linked to the task")
+    return output.getvalue().strip()
+
+
+def _hook_claim(task: dict, session: str, *, timer: bool, created: bool = False) -> str:
+    rec = claim(task, session)
+    prefix = "created and 😈 claimed" if created else "😈 claimed"
+    out = f"[claim hook] {prefix}: {rec['task']} (id {rec['task_id']})."
+    if timer:
+        try:
+            out += " " + start_task_timer(task)
+        except (OSError, RuntimeError, ValueError, ImportError) as e:
+            out += f" Timer failed: {e}. The claim is held; report the timer failure."
+    push()
+    _retitle(session)
+    return out + " Already done; don't create, claim, or start the timer again."
 
 
 VALUE_RE = __import__("re").compile(r"^\s*\[(\d+)\]\s*$")
@@ -1012,6 +1076,7 @@ def hook(payload: str) -> str:
     m = HOOK_RE.match(prompt)
     if not m or not session:
         return ""
+    timer = prompt.lstrip().split(None, 1)[0] == "/dt"
     arg = (m.group(1) or "").strip()
     # The task is the first line, up to a colon. Anything after (a `:` or a
     # newline) is the request: `/d work offline sync` + a pasted /bug
@@ -1029,7 +1094,13 @@ def hook(payload: str) -> str:
         # list with ids so it can pick (one claim call) or create (one new
         # call) without a second round trip; claim nothing here.
         tq = df.load_task_queue()
-        return bare_d_line(all_tasks(tq), df, tq)
+        line = bare_d_line(all_tasks(tq), df, tq)
+        if timer:
+            line = (line.replace("bare /d,", "bare /dt,")
+                    .replace("agent_claims.py claim <id>", "agent_claims.py dt <id>")
+                    .replace('new "<thread goal>', 'dt new "<thread goal>'))
+            line += " /dt also starts the selected task's Toggl timer."
+        return line
     explicit_new = query.lower().startswith("new ")
     tasks = [] if explicit_new else all_tasks(df.load_task_queue())
     row = None if explicit_new else ROW_PREFIX_RE.match(query)
@@ -1058,18 +1129,13 @@ def hook(payload: str) -> str:
             task = new_task(name)
         except Exception as e:
             return f"[claim hook] couldn't create {name!r} in Todoist ({e}); nothing claimed."
-        rec = claim(task, session)
-        push()
-        _retitle(session)
-        return (f"[claim hook] created and 😈 claimed: {rec['task']} (id {rec['task_id']}). "
-                "Already done; don't create or claim it again.")
+        return _hook_claim(task, session, timer=timer, created=True)
     if len(cands) > 1:
         opts = "; ".join(f"{t['id']}: {t.get('content', '')}" for t in cands[:5])
-        return f"[claim hook] ambiguous, nothing claimed. Candidates: {opts}"
-    rec = claim(cands[0], session)
-    push()
-    _retitle(session)
-    return f"[claim hook] 😈 claimed: {rec['task']} (id {rec['task_id']}). Already done; don't run agent_claims.py claim again."
+        tail = (" After selection, run `python3 ~/code/i446/tools/did/agent_claims.py dt <id>`."
+                if timer else "")
+        return f"[claim hook] ambiguous, nothing claimed. Candidates: {opts}" + tail
+    return _hook_claim(cands[0], session, timer=timer)
 
 
 # --- auto-claim (2026-11-14) -------------------------------------------------
@@ -1236,6 +1302,10 @@ def main(argv: list[str]) -> int:
     if not session:
         print(json.dumps({"ok": False, "error": "no CLAUDE_CODE_SESSION_ID; run inside Claude"}))
         return 1
+    if cmd == "dt":
+        out = hook(json.dumps({"session_id": session, "prompt": f"/dt {rest}".rstrip()}))
+        print(out)
+        return 1 if "Timer failed:" in out else 0
     if cmd == "release":
         print(json.dumps({"ok": True, "released": release(session)}))
         push()

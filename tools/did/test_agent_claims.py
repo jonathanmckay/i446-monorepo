@@ -285,6 +285,169 @@ def test_hook_matched_d_does_not_create(hooked, monkeypatch):
     assert "😈 claimed: source logging" in _fast("/d source logging")
 
 
+@pytest.mark.parametrize("prompt", [
+    "/dt source logging: build the adapter",
+    "<command-name>/dt</command-name><command-args>source logging</command-args>",
+])
+def test_dt_claims_then_starts_resolved_task(hooked, monkeypatch, prompt):
+    started = []
+
+    def start(task):
+        assert (hooked / "by-session" / "S9").read_text().strip() == task["id"]
+        started.append(task)
+        return "Started: source logging"
+
+    monkeypatch.setattr(ac, "start_task_timer", start)
+    monkeypatch.setattr(ac, "_retitle", lambda *a: None)
+    out = _fast(prompt)
+    assert started == [TASK]
+    assert "😈 claimed:" in out and "Started: source logging" in out
+
+
+def test_dt_code_resolves_before_starting_timer(hooked, monkeypatch):
+    import types
+    started = []
+    monkeypatch.setattr(ac, "_dtd_codes", lambda: types.SimpleNamespace(
+        lookup=lambda q, tasks: ["T1"] if q == "wh" else [], is_code=lambda q: q == "wh"))
+    monkeypatch.setattr(ac, "start_task_timer", lambda t: started.append(t["id"]) or "Started")
+    monkeypatch.setattr(ac, "_retitle", lambda *a: None)
+    assert "😈 claimed:" in _fast("/dt wh")
+    assert started == ["T1"]
+
+
+@pytest.mark.parametrize("prompt", ["/dt new draft xbox memo", "/dt draft xbox memo"])
+def test_dt_created_task_starts_timer(hooked, monkeypatch, prompt):
+    started = []
+    monkeypatch.setattr(ac, "new_task", lambda c: {"id": "N1", "content": c, "labels": ["i9"]})
+    monkeypatch.setattr(ac, "start_task_timer", lambda t: started.append(t) or "Started")
+    monkeypatch.setattr(ac, "_retitle", lambda *a: None)
+    assert "created and 😈 claimed:" in _fast(prompt)
+    assert started == [{"id": "N1", "content": "draft xbox memo", "labels": ["i9"]}]
+
+
+@pytest.mark.parametrize("prompt", [
+    "/d source logging", "/dt source", "/dt", "/dt off", "/dt release",
+    "/dt done", "/dt 999", "/dtd source logging",
+])
+def test_dt_unresolved_or_control_prompts_never_start_timer(hooked, monkeypatch, prompt):
+    monkeypatch.setattr(ac, "start_task_timer", lambda t: pytest.fail("unexpected timer start"))
+    monkeypatch.setattr(ac, "_retitle", lambda *a: None)
+    monkeypatch.setattr(ac, "row_task_id", lambda n: None)
+    _fast(prompt)
+
+
+def test_dt_bare_and_ambiguous_context_preserves_timer_command(hooked):
+    out = _fast("/dt")
+    assert "bare /dt," in out and "agent_claims.py dt <id>" in out
+    assert 'dt new "<thread goal>' in out
+    out = _fast("/dt source")
+    assert "ambiguous, nothing claimed" in out and "agent_claims.py dt <id>" in out
+
+
+def test_dt_timer_failure_keeps_claim_and_cli_fails(hooked, monkeypatch, capsys):
+    def fail(task):
+        raise RuntimeError("Toggl unavailable")
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S9")
+    monkeypatch.setattr(ac, "_retitle", lambda *a: None)
+    monkeypatch.setattr(ac, "start_task_timer", fail)
+    assert ac.main(["dt", "source logging"]) == 1
+    assert "Timer failed: Toggl unavailable" in capsys.readouterr().out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "T1"
+
+
+def test_task_timer_uses_literal_title_project_and_task_link(hooked, monkeypatch):
+    import types
+    tid = "6j3rV8VVw9vwJxxc"
+    task = {"id": tid, "content": "write review 9-10 (30) [20]", "labels": ["hcmc"],
+            "due": {"date": "2026-11-20"}}
+    calls = []
+    current = {"id": 100, "description": "old"}
+
+    def resolve(raw):
+        calls.append(("resolve", raw))
+        return "write review 9-10", "hcmc", ["review"]
+
+    def stop(args):
+        calls.append(("stop", args))
+
+    def start(args):
+        nonlocal current
+        calls.append(("start", args))
+        current = {"id": 200, "description": "write review 9-10"}
+        print("Started: write review 9-10")
+
+    cli = types.SimpleNamespace(
+        PROJECT_MAP={"hcmc": 1},
+        toggl_api=types.SimpleNamespace(get_current_cached=lambda: current),
+        cmd_stop=stop, cmd_start=start)
+    monkeypatch.setattr(ac, "_timer_tools", lambda: (types.SimpleNamespace(resolve=resolve), cli))
+    assert ac.start_task_timer(task) == "Started: write review 9-10"
+    assert calls == [
+        ("resolve", "write review 9-10 @hcmc"),
+        ("stop", []),
+        ("start", ["write review 9-10", "hcmc", "review", "--task", tid, "--due", "2026-11-20"]),
+    ]
+    assert ac.timer_link(tid, root=hooked)["entry_id"] == 200
+    calls.clear()
+    assert ac.start_task_timer(task) == "Timer already running: write review 9-10"
+    assert calls == []
+
+
+def test_task_timer_stop_failure_never_starts_another(hooked, monkeypatch):
+    import types
+
+    def fail(args):
+        raise RuntimeError("stop failed")
+
+    cli = types.SimpleNamespace(
+        PROJECT_MAP={}, toggl_api=types.SimpleNamespace(get_current_cached=lambda: {}),
+        cmd_stop=fail, cmd_start=lambda args: pytest.fail("started after failed stop"))
+    tg = types.SimpleNamespace(resolve=lambda raw: (raw, "", []))
+    monkeypatch.setattr(ac, "_timer_tools", lambda: (tg, cli))
+    with pytest.raises(RuntimeError, match="stop failed"):
+        ac.start_task_timer(TASK)
+
+
+def test_dt_runs_real_timer_commands_without_reparsing_title(hooked, monkeypatch, capsys):
+    import types
+    tid = "6j3rV8VVw9vwJxxc"
+    task = {"id": tid, "content": "write review 9-10 (30) [20]", "labels": ["hcmc"]}
+    tg, cli = ac._timer_tools()
+    calls = []
+    current = {"id": 100, "description": "old", "duration": -1}
+
+    def stop(entry_id):
+        nonlocal current
+        calls.append(("stop", entry_id))
+        old, current = current, None
+        return old
+
+    def start(desc, project_id, tags, start_time=None):
+        nonlocal current
+        calls.append(("start", desc, project_id, tags))
+        current = {"id": 200, "description": desc, "duration": -1}
+        return current
+
+    monkeypatch.setattr(cli.toggl_api, "get_current_cached", lambda: current)
+    monkeypatch.setattr(cli.toggl_api, "stop_timer", stop)
+    monkeypatch.setattr(cli.toggl_api, "start_timer", start)
+    monkeypatch.setattr(cli, "_claims", lambda: types.SimpleNamespace(
+        link_timer=lambda *a: ac.link_timer(*a, root=hooked),
+        unlink_timer=lambda **kw: ac.unlink_timer(root=hooked, **kw)))
+    monkeypatch.setattr(ac, "_timer_tools", lambda: (tg, cli))
+    monkeypatch.setattr(ac, "_retitle", lambda *a: None)
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([task]))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S9")
+    assert ac.main(["dt", tid]) == 0
+    assert "Started: write review 9-10" in capsys.readouterr().out
+    assert calls == [("stop", 100), ("start", "write review 9-10", cli.PROJECT_MAP["hcmc"], None)]
+    assert ac.timer_link(tid, root=hooked)["entry_id"] == 200
+    assert ac.main(["dt", tid]) == 0
+    assert "Timer already running:" in capsys.readouterr().out
+    assert len(calls) == 2
+
+
 def test_hook_row_number_with_runon_request_claims_row(hooked, monkeypatch):
     """2026-10-28: `/d 21 can you take a look ... https://x` split at the
     URL's colon, queried "21 can you ... https", and created that as a task."""
@@ -364,7 +527,7 @@ def test_skill_prompt_never_creates_when_card_is_gone(hooked, monkeypatch):
 
 
 def test_zsh_hook_prefilter_routes_0t_to_python():
-    assert _hook_alternations() == ["d|claim|" + "|".join(ac.SKILL_CLAIMS)] * 2
+    assert _hook_alternations() == ["d|claim|dt|" + "|".join(ac.SKILL_CLAIMS)] * 2
 
 
 def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
@@ -410,7 +573,7 @@ def _hook_alternations() -> list[str]:
 def test_hook_prefilter_lists_exactly_the_skill_claims():
     """The zsh prefilter keeps python off the hot path, so it must name every
     SKILL_CLAIMS key (prompt form and <command-name> form), no more, no less."""
-    assert _hook_alternations() == ["d|claim|" + "|".join(ac.SKILL_CLAIMS)] * 2
+    assert _hook_alternations() == ["d|claim|dt|" + "|".join(ac.SKILL_CLAIMS)] * 2
 
 
 def test_skill_claim_is_exact_name_only(hooked, monkeypatch):

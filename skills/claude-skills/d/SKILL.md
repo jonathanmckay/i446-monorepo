@@ -24,6 +24,8 @@ user-invocable: true
   token becomes its label), then claims it, so work that isn't in dtd yet
   still shows up there as underway.
 - `/d off` releases.
+- `/dt` takes the same arguments and also starts the claimed task's Toggl timer.
+  Use the `/dt` skill for that variant; plain `/d` does not change the timer.
 - `/d done` marks every task this session holds as agent-finished (✅ on the
   left in dtd); see "When you think the claimed work is done" below.
 - **Bare `/d`** (2026-10-19) attaches this session to the task it is *already*
