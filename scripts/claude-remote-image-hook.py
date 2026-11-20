@@ -16,6 +16,14 @@ taken in the SHOT_WINDOW_S before the paste, read from the stamp in the
 pasted filename. Syncthing needs 7-15 s to deliver one (often longer), so the
 hook waits until GRACE_S after the paste, capped at WAIT_S from now.
 
+Direct push (2026-11-20): bin/screenshot-to-clipboard.sh on Straylight also
+rsyncs each screenshot straight to DIRECT_DIR here, about a second after it
+is taken, so the file is normally present before the paste. The newest
+candidate across DIRECT_DIR and ~/screenshots wins. A direct copy is taken at
+once; a Syncthing-only copy is not accepted before SETTLE_S after the paste,
+so the previous screenshot of a burst is not picked while the right one is
+still in transit.
+
 Hooks cannot edit the prompt, only add context, so the context is imperative.
 """
 import datetime
@@ -31,6 +39,8 @@ STEP_S = 0.5
 SHOTS_DIR = os.path.expanduser(os.environ.get("CLIP_SHOTS", "~/screenshots"))
 SHOT_WINDOW_S = float(os.environ.get("CLIP_SHOT_WINDOW_S", "300"))
 GRACE_S = float(os.environ.get("CLIP_GRACE_S", "40"))
+DIRECT_DIR = os.path.expanduser(os.environ.get("CLIP_DIRECT", "~/.cache/shots-direct"))
+SETTLE_S = float(os.environ.get("CLIP_SETTLE_S", "3"))
 STAMP_RE = re.compile(r"clipboard-(\d{4})-(\d\d)-(\d\d)-(\d\d)(\d\d)(\d\d)")
 IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
@@ -114,8 +124,28 @@ def recent_screenshot(paste_ts, shots_dir=SHOTS_DIR, window_s=SHOT_WINDOW_S):
     return best
 
 
+def newest_shot(paste_ts, shots_dir, direct_dir):
+    """(mtime, path, is_direct) of the newest candidate across both dirs, or None."""
+    best = None
+    for d, direct in ((direct_dir, True), (shots_dir, False)):
+        hit = recent_screenshot(paste_ts, d) if d else None
+        if hit and (best is None or hit[0] > best[0]):
+            best = (hit[0], hit[1], direct)
+    return best
+
+
+def prune_direct(direct_dir=DIRECT_DIR, max_age_s=86400, now=time.time):
+    try:
+        with os.scandir(direct_dir) as it:
+            for e in it:
+                if e.is_file() and now() - e.stat().st_mtime > max_age_s:
+                    os.unlink(e.path)
+    except OSError:
+        pass
+
+
 def resolve(remote, clips_dir=CLIPS_DIR, shots_dir=SHOTS_DIR, wait_s=None,
-            step=STEP_S, now=time.time, sleep=time.sleep):
+            step=STEP_S, now=time.time, sleep=time.sleep, direct_dir=None):
     """('clip', path, None) | ('shot', path, seconds_before_paste) | (None, None, None)."""
     local = synced_path(remote, clips_dir)
     pt = paste_time(remote)
@@ -127,8 +157,9 @@ def resolve(remote, clips_dir=CLIPS_DIR, shots_dir=SHOTS_DIR, wait_s=None,
         if os.path.isfile(local) and os.path.getsize(local) > 0:
             return "clip", local, None
         if not in_flight(local):
-            shot = recent_screenshot(pt, shots_dir)
-            if shot:
+            shot = newest_shot(pt, shots_dir, direct_dir)
+            settled = now() >= pt + SETTLE_S if pt is not None else True
+            if shot and (shot[2] or settled or now() >= deadline):
                 return "shot", shot[1], max(0, int(pt - shot[0]))
             if now() >= deadline:
                 return None, None, None
@@ -136,7 +167,7 @@ def resolve(remote, clips_dir=CLIPS_DIR, shots_dir=SHOTS_DIR, wait_s=None,
 
 
 def build_context(prompt, exists=os.path.exists, clips_dir=CLIPS_DIR, waiter=None,
-                  shots_dir=SHOTS_DIR, resolver=resolve):
+                  shots_dir=SHOTS_DIR, resolver=resolve, direct_dir=None):
     """Return the additionalContext string, or '' when the prompt needs nothing."""
     remotes = remote_image_paths(prompt, exists)
     if not remotes:
@@ -147,7 +178,8 @@ def build_context(prompt, exists=os.path.exists, clips_dir=CLIPS_DIR, waiter=Non
         if waiter is not None:  # legacy seam: exact-name clip only
             kind, path, age = ("clip", local, None) if waiter(local) else (None, None, None)
         else:
-            kind, path, age = resolver(r, clips_dir=clips_dir, shots_dir=shots_dir)
+            kind, path, age = resolver(r, clips_dir=clips_dir, shots_dir=shots_dir,
+                                       direct_dir=direct_dir)
         if kind == "clip":
             lines.append(
                 f"The pasted image {r} is a Straylight path and does not exist on this "
@@ -178,10 +210,12 @@ def main():
         data = json.load(sys.stdin)
     except Exception:
         return 0
-    ctx = build_context(data.get("prompt", ""))
+    ctx = build_context(data.get("prompt", ""), direct_dir=DIRECT_DIR)
     if ctx:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit", "additionalContext": ctx}}))
+        sys.stdout.flush()
+        prune_direct()
     return 0
 
 

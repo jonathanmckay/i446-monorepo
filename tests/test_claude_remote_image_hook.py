@@ -141,3 +141,64 @@ def test_gives_up_at_grace_after_paste_not_wait_s_from_now(tmp_path):
     ctx = hook.build_context(SHOT_REMOTE, exists=lambda p: False, clips_dir=str(clips),
                              shots_dir=str(shots), resolver=lambda r, **k: out)
     assert "did not sync" in ctx
+
+
+# 2026-11-20: ~1 s goal. Straylight rsyncs each screenshot straight to
+# ~/.cache/shots-direct; Syncthing's copy lands 7-15 s later.
+def _dirs(tmp_path):
+    d = {n: tmp_path / n for n in ("clips", "shots", "direct")}
+    for p in d.values():
+        p.mkdir()
+    return d
+
+
+def test_direct_copy_is_taken_at_once_even_right_after_the_paste(tmp_path):
+    d = _dirs(tmp_path)
+    pt = hook.paste_time(SHOT_REMOTE)
+    want = _shot(d["direct"], "2026-11-20_093612--ss.png", pt - 3)
+    slept = []
+    kind, path, age = hook.resolve(SHOT_REMOTE, clips_dir=str(d["clips"]), shots_dir=str(d["shots"]),
+                                   direct_dir=str(d["direct"]), now=lambda: pt + 0.5,
+                                   sleep=lambda dt: slept.append(dt))
+    assert (kind, path, age, slept) == ("shot", str(want), 3, [])
+
+
+def test_newest_across_both_dirs_wins(tmp_path):
+    # Burst: the push of the latest shot failed, the earlier one sits in direct.
+    d = _dirs(tmp_path)
+    pt = hook.paste_time(SHOT_REMOTE)
+    _shot(d["direct"], "2026-11-20_093608--ss.png", pt - 7)
+    want = _shot(d["shots"], "2026-11-20_093612--ss.png", pt - 3)
+    out = hook.resolve(SHOT_REMOTE, clips_dir=str(d["clips"]), shots_dir=str(d["shots"]),
+                       direct_dir=str(d["direct"]), now=lambda: pt + 10)
+    assert out[:2] == ("shot", str(want))
+
+
+def test_syncthing_only_copy_waits_for_settle_so_a_newer_one_can_land(tmp_path):
+    d = _dirs(tmp_path)
+    pt = hook.paste_time(SHOT_REMOTE)
+    _shot(d["shots"], "2026-11-20_093608--ss.png", pt - 7)   # previous shot of a burst
+    clock = {"t": pt + 0.5}
+
+    def sleep(dt):
+        clock["t"] += dt
+        if clock["t"] >= pt + 2 and not list(d["direct"].iterdir()):
+            _shot(d["direct"], "2026-11-20_093612--ss.png", pt - 3)
+
+    kind, path, age = hook.resolve(SHOT_REMOTE, clips_dir=str(d["clips"]), shots_dir=str(d["shots"]),
+                                   direct_dir=str(d["direct"]), now=lambda: clock["t"], sleep=sleep)
+    assert path.endswith("093612--ss.png") and age == 3
+
+
+def test_partial_rsync_temp_is_ignored(tmp_path):
+    d = _dirs(tmp_path)
+    pt = hook.paste_time(SHOT_REMOTE)
+    _shot(d["direct"], ".2026-11-20_093612--ss.png.Ab12Cd", pt - 3)
+    assert hook.newest_shot(pt, str(d["shots"]), str(d["direct"])) is None
+
+
+def test_prune_direct_drops_day_old_files(tmp_path):
+    old = _shot(tmp_path, "2026-11-18_093612--ss.png", 1_000_000)
+    new = _shot(tmp_path, "2026-11-20_093612--ss.png", 2_000_000 - 60)
+    hook.prune_direct(str(tmp_path), now=lambda: 2_000_000)
+    assert not old.exists() and new.exists()
