@@ -127,6 +127,7 @@ def test_a_new_write_drains_the_backlog_first_then_applies_normally(q):
     q.xl.up = False
     q.queued_write("/append", append("R", "+15"))
     q.xl.up = True
+    q.EXCEL_DOWN_AT = 0.0                     # the "Excel is down" grace has run out
     status, res = q.queued_write("/append", append("R", "+7"))
     assert status == 200 and res["formula"] == "=1+15+7"
     assert q.xl.sets == [("0分", "R", "+15"), ("0分", "R", "+7")]
@@ -162,7 +163,7 @@ def test_unexplained_cell_content_holds_the_intent_and_lets_later_ones_through(q
     assert q.xl.cells[("0分", "S")] == "=2+3"                              # later intent still applied
     st = q.INTENTS.stats()
     assert st["held"] == 1 and st["pending"] == 0
-    assert q.alerts and q.alerts[0][0] == "held" and "cannot tell" in q.alerts[0][1]
+    assert q.alerts and q.alerts[0][0] == "lost_write" and "cannot tell" in q.alerts[0][1]
 
 
 def test_batch_that_failed_midway_replays_only_what_is_missing(q):
@@ -354,3 +355,138 @@ def test_over_http_with_the_queue_on(q):
         assert q.INTENTS.stats()["pending"] == 0
     finally:
         httpd.shutdown()
+
+
+# ── stage 2 (2026-11-20): request ids, status lookup, snapshots refused ──────
+
+def test_while_excel_is_known_down_a_new_write_is_queued_without_waiting(q):
+    """did-fast sends several writes per completion; each must not cost another
+    osascript timeout, or its watchdog kills it and dtd retries the lot."""
+    baseline(q, "R", "=1")
+    q.xl.up = False
+    q.queued_write("/append", append("R", "+15"))
+    calls = []
+    real = q.xl.osascript
+    q.osascript = lambda script: (calls.append(script), real(script))[1]
+    status, res = q.queued_write("/append", append("R", "+7"))
+    assert status == 503 and res["queued"] and calls == []     # Excel was not touched
+    q.xl.up = True
+    assert q.drain_locked() == 2 and q.xl.cells[("0分", "R")] == "=1+15+7"
+    assert q.EXCEL_DOWN_AT == 0.0
+
+
+def test_a_resend_of_the_same_request_id_is_one_write(q):
+    baseline(q, "R", "=1")
+    q.xl.up = False
+    s1, r1 = q.queued_write("/append", append("R", "+15", rid="abc"))
+    s2, r2 = q.queued_write("/append", append("R", "+15", rid="abc"))     # the caller timed out and resent
+    assert r1["queued"] and r2["queued"] and r2["dup"] and r1["intent"] == r2["intent"]
+    assert q.INTENTS.stats()["pending"] == 1
+    q.xl.up = True
+    assert q.drain_locked() == 1
+    s3, r3 = q.queued_write("/append", append("R", "+15", rid="abc"))     # resent after it landed
+    assert s3 == 200 and r3["dup"] and r3["formula"] == "=1+15"           # the reply it would have had
+    assert q.xl.sets == [("0分", "R", "+15")]
+    s4, r4 = q.queued_write("/append", append("R", "+15", rid="other"))   # a second, deliberate write
+    assert s4 == 200 and r4["formula"] == "=1+15+15"
+
+
+def test_intent_lookup_says_what_became_of_a_request(q):
+    baseline(q, "R", "=1")
+    assert q.do_intent({"rid": "nope"})["state"] == "unknown"
+    q.xl.up = False
+    q.queued_write("/append", append("R", "+15", rid="abc"))
+    assert q.do_intent({"rid": "abc"})["state"] == "pending"
+    q.xl.up = True
+    q.drain_locked()
+    st = q.do_intent({"rid": "abc"})
+    assert st["state"] == "done" and st["result"]["formula"] == "=1+15" and st["result"]["ok"]
+    q.queued_write("/append", {"sheet": "0分", "date": "11/19", "value": "+1", "rid": "bad"})   # no column
+    st = q.do_intent({"rid": "bad"})
+    assert st["state"] == "rejected" and st["result"]["ok"] is False
+
+
+def test_intent_lookup_survives_a_restart_and_a_compaction(q, monkeypatch):
+    baseline(q, "R", "=1")
+    q.queued_write("/append", append("R", "+15", rid="abc"))
+    again = q.intents_store.Intents(q.INTENTS_PATH)
+    assert again.by_rid("abc")["state"] == "done" and again.by_rid("abc")["result"]["formula"] == "=1+15"
+    monkeypatch.setattr(q.intents_store, "COMPACT_AFTER", 0)
+    compacted = q.intents_store.Intents(q.INTENTS_PATH)                  # rewrites the file on load
+    assert compacted.by_rid("abc")["result"]["formula"] == "=1+15"
+    assert q.intents_store.Intents(q.INTENTS_PATH).by_rid("abc")["state"] == "done"
+
+
+def test_intent_lookup_with_the_queue_off_is_unknown(q):
+    q.QUEUE_ENABLED = False
+    assert q.do_intent({"rid": "abc"}) == {"ok": True, "enabled": False, "state": "unknown"}
+
+
+def test_a_queued_write_that_is_rejected_on_replay_raises_a_lost_write(q, monkeypatch):
+    """The caller was told "queued" and closed its task; a later rejection has
+    no one else to notice it."""
+    baseline(q, "R", "=1")
+    q.xl.up = False
+    q.queued_write("/append", append("R", "+15"))
+    q.xl.up = True
+    monkeypatch.setattr(q, "lookup_row_cached", lambda sheet, d: None)   # the date row is gone
+    assert q.drain_locked() == 1
+    assert [a[0] for a in q.alerts] == ["lost_write"] and "rejected on replay" in q.alerts[0][1]
+
+
+def test_snapshots_and_reads_are_refused_while_writes_are_queued(q):
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    baseline(q, "R", "=1")
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), q.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % httpd.server_address[1]
+
+    def post(path, body):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    try:
+        q.xl.up = False
+        post("/append", append("R", "+7", rid="abc"))
+        assert post("/intent", {"rid": "abc"})[1]["state"] == "pending"      # answers while Excel is down
+        q.xl.up = True
+        # Excel answers reads again but the queued write cannot be resolved yet
+        # (the drain finds nothing to do: pretend it is still waiting).
+        real_drain = q.drain_locked
+        q.drain_locked = lambda before_seq=None: 0
+        status, body = post("/reconcile", {"sheet": "0分", "date": "11/19", "cols": ["R"], "snapshot": True})
+        assert (status, body["error"], body["pending"]) == (503, "queue_pending", 1)
+        # A read is half of a read-then-write: stale content must not be handed out.
+        status, body = post("/read", {"sheet": "0分", "col": "R", "date": "11/19"})
+        assert (status, body["error"], body["pending"]) == (503, "queue_pending", 1)
+        status, body = post("/read_range", {"sheet": "0分", "range": "P321:Y321"})
+        assert (status, body["error"]) == (503, "queue_pending")
+        status, body = post("/read", {"sheet": "0分", "col": "R", "date": "11/19", "allow_stale": True})
+        assert status == 200 and q.xl.cells[("0分", "R")] == "=1"
+        assert post("/lookup", {"sheet": "0分", "date": "11/19"})[0] == 200       # rows do not move
+        q.drain_locked = real_drain
+        q.EXCEL_DOWN_AT = 0.0
+        status, body = post("/read", {"sheet": "0分", "col": "R", "date": "11/19"})
+        assert status == 200 and "queue_pending" not in body and q.xl.cells[("0分", "R")] == "=1+7"
+    finally:
+        httpd.shutdown()
+
+
+def test_a_queue_that_does_not_drain_raises_one_alert_an_hour(q):
+    import datetime
+    baseline(q, "R", "=1")
+    q.xl.up = False
+    q.queued_write("/append", append("R", "+15"))
+    asked = datetime.datetime.strptime(q.INTENTS.pending()[0]["ts"], "%Y-%m-%dT%H:%M:%S")
+    assert q._alert_if_stuck(asked + datetime.timedelta(minutes=5)) is False
+    assert q._alert_if_stuck(asked + datetime.timedelta(minutes=31)) is True
+    assert q._alert_if_stuck(asked + datetime.timedelta(minutes=40)) is False     # throttled
+    assert [a[0] for a in q.alerts] == ["stuck"]

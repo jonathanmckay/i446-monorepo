@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -114,7 +114,15 @@ MAX_ATTEMPTS = 4        # dispatches before an intent is set aside (held) with a
 STABLE_DELAY = 1.5      # seconds between the two reads that must agree before a replay decision
 DRAIN_INTERVAL = 20     # seconds between idle drain passes
 DRAIN_BUDGET = 25       # seconds one drain pass may hold EXCEL_LOCK
+# While Excel is known not to be answering, a new write behind queued ones is
+# answered "queued" at once instead of waiting on EXCEL_LOCK for another 15 s
+# osascript timeout: did-fast sends three or four writes per completion and
+# its 60 s watchdog must not expire on them (a killed did-fast is retried by
+# dtd with new request ids). The idle drain keeps probing.
+DOWN_GRACE = 45         # seconds a failed dispatch/probe counts as "Excel is down"
+EXCEL_DOWN_AT = 0.0     # time.monotonic() of the last failure; 0 = answering
 ALERT_SH = os.path.expanduser("~/bin/cron-alert.sh")
+HERE = os.path.dirname(os.path.abspath(__file__))
 # osascript failures that mean "Excel is not answering", as opposed to a bad
 # request: the intent stays pending instead of being rejected.
 _TRANSIENT = re.compile(r"-600\b|-609\b|-1712\b|-1728\b|not running|Connection is invalid|"
@@ -1198,6 +1206,23 @@ def alert(reason: str, detail: str) -> None:
         sys.stderr.write(f"queue alert failed: {e}\n")
 
 
+def lost_write(intent: dict, why: str) -> None:
+    """A write the caller was told is queued (its task is closed, its points
+    are promised) ended held or rejected: nothing else will notice, so put a
+    card in front of JM as well as the alert line. Never raises."""
+    detail = (f"{intent['path']} intent {intent['id']} (asked {intent.get('ts')}): {why}; "
+              f"body {json.dumps(intent['body'], ensure_ascii=False)[:300]}")
+    alert("lost_write", detail)
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return                      # a test must never file a real card (2026-11-20: three did)
+    try:
+        subprocess.Popen([sys.executable, os.path.join(HERE, "queue_card.py"), detail],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"queue card failed: {e}\n")
+
+
 def _queued(intent: dict, error: str, **extra) -> dict:
     """Body for "recorded, not in Excel yet". ok stays False and the HTTP
     status stays today's 504/503 on purpose: callers that predate the queue
@@ -1224,24 +1249,29 @@ def _attempt(intent: dict, replay: bool = False) -> tuple[int, dict]:
         body["_requested_ts"] = intent["ts"]
     if attempts > 1:
         body["_reapply"] = True
+    global EXCEL_DOWN_AT
     try:
         result = ROUTES[intent["path"]](body)
     except subprocess.TimeoutExpired:
+        EXCEL_DOWN_AT = time.monotonic()
         return 504, _queued(intent, "osascript_timeout")
     except ExcelError as e:
+        EXCEL_DOWN_AT = time.monotonic()
         return 503, _queued(intent, "excel_error", detail=str(e))
     except Exception as e:  # noqa: BLE001 — a handler bug must not replay forever
-        INTENTS.finish(iid, "rejected", f"{type(e).__name__}: {e}")
-        return 500, {"ok": False, "error": f"{type(e).__name__}: {e}", "intent": iid}
+        result = {"ok": False, "error": f"{type(e).__name__}: {e}", "intent": iid}
+        INTENTS.finish(iid, "rejected", f"{type(e).__name__}: {e}", result)
+        return 500, result
     if result.get("ok"):
-        INTENTS.finish(iid, "done")
+        EXCEL_DOWN_AT = 0.0
+        INTENTS.finish(iid, "done", result=result)
         return 200, result
     errs = _errors(result)
     if any(_TRANSIENT.search(e) for e in errs):
         return 503, {**result, "queued": True, "intent": iid}
     # A bad request (unknown column, date not in the sheet, …): final. Items of
     # a batch that did land are journaled and stay applied.
-    INTENTS.finish(iid, "rejected", "; ".join(errs)[:300])
+    INTENTS.finish(iid, "rejected", "; ".join(errs)[:300], result)
     return 400, result
 
 
@@ -1343,8 +1373,12 @@ def drain_locked(before_seq: int | None = None) -> int:
     wedge the queue. → number of intents that reached a terminal state."""
     if INTENTS is None:
         return 0
+    global EXCEL_DOWN_AT
     pending = INTENTS.pending(before_seq)
-    if not pending or not excel_probe():
+    if not pending:
+        return 0
+    if not excel_probe():
+        EXCEL_DOWN_AT = time.monotonic()
         return 0
     settled, deadline = 0, time.monotonic() + DRAIN_BUDGET
     for it in pending:
@@ -1352,7 +1386,7 @@ def drain_locked(before_seq: int | None = None) -> int:
             break
         if it["attempts"] >= MAX_ATTEMPTS:
             INTENTS.finish(it["id"], "held", f"{it['attempts']} attempts while Excel was answering")
-            alert("held", f"{it['path']} intent {it['id']} failed {it['attempts']} times; body {json.dumps(it['body'], ensure_ascii=False)[:300]}")
+            lost_write(it, f"held after {it['attempts']} attempts while Excel was answering")
             settled += 1
             continue
         if it["attempts"] > 0:
@@ -1361,14 +1395,17 @@ def drain_locked(before_seq: int | None = None) -> int:
                 break
             if verdict == "held":
                 INTENTS.finish(it["id"], "held", note)
-                alert("held", f"{it['path']} intent {it['id']}: {note}")
+                lost_write(it, f"held: {note}")
                 settled += 1
                 continue
-        status, _ = _attempt(it, replay=True)
+        status, res = _attempt(it, replay=True)
         if status in (503, 504):
             if not excel_probe():
                 break                          # Excel went away again
             continue                           # Excel is up, this intent is the problem: next pass counts it
+        if status != 200:
+            # Rejected on replay: the caller already took "queued" as accepted.
+            lost_write(it, "rejected on replay: " + ("; ".join(_errors(res)) or str(status))[:200])
         settled += 1
     return settled
 
@@ -1378,12 +1415,51 @@ def queued_write(path: str, body: dict) -> tuple[int, dict]:
     nothing older is waiting and Excel answers."""
     intent, dup = INTENTS.add(path, body)
     if dup:
-        return 503, _queued(intent, "excel_error", detail="already queued (same idem key)", dup=True)
+        # Same request id (a resend of one call) or same idem keys as a
+        # pending intent. A finished one answers with what it answered then.
+        if intent["state"] == "done":
+            return 200, {**(intent.get("result") or {"ok": True}), "dup": True, "intent": intent["id"]}
+        if intent["state"] == "rejected":
+            return 400, {**(intent.get("result") or {"ok": False, "error": intent.get("note") or "rejected"}),
+                         "dup": True, "intent": intent["id"]}
+        if intent["state"] == "held":
+            return 503, {"ok": False, "error": "held", "detail": intent.get("note") or "",
+                         "held": True, "dup": True, "intent": intent["id"]}
+        return 503, _queued(intent, "excel_error", detail="already queued (same request)", dup=True)
+    if (EXCEL_DOWN_AT and time.monotonic() - EXCEL_DOWN_AT < DOWN_GRACE
+            and INTENTS.pending(before_seq=intent["seq"])):
+        return 503, _queued(intent, "excel_error", detail="queued: Excel has not been answering")
     with EXCEL_LOCK:
         drain_locked(before_seq=intent["seq"])
         if INTENTS.pending(before_seq=intent["seq"]):
             return 503, _queued(intent, "excel_error", detail="queued behind earlier writes Excel has not taken")
         return _attempt(intent)
+
+
+STUCK_AFTER = 30 * 60   # seconds a write may stay queued before it is worth an alert
+STUCK_EVERY = 60 * 60   # at most one such alert per hour
+_stuck_alerted = 0.0
+
+
+def _alert_if_stuck(now: datetime.datetime | None = None) -> bool:
+    """Reads and snapshots are refused while anything is queued, so a queue
+    that does not drain (Excel down for long, or an intent that can never be
+    resolved because its cell keeps changing) silences every reader. Say so."""
+    global _stuck_alerted
+    pend = INTENTS.pending() if INTENTS is not None else []
+    if not pend:
+        return False
+    try:
+        age = ((now or datetime.datetime.now())
+               - datetime.datetime.strptime(pend[0]["ts"], "%Y-%m-%dT%H:%M:%S")).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    if age < STUCK_AFTER or time.monotonic() - _stuck_alerted < STUCK_EVERY and _stuck_alerted:
+        return False
+    _stuck_alerted = time.monotonic()
+    alert("stuck", f"{len(pend)} write(s) queued, oldest since {pend[0]['ts']} "
+                   f"({pend[0]['path']} intent {pend[0]['id']}); reads and snapshots are refused until it drains")
+    return True
 
 
 def drain_loop() -> None:
@@ -1395,8 +1471,30 @@ def drain_loop() -> None:
             if INTENTS is not None and INTENTS.pending():
                 with EXCEL_LOCK:
                     drain_locked()
+                _alert_if_stuck()
         except Exception as e:  # noqa: BLE001 — never let the thread die
             sys.stderr.write(f"drain_loop: {e!r}\n")
+
+
+def do_intent(req: dict) -> dict:
+    """What became of a write request: {rid} → {state, result?}. Never touches
+    Excel and never waits on EXCEL_LOCK, so it answers while a write is stuck.
+    state: pending | done | rejected | held | unknown (never recorded: the
+    request did not reach the daemon, or the queue is off)."""
+    if not QUEUE_ENABLED or INTENTS is None:
+        return {"ok": True, "enabled": False, "state": "unknown"}
+    it = INTENTS.by_rid(str(req.get("rid") or ""))
+    if it is None:
+        return {"ok": True, "enabled": True, "state": "unknown"}
+    out = {"ok": True, "enabled": True, "state": it["state"] or "pending",
+           "intent": it["id"], "note": it.get("note") or ""}
+    if it.get("result") is not None:
+        out["result"] = it["result"]
+    return out
+
+
+def pending_count() -> int:
+    return len(INTENTS.pending()) if QUEUE_ENABLED and INTENTS is not None else 0
 
 
 def queue_state() -> dict:
@@ -1416,8 +1514,22 @@ ROUTES = {
     "/ack":    do_ack,
     "/reconcile": do_reconcile,
     "/observe": do_observe,
+    "/intent": do_intent,
 }
-NO_EXCEL = {"/observe"}  # handlers that never touch Excel: skip EXCEL_LOCK
+NO_EXCEL = {"/observe", "/intent"}  # handlers that never touch Excel: skip EXCEL_LOCK
+# Requests that look at cell content are refused (503 queue_pending) while
+# writes are still queued after a drain attempt, i.e. while Excel is behind
+# what callers were told is recorded:
+#   /reconcile          a snapshot would journal a queued write's absence, and
+#                       later its arrival, as hand edits
+#   /read, /read_range  nearly every reader is half of a read-then-write
+#                       (run.py's old+N, the block lock's residual, undo's
+#                       strip, the ritual P set); a stale read turns into a
+#                       whole-cell write queued BEHIND the pending ones, which
+#                       then erases them
+# This is what those callers already get when Excel is down, which is the only
+# time writes stay queued. {"allow_stale": true} reads anyway (diagnostics).
+NEEDS_DRAINED = {"/reconcile", "/read", "/read_range"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1472,6 +1584,10 @@ class Handler(BaseHTTPRequestHandler):
                         # A read must not see Excel without the writes still
                         # queued for it: replay them first if Excel answers.
                         drain_locked()
+                        n = pending_count()
+                        if n and self.path in NEEDS_DRAINED and not body.get("allow_stale"):
+                            return self._send(503, {"ok": False, "error": "queue_pending", "pending": n,
+                                                    "detail": "Excel is behind %d queued write(s)" % n})
                     result = handler(body)
         except subprocess.TimeoutExpired:
             return self._send(504, {"ok": False, "error": "osascript_timeout"})

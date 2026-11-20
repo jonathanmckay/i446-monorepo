@@ -2265,6 +2265,26 @@ end tell'''
     return script
 
 
+def _queued_proc(path: str, resp: dict, what: str):
+    """CompletedProcess for a write excel-http accepted but has not applied
+    (Excel is not answering; the daemon's write queue replays it in order).
+    rc 0 on purpose: the write is recorded and WILL land, so the completion
+    must go through and must not be retried by dtd, and the raw AppleScript
+    fallback must not run (either would apply it twice). There is no echo:
+    no row, no pre-image. undo-fast gets those from the daemon by `queued_rid`
+    once the write has landed, and refuses to undo before that."""
+    print(f"⏳ {what} queued: Excel is not answering, excel-http will apply it", file=sys.stderr)
+    proc = subprocess.CompletedProcess(args=["excel-http", path], returncode=0,
+                                       stdout=f"QUEUED:{resp.get('rid') or ''}", stderr="")
+    proc.queued_rid = resp.get("rid") or ""
+    return proc
+
+
+def _queued_rid(proc) -> Optional[str]:
+    """The request id of a queued write's CompletedProcess, else None."""
+    return getattr(proc, "queued_rid", None) if proc is not None else None
+
+
 def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
                         src: Optional[str] = None):
     """0n habit writes through the excel-http daemon (POST /batch_write), one
@@ -2288,6 +2308,8 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
     except Exception as e:  # noqa: BLE001
         print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
+    if neon_excel.is_queued(resp):
+        return _queued_proc("/batch_write", resp, "0n write")
     if resp and resp.get("timeout"):
         # The daemon may still apply it (2026-11-04): the raw-script retry
         # would double an add/append. Fail the write; no fallback.
@@ -2424,6 +2446,8 @@ def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
     except Exception as e:  # noqa: BLE001
         print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
+    if neon_excel.is_queued(resp):
+        return _queued_proc("/batch_write", resp, "1n+ write")
     if resp and resp.get("timeout"):
         # The daemon may still apply it (2026-11-04): the raw-script retry
         # would double an add/append. Fail the write; no fallback.
@@ -2639,6 +2663,8 @@ def append_0fen_batch(appends: list[tuple[str, object]], target_date: str,
                                        src=_did_src(src_names))
     except Exception as e:  # noqa: BLE001 — surface as the old rc!=0 path
         return subprocess.CompletedProcess("excel-http", 1, stdout="", stderr=str(e))
+    if neon_excel.is_queued(resp):
+        return _queued_proc("/batch", resp, f"0分 append ({tag})")
     _warn_chain_broken(resp)
     sub_results = [r for r in resp.get("results") or [] if isinstance(r, dict)]
     if resp.get("ok"):
@@ -2668,6 +2694,8 @@ def append_hcbi_via_daemon(appends: list[dict], target_date: str, src: str):
     except Exception as e:  # noqa: BLE001
         return subprocess.CompletedProcess(args=["excel-http", "/batch"], returncode=1,
                                            stdout="", stderr=f"hcbi daemon append failed: {e}")
+    if neon_excel.is_queued(resp):
+        return _queued_proc("/batch", resp, "hcbi append")
     if not resp or not resp.get("ok"):
         err = (resp or {}).get("error") or "; ".join(
             str(r.get("error")) for r in (resp or {}).get("results", []) if not r.get("ok"))
@@ -3835,6 +3863,11 @@ def _credit_ritual_p(new_text: str, pts: int, block: str, nb) -> dict:
         write_res = neon_excel.write("0分", "P", row=p_row, date=p_date,
                                      value=new_formula,
                                      src=f"ritual {block} -1n")
+        if neon_excel.is_queued(write_res):
+            # Accepted, not in Excel yet: the credit will land (and the block
+            # fire re-SETs P from the markers anyway). Not a failed credit.
+            return {"p_credit": {"points": pts, "ok": True, "queued": write_res.get("rid") or True,
+                                 "regrouped": regrouped, "excel": "P queued"}}
         _warn_chain_broken(write_res)
         return {"p_credit": {"points": pts, "ok": bool(write_res.get("ok")),
                              "regrouped": regrouped,
@@ -4589,7 +4622,16 @@ def main():
     # exactly as for any 1neon completion. Past-day writes included
     # (2026-11-14): the 1n path routes them to that day's week and that
     # day's 0分 row; only the card close is week-gated.
-    if on_result and on_result.returncode == 0:
+    if on_result and on_result.returncode == 0 and _queued_rid(on_result):
+        # No echo for a queued write, so the day total before/after is unknown
+        # and the long-session bonus cannot be judged. Say so, never silently.
+        from neon import long_bonus as _lb
+        for _w in on_writes:
+            _b = ZERO_N_ALIASES.get(_w.item.name.lower(), _w.item.name.lower())
+            if _lb.weekly_header(_b):
+                print(f"⚠ {_b}: write is queued, so the long-session bonus was not evaluated; "
+                      f"log it by hand if the day total reached the threshold", file=sys.stderr)
+    elif on_result and on_result.returncode == 0:
         fast.extend(_long_bonus_results(on_writes, on_result.stdout, tq,
                                         past_target=past_target))
 
@@ -4629,6 +4671,8 @@ def main():
     week_row = None
     pre_1n: dict = {}
     week_row_by_col: dict = {}  # a batch can span weeks: 1n+ col → its row
+    queued_1n_cols: set = set()   # 1n+ cols whose week-cell write is queued (no row echo)
+    queued_1n_rids: list = []
     filled_prev_week: dict = {}  # col → label, when a blank last week took it
     if one_n_writes:
         # A past-day write (past_ok) belongs to THAT date's week, which may
@@ -4664,6 +4708,9 @@ def main():
                 # A failed group must stay visible past later successes.
                 if one_n_result is None or one_n_result.returncode == 0:
                     one_n_result = _group_result
+                if _queued_rid(_group_result):
+                    queued_1n_rids.append(_queued_rid(_group_result))
+                    queued_1n_cols.update(_w.col_letter for _w in group)
                 # Parse weekRow from output for 0分 cell references
                 if _group_result.returncode == 0:
                     pre_1n.update(parse_pre_lines(_group_result.stdout))
@@ -4680,12 +4727,15 @@ def main():
     # points (a constant), variable habits and [N] overrides append literal
     # points via step 5's fen_appends.
     one_n_fen_result = None
-    if one_n_writes and week_row:
+    # A queued week-cell write has no row echo, but its 0分 credit references
+    # row 5 (not the week row), so it is appended (and queued behind it) too.
+    if one_n_writes and (week_row or queued_1n_cols):
         ref_appends = []
         ref_names = []
         ref_idem = []
         for r in one_n_writes:
-            if not r.fen_col or r.col_letter not in week_row_by_col:
+            if not r.fen_col or (r.col_letter not in week_row_by_col
+                                 and r.col_letter not in queued_1n_cols):
                 continue
             if r.is_variable_1n:
                 # Row 5 is a RATE string ("1/m") for these, never a number:
@@ -5396,6 +5446,8 @@ def main():
             "ok": one_n_result.returncode == 0,
             "output": one_n_result.stdout.strip(),
         }
+        if queued_1n_rids:
+            output["1n_write"]["queued"] = queued_1n_rids
         if one_n_result.returncode != 0:
             output["1n_write"]["error"] = one_n_result.stderr.strip() or f"ix-osa exit {one_n_result.returncode}"
     if one_n_fen_result:
@@ -5403,15 +5455,20 @@ def main():
             "ok": one_n_fen_result.returncode == 0,
             "output": one_n_fen_result.stdout.strip(),
         }
+        if _queued_rid(one_n_fen_result):
+            output["1n_0fen_write"]["queued"] = _queued_rid(one_n_fen_result)
         if one_n_fen_result.returncode != 0:
             output["1n_0fen_write"]["error"] = one_n_fen_result.stderr.strip() or f"ix-osa exit {one_n_fen_result.returncode}"
 
     if on_result:
-        on_verr = verify_0n_output(on_result.stdout, on_writes) if on_result.returncode == 0 else None
+        on_verr = (verify_0n_output(on_result.stdout, on_writes)
+                   if on_result.returncode == 0 and not _queued_rid(on_result) else None)
         output["0n_write"] = {
             "ok": on_result.returncode == 0 and on_verr is None,
             "output": on_result.stdout.strip(),
         }
+        if _queued_rid(on_result):
+            output["0n_write"]["queued"] = _queued_rid(on_result)
         if on_result.returncode != 0:
             output["0n_write"]["error"] = on_result.stderr.strip() or f"ix-osa exit {on_result.returncode}"
         elif on_verr:
@@ -5421,6 +5478,8 @@ def main():
             "ok": fen_ok,
             "output": fen_result.stdout.strip(),
         }
+        if _queued_rid(fen_result):
+            output["0fen_write"]["queued"] = _queued_rid(fen_result)
         if not fen_ok:
             output["0fen_write"]["error"] = (fen_result.stderr.strip() or fen_result.stdout.strip()
                                              or f"ix-osa exit {fen_result.returncode}")
@@ -5429,6 +5488,8 @@ def main():
             "ok": hcbi_ok,
             "output": hcbi_result.stdout.strip(),
         }
+        if _queued_rid(hcbi_result):
+            output["hcbi_write"]["queued"] = _queued_rid(hcbi_result)
         if not hcbi_ok:
             output["hcbi_write"]["error"] = (hcbi_result.stderr.strip() or hcbi_result.stdout.strip()
                                              or f"ix-osa exit {hcbi_result.returncode}")

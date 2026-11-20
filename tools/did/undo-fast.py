@@ -688,6 +688,93 @@ def journal_append(journal: str, record: dict) -> None:
             os.close(fd)
 
 
+# ---------------------------------------------------------------------------
+# Write queue (Neon off Excel step 4b stage 2, 2026-11-20)
+# ---------------------------------------------------------------------------
+
+def _queued_rids(out: dict) -> list[tuple[str, str]]:
+    """[(write key, request id)] for every write did-fast reported as queued."""
+    found = []
+    for key in ("0n_write", "1n_write", "1n_0fen_write", "0fen_write", "hcbi_write"):
+        q = (out.get(key) or {}).get("queued")
+        for rid in (q if isinstance(q, list) else [q]):
+            if rid and isinstance(rid, str):
+                found.append((key, rid))
+    return found
+
+
+def _pre_image_text(r: dict) -> str:
+    """Same rule as did-fast's: the formula when the cell held one, else the
+    numeric value, else blank."""
+    before = (r.get("before") or "").strip()
+    if before.startswith("="):
+        return before
+    bv = (r.get("before_value") or "").strip()
+    return "" if bv in ("", "missing value") else bv
+
+
+def hydrate_queued(out: dict) -> str | None:
+    """A did-fast run whose writes were queued has no echo: no 0n pre-image,
+    no 1n+ week row. Once the writes have landed the daemon knows both (the
+    intent's stored reply), so fill them into `out` in place before reversing.
+
+    → None when `out` is ready to reverse; otherwise why the undo must wait.
+    A write the daemon rejected or set aside never landed: its *_write is
+    marked not-ok so nothing is stripped or restored for it."""
+    for key, rid in _queued_rids(out):
+        st = excel.intent_status(rid)
+        state = st.get("state")
+        if not st:
+            return "excel-http is unreachable, so the queued write cannot be checked; not undoing"
+        if state == "pending":
+            return "its write is still queued for Excel; undo once it has landed"
+        if state in ("rejected", "held") or (state == "done" and not (st.get("result") or {}).get("ok")):
+            out[key]["ok"] = False
+            continue
+        if state != "done":
+            return f"the queued write {rid[:8]} is unknown to excel-http; not undoing blind"
+        res = st.get("result") or {}
+        items = [r for r in res.get("results") or [] if isinstance(r, dict)]
+        if key == "0n_write":
+            by_col = {str(r.get("col") or "").upper(): r for r in items}
+            for e in out.get("results", []):
+                if e.get("step") != "0n" or e.get("col") is None:
+                    continue
+                r = by_col.get(neon_cols.col_letter(int(e["col"])))
+                if r is not None and "prev_0n" not in (e.get("undo") or {}):
+                    bv = r.get("before_value") or ""
+                    e.setdefault("undo", {})["prev_0n"] = "" if bv == "missing value" else bv
+        elif key == "1n_write":
+            by_col = {str(r.get("col") or "").upper(): r for r in items}
+            for e in out.get("results", []):
+                r = by_col.get(str(e.get("col_letter") or "").upper())
+                if e.get("step") != "1n" or r is None or e.get("week_row"):
+                    continue
+                e["week_row"] = str(res.get("row") or r.get("row") or "")
+                if not e.get("variable_1n"):
+                    e.setdefault("undo", {}).setdefault("prev_1n_formula", _pre_image_text(r))
+    return None
+
+
+def queue_blocks_undo(record: dict) -> str | None:
+    """Why this record cannot be undone right now, or None. An undo reads a
+    cell and writes back what it worked out; while writes are queued that
+    read is refused (and would be stale), so refuse before the record is
+    popped instead of half-reversing it."""
+    try:
+        n = excel.queue_pending()
+    except Exception:  # noqa: BLE001
+        n = 0
+    if n:
+        return f"{n} write(s) still queued for Excel; undo once they have landed"
+    if record.get("type") == "done":
+        try:
+            return hydrate_queued(record.get("output") or {})
+        except Exception as e:  # noqa: BLE001
+            return f"could not check the queued write ({e}); not undoing"
+    return None
+
+
 def journal_pop_and_reverse(journal: str, session: str | None,
                             removed: str | None, done_json: str | None) -> dict:
     """Pop the last journal record and reverse it. Holds flock for the whole
@@ -713,6 +800,10 @@ def journal_pop_and_reverse(journal: str, session: str | None,
 
             if record.get("date") != date.today().isoformat():
                 return {"error": f"stale record from {record.get('date')} — not undoing"}
+
+            wait = queue_blocks_undo(record)
+            if wait:
+                return {"error": wait}     # record stays in the journal for a later ctrl-z
 
             # Pop first (consistent LIFO even if reversal partially fails)
             f.seek(0)

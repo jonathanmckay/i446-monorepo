@@ -507,6 +507,13 @@ def apply_long_bonus(long_habit_id: str, pts: int, target_date: str) -> str | No
         return None
 
     cur = excel.read("1n+", bonus_col, row=week_row)
+    if cur.get("ok") is False:
+        # A failed read used to count as 0 and the SET below then replaced the
+        # week's running total with this one bonus. With the write queue on,
+        # reads are refused while writes are queued (2026-11-20).
+        print(f"  ✗ long bonus not written: could not read 1n+!{bonus_col}{week_row} "
+              f"({cur.get('error') or '?'})", file=sys.stderr)
+        return None
     old = 0
     try:
         old = int(float(cur.get("value", 0) or 0))
@@ -561,6 +568,10 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
     if cumulative:
         # Add to existing value: read, then write sum
         cur = excel.read(sheet, col, date=target_date)
+        if cur.get("ok") is False:
+            # old + N as a whole-cell SET: never guess old = 0 (2026-11-20).
+            print(f"  ✗ Excel read failed, nothing written: {cur.get('error') or cur}", file=sys.stderr)
+            return 1
         old = 0
         try:
             old = int(float(cur.get("value", 0) or 0))
@@ -574,7 +585,11 @@ def run_0n(d: dict, raw_input: str, target_date: str, time_range, explicit_minut
     else:
         # Actual minutes (from Toggl auto-detect or explicit): append
         result = excel.append(sheet, col, date=target_date, value=f"+{minutes}", src=f"did {name}")
-    if not result.get("ok"):
+    if excel.is_queued(result):
+        # Recorded by excel-http, applied when Excel answers: accepted. Never
+        # rerun or the write lands twice.
+        print("  ⏳ Excel is not answering; the write is queued and will land on its own")
+    elif not result.get("ok"):
         print(f"  ✗ Excel write failed: {result}", file=sys.stderr)
         return 1
     verify = result.get("value")
@@ -720,6 +735,9 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
         # Cumulative habits: minutes accumulate in the cell, the fixed
         # increment is the per-occurrence points.
         cur = excel.read("1n+", col, row=week_row)
+        if cur.get("ok") is False:
+            print(f"  ✗ Excel read failed, nothing written: {cur.get('error') or cur}", file=sys.stderr)
+            return 1
         try:
             old = int(float(cur.get("value", 0) or 0))
         except (TypeError, ValueError):
@@ -734,6 +752,9 @@ def run_1n(d: dict, target_date: str, time_range=None, explicit_minutes: Optiona
             points = inc
     else:
         row5 = excel.read("1n+", col, row=5)
+        if row5.get("ok") is False:
+            print(f"  ✗ Excel read failed, nothing written: {row5.get('error') or row5}", file=sys.stderr)
+            return 1
         row5_val = row5.get("value", 0)
         if rates.parse_rate(row5_val) is not None:
             # Row 5 is a per-minute RATE ("1/m"), not points (bug 2026-10-03):

@@ -13,6 +13,8 @@ import shlex
 import socket
 import subprocess
 import sys
+import time
+import uuid
 from typing import Any
 
 DAEMON_HOST = "ix"
@@ -119,6 +121,102 @@ def health() -> bool:
     return bool(out and out.get("ok"))
 
 
+# ── Write queue (Neon off Excel step 4b stage 2, 2026-11-20) ──────────────────
+# With NEON_WRITE_QUEUE=1 on the daemon, a write Excel cannot take right now is
+# recorded and replayed later. The reply is then either {"queued": true} or,
+# more often, nothing at all: the request sits behind the drain on the
+# daemon's Excel lock until curl gives up. Both used to end in a retry or a raw
+# AppleScript fallback, and both are a double write once the drain replays the
+# original. So every write carries a request id, and after a queued reply or
+# a timeout the client asks the daemon what became of that id (POST /intent,
+# which never waits on Excel):
+#   done / rejected → the handler's real reply, as if nothing had happened
+#   pending / held  → {"ok": False, "queued": True, …}: accepted, not in Excel
+#                      yet. NEVER fall back or rerun on this.
+#   unknown         → the request never reached the daemon, or the queue is
+#                      off: exactly the pre-queue behaviour.
+QUEUE_WAIT = 8.0        # seconds to wait for a queued write to land before reporting it queued
+QUEUE_POLL = 2.0
+_seen_queued = False
+QUEUED_ERROR = ("queued: Excel is not answering, so excel-http recorded this write and will apply "
+                "it when Excel is back. Do not rerun it and do not write the cell another way.")
+
+
+def is_queued(resp: Any) -> bool:
+    """True for a write the daemon accepted but has not applied to Excel yet."""
+    return bool(isinstance(resp, dict) and resp.get("queued"))
+
+
+def queue_state() -> dict:
+    """The daemon's /health queue block: {"enabled": bool, "pending": n,
+    "held": n, "oldest_ts": ts}. {} when the daemon is unreachable."""
+    out = _curl("/health", method="GET")
+    q = (out or {}).get("queue")
+    return q if isinstance(q, dict) else {}
+
+
+def queue_pending() -> int:
+    """Writes recorded but not in Excel yet (0 when the queue is off or the
+    daemon is unreachable: callers gate on this to refuse work that needs
+    Excel current, and an unreachable daemon fails them anyway)."""
+    q = queue_state()
+    return int(q.get("pending") or 0) if q.get("enabled") else 0
+
+
+def intent_status(rid: str) -> dict:
+    """What became of a queued write: {"state": pending | done | rejected |
+    held | unknown, "result": the handler's reply once finished}. {} when the
+    daemon is unreachable."""
+    return _curl("/intent", {"rid": rid}) or {}
+
+
+def _queued_result(rid: str, st: dict | None = None) -> dict[str, Any]:
+    out = {"ok": False, "queued": True, "rid": rid, "error": QUEUED_ERROR}
+    if st:
+        out["intent"] = st.get("intent")
+        if st.get("state") == "held":
+            out["held"] = True
+            out["error"] = ("held: excel-http set this write aside (%s). It will not be applied "
+                            "without help; do not rerun it blindly." % (st.get("note") or "see alerts"))
+    return out
+
+
+def _send_write(path: str, body: dict) -> tuple[dict | None, bool]:
+    """POST a write with a request id and settle what happened to it.
+    → (reply or None, timed_out), same contract as _curl_ex, except that a
+    queued write comes back as _queued_result() and a write that landed late
+    comes back with its real reply."""
+    rid = uuid.uuid4().hex
+    body["rid"] = rid
+    out, timed_out = _curl_ex(path, body)
+    if out is not None and not is_queued(out) and not out.get("held"):
+        return out, False
+    if out is None and not timed_out:
+        return None, False                  # refused / ssh down: nothing was sent
+    # One wait per process: once a write has been reported queued, Excel is
+    # down for this run and the next writes are simply queued behind it.
+    global _seen_queued
+    deadline = time.monotonic() + (0 if _seen_queued else QUEUE_WAIT)
+    st: dict | None = None
+    while True:
+        st = _curl("/intent", {"rid": rid})
+        state = (st or {}).get("state")
+        if state in ("done", "rejected") and isinstance((st or {}).get("result"), dict):
+            return st["result"], False
+        if state not in ("pending",) or time.monotonic() >= deadline:
+            break
+        time.sleep(QUEUE_POLL)
+    state = (st or {}).get("state")
+    if state in ("pending", "held", "done", "rejected"):
+        _seen_queued = True
+        return _queued_result(rid, st), False
+    if is_queued(out):
+        # The daemon said queued and then could not be asked again: still queued.
+        _seen_queued = True
+        return _queued_result(rid), False
+    return out, timed_out                   # unknown: the pre-queue outcome
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def _surface() -> dict[str, str]:
@@ -149,7 +247,7 @@ def append(sheet: str, col: str, *, date: str | None = None,
     if src:
         body["src"] = src
     body.update(_surface())
-    out, timed_out = _curl_ex("/append", body)
+    out, timed_out = _send_write("/append", body)
     if out:
         return out
     if timed_out:
@@ -167,7 +265,9 @@ def write(sheet: str, col: str, *, date: str | None = None,
     if src:
         body["src"] = src
     body.update(_surface())
-    out = _curl("/write", body)
+    # A timeout with the queue off still falls back (a set is idempotent);
+    # with the queue on, _send_write has already turned it into "queued".
+    out, _ = _send_write("/write", body)
     if out:
         return out
     return _ssh_fallback("write", sheet, col, date, row, value, src=src)
@@ -191,7 +291,7 @@ def batch_append(sheet: str, appends: list, *, date: str | None = None,
     if src:
         body["src"] = src
     body.update(_surface())
-    out, timed_out = _curl_ex("/batch", body)
+    out, timed_out = _send_write("/batch", body)
     if out:
         return out
     if timed_out:
@@ -222,7 +322,7 @@ def batch_write(sheet: str, writes: list, *, date: str | None = None,
     if src:
         body["src"] = src
     body.update(_surface())
-    out, timed_out = _curl_ex("/batch_write", body)
+    out, timed_out = _send_write("/batch_write", body)
     if out:
         return out
     if timed_out and any((w.get("mode") or "set") in ("add", "append") for w in writes):
