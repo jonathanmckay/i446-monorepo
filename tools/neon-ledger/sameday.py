@@ -149,6 +149,14 @@ def main() -> int:
     a = ap.parse_args()
     day = dt.date.fromisoformat(a.date) if a.date else dt.date.today()
     if not a.date:
+        # With writes still queued Excel is behind the ledger's requests and the
+        # snapshot is refused: a check against the last (stale) observation
+        # would card every queued write as drift (write queue, 2026-11-20).
+        from neon import excel
+        n = excel.queue_pending()
+        if n:
+            print(f"{day}: {n} write(s) still queued for Excel; no snapshot, no check, no card")
+            return 0
         snapshot()
     ledger.catch_up()                # same as neon.py strict: fallback writes, then
     ledger.repair_dates()            # date the row-addressed writes

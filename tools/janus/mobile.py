@@ -1250,10 +1250,14 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     # on each divider as lpts; they replace the Excel values only under
     # NEON_READ_SOURCE=ledger. Disagreements → ~/.cache/neon-rules/reader-diff.jsonl.
     ledger_points, ledger_blocks = None, {}
+    pending_writes = 0
     if not lite:
         try:
             from neon import view as nview
             lv = nview.day_view(today.isoformat())
+            # Writes queued for Excel (step 4b): shown as ⏳n beside the Σ.
+            pending_writes = int(((lv or {}).get("pending_writes") if lv
+                                  else nview.pending_writes()) or 0) if is_today else 0
             if lv and lv.get("total") is not None:
                 ledger_points = int(float(lv["total"]))  # truncate, like the Excel path
                 ledger_blocks = {k: int(round(v)) for k, v in (lv.get("blocks") or {}).items()}
@@ -1274,6 +1278,7 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     since, since_min = untracked_since(entries, now) if is_today else (None, None)
     payload = {"rows": rows, "tracked_min": tracked_min, "points": points,
                "ledger_points": ledger_points, "ledger_blocks": ledger_blocks,
+               "pending_writes": pending_writes,
                "date": today.isoformat(), "is_today": is_today, "lite": lite,
                "untracked_since": since, "untracked_min": since_min}
     # Habit strip (2026-11-10): today's full pass only -- the lite pass has
@@ -2777,7 +2782,8 @@ function apply(d){
   // Ledger Σ shown only when it disagrees with what's displayed (step 4a shadow).
   if(!d.lite){
     var lp=document.getElementById('lpts');
-    if(lp) lp.textContent=(d.ledger_points==null||d.ledger_points==d.points)?'':' ⌁'+d.ledger_points;
+    if(lp) lp.textContent=((d.ledger_points==null||d.ledger_points==d.points)?'':' ⌁'+d.ledger_points)
+      +(d.pending_writes?' ⏳'+d.pending_writes:'');
   }
   document.getElementById('trk').textContent =
     Math.floor(d.tracked_min/60)+':'+String(d.tracked_min%60).padStart(2,'0');

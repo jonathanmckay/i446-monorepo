@@ -53,3 +53,23 @@ excel.lookup_row("hcbi", "4/29")                    # → row int or None
 ```
 
 The client tries the daemon first, falls back to direct `ssh ix osascript` if the daemon is down. Skills don't need to know the difference.
+
+## Write queue (1.13.0 stage 1, 1.14.0 stage 2)
+
+Off unless the daemon starts with `NEON_WRITE_QUEUE=1`; `queue_switch.sh on|off|status`
+sets that in the installed plist and reloads. With it on:
+
+- every `/append /write /batch /batch_write` is recorded in
+  `~/.local/share/neon/write-intents.jsonl` before Excel is touched, applied at once when
+  Excel answers, and otherwise answered `503/504 {"ok": false, "queued": true, "intent"}` and
+  replayed in order later;
+- clients send a request id (`rid`); `POST /intent {"rid"}` says what became of it
+  (`pending | done | rejected | held | unknown`, with the handler's reply once finished) and
+  never waits on Excel. A resend of the same rid is not a second write;
+- `/read`, `/read_range` and `/reconcile` answer `503 queue_pending` while writes are still
+  queued after a drain attempt (`"allow_stale": true` reads anyway);
+- a queued write that ends held or rejected raises an alert and one dtd card a day
+  (`queue_card.py`).
+
+Callers must never rerun or fall back on a `queued` reply. Design and limits:
+`vault/i447/i446/neon-off-excel-plan.md`, Step 4b.

@@ -333,3 +333,86 @@ def test_floor_never_lowers_a_larger_residual():
          patch.object(mod, "_fill_cell"):
         out = mod.neon_lock_cell(dt.date(2026, 11, 19), "H", floor=13)
     assert out == "LOCKED 87"
+
+
+# ── Freeze gate (write queue, 2026-11-20) ──────────────────────────────────
+
+class _Ledger:
+    def __init__(self, tmp, baseline):
+        self.DB_PATH = tmp / "neon.db"
+        self.DB_PATH.write_text("")
+        self.baseline = baseline
+        self.asked = 0
+
+    def has_baseline(self, iso):
+        self.asked += 1
+        return self.baseline
+
+
+def _gate_env(mod, monkeypatch, tmp_path, queue, baseline):
+    import sys
+    import types
+    led = _Ledger(tmp_path, baseline)
+    pkg = types.ModuleType("neon")
+    pkg.ledger = led
+    pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "neon", pkg)
+    monkeypatch.setitem(sys.modules, "neon.ledger", led)
+    monkeypatch.setattr(mod.neon_excel, "queue_state", lambda: queue)
+    monkeypatch.setattr(mod, "NEON_RULES_CACHE", tmp_path / "cache")
+    monkeypatch.setattr(mod, "_BASELINE_RETRIED", set())
+    runs, cards = [], []
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: runs.append(a[0]))
+    fake_todoist = types.SimpleNamespace(
+        create_task=lambda content, **k: (cards.append(content), {"id": "c1"})[1],
+        add_comment=lambda tid, body: None)
+    monkeypatch.setitem(sys.modules, "todoist", fake_todoist)
+    return led, runs, cards
+
+
+def test_gate_is_inert_with_the_queue_off(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    led, runs, cards = _gate_env(mod, monkeypatch, tmp_path, {"enabled": False}, baseline=False)
+    assert mod.block_freeze_gate(dt.date(2026, 11, 20), hour=10) is None
+    assert led.asked == 0 and runs == [] and cards == []     # today's behaviour, untouched
+
+
+def test_gate_holds_the_freeze_while_writes_are_queued(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    _gate_env(mod, monkeypatch, tmp_path, {"enabled": True, "pending": 2}, baseline=True)
+    assert mod.block_freeze_gate(dt.date(2026, 11, 20), hour=10).startswith("pending")
+    monkeypatch.setattr(mod.neon_excel, "read", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no read")))
+    assert mod.neon_lock_cell(dt.date(2026, 11, 20), "I") == "FAILED"          # retried by the wrapper
+
+
+def test_gate_without_a_baseline_retries_the_reconcile_once_then_skips_with_one_card(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    led, runs, cards = _gate_env(mod, monkeypatch, tmp_path, {"enabled": True, "pending": 0}, baseline=False)
+    day = dt.date(2026, 11, 20)
+    assert mod.block_freeze_gate(day, hour=10) == "no_baseline"
+    assert mod.block_freeze_gate(day, hour=10) == "no_baseline"                # same fire: no second reconcile
+    assert len(runs) == 1 and "neon-reconcile.py" in runs[0][1]
+    assert mod.block_freeze_gate(day, hour=12) == "no_baseline"                # next fire tries again
+    assert len(runs) == 2 and len(cards) == 1                                   # one card for the day
+    monkeypatch.setattr(mod.neon_excel, "read", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no read")))
+    monkeypatch.setattr(mod.daytime, "local_now", lambda: dt.datetime(2026, 11, 20, 12, 0, 5))
+    assert mod.neon_lock_cell(day, "I") == "SKIPPED no_baseline"               # final: not retried
+
+
+def test_gate_passes_once_the_reconcile_retry_lands_a_baseline(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    led, runs, cards = _gate_env(mod, monkeypatch, tmp_path, {"enabled": True, "pending": 0}, baseline=False)
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: setattr(led, "baseline", True))
+    assert mod.block_freeze_gate(dt.date(2026, 11, 20), hour=6) is None and cards == []
+
+
+def test_a_lock_write_that_gets_queued_is_final_not_retried(monkeypatch, tmp_path):
+    mod = _load_daemon()
+    _gate_env(mod, monkeypatch, tmp_path, {"enabled": True, "pending": 0}, baseline=True)
+    monkeypatch.setattr(mod.neon_excel, "read",
+                        lambda *a, **k: {"ok": True, "row": 321, "formula": "=D321-SUM(G321:H321)", "value": "42"})
+    monkeypatch.setattr(mod.neon_excel, "write", lambda *a, **k: {"ok": False, "queued": True, "rid": "x"})
+    writes = []
+    with patch.object(mod.time, "sleep", lambda s: None):
+        status = mod.neon_lock_cell_with_retry(dt.date(2026, 11, 20), "I")
+    assert status == "QUEUED 42"

@@ -57,9 +57,28 @@ def post(body: dict) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def queue_pending() -> int:
+    """Writes excel-http has recorded but not applied (write queue, 2026-11-20).
+    0 when the queue is off or /health cannot be read."""
+    try:
+        with urllib.request.urlopen(URL.rsplit("/", 1)[0] + "/health", timeout=10) as r:
+            q = json.loads(r.read()).get("queue") or {}
+    except Exception:  # noqa: BLE001
+        return 0
+    return int(q.get("pending") or 0) if q.get("enabled") else 0
+
+
 def main() -> int:
     today = datetime.date.today()
     rc = 0
+    # A snapshot taken while writes are queued would journal their absence, and
+    # later their arrival, as hand edits. The daemon refuses /reconcile then
+    # (after one more drain attempt); say it once instead of once per sheet.
+    n = queue_pending()
+    if n:
+        print(f"{datetime.datetime.now():%Y-%m-%d %H:%M} skipped: {n} write(s) still queued for Excel "
+              "(no snapshot until the queue drains)", flush=True)
+        return 3
     jobs = []
     for d in (today - datetime.timedelta(days=1), today):
         for sheet, cols in RANGES.items():

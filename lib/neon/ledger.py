@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS events (
     chain         TEXT,
     jsonl_kind    TEXT NOT NULL,
     block         TEXT,
-    fallback      INTEGER NOT NULL DEFAULT 0
+    fallback      INTEGER NOT NULL DEFAULT 0,
+    requested_ts  TEXT
 );
 CREATE INDEX IF NOT EXISTS events_date_sheet_col ON events(date, sheet, col);
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
@@ -101,7 +102,21 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
     c = sqlite3.connect(str(p), timeout=5)
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
+    _migrate(c)
     return c
+
+
+def _migrate(c: sqlite3.Connection) -> None:
+    """Columns added after the table first shipped (CREATE IF NOT EXISTS does
+    not add them to an existing DB). requested_ts, 2026-11-20: when a write
+    the daemon's queue applied late was asked for."""
+    have = {r[1] for r in c.execute("PRAGMA table_info(events)")}
+    if "requested_ts" not in have:
+        try:
+            c.execute("ALTER TABLE events ADD COLUMN requested_ts TEXT")
+            c.commit()
+        except sqlite3.OperationalError:
+            pass                        # another connection added it first
 
 
 # ── pure helpers (all unit-tested) ───────────────────────────────────────────
@@ -228,6 +243,10 @@ def to_row(entry: dict, row_date: Optional[str] = None) -> Optional[dict]:
     if not sheet or not col:
         return None
     date_iso = resolve_date(entry.get("date"), ts) or row_date
+    # A write the daemon queued (Excel was not answering) is journaled when it
+    # is applied; it belongs to the block it was asked for in, which is also
+    # where Excel puts it, because the block freeze waits for the queue.
+    asked = parse_ts(entry.get("requested_ts") or "") or ts
     return {
         "hash": line_hash(entry),
         "ts": ts.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -241,8 +260,9 @@ def to_row(entry: dict, row_date: Optional[str] = None) -> Optional[dict]:
         "src": entry.get("src"), "source": entry.get("source"),
         "via": entry.get("via"), "idem": entry.get("idem"),
         "chain": entry.get("chain"), "jsonl_kind": entry.get("kind"),
-        "block": block_for(ts, date_iso),
+        "block": block_for(asked, date_iso),
         "fallback": 1 if entry.get("fallback") else 0,
+        "requested_ts": entry.get("requested_ts"),
     }
 
 
@@ -250,7 +270,7 @@ def to_row(entry: dict, row_date: Optional[str] = None) -> Optional[dict]:
 
 _COLS = ("hash", "ts", "date", "sheet", "col", "row", "field", "kind", "points",
          "value", "after_value", "before_value", "after_formula", "src", "source",
-         "via", "idem", "chain", "jsonl_kind", "block", "fallback")
+         "via", "idem", "chain", "jsonl_kind", "block", "fallback", "requested_ts")
 _INSERT = (f"INSERT OR IGNORE INTO events ({', '.join(_COLS)}) "
            f"VALUES ({', '.join('?' for _ in _COLS)})")
 
@@ -451,7 +471,7 @@ def repair_dates(conn: Optional[sqlite3.Connection] = None) -> int:
     c = conn or connect()
     try:
         rows = c.execute(
-            """SELECT e.id, e.ts, rd.date FROM events e
+            """SELECT e.id, COALESCE(e.requested_ts, e.ts), rd.date FROM events e
                  JOIN row_dates rd ON rd.sheet = e.sheet AND rd.row = e.row
                 WHERE e.date IS NULL AND e.sheet IN ('0分', '0n', 'hcbi')""").fetchall()
         for rid, ts, d in rows:

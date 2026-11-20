@@ -290,3 +290,96 @@ def test_batch_append_fallback_passes_idem(monkeypatch):
     monkeypatch.setattr(excel, "_ssh_fallback", fake_fallback)
     excel.batch_append("0分", [{"col": "T", "value": "+1", "idem": "k"}], row=306)
     assert seen == {"T": "k"}
+
+
+# ── write queue (step 4b stage 2, 2026-11-20): request ids and settling ──────
+
+def _queue_transport(monkeypatch, replies, intent_states):
+    """_curl_ex fake: `replies` answers the write, `intent_states` answers each
+    successive POST /intent. Records every (path, body)."""
+    calls = []
+    states = list(intent_states)
+
+    def fake(path, body=None, **k):
+        calls.append((path, dict(body or {})))
+        if path == "/intent":
+            return (states.pop(0) if states else None), False
+        return replies.pop(0)
+
+    monkeypatch.setattr(excel, "_curl_ex", fake)
+    monkeypatch.setattr(excel, "_ssh_fallback", lambda *a, **k: pytest.fail("no fallback for a recorded write"))
+    monkeypatch.setattr(excel.time, "sleep", lambda s: None)
+    monkeypatch.setattr(excel, "_seen_queued", False)
+    return calls
+
+
+def test_every_write_carries_a_request_id_and_a_plain_reply_is_untouched(monkeypatch):
+    calls = _queue_transport(monkeypatch, [({"ok": True, "row": 5}, False)], [])
+    assert excel.append("0分", "R", date="11/19", value="+5") == {"ok": True, "row": 5}
+    assert [p for p, _ in calls] == ["/append"] and len(calls[0][1]["rid"]) == 32
+
+
+def test_queued_reply_that_lands_while_waiting_returns_the_real_reply(monkeypatch):
+    real = {"ok": True, "row": 5, "results": [{"col": "R", "value": "6"}]}
+    calls = _queue_transport(monkeypatch,
+                             [({"ok": False, "error": "osascript_timeout", "queued": True, "intent": "i1"}, False)],
+                             [{"ok": True, "state": "pending"}, {"ok": True, "state": "done", "result": real}])
+    assert excel.batch_append("0分", [("R", 5)], date="11/19") == real
+    assert calls[1][1]["rid"] == calls[0][1]["rid"]            # asked about the same request
+
+
+def test_write_still_queued_is_reported_queued_never_retried_or_fallen_back(monkeypatch):
+    monkeypatch.setattr(excel, "QUEUE_WAIT", 0)
+    _queue_transport(monkeypatch,
+                     [({"ok": False, "error": "excel_error", "queued": True, "intent": "i1"}, False)],
+                     [{"ok": True, "state": "pending", "intent": "i1"}])
+    r = excel.batch_write("0n", [{"col": "AE", "value": 15, "mode": "add"}], date="11/19")
+    assert excel.is_queued(r) and r["ok"] is False and r["intent"] == "i1" and len(r["rid"]) == 32
+    assert "Do not rerun" in r["error"] and not r.get("timeout") and not r.get("fallback")
+
+
+def test_client_timeout_on_a_recorded_write_is_queued_not_a_timeout(monkeypatch):
+    """The usual outage reply: the request waits behind the daemon's Excel lock
+    until curl gives up. The intent exists, so this is "queued", and a retry
+    (dtd re-driving a failed did-fast) would be a second write."""
+    monkeypatch.setattr(excel, "QUEUE_WAIT", 0)
+    _queue_transport(monkeypatch, [(None, True)], [{"ok": True, "state": "pending", "intent": "i9"}])
+    r = excel.append("0分", "R", date="11/19", value="+5")
+    assert excel.is_queued(r) and not r.get("timeout")
+    # write(): a timed-out set used to go to the ssh fallback; not once it is recorded
+    _queue_transport(monkeypatch, [(None, True)], [{"ok": True, "state": "pending"}])
+    assert excel.is_queued(excel.write("0分", "P", date="11/19", value="=3"))
+
+
+def test_timeout_the_daemon_never_recorded_keeps_the_old_outcome(monkeypatch):
+    """Queue off (or the request never arrived): exactly the pre-queue rules."""
+    _queue_transport(monkeypatch, [(None, True)], [{"ok": True, "enabled": False, "state": "unknown"}])
+    r = excel.append("0分", "R", date="11/19", value="+5")
+    assert r.get("timeout") and not excel.is_queued(r)
+    # an old daemon without /intent answers 404 not_found: same thing
+    _queue_transport(monkeypatch, [(None, True)], [{"ok": False, "error": "not_found"}])
+    assert excel.batch_append("0分", [("R", 5)], date="11/19").get("timeout")
+
+
+def test_only_the_first_queued_write_of_a_run_waits(monkeypatch):
+    monkeypatch.setattr(excel, "QUEUE_WAIT", 8)
+    clock = [0.0]
+    monkeypatch.setattr(excel.time, "monotonic", lambda: clock[0])
+    q = ({"ok": False, "error": "excel_error", "queued": True}, False)
+    calls = _queue_transport(monkeypatch, [q, q], [{"ok": True, "state": "pending"}] * 10)
+    monkeypatch.setattr(excel.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    assert excel.is_queued(excel.append("0分", "R", date="11/19", value="+5"))
+    first = len(calls)
+    assert first > 2                                             # polled until the wait ran out
+    assert excel.is_queued(excel.append("0分", "S", date="11/19", value="+5"))
+    assert len(calls) - first == 2                               # the write + one status check
+
+
+def test_queue_pending_reads_health(monkeypatch):
+    monkeypatch.setattr(excel, "_curl_ex", lambda path, body=None, **k: (
+        {"ok": True, "queue": {"enabled": True, "pending": 3, "held": 0}}, False))
+    assert excel.queue_pending() == 3
+    monkeypatch.setattr(excel, "_curl_ex", lambda path, body=None, **k: ({"ok": True, "queue": {"enabled": False}}, False))
+    assert excel.queue_pending() == 0
+    monkeypatch.setattr(excel, "_curl_ex", lambda path, body=None, **k: (None, False))
+    assert excel.queue_pending() == 0 and excel.queue_state() == {}

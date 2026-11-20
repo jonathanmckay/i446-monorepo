@@ -40,6 +40,20 @@ def db_present() -> bool:
     return ledger.DB_PATH.exists()
 
 
+def pending_writes() -> int:
+    """Writes excel-http has recorded but not yet applied to Excel (write
+    queue, step 4b). While this is > 0 Excel is behind, the daemon refuses
+    cell reads, and the ledger's own totals lag by the same writes (they are
+    journaled when applied). Readers show it as ⏳n so a frozen number is
+    explained. 0 when the queue is off, the daemon is unreachable, or under
+    pytest without a faked transport. Never raises."""
+    try:
+        from neon import excel
+        return excel.queue_pending()
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _round(v: Optional[float]) -> Optional[float]:
     return None if v is None else round(float(v), 3)
 
@@ -52,6 +66,7 @@ def day_view(date_iso: str, conn=None, now: Optional[_dt.datetime] = None) -> Op
     only) at max(0, total − Σlocks); future blocks absent.
     unknown: inputs the ledger never observed (derivation is partial).
     pending: columns with no derivation yet (P before its first ritual set).
+    pending_writes (also in the dict): pending_writes() for today, else 0.
     """
     if conn is None and not db_present():
         return None
@@ -113,7 +128,8 @@ def day_view(date_iso: str, conn=None, now: Optional[_dt.datetime] = None) -> Op
             return None
         return {"date": date_iso, "total": total, "cols": cols, "blocks": out_blocks,
                 "live_block": live, "unknown": sorted(set(unknown)), "pending": pending,
-                "through": through, "source": "ledger"}
+                "through": through, "source": "ledger",
+                "pending_writes": pending_writes() if date_iso == today else 0}
     finally:
         if own:
             try:

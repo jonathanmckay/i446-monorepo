@@ -262,3 +262,36 @@ def test_state_late_import_does_not_outrank_a_later_repair(db):
     ledger.record(_e(ts="2026-10-19T20:23:00", sheet="hcbi", col="BD", row=310, date="10/20",
                      value="+550", after="=550+550", after_value="1100.0", fallback=True), db)
     assert ledger.state("2026-10-20", "hcbi", db)["BD"]["value"] == 550.0
+
+
+# ── write queue: a late-applied write keeps the block it was asked for in ────
+
+def test_queued_write_is_attributed_to_the_block_it_was_requested_in(tmp_path):
+    from neon import blocks
+    c = ledger.connect(tmp_path / "q.db")
+    asked, applied = "2026-11-19T09:58:00", "2026-11-19T10:07:00"
+    want = blocks.current_block(ledger.parse_ts(asked))[1]
+    assert want != blocks.current_block(ledger.parse_ts(applied))[1]
+    e = {"ts": applied, "requested_ts": asked, "kind": "append", "sheet": "0分", "col": "R",
+         "row": 321, "date": "11/19", "value": "+15", "before": "=1", "after": "=1+15",
+         "after_value": "16", "before_value": "1", "intent": "x", "item": 0}
+    ledger.record(e, c)
+    c.commit()
+    ts, block, req = c.execute("SELECT ts, block, requested_ts FROM events").fetchone()
+    assert (ts, block, req) == (applied, want, asked)          # ts stays apply time
+    # the same line imported again (rebuild from JSONL) is still one event
+    assert ledger.record(e, c) is None
+
+
+def test_requested_ts_column_is_added_to_an_existing_db(tmp_path):
+    import sqlite3
+    p = tmp_path / "old.db"
+    old = sqlite3.connect(str(p))
+    old.executescript(ledger.SCHEMA.replace(",\n    requested_ts  TEXT", ""))
+    assert "requested_ts" not in {r[1] for r in old.execute("PRAGMA table_info(events)")}
+    old.close()
+    c = ledger.connect(p)
+    assert "requested_ts" in {r[1] for r in c.execute("PRAGMA table_info(events)")}
+    ledger.record({"ts": "2026-11-19T10:07:00", "kind": "append", "sheet": "0分", "col": "R", "row": 321,
+                   "date": "11/19", "value": "+15", "before": "=1", "after": "=1+15"}, c)
+    assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1

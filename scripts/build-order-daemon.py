@@ -566,6 +566,77 @@ def _date_str(d: dt.date) -> str:
     return f"{d.month}/{d.day}"
 
 
+# ── Block-freeze gate (Neon off Excel step 4b stage 2, 2026-11-20) ───────────
+# Only with excel-http's write queue on (NEON_WRITE_QUEUE=1); with it off the
+# freeze runs exactly as before. The block job is then: drain the queue,
+# freeze G:O, and no drain → no freeze.
+#   * Writes still queued: Excel's residual is short by them, so freezing now
+#     would lock a stale block and push the queued points into the next one.
+#     The daemon refuses the read anyway; this just says why, and retries.
+#   * No 03:50 baseline for the day (JM, 2026-11-19): run the reconcile once
+#     per fire; if the baseline still has not landed, skip the freeze for this
+#     boundary and raise one card for the day. The next fire's self-heal sweep
+#     tries again, so a late baseline locks the skipped blocks late, never not
+#     at all.
+NEON_RULES_CACHE = Path.home() / ".cache" / "neon-rules"
+FREEZE_SKIP_CARD = "⚠ Neon block freeze skipped (no baseline)"
+_BASELINE_RETRIED: set = set()      # (date iso, fire hour) the reconcile was already re-run for
+
+
+def _freeze_skip_card(day: dt.date, why: str) -> None:
+    """One dtd card per day for a skipped freeze. Never raises."""
+    try:
+        NEON_RULES_CACHE.mkdir(parents=True, exist_ok=True)
+        flag = NEON_RULES_CACHE / f"freeze-skip-{day.isoformat()}"
+        if flag.exists():
+            return
+        flag.write_text(why + "\n")
+        import todoist
+        t = todoist.create_task(f"{FREEZE_SKIP_CARD} (5) [10]", labels=["i447"], due_string="today")
+        todoist.add_comment(t["id"], (
+            f"{day:%-m/%-d}: {why}. The 0分 G:O block freeze is skipped at each boundary until "
+            "scripts/neon-reconcile.py lands a baseline for today (it is retried at every fire); "
+            "the skipped blocks are then locked late by the next fire. Check Excel on Ix and "
+            "`curl -s localhost:9876/health`."))
+    except Exception as e:  # noqa: BLE001
+        log(f"freeze gate: card failed: {e}")
+
+
+def block_freeze_gate(target_date: dt.date, hour: int | None = None) -> str | None:
+    """Why the G:O freeze must not run right now, or None to go ahead.
+    "pending …" is worth a retry in a few seconds; "no_baseline" is final for
+    this fire."""
+    try:
+        q = neon_excel.queue_state()
+    except Exception as e:  # noqa: BLE001 — a gate that cannot tell must not block the lock
+        log(f"freeze gate: queue state unavailable ({e}); not gating")
+        return None
+    if not q.get("enabled"):
+        return None
+    if int(q.get("pending") or 0):
+        return f"pending {q.get('pending')} queued write(s)"
+    try:
+        from neon import ledger
+        if not ledger.DB_PATH.exists():
+            return None
+        iso = target_date.isoformat()
+        if ledger.has_baseline(iso):
+            return None
+        key = (iso, daytime.local_now().hour if hour is None else hour)
+        if key not in _BASELINE_RETRIED:
+            _BASELINE_RETRIED.add(key)
+            log("freeze gate: no baseline for today; running neon-reconcile once")
+            subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "neon-reconcile.py")],
+                           check=False, capture_output=True, timeout=600, stdin=subprocess.DEVNULL)
+            if ledger.has_baseline(iso):
+                return None
+    except Exception as e:  # noqa: BLE001
+        log(f"freeze gate: baseline check failed ({e}); not gating")
+        return None
+    _freeze_skip_card(target_date, "no 03:50 baseline in the ledger and the reconcile retry did not land one")
+    return "no_baseline"
+
+
 def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False,
                    floor: float = 0) -> str:
     """Read computed value of `col` for target_date, write back as literal.
@@ -585,6 +656,13 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False,
     if dry_run:
         log(f"[DRY RUN] Would lock {NEON_SHEET}!{col} for {_date_str(target_date)}")
         return "DRY_RUN"
+    gate = block_freeze_gate(target_date)
+    if gate:
+        if gate == "no_baseline":
+            log(f"lock {col}: SKIPPED no baseline (freeze gate)")
+            return "SKIPPED no_baseline"
+        log(f"lock {col}: FAILED {gate} (freeze gate)")
+        return "FAILED"
     try:
         r = neon_excel.read(NEON_SHEET, col, date=_date_str(target_date))
         if not r.get("ok"):
@@ -618,6 +696,9 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False,
             # "nothing earned" state.
             w = neon_excel.write(NEON_SHEET, col, row=r["row"], value="",
                                  src=f"block-turnover lock {col} (empty block)")
+            if neon_excel.is_queued(w):
+                log(f"lock {col}: QUEUED empty (Excel stopped answering after the read)")
+                return "QUEUED"
             if not w.get("ok"):
                 log(f"lock {col}: FAILED {w.get('error', '')}")
                 return "FAILED"
@@ -626,6 +707,12 @@ def neon_lock_cell(target_date: dt.date, col: str, dry_run: bool = False,
             return "LOCKED EMPTY"
         w = neon_excel.write(NEON_SHEET, col, row=r["row"], value=str(v),
                              src=f"block-turnover lock {col}")
+        if neon_excel.is_queued(w):
+            # The residual was read with nothing queued, so the literal is
+            # right for this boundary; the daemon replays it in order. Final:
+            # a retry would only queue the same set again.
+            log(f"lock {col}: QUEUED {v} (Excel stopped answering after the read)")
+            return f"QUEUED {v}"
         if not w.get("ok"):
             log(f"lock {col}: FAILED {w.get('error', '')}")
             return "FAILED"

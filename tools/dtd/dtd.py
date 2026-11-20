@@ -1407,9 +1407,14 @@ def _compute_summary() -> dict:
     # replaces `points` under NEON_READ_SOURCE=ledger. Disagreements go to
     # ~/.cache/neon-rules/reader-diff.jsonl (deduped). Never fails the summary.
     ledger_points = None
+    pending_writes = 0
     try:
         from neon import view as nview
         lv = nview.day_view(iso)
+        # Writes queued for Excel (step 4b): the Excel number above is frozen
+        # or missing until they drain. Asked directly when there is no ledger
+        # view, because that is exactly when the reader has nothing else.
+        pending_writes = (lv or {}).get("pending_writes") if lv else nview.pending_writes()
         if lv and lv.get("total") is not None:
             ledger_points = int(float(lv["total"]))  # truncate, like the Excel path
             nview.log_reader_diff("dtd", iso, points, ledger_points)
@@ -1439,6 +1444,8 @@ def _compute_summary() -> dict:
         val["minutes"] = minutes
     if ledger_points is not None:
         val["ledger_points"] = ledger_points
+    if pending_writes:
+        val["pending_writes"] = int(pending_writes)
     _SUMMARY.update(at=time.time(), val=val)
     return val
 
