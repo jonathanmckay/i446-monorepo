@@ -3,6 +3,7 @@
 #
 #   ./install-wear.sh <ip:port>     # the watch's Wireless-debugging address
 #   ./install-wear.sh               # reuse a watch `adb devices` already lists
+#   ./install-wear.sh pair <ip:pairport> <code> <ip:port>   # first run on a Mac
 #
 # On the watch: Settings → Developer options → Wireless debugging. The port
 # changes whenever the toggle flips, and the first time this Mac must be
@@ -12,6 +13,20 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17}"
+# Use the SDK's own adb (sdkmanager "platform-tools"). The Homebrew cask copy
+# is quarantined and hangs on a Gatekeeper prompt in a headless session.
+export PATH="/opt/homebrew/share/android-commandlinetools/platform-tools:$PATH"
+
+# First time from a given Mac: ./install-wear.sh pair <ip:pairport> <code> <ip:port>
+# (watch: Wireless debugging → Pair new device shows the pair port and code;
+# the main Wireless debugging screen shows the connect port).
+if [[ "${1:-}" == pair ]]; then
+  [[ $# -eq 4 ]] || { echo "usage: $0 pair <ip:pairport> <code> <ip:port>"; exit 1; }
+  echo "→ adb pair $2"
+  out=$(adb pair "$2" "$3" 2>&1); echo "  $out"
+  [[ "$out" == *Successfully* ]] || { echo "✗ pairing failed (code expired? pair port changed?)"; exit 1; }
+  shift 3
+fi
 
 addr="${1:-}"
 if [[ -n "$addr" ]]; then
