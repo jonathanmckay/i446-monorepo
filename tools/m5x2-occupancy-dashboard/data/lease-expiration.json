@@ -1413,7 +1413,7 @@
     "move_in": "2014-08-01",
     "renewal_start_date": null,
     "last_lease_renewal": null,
-    "rent": "1451.00"
+    "rent": "1240.00"
   },
   {
     "unit_id": 677,
@@ -4624,7 +4624,7 @@
     "property_name": "s129",
     "unit": "18",
     "tenant_name": "Nugam, Sylvestria",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2024-06-28",
     "renewal_start_date": null,
