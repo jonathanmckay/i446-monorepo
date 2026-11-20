@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "rational 1600 day": {
-      "todoist_id": "6j3c5wM5G8565pv2",
-      "minutes": 100
-    },
-    "thank you for everybody cut off": {
-      "todoist_id": "6j3c62F4WRPxq5M2",
-      "minutes": 50
-    }
-  },
-  "last_sync": "2026-11-20T03:55:02.253275-08:00"
+  "tasks": {},
+  "last_sync": "2026-11-20T04:00:05.804750-08:00"
 }
