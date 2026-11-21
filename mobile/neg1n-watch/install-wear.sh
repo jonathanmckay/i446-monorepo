@@ -94,9 +94,19 @@ if [[ -n "$test_at" ]]; then
   out=$(adb -s "$serial" shell am start --activity-clear-task \
     -n com.mckay.neg1n/com.mckay.neg1n.wear.MainActivity --el test_nudge_at "${test_at}000" 2>&1)
   [[ "$out" != *Warning* && "$out" != *Error* ]] || { echo "✗ $out"; exit 1; }
-  sleep 2
-  adb -s "$serial" logcat -d -t 200 | grep -q "Nudge: test armed for ${test_at}000" \
-    || { echo "✗ the app did not arm the test (is this build installed? run without 'test' first)"; exit 1; }
+  echo "  $out"
+  # Tag-filtered dump, polled: a 200-line tail of the whole log misses the
+  # line on a chatty watch, and a cold start can take a few seconds.
+  armed=""
+  for i in 1 2 3 4 5 6; do
+    sleep 2
+    adb -s "$serial" logcat -d -s Neg1n 2>/dev/null | grep -q "Nudge: test armed for ${test_at}000" && { armed=1; break; }
+  done
+  if [[ -z "$armed" ]]; then
+    echo "✗ the app did not arm the test (is this build installed? run without 'test' first)"
+    echo "  last Neg1n log lines:"; adb -s "$serial" logcat -d -s Neg1n 2>/dev/null | tail -8
+    exit 1
+  fi
   # Back to the watch face: a notification can stay silent under its own app.
   adb -s "$serial" shell input keyevent KEYCODE_HOME
   echo "✓ test nudge armed for $(date -r $test_at +%H:%M:%S); keep the watch on your wrist, DND/Bedtime off"
