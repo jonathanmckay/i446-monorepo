@@ -18,6 +18,13 @@ if [ "$(head -1 "$TRIGGER" 2>/dev/null)" = noop ]; then
   echo "=== noop $(date '+%F %T') ===" > "$LOG"
   exit 0
 fi
+# Reserved verb (2026-11-21): `wear [install|test [HH:MM]|pair <code>]` deploys
+# the Wear OS watch app instead (mobile/neg1n-watch/deploy-wear.sh).
+read -r VERB REST < "$TRIGGER" 2>/dev/null
+if [ "$VERB" = wear ]; then
+  # shellcheck disable=SC2086
+  LOG="$LOG" exec /bin/zsh "$HOME/i446-monorepo/mobile/neg1n-watch/deploy-wear.sh" $REST
+fi
 cd "$DIR" || exit 1
 SCHEMES=$(head -1 "$TRIGGER" 2>/dev/null)
 [ -z "$SCHEMES" ] && SCHEMES="janus dtd"
