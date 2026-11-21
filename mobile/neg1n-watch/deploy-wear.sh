@@ -24,7 +24,9 @@ verb="${1:-all}"; shift 2>/dev/null
     install) ./install-wear.sh ;;
     test)    ./install-wear.sh test "$@" ;;
     pair)    ./install-wear.sh pair-auto "$@" ;;
-    log)     adb logcat -d -s Neg1n | tail -"${1:-15}" ;;
+    log)     adb devices | sed 1d
+             serial=$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')
+             adb -s "$serial" logcat -d -s Neg1n:V | tail -n "${1:-15}" ;;
     *)       echo "✗ unknown wear verb: $verb"; false ;;
   esac
   echo "=== wear $verb exit=$? $(date '+%F %T') ==="
