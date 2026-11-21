@@ -1788,18 +1788,6 @@
     "rent": "850.00"
   },
   {
-    "unit_id": 821,
-    "property_name": "tc34",
-    "unit": "B110",
-    "tenant_name": "Del Pino, Nelson",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2025-03-05",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-03-01",
-    "rent": "1043.00"
-  },
-  {
     "unit_id": 1166,
     "property_name": "tc68",
     "unit": "A17",
@@ -4624,11 +4612,11 @@
     "property_name": "s129",
     "unit": "18",
     "tenant_name": "Nugam, Sylvestria",
-    "status": "Pending",
-    "lease_sign_date": null,
+    "status": "Renewed",
+    "lease_sign_date": "2026-11-20",
     "move_in": "2024-06-28",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-06-01",
+    "renewal_start_date": "2026-11-27",
+    "last_lease_renewal": "2026-11-27",
     "rent": "1385.00"
   },
   {
