@@ -24,6 +24,14 @@ class MainActivity : Activity() {
         requestNudgePermissionIfNeeded()
         val textView = findViewById<TextView>(R.id.statusText)
         textView.text = "-1n\nloading..."
+        // `install-wear.sh test HH:MM` launches with this extra.
+        val testAt = intent?.getLongExtra(EXTRA_TEST_NUDGE_AT, 0L) ?: 0L
+        if (testAt > 0L && NudgeScheduler.armTest(applicationContext, testAt)) {
+            val hhmm = java.time.Instant.ofEpochMilli(testAt).atZone(java.time.ZoneId.systemDefault())
+                .toLocalTime().toString().take(5)
+            textView.text = "-1n\ntest nudge at $hhmm"
+            return
+        }
         CoroutineScope(Dispatchers.Main).launch {
             val status = DataLayerReader.readLatest(applicationContext)
             val text = if (status.block == null) {

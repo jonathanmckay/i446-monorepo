@@ -26,6 +26,13 @@ private const val NOTIFICATION_ID = 7301
 private const val CHANNEL_ID = "neg1n_nudge"
 private const val PREF_HANDLED_SLOT = "nudge_handled_slot"
 private const val SYNC_NOW_PATH = "/neg1n_sync_now"
+// Test nudge (`install-wear.sh test HH:MM`): its own alarm, notification id
+// and pref, so the real nudge's handled-slot and cancel-on-done never see it.
+private const val ACTION_NUDGE_TEST = "com.mckay.neg1n.wear.NUDGE_TEST"
+private const val REQUEST_TEST_ALARM = 7304
+private const val TEST_NOTIFICATION_ID = 7305
+private const val PREF_TEST_AT = "nudge_test_at"
+const val EXTRA_TEST_NUDGE_AT = "test_nudge_at"
 
 /** Arms the one alarm that drives the nudge: it always points at the next
  * pre-sync (+25 min) or nudge (+30 min) instant, and every fire re-arms it.
@@ -53,12 +60,44 @@ object NudgeScheduler {
             alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
         }
     }
+
+    /** Schedule a test notification at `atMillis` through the same kind of
+     * exact alarm and the same channel as the real nudge. It proves alarm →
+     * notification → vibration; it skips the phone sync and the decision.
+     * Each timestamp is honoured once: the launch intent that carries it is
+     * redelivered when the activity is recreated, and must not fire again.
+     * Returns false when nothing was scheduled. */
+    fun armTest(context: Context, atMillis: Long, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val prefs = context.getSharedPreferences(Neg1nConfig.PREFS_NAME, Context.MODE_PRIVATE)
+        if (atMillis <= nowMillis || prefs.getLong(PREF_TEST_AT, 0L) == atMillis) return false
+        val alarms = context.getSystemService(AlarmManager::class.java) ?: return false
+        val pi = PendingIntent.getBroadcast(
+            context, REQUEST_TEST_ALARM,
+            Intent(context, NudgeReceiver::class.java).setAction(ACTION_NUDGE_TEST),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val exactAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms.canScheduleExactAlarms()
+        try {
+            if (exactAllowed) alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi)
+            else alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "NudgeScheduler: exact test alarm refused, falling back to inexact", e)
+            alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi)
+        }
+        prefs.edit().putLong(PREF_TEST_AT, atMillis).apply()
+        Log.i(TAG, "Nudge: test armed for $atMillis (exact=$exactAllowed)")
+        return true
+    }
 }
 
 /** The alarm target, and the re-arm hook for boot and app update. */
 class NudgeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
+        if (intent.action == ACTION_NUDGE_TEST) {
+            NudgeCheck.postTest(app)
+            return
+        }
         if (intent.action != ACTION_NUDGE) {
             NudgeScheduler.arm(app)
             return
@@ -144,20 +183,44 @@ object NudgeCheck {
         prefs(context).edit().putLong(PREF_HANDLED_SLOT, slot.startMillis).apply()
     }
 
-    private fun post(context: Context, slot: NudgeLogic.Slot, missing: List<String>) {
+    /** The notification manager with the nudge channel in place, or null
+     * (logged) when notifications are not allowed. Shared by the real nudge
+     * and the test, so the test exercises the same permission and channel. */
+    private fun channelReady(context: Context, what: String): NotificationManager? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.e(TAG, "Nudge: POST_NOTIFICATIONS not granted, ${slot.block} nudge dropped (open the app once to allow)")
-            return
+            Log.e(TAG, "Nudge: POST_NOTIFICATIONS not granted, $what dropped (open the app once to allow)")
+            return null
         }
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return null
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "-1n 30-minute nudge", NotificationManager.IMPORTANCE_HIGH).apply {
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 250, 150, 250)
             }
         )
+        return manager
+    }
+
+    /** The test alarm's target (NudgeScheduler.armTest). */
+    fun postTest(context: Context) {
+        val manager = channelReady(context, "test nudge") ?: return
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_nudge)
+            .setContentTitle("-1n test nudge")
+            .setContentText("alarm, channel and buzz work")
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setTimeoutAfter(15 * 60_000L)
+            .build()
+        manager.notify(TEST_NOTIFICATION_ID, notification)
+        Log.i(TAG, "Nudge: test posted")
+    }
+
+    private fun post(context: Context, slot: NudgeLogic.Slot, missing: List<String>) {
+        val manager = channelReady(context, "${slot.block} nudge") ?: return
         val labelOf = Neg1nConfig.RITUALS.associate { (tag, label, _) -> tag to label }
         val open = PendingIntent.getActivity(
             context, REQUEST_OPEN_LIST,
