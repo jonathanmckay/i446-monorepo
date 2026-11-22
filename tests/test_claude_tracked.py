@@ -239,7 +239,7 @@ def test_local_tmux_inner_exports_checkpoint(ct, monkeypatch, capsys):
 # after_ix_exit used to close the surface only when the workspace held another Claude tab and
 # otherwise relaunched a fresh thread in it; with one Claude tab per workspace that was every /fin.
 
-def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux', tmp_log=None):
+def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux', tmp_log=None, shell_sent=False):
     """Run after_ix_exit with the ix marker faked; returns (result, cmux argvs, relaunches)."""
     import types
     if surface:
@@ -249,6 +249,7 @@ def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='
     monkeypatch.setattr(ct, 'fin_closed_on_ix', lambda name, host: marker)
     monkeypatch.setattr(ct, 'cmux_resume_clear', lambda name: None)
     monkeypatch.setattr(ct, 'cmux_bin', lambda: cmux, raising=False)
+    monkeypatch.setattr(ct, 'end_tab_shell', lambda: {'sent': shell_sent}, raising=False)
     monkeypatch.setattr(ct, 'FIN_TAB_LOG', tmp_log or Path('/nonexistent-dir/fin.log'), raising=False)
     monkeypatch.setattr(ct, 'other_claude_tabs', lambda: [], raising=False)   # the lone-tab case
     relaunched, calls = [], []
@@ -335,7 +336,7 @@ def test_fin_tab_close_leaves_evidence_where_ix_can_read_it(ct, monkeypatch, tmp
     log = tmp_path / 'fin.log'
     _fin_exit(ct, monkeypatch, close_rc=1, tmp_log=log)
     rows = [json.loads(l) for l in log.read_text().splitlines()]
-    assert [r['step'] for r in rows] == ['start', 'layout', 'close']
+    assert [r['step'] for r in rows] == ['start', 'layout', 'close', 'end-shell']
     assert rows[0]['CMUX_SURFACE_ID'] == 'SURF-1'
     assert rows[2]['rc'] == 1 and rows[2]['err'] == 'no such surface'
 
@@ -378,3 +379,29 @@ def test_cmux_password_falls_back_to_cmux_config(ct, monkeypatch, tmp_path, text
     facts = ct.cmux_auth_facts('/usr/bin/true')
     assert facts['mode'] == 'password' and facts['config_has_password'] is True
     assert 'c0nfig' not in repr(facts)                      # the log never carries the password
+
+
+def test_fin_ends_the_tab_shell_when_the_cmux_socket_refuses(ct, monkeypatch, capsys):
+    """2026-11-22, third run: Straylight's socket is in password mode with no password the CLI can
+    find, so close-surface can never succeed there. The tab still has to close."""
+    done, calls, relaunched = _fin_exit(ct, monkeypatch, close_rc=1, shell_sent=True)
+    assert done is True and relaunched == []
+    assert 'close it by hand' not in capsys.readouterr().out
+
+
+def test_end_tab_shell_hangs_up_only_a_parent_shell_outside_tmux(ct, monkeypatch):
+    import os, signal, types
+    killed = []
+    monkeypatch.setattr(os, 'getppid', lambda: 4242)
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: killed.append((pid, sig)))
+    parent = {'comm': '-zsh'}
+    monkeypatch.setattr(ct.subprocess, 'run',
+                        lambda argv, **k: types.SimpleNamespace(stdout=parent['comm'] + '\n', returncode=0))
+    monkeypatch.delenv('TMUX', raising=False)
+    assert ct.end_tab_shell()['sent'] is True and killed == [(4242, signal.SIGHUP)]
+    parent['comm'] = '/usr/bin/python3'
+    assert ct.end_tab_shell()['sent'] is False                 # a script started us: leave it
+    parent['comm'] = '/bin/zsh'
+    monkeypatch.setenv('TMUX', '/tmp/tmux-501/default,1,0')
+    assert ct.end_tab_shell()['sent'] is False                 # local tmux pane, not the tab's shell
+    assert len(killed) == 1
