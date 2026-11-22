@@ -139,16 +139,33 @@ def test_card_badge_habit_shows_zero():
     assert ic.card_badge("groceries", {"slack m5x2": _b(3)}) == ""
 
 
-def test_card_badge_ritual_sums_reported_slack_habits():
-    badges = {"slack m5x2": _b(2), "slack i9": _b(1), "ibx m5x2": _b(50)}
-    assert ic.card_badge("\U0001F608 -1ibx", badges) == "\u27093"
-    # a habit no host reports (ix has no github Slack) is left out
+# Bug 2026-11-22: the ritual card summed Slack only, so it read \u27090 while
+# ibx m5x2 showed \u270942 and ibx s897 \u27093. JM: "-1ibx should be the sum of the
+# number we see in slack and ibx for s897 and m5x2". i9 is not part of it.
+
+def test_card_badge_ritual_sums_slack_and_ibx_for_s897_and_m5x2():
+    badges = {"slack m5x2": _b(2), "ibx m5x2": _b(42), "ibx s897": _b(3),
+              "slack i9": _b(7), "ibx i9": _b(11), "teams": _b(5)}
+    assert ic.card_badge("\U0001F608 -1ibx", badges) == "\u270947"
+    # a habit no host reports is left out
     assert ic.card_badge("\U0001F608 -1ibx", {"slack m5x2": _b(0)}) == "\u27090"
 
 
-def test_card_badge_ritual_blank_on_failed_ping_or_no_slack():
-    assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "slack i9": _b(0, ok=False)}) == ""
-    assert ic.card_badge("-1ibx", {"ibx m5x2": _b(50)}) == ""
+def test_card_badge_ritual_matches_the_s897_number_shown_on_its_card(tmp_path):
+    # s897's card shows badge_count (Gmail only), so the ritual sums that too
+    items = [_email("gmail"), {"type": "imsg", "_data": {}}, _email("m5c7"), _slack("m5x2")]
+    ok = {"gmail:gmail": True, "imsg": False, "gmail:m5c7": True, "slack:m5x2": True}
+    ic.write_snapshot(ic.build_snapshot(items, ok, host="h", now=1000.0), tmp_path)
+    b = ic.read_badges(tmp_path, now=1001.0)
+    shown = sum(int(ic.card_badge(h, b)[1:]) for h in ("ibx s897", "ibx m5x2", "slack m5x2"))
+    assert ic.card_badge("-1ibx", b) == "\u2709" + str(shown) == "\u27093"
+
+
+def test_card_badge_ritual_blank_on_failed_ping_or_nothing_reported():
+    assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "ibx m5x2": _b(0, ok=False)}) == ""
+    # an i9 failure is not this card's business
+    assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "slack i9": _b(0, ok=False)}) == "\u27092"
+    assert ic.card_badge("-1ibx", {"ibx i9": _b(50)}) == ""
     assert ic.card_badge("-1ibx", {}) == ""
 
 
