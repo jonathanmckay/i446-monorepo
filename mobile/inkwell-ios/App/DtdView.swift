@@ -161,7 +161,7 @@ struct DtdView: View {
     private func doneButton(_ t: DtdTask) -> some View {
         Button {
             if !t.form.isEmpty { openForm(t) }
-            else if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }
+            else if t.variablePrompt { valueText = t.prefillValue(); valuePrompt = t } else { store.complete(t, value: nil) }
         } label: {
             if !t.form.isEmpty { Label("form", systemImage: "list.bullet.clipboard") }
             else { Label(t.points.map { "done +\($0)分" } ?? "done", systemImage: "checkmark") }
@@ -196,7 +196,7 @@ struct DtdView: View {
             switch await store.form(t) {
             case .form(let f): formOpen = (t, f)
             case .none:
-                if t.variablePrompt { valueText = ""; valuePrompt = t } else { store.complete(t, value: nil) }
+                if t.variablePrompt { valueText = t.prefillValue(); valuePrompt = t } else { store.complete(t, value: nil) }
             case .failed: break
             }
         }

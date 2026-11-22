@@ -67,6 +67,18 @@ object NudgeLogic {
     fun missing(status: Neg1nStatus): List<String> =
         Neg1nConfig.RITUALS.map { it.first }.filter { it !in status.done }
 
+    /** Test mode (`deploy-wear.sh always on`): what to say at +30 in a block
+     * where the real nudge stays silent, or null when there is nothing to add
+     * (before +30, outside block hours, or a real nudge is going out). NotDue
+     * at or after +30 means the 15-minute window has passed: a late alarm. */
+    fun testNote(d: Decision, nowMillis: Long, slot: Slot?): String? = when {
+        slot == null || nowMillis < slot.nudgeAt -> null
+        d is Decision.AllDone -> "all done"
+        d is Decision.Stale -> "status stale"
+        d is Decision.NotDue -> "late, past the 15-minute window"
+        else -> null
+    }
+
     fun decide(nowMillis: Long, status: Neg1nStatus, zone: ZoneId = Neg1nConfig.ZONE): Decision {
         val slot = slotAt(nowMillis, zone) ?: return Decision.NotDue
         if (nowMillis < slot.nudgeAt || nowMillis >= slot.windowEnd) return Decision.NotDue

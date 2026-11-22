@@ -34,6 +34,19 @@ sid=""
 IFS= read -r -d '' -t 1 j 2>/dev/null
 [[ "$j" =~ '"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"' ]] && sid="${match[1]}"
 [[ -z "$sid" ]] && sid="${CLAUDE_CODE_SESSION_ID:-}"
+# /fin's exit request (see "/fin closes the tab" below) is void once JM sends
+# anything else here: he kept working in this thread.
+# First thing on a prompt (2026-11-22): below the claim/regrab/autoclaim python
+# calls (autoclaim can hold for seconds) the typist woke first and typed /exit
+# into the prompt JM had queued behind /fin.
+# The fin-close marker goes with it (2026-11-22): left behind, the next ordinary
+# exit of this thread would end its tmux session and close the tab.
+if [[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.exit" ]]; then
+  for _l in ${(f)"$(<"$D/by-session/$sid.exit")"}; do
+    [[ "$_l" == tmux=?* && "${_l#tmux=}" != */* ]] && rm -f "${FIN_CLOSE_DIR:-$HOME/.local/state/jm/fin-close}/${_l#tmux=}" 2>/dev/null
+  done
+  rm -f "$D/by-session/$sid.exit" 2>/dev/null
+fi
 # `/d <task>[: request]` / `/d new <task>` (or /claim): claim (or create +
 # claim) right here, before the model starts, so dtd shows it in ~1s. Python
 # only runs for these prompts; its stdout lands in the model's context so the
@@ -82,16 +95,6 @@ if [[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.free" \
   rm -f "$D/by-session/$sid.free" 2>/dev/null
 fi
 zmodload zsh/datetime zsh/files 2>/dev/null
-# /fin's exit request (see "/fin closes the tab" below) is void once JM sends
-# anything else here: he kept working in this thread.
-# The fin-close marker goes with it (2026-11-22): left behind, the next ordinary
-# exit of this thread would end its tmux session and close the tab.
-if [[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.exit" ]]; then
-  for _l in ${(f)"$(<"$D/by-session/$sid.exit")"}; do
-    [[ "$_l" == tmux=?* && "${_l#tmux=}" != */* ]] && rm -f "${FIN_CLOSE_DIR:-$HOME/.local/state/jm/fin-close}/${_l#tmux=}" 2>/dev/null
-  done
-  rm -f "$D/by-session/$sid.exit" 2>/dev/null
-fi
 AGENT_STALE_S=7200
 # In-flight subagents of this session: "<agent_id> <epoch>" per line. Kept
 # for every session (builtins only), claimed or not, so a claim made after
@@ -162,8 +165,12 @@ fi
 # already cleared the index. One builtin file test in the common case.
 if [[ "$1" == idle && -n "$sid" && -f "$D/by-session/$sid.exit" ]]; then
   if [[ -n "$TMUX_PANE" && -z "$DTD_NOTE_CHILD" && -z "$(_live_agents)" && -z "$(_live_shells)" ]]; then
-    rm -f "$D/by-session/$sid.exit" 2>/dev/null
-    { sleep 1; tmux send-keys -t "$TMUX_PANE" C-u; tmux send-keys -t "$TMUX_PANE" -l '/exit'; sleep 0.3; tmux send-keys -t "$TMUX_PANE" Enter; } >/dev/null 2>&1 &!
+    # The request stays on disk through the wait (2026-11-22): a prompt JM queued
+    # behind /fin is submitted as this turn ends, and its `working` hook voids
+    # the request, so the tab stays open for it. The rm is the claim: no `-f`,
+    # so a voided request, or a second Stop's typist, types nothing.
+    _x="$D/by-session/$sid.exit"
+    { sleep 1; rm "$_x" 2>/dev/null || exit 0; tmux send-keys -t "$TMUX_PANE" C-u; tmux send-keys -t "$TMUX_PANE" -l '/exit'; sleep 0.3; tmux send-keys -t "$TMUX_PANE" Enter; } >/dev/null 2>&1 &!
   fi
 fi
 # SessionEnd: a re-grabbed task (see Re-grab above) returns to ✅, and the

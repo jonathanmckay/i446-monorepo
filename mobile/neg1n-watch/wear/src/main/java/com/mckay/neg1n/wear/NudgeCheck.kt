@@ -33,6 +33,17 @@ private const val REQUEST_TEST_ALARM = 7304
 private const val TEST_NOTIFICATION_ID = 7305
 private const val PREF_TEST_AT = "nudge_test_at"
 const val EXTRA_TEST_NUDGE_AT = "test_nudge_at"
+// Always-test mode (`deploy-wear.sh always on [hours]`, 2026-11-22): until
+// PREF_ALWAYS_UNTIL, every block buzzes at +30 even when the real nudge is
+// silent (all done, stale, late). Its own notification id and slot pref, so
+// the real nudge's handled-slot never sees it. Expires by itself: prefs
+// survive `adb install -r`, a plain switch would stay on for good.
+private const val PREF_ALWAYS_UNTIL = "nudge_always_until"
+private const val PREF_ALWAYS_CMD_AT = "nudge_always_cmd_at"
+private const val PREF_ALWAYS_SLOT = "nudge_always_slot"
+private const val ALWAYS_NOTIFICATION_ID = 7306
+const val EXTRA_ALWAYS_UNTIL = "nudge_always_until"
+const val EXTRA_ALWAYS_CMD_AT = "nudge_always_cmd_at"
 
 /** Arms the one alarm that drives the nudge: it always points at the next
  * pre-sync (+25 min) or nudge (+30 min) instant, and every fire re-arms it.
@@ -148,14 +159,17 @@ object NudgeCheck {
         }
         val status = latest
             ?: PendingCompletions.fromPrefs(context).applyTo(StatusStore.load(context))
-        onStatus(context, status)
+        onStatus(context, status, fromAlarm = true)
     }
 
     /** Decide and act on a status. Called from the alarm, and from every -1n
      * complication refresh with the status it just read: that second caller
      * is what delivers a nudge whose alarm ran late or found only stale data,
      * and what clears the notification once the block is finished. */
-    fun onStatus(context: Context, status: Neg1nStatus, nowMillis: Long = System.currentTimeMillis()) {
+    fun onStatus(
+        context: Context, status: Neg1nStatus, nowMillis: Long = System.currentTimeMillis(),
+        fromAlarm: Boolean = false,
+    ) {
         val slot = NudgeLogic.slotAt(nowMillis)
         if (slot != null && status.block == slot.block && NudgeLogic.missing(status).isEmpty()) {
             context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
@@ -171,6 +185,45 @@ object NudgeCheck {
                 Log.i(TAG, "Nudge: status stale (block=${status.block} updatedAt=${status.updatedAtMillis}), holding")
             NudgeLogic.Decision.NotDue -> Unit
         }
+        postAlwaysTest(context, slot, NudgeLogic.decide(nowMillis, status), nowMillis, fromAlarm)
+    }
+
+    /** Honour an `always on/off` command once: the launch intent carrying it
+     * is redelivered when the activity is recreated and must not undo a later
+     * command. `until` 0 turns the mode off. */
+    fun setAlways(context: Context, until: Long, cmdAt: Long) {
+        val p = prefs(context)
+        if (cmdAt <= p.getLong(PREF_ALWAYS_CMD_AT, 0L)) return
+        p.edit().putLong(PREF_ALWAYS_CMD_AT, cmdAt).putLong(PREF_ALWAYS_UNTIL, until).apply()
+        Log.i(TAG, "Nudge: always-test until=$until (cmd=$cmdAt)")
+    }
+
+    /** Always-test mode: buzz once per block at +30 when the real nudge has
+     * nothing to say. "status stale" waits for the alarm's own sync (or a
+     * minute), so a complication refresh at +30:00 cannot label a block stale
+     * seconds before fresh data produces the real nudge. */
+    private fun postAlwaysTest(
+        context: Context, slot: NudgeLogic.Slot?, d: NudgeLogic.Decision, nowMillis: Long, fromAlarm: Boolean,
+    ) {
+        if (slot == null || nowMillis >= prefs(context).getLong(PREF_ALWAYS_UNTIL, 0L)) return
+        val note = NudgeLogic.testNote(d, nowMillis, slot) ?: return
+        if (d is NudgeLogic.Decision.Stale && !fromAlarm && nowMillis < slot.nudgeAt + 60_000L) return
+        synchronized(this) { // the alarm coroutine and a complication refresh can race here
+            if (prefs(context).getLong(PREF_ALWAYS_SLOT, 0L) == slot.startMillis) return
+            prefs(context).edit().putLong(PREF_ALWAYS_SLOT, slot.startMillis).apply()
+        }
+        val manager = channelReady(context, "${slot.block} always-test") ?: return
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_nudge)
+            .setContentTitle("-1n ${slot.block} · test at 30m")
+            .setContentText(note)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setTimeoutAfter(15 * 60_000L)
+            .build()
+        manager.notify(ALWAYS_NOTIFICATION_ID, notification)
+        Log.i(TAG, "Nudge: always-test posted for ${slot.block} ($note)")
     }
 
     private fun prefs(context: Context) =

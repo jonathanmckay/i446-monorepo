@@ -164,6 +164,31 @@ def test_fin_exit_request_is_typed_once_the_turn_is_idle(tmp_path):
     assert _typed(log, wait=1.5) == ""
 
 
+def test_fin_exit_request_is_void_for_a_prompt_queued_behind_fin(tmp_path):
+    """2026-11-22 (JM: "if there are further commands after /fin, you can keep the window open,
+    means I'm using it for other tasks"): Stop removed the request before the typist's wait, so
+    a prompt queued behind /fin, submitted as the turn ended, voided nothing and /exit was typed
+    into it. The request now stays through the wait and the typist claims it by removing it."""
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    (root / "by-session").mkdir(parents=True)
+    log = _fake_tmux(tmp_path)
+    req = root / "by-session" / "S1.exit"
+    req.write_text("S1\n")
+    _hook_pane(tmp_path, "idle", "S1")
+    assert req.exists()                                          # still voidable during the wait
+    _hook_pane(tmp_path, "working", "S1", prompt="next task")    # the queued prompt lands
+    assert not req.exists()
+    assert _typed(log, wait=2.0) == ""                           # the tab stays open
+    req.write_text("S1\n")
+    _hook_pane(tmp_path, "idle", "S1")
+    _hook_pane(tmp_path, "idle", "S1")                           # two Stops, one /exit
+    _typed(log)
+    __import__("time").sleep(1.0)
+    assert log.read_text().count("-l /exit") == 1
+    hook = (Path(__file__).resolve().parents[2] / "scripts/agent-claim-hook.sh").read_text()
+    assert hook.index("is void once JM sends") < hook.index("agent_claims.py\" autoclaim")
+
+
 def test_fin_exit_request_waits_for_background_work_and_dies_with_a_new_prompt(tmp_path):
     root = tmp_path / "vault/z_ibx/agent-claims"
     (root / "by-session").mkdir(parents=True)

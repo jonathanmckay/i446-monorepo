@@ -10,6 +10,29 @@ JM typing /fin IS the real decision about his claimed task (his ⌥↵, or his
 ctrl-d / ctrl-v), so acting on the Todoist task here is intended; the /d rule
 "never complete it yourself" is about agents deciding on their own.
 
+## 0. More to do in this thread? Keep the tab (2026-11-22)
+
+JM: "if there are further commands after /fin, you can keep the window open,
+means I'm using it for other tasks." Further commands means any of:
+
+- the /fin message itself carries more than the argument (`/fin then fix X`,
+  `/fin 3 and look at Y`);
+- JM sent or queued another prompt during this turn.
+
+Then add `--keep-tab` to the script call in step 1 (`done_session.py --keep-tab`,
+`done_session.py --keep-tab 3`). The task is closed, delayed or hidden exactly
+as usual and reported as usual, but nothing asks the tab to close: end the
+report with `→ tab stays open` instead of step 2, then carry on with the other
+commands in the same turn. If the further prompt only showed up after the
+script had already run, take the request back:
+
+```bash
+python3 ~/i446-monorepo/tools/did/done_session.py --void-close
+```
+
+A prompt JM types after the turn has ended needs nothing from you: the hook
+voids the close on its own, including one queued behind /fin.
+
 ## 1. Run the session script with the argument as typed
 
 ```bash
@@ -114,7 +137,8 @@ cost):
 
 A skill cannot run /exit or /clear, and typing them into this session's own
 terminal is blocked by the auto-mode classifier (tmux self-drive). After the
-report, end with exactly one of:
+report, unless step 0 applied (then `→ tab stays open` and keep working), end
+with exactly one of:
 
 - `→ closing this tab` when the JSON has `"tab_close": true`. Nothing for JM
   to type, and the same wherever the thread runs (2026-11-22: "/fin should

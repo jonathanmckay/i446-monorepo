@@ -245,3 +245,25 @@ def test_fin_marks_any_thread_that_owns_its_tmux_session(tmp_path, monkeypatch):
     # the exit request names the tmux session, so a later prompt can void the marker with it
     assert (tmp_path / "claims/by-session/L1.exit").read_text() == "L1\ntmux=cc-local-thread\n"
     assert ds.mark_tab_close("L1", env={"CC_FIN_ENDS_TMUX": "1"}, run=run) is False   # flag but no tmux: nothing can type /exit
+
+
+def test_keep_tab_and_void_close(tmp_path, monkeypatch):
+    """2026-11-22 (JM: "if there are further commands after /fin, you can keep the window open,
+    means I'm using it for other tasks"): --keep-tab closes the task without asking for the tab
+    to close; --void-close takes an already-filed request back, launcher marker included."""
+    assert ds.split_flags(["--keep-tab", "3"]) == ({"--keep-tab"}, ["3"])
+    assert ds.split_flags(["15:00"]) == (set(), ["15:00"])
+    monkeypatch.setattr(ds, "CLAIMS_ROOT", tmp_path / "claims")
+    monkeypatch.setattr(ds, "FIN_CLOSE_DIR", tmp_path / "fin-close")
+    (tmp_path / "claims/by-session").mkdir(parents=True)
+    (tmp_path / "fin-close").mkdir()
+    assert ds.void_tab_close("S1") is False                      # nothing was asked
+    (tmp_path / "claims/by-session/S1.exit").write_text("S1\ntmux=cc-thread\n")
+    (tmp_path / "fin-close/cc-thread").write_text("S1\n")
+    (tmp_path / "fin-close/other").write_text("S2\n")
+    assert ds.void_tab_close("S1") is True
+    assert not (tmp_path / "claims/by-session/S1.exit").exists()
+    assert [p.name for p in (tmp_path / "fin-close").iterdir()] == ["other"]
+    fin = (Path(__file__).resolve().parents[2] / "skills/claude-skills/fin/SKILL.md").read_text()
+    assert "--keep-tab" in fin and "--void-close" in fin and "→ tab stays open" in fin
+

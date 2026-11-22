@@ -593,6 +593,8 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     # dtd-running-hint file (janus /d, dtd Enter) when under 4h old. Matched
     # by task id, falling back to the annotation-stripped name.
     running_id, running_clean = _running_task()
+    running_since = _running_since() if (running_id or running_clean) else 0
+    today_iso = _today().isoformat()
 
     def is_woke(t):
         if t.get("id") is not None and str(t["id"]) in woken:
@@ -678,6 +680,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             # (dtd_forms.CARD_FORMS), "" for a plain task; the phone opens
             # GET /api/form for these instead of starting a timer.
             "form": dtd_forms.form_for(raw),
+            **value_prefill(raw, is_running, running_since, today_iso),
         })
     return out
 
@@ -710,6 +713,84 @@ def _running_task(now: float | None = None) -> tuple[str, str]:
     if obs and obs.get("ts", 0) > hint_ts:
         return (obs.get("task_id") or ""), (obs.get("desc") or "").strip().lower()
     return hint_id, hint_clean
+
+# Value-prompt prefill (2026-11-22, JM: "if hiit is running and the hiit survey
+# comes up, it's prefilled with the current number"). Terminal dtd already
+# takes a running timer's minutes without asking; web and the phone opened the
+# prompt empty. Only where the number means what did-fast will record:
+#   PREFILL_DAY      the cell is SET to the day's Toggl total (hiit): prefill
+#                    earlier sessions today + the running one
+#   PREFILL_SESSION  each completion ADDS its own minutes (xk20/22/26), or is
+#                    one sitting (新闻): prefill the running session alone
+# The 冥想/o314/hcmr family is left empty on purpose: a typed value adds one
+# session there while a bare completion records the day total, so a prefilled
+# "done" could credit less than "skip".
+PREFILL_DAY = {"hiit"}
+PREFILL_SESSION = {"xk20", "xk22", "xk26", "新闻"}
+
+
+def _running_since(now: float | None = None) -> int:
+    """Start epoch of the live timer, by _running_task's precedence (the
+    shared Toggl observation when newer than the hint, else the hint's own
+    timestamp, written when the timer was started); 0 when unknown."""
+    import time as _t
+    now = _t.time() if now is None else now
+    hint_ts = 0
+    try:
+        parts = RUNNING_HINT.read_text().strip().split("\t")
+        ts = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        if ts and now - ts < 4 * 3600:
+            hint_ts = ts
+    except (OSError, IndexError, ValueError):
+        pass
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lib"))
+        import running_timer
+        obs = running_timer.observed(now=now)
+    except Exception:
+        obs = None
+    if obs and obs.get("ts", 0) > hint_ts:
+        return int(obs.get("started") or 0) if (obs.get("desc") or "").strip() else 0
+    return hint_ts
+
+
+def _stopped_secs_today(name: str, iso: str, now: float | None = None, path: Path | None = None) -> int:
+    """Seconds on today's FINISHED Toggl entries described `name` (janus's day
+    cache); 0 when the cache is missing or stale. The running entry is left
+    out: the client adds it from runningSince so the number keeps moving."""
+    now = time.time() if now is None else now
+    path = path or JANUS_DAY_CACHE
+    try:
+        if now - path.stat().st_mtime > TRACKED_MAX_AGE:
+            return 0
+        entries = json.loads(path.read_text()).get(iso)
+    except (OSError, ValueError):
+        return 0
+    secs = 0.0
+    for e in entries if isinstance(entries, list) else []:
+        try:
+            if e.get("running") or (e.get("desc") or "").strip().lower() != name:
+                continue
+            secs += max(0.0, _dt.datetime.fromisoformat(e["end_dt"]).timestamp()
+                        - _dt.datetime.fromisoformat(e["start_dt"]).timestamp())
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    return int(secs)
+
+
+def value_prefill(raw: str, is_running: bool, since: int, iso: str) -> dict:
+    """{"runningSince": epoch, "prefillBaseSecs": n} for a running card whose
+    value prompt should open with the timer's minutes, else {}. The client
+    shows round((prefillBaseSecs + now - runningSince) / 60), at least 1."""
+    if not is_running or not since:
+        return {}
+    key = _DEFER_DATE.sub("", strip_ann(raw).lower().strip()).strip()
+    if key in PREFILL_DAY:
+        return {"runningSince": int(since), "prefillBaseSecs": _stopped_secs_today(key, iso)}
+    if key in PREFILL_SESSION:
+        return {"runningSince": int(since), "prefillBaseSecs": 0}
+    return {}
+
 
 # ---------------------------------------------------------------------------
 # Complete via did-fast (real /did: closes Todoist + writes Neon)
@@ -2313,9 +2394,16 @@ let valCtx = null;
 function openVal(t, row, line){
   valCtx = {t, row, line};
   valLabel.textContent = t.variablePrompt;
+  // Its timer is the one running (2026-11-22): open with the minutes so far
+  // (hiit: today's earlier sessions too, which is what did-fast records).
+  // Selected, so typing replaces it.
   valInput.value = '';
+  if(t.running && t.runningSince){
+    const secs = (t.prefillBaseSecs || 0) + Math.max(0, Date.now()/1000 - t.runningSince);
+    valInput.value = String(Math.max(1, Math.round(secs / 60)));
+  }
   valWrap.classList.add('show');
-  setTimeout(()=>valInput.focus(), 50);
+  setTimeout(()=>{ valInput.focus(); if(valInput.value) valInput.select(); }, 50);
 }
 // Cancel (tap outside): abort the completion entirely, snap the row back —
 // distinct from "skip", which still completes with no value (matches

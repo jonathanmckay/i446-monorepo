@@ -82,6 +82,19 @@ do {
     eq(ts[0].variableLabel, "CPAP quality (1-3)", "label kept for the alert")
     check(!ts[2].variablePrompt && ts[2].variableLabel.isEmpty, "null → no prompt")
     eq(ts[3].meta, "[3]", "ritual card shows its points")
+    // 2026-11-22: a running variable habit opens its value prompt with the timer's minutes
+    let pj = """
+    {"ok": true, "tasks": [
+      {"id": "h", "raw": "hiit (10) [23]", "title": "hiit", "variablePrompt": "hiit minutes", "running": true,
+       "runningSince": 1700000000, "prefillBaseSecs": 720},
+      {"id": "n", "raw": "hiit 11.21", "title": "hiit 11.21", "variablePrompt": "hiit minutes", "running": false}
+    ]}
+    """
+    let ps = Parsers.tasks(JSON.parse(pj)!)
+    eq(ps[0].prefillValue(now: Date(timeIntervalSince1970: 1700000000 + 6 * 60 + 20)), "18", "12m earlier + 6m running")
+    eq(ps[0].prefillValue(now: Date(timeIntervalSince1970: 1700000000)), "12", "base alone at the start")
+    eq(ps[1].prefillValue(), "", "not running → empty prompt")
+    eq(ts[1].prefillValue(), "", "no start time from the server → empty prompt")
     let f = Parsers.form(JSON.parse(#"{"ok":true,"form":"0s","title":"0s","fields":[],"keepsCard":false,"closesIf":{"points_checked":"1"}}"#.data(using: .utf8)!)!)!
     check(f.closesCard(["points_checked": "1"]) && !f.closesCard(["points_checked": "0"]), "0s closes only when checked")
     let k = Parsers.form(JSON.parse(#"{"ok":true,"form":"1s","title":"1s","fields":[],"keepsCard":true,"closesIf":{}}"#.data(using: .utf8)!)!)!

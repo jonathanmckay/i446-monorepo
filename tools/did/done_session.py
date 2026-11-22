@@ -295,6 +295,29 @@ def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     return True
 
 
+def void_tab_close(session: str) -> bool:
+    """Take back mark_tab_close: JM gave this thread more to do after /fin (2026-11-22: "if there
+    are further commands after /fin, you can keep the window open, means I'm using it for other
+    tasks"). Drops the exit request and the launcher marker it names, like the hook's `working`
+    branch does for a prompt typed later. True if there was a request to drop."""
+    req = CLAIMS_ROOT / "by-session" / f"{session}.exit"
+    try:
+        lines = req.read_text().splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        name = line[5:] if line.startswith("tmux=") else ""
+        if name and "/" not in name:
+            (FIN_CLOSE_DIR / name).unlink(missing_ok=True)
+    req.unlink(missing_ok=True)
+    return True
+
+
+def split_flags(argv: list[str]) -> tuple[set[str], list[str]]:
+    flags = {a for a in argv if a in ("--keep-tab", "--void-close")}
+    return flags, [a for a in argv if a not in flags]
+
+
 def no_claim_result(session: str, when, mark=None) -> dict:
     """/fin on a session that holds no claim. Bare /fin still ends the thread and its tab
     (2026-11-22: it answered no-claim with no tab_close, so a fresh or already-closed thread kept
@@ -308,8 +331,14 @@ def main() -> int:
     if not session:
         print(json.dumps({"status": "failed", "error": "no CLAUDE_CODE_SESSION_ID; run inside Claude"}))
         return 1
+    flags, args = split_flags(sys.argv[1:])
+    if "--void-close" in flags:      # more work arrived after the close: keep the tab
+        print(json.dumps({"status": "kept", "voided": void_tab_close(session)}))
+        return 0
+    if "--keep-tab" in flags:        # /fin came with further instructions: close the task only
+        globals()["mark_tab_close"] = lambda *_a, **_k: False
     try:
-        when = parse_when(sys.argv[1] if len(sys.argv) > 1 else None)
+        when = parse_when(args[0] if args else None)
     except ValueError as e:
         print(json.dumps({"status": "failed", "error": str(e), "tasks": []}))
         return 1

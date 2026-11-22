@@ -17,15 +17,27 @@ public struct DtdTask: Identifiable, Equatable, Hashable {
     public let agentDone: Bool        // the claiming agent thinks it's finished → ✅ on the left (2026-10-22)
     public let form: String           // survey card (0s, 1s, xk887, …): opens a form instead of a timer; "" = none
     public let variableLabel: String  // the server's prompt text ("CPAP quality (1-3)"), "" if none (2026-10-25)
+    public let runningSince: Double   // start epoch of its live timer when the value prompt should open prefilled, else 0 (2026-11-22)
+    public let prefillBaseSecs: Int   // seconds already on today's finished entries (hiit: the cell is the day's total)
 
     public init(id: String, raw: String, title: String, est: Int?, points: Int?, color: String,
                 domain: String, recurring: Bool, variablePrompt: Bool, scheduledTime: Date? = nil,
                 agent: Bool = false, running: Bool = false, form: String = "", agentDone: Bool = false,
-                variableLabel: String = "") {
+                variableLabel: String = "", runningSince: Double = 0, prefillBaseSecs: Int = 0) {
         self.id = id; self.raw = raw; self.title = title; self.est = est; self.points = points
         self.color = color; self.domain = domain; self.recurring = recurring; self.variablePrompt = variablePrompt
         self.scheduledTime = scheduledTime; self.agent = agent; self.running = running; self.form = form
         self.agentDone = agentDone; self.variableLabel = variableLabel
+        self.runningSince = runningSince; self.prefillBaseSecs = prefillBaseSecs
+    }
+
+    /// What the value prompt opens with: the running timer's minutes so far
+    /// (plus today's earlier sessions for hiit), "" when the server sent no
+    /// start time. Same arithmetic as web dtd's openVal.
+    public func prefillValue(now: Date = Date()) -> String {
+        guard running, runningSince > 0 else { return "" }
+        let secs = Double(prefillBaseSecs) + max(0, now.timeIntervalSince1970 - runningSince)
+        return String(max(1, Int((secs / 60).rounded())))
     }
 
     /// A task is "active" when it's the live timer (▶) or a Claude session has

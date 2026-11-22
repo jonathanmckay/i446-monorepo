@@ -23,7 +23,9 @@ public enum Parsers {
                 running: t.bool("running"),
                 form: t.string("form"),
                 agentDone: t.bool("agentDone"),
-                variableLabel: variableLabel(t))
+                variableLabel: variableLabel(t),
+                runningSince: Double(t.intOrNil("runningSince") ?? 0),
+                prefillBaseSecs: t.intOrNil("prefillBaseSecs") ?? 0)
         }
     }
 

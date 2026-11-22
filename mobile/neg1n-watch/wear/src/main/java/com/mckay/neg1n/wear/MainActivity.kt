@@ -24,6 +24,14 @@ class MainActivity : Activity() {
         requestNudgePermissionIfNeeded()
         val textView = findViewById<TextView>(R.id.statusText)
         textView.text = "-1n\nloading..."
+        // `deploy-wear.sh always on|off` launches with these two extras.
+        if (intent?.hasExtra(EXTRA_ALWAYS_CMD_AT) == true) {
+            NudgeCheck.setAlways(
+                applicationContext,
+                intent.getLongExtra(EXTRA_ALWAYS_UNTIL, 0L),
+                intent.getLongExtra(EXTRA_ALWAYS_CMD_AT, 0L),
+            )
+        }
         // `install-wear.sh test HH:MM` launches with this extra.
         val testAt = intent?.getLongExtra(EXTRA_TEST_NUDGE_AT, 0L) ?: 0L
         if (testAt > 0L && NudgeScheduler.armTest(applicationContext, testAt)) {

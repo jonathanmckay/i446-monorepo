@@ -51,6 +51,29 @@ class NudgeLogicTest {
             NudgeLogic.decide(now, status("巳", emptySet(), now - 60_000), zone))
     }
 
+    // Always-test mode (2026-11-22): JM wants a buzz at +30 in every block
+    // while debugging, including the blocks where the real nudge is silent.
+    @Test
+    fun `test mode names why the real nudge is silent, and adds nothing to a real one`() {
+        val slot = NudgeLogic.slotAt(at(8, 30), zone)
+        val done = status("巳", allTags.toSet(), at(8, 29))
+        assertEquals("all done", NudgeLogic.testNote(NudgeLogic.decide(at(8, 30), done, zone), at(8, 30), slot))
+        val old = status("卯", emptySet(), at(5, 0))
+        assertEquals("status stale", NudgeLogic.testNote(NudgeLogic.decide(at(8, 30), old, zone), at(8, 30), slot))
+        val open = status("巳", emptySet(), at(8, 29))
+        assertNull(NudgeLogic.testNote(NudgeLogic.decide(at(8, 30), open, zone), at(8, 30), slot))
+    }
+
+    @Test
+    fun `test mode is quiet before 30 minutes and outside block hours, and says late after the window`() {
+        val done = status("巳", allTags.toSet(), at(8, 29))
+        val slot = NudgeLogic.slotAt(at(8, 29), zone)
+        assertNull(NudgeLogic.testNote(NudgeLogic.decide(at(8, 29), done, zone), at(8, 29), slot))
+        assertEquals("late, past the 15-minute window",
+            NudgeLogic.testNote(NudgeLogic.decide(at(8, 50), done, zone), at(8, 50), slot))
+        assertNull(NudgeLogic.testNote(NudgeLogic.Decision.NotDue, at(23, 0), NudgeLogic.slotAt(at(23, 0), zone)))
+    }
+
     @Test
     fun `a status older than 20 minutes is stale`() {
         val now = at(8, 30)
