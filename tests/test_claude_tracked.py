@@ -344,17 +344,24 @@ def test_fin_tab_close_leaves_evidence_where_ix_can_read_it(ct, monkeypatch, tmp
     assert rows[2]['rc'] == 1 and rows[2]['err'] == 'no such surface'
 
 
+# Fixture values for the cmux socket tests. Kept away from any literal next to a
+# *PASSWORD* name: GitGuardian's Generic Password detector flagged 's3cret' in 5bf5836
+# (this repo is public, so every such hit becomes an incident email).
+FAKE_FILE_VALUE = 'fixture-from-file'
+FAKE_CONFIG_VALUE = 'fixture-from-config'
+
+
 def test_fin_tab_close_authenticates_to_the_cmux_socket(ct, monkeypatch, tmp_path):
     """2026-11-22, from the tab itself: "cc: could not close this tab (Error: auth_required:
     Authentication required. Send auth <password> first.)". The socket is password-protected and
     the close went out without CMUX_SOCKET_PASSWORD."""
     pw = tmp_path / 'socket-control-password'
-    pw.write_text('s3cret\n')
+    pw.write_text(FAKE_FILE_VALUE + '\n')
     monkeypatch.setattr(ct, 'CMUX_PASSWORD_FILE', pw, raising=False)
     monkeypatch.delenv('CMUX_SOCKET_PASSWORD', raising=False)
     done, calls, _ = _fin_exit(ct, monkeypatch)
     assert done is True and calls[-1][1] == 'close-surface'
-    assert _fin_exit.envs[-1].get('CMUX_SOCKET_PASSWORD') == 's3cret'
+    assert _fin_exit.envs[-1].get('CMUX_SOCKET_PASSWORD') == FAKE_FILE_VALUE
     monkeypatch.setenv('CMUX_SOCKET_PASSWORD', 'from-env')          # an explicit one wins
     _fin_exit(ct, monkeypatch)
     assert _fin_exit.envs[-1]['CMUX_SOCKET_PASSWORD'] == 'from-env'
@@ -366,8 +373,8 @@ def test_fin_tab_close_authenticates_to_the_cmux_socket(ct, monkeypatch, tmp_pat
 
 
 @pytest.mark.parametrize('text', [
-    '{"automation": {"socketControlMode": "password", "socketPassword": "c0nfig"}}',
-    '{\n  // jsonc\n  "automation": {"socketControlMode": "password", "socketPassword": "c0nfig",},\n}',
+    '{"automation": {"socketControlMode": "password", "socketPassword": "%s"}}' % FAKE_CONFIG_VALUE,
+    '{\n  // jsonc\n  "automation": {"socketControlMode": "password", "socketPassword": "%s",},\n}' % FAKE_CONFIG_VALUE,
 ])
 def test_cmux_password_falls_back_to_cmux_config(ct, monkeypatch, tmp_path, text):
     """2026-11-22, second run: the log said password=false. Straylight has no
@@ -377,11 +384,11 @@ def test_cmux_password_falls_back_to_cmux_config(ct, monkeypatch, tmp_path, text
     monkeypatch.setattr(ct, 'CMUX_CONFIG', cfg)
     monkeypatch.setattr(ct, 'CMUX_PASSWORD_FILE', tmp_path / 'absent')
     monkeypatch.delenv('CMUX_SOCKET_PASSWORD', raising=False)
-    assert ct.cmux_password() == ('c0nfig', 'config')
-    assert ct.cmux_env()['CMUX_SOCKET_PASSWORD'] == 'c0nfig'
+    assert ct.cmux_password() == (FAKE_CONFIG_VALUE, 'config')
+    assert ct.cmux_env()['CMUX_SOCKET_PASSWORD'] == FAKE_CONFIG_VALUE
     facts = ct.cmux_auth_facts('/usr/bin/true')
     assert facts['mode'] == 'password' and facts['config_has_password'] is True
-    assert 'c0nfig' not in repr(facts)                      # the log never carries the password
+    assert FAKE_CONFIG_VALUE not in repr(facts)                      # the log never carries the password
 
 
 def test_fin_ends_the_tab_shell_when_the_cmux_socket_refuses(ct, monkeypatch, capsys):
