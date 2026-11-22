@@ -505,7 +505,7 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
     def card(b):
         return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in b.items()}
 
-    # Newsletter stories (jmreads_stories.py, 2026-11-21) are built apart from
+    # Daily brief stories (jmreads_stories.py, 2026-11-21) are built apart from
     # the book events and merged only here, on ISO-date strings. Bodies ride
     # along inline so "Read" works from the offline archive (no fetch on click).
     feed = [{"type": e["type"], "date": e["date"].isoformat(), "book": card(e["book"])}
@@ -709,6 +709,10 @@ __SHARED_STYLE__
 .ev.story-row { padding: 10px 0; align-items: center; }
 .story-row .avatar { width: 24px; height: 24px; font-size: 12px; margin: 0 6px; }
 .story-link { cursor: pointer; }
+.story-sec h4 { font: bold 16px Georgia, serif; margin: 22px 0 10px; padding-top: 14px; border-top: 1px solid var(--grid); }
+.story-sec:first-child h4 { border-top: none; padding-top: 0; margin-top: 0; }
+.story-sec h4 .muted { font-weight: normal; margin-left: 6px; }
+#viewDlg .body a { color: inherit; }
 .story-link:hover { text-decoration: underline; }
 #draftDlg { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 30;
             display: none; align-items: center; justify-content: center; }
@@ -861,14 +865,25 @@ function openView(id) {
       : '<div class="muted">No review written yet.</div>';
   }).catch(() => { document.getElementById('viewTitle').textContent = 'Failed — offline'; });
 }
-// Newsletter stories: the body is already in /api/reads, so this works offline.
+// Daily brief stories: everything is already in /api/reads, so this works
+// offline. The lead section (The Economist) runs title into text, as the
+// brief's bold lead-ins do; the other sections are linked headlines.
 let STORIES = {};
+function storyHtml(s) {
+  return s.sections.map(sec => `<div${sec.rtl ? ' dir="rtl"' : ''} class="story-sec">
+    <h4>${esc(sec.name)} <span class="muted">${esc(sec.sub)}</span></h4>` +
+    sec.items.map(i => sec.lead
+      ? `<p><b>${esc(i.title)}</b>${esc(i.text)}</p>`
+      : `<p>${i.url ? `<a href="${esc(i.url)}" target="_blank"><b>${esc(i.title)}</b></a>` : `<b>${esc(i.title)}</b>`}<br>${esc(i.text)}</p>`
+    ).join('') + '</div>').join('') +
+    (s.links || []).map(l => `<p><a href="${esc(l.url)}" target="_blank">${esc(l.label)}</a></p>`).join('');
+}
 function openStory(id) {
   const s = STORIES[id];
   if (!s) return;
   document.getElementById('viewTitle').textContent = s.title;
   document.getElementById('viewMeta').innerHTML = [esc(s.source), esc(s.kind), esc(s.date)].join(' · ');
-  document.getElementById('viewBody').innerHTML = mdLite(s.body);
+  document.getElementById('viewBody').innerHTML = storyHtml(s);
   const dlg = document.getElementById('viewDlg');
   dlg.classList.add('show');
   dlg.querySelector('.box').scrollTop = 0;
@@ -913,22 +928,23 @@ cachedJSON('/api/reads').then(d => {   // offline-capable, mount-prefix aware (d
       // so a week of newsletters doesn't bury the book updates.
       const s = e.story; STORIES[s.id] = s;
       const full = !storyShown; storyShown = true;
+      const lead = (s.sections.find(x => x.lead) || s.sections[0]).items;
       const read = `<button class="view-btn story-btn" data-story="${esc(s.id)}">Read</button>`;
-      const src = s.url ? `<a href="${esc(s.url)}" target="_blank">Email</a>` : '';
       if (!full) return `<div class="ev story-row">
         <div class="avatar story-av">E</div>
         <div style="flex:1; min-width:0"><div class="head"><div class="who"><span class="muted">${esc(s.kind)}</span>
           <b class="serif story-link" data-story="${esc(s.id)}">${esc(s.title)}</b></div>
           <div class="when">${esc(ago(e.date))}</div></div></div>
       </div>`;
+      const others = s.sections.filter(x => !x.lead).map(x => esc(x.name)).join(' · ');
       return `<div class="ev">
         <div class="avatar story-av">E</div>
         <div style="flex:1; min-width:0">
           <div class="head"><div class="who"><b>${esc(s.source)}</b> · ${esc(s.kind)}</div>
             <div class="when">${esc(ago(e.date))}</div></div>
           <div class="hl">${esc(s.title)}</div>
-          <ul class="story-bullets">${s.bullets.slice(0, 3).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-          <div class="links">${read}${s.bullets.length > 3 ? `<span class="muted" style="margin-right:10px">+${s.bullets.length - 3} more stories and the agenda</span>` : ''}${src}</div>
+          <ul class="story-bullets">${lead.slice(0, 3).map(x => `<li><b>${esc(x.title)}</b>${esc(x.text)}</li>`).join('')}</ul>
+          <div class="links">${read}<span class="muted">${lead.length > 3 ? `+${lead.length - 3} more` : ''}${others ? ' · ' + others : ''}</span></div>
         </div>
       </div>`;
     }

@@ -1,7 +1,9 @@
-"""jmreads stories (2026-11-21): the Economist "World in Brief" email parsed
-into a feed story and merged into /api/reads without disturbing book events."""
+"""jmreads stories (2026-11-21): the Chinese daily brief written by
+~/code/x953-hcmc0 (feed_writer.py) merged into /api/reads beside book events."""
 import json
+import os
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -9,102 +11,61 @@ sys.path.insert(0, str(Path(__file__).parent))
 import jmreads  # noqa: E402
 import jmreads_stories as js  # noqa: E402
 
-SAMPLE = """
- <link rel=stylesheet href=https://cdn.example.com/font-face.css>
- The Economist
 
-https://click.e.example.com/?qs=AAA
-
-November 21st 2026
-
-The World in Brief
-
-Photo: AP
-
-Today&rsquo;s top stories
-
- ▸ Widgets entered a bear market. Acme’s
-https://click.e.example.com/?qs=BBB
-share price  fell by 8%.
-
- ▸ A second story about “
-https://click.e.example.com/?qs=CCC
-quoted things ” here.
-
- Word of the week
-
- Axis, our term for a thing.
-
- Financial markets
-
- S&P 500
-
-7,175.8
-
- -2.0% ↓
-
- Topix
-
-3,674.2
-
- -3.9% ↓
-
- Data at Nov 20th 2026 | Sources: X
-
-Today’s agenda
-
-AP PHOTO/SOME NAME
-
-After the summit
-
- They came, they met.
-
-Second paragraph.
-
- Expand your mind with our science newsletter
- Our correspondents explain
- Sign Up
-
-A MESSAGE FROM ECONOMIST EDUCATION
- Save 25%
-
- This email has been sent to someone@example.com
-"""
-
-
-def _store(d: Path, day: str, raw: str = SAMPLE, title: str = "Widgets plunge"):
+def _store(d: Path, day: str, **over):
+    rec = {"source": "The Economist", "kind": "世界简讯", "title": "科技股跌入熊市", "date": day,
+           "sections": [
+               {"name": "财新", "sub": "Caixin", "items": [
+                   {"title": "财政收入转增", "text": "摘要", "url": "https://caixin.example/a"},
+                   {"title": "坏链接", "text": "x", "url": "javascript:alert(1)"}]},
+               {"name": "The Economist", "sub": "世界简讯", "lead": True, "items": [
+                   {"title": "英伟达", "text": "股价下跌了14%。", "url": ""},
+                   {"title": "数学家", "text": "声称解决了难题。", "url": ""}]},
+               {"name": "الشرق الأوسط", "sub": "Asharq", "rtl": True, "items": [
+                   {"title": "عنوان", "text": "نص", "url": "https://aawsat.example/1"}]}],
+           "links": [{"label": "Anki", "url": "https://example.com/anki"}, {"label": "bad", "url": "ankimobile://x"}]}
+    rec.update(over)
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"economist-{day}.json").write_text(json.dumps(
-        {"title": title, "date": day, "gmail_id": "g" + day, "url": "https://mail.example/x", "raw": raw}))
+    p = d / f"brief-{day}.json"
+    p.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+    return p
 
 
-def test_parse_brief_bullets_headings_and_noise():
-    r = js.parse_brief(SAMPLE)
-    assert r["bullets"] == ["Widgets entered a bear market. Acme’s share price fell by 8%.",
-                            "A second story about “quoted things” here."]
-    paras = r["body"].split("\n\n")
-    assert paras[0] == "## Today’s top stories"
-    assert "S&P 500 7,175.8 -2.0% ↓" in paras and "Topix 3,674.2 -3.9% ↓" in paras
-    assert "## After the summit" in paras and "They came, they met." in paras
-    body = r["body"]
-    for noise in ("http", "AP PHOTO", "Photo:", "Sign Up", "MESSAGE FROM", "example.com", "<link"):
-        assert noise not in body, noise
-
-
-def test_unrecognised_layout_yields_no_bullets():
-    assert js.parse_brief("Hello\n\nA redesigned newsletter")["bullets"] == []
-    assert js.parse_brief("")["bullets"] == []
+def test_load_stories_shape_and_link_sanitising(tmp_path):
+    _store(tmp_path, "2026-11-21")
+    s = js.load_stories(today=date(2026, 11, 21), stories_dir=tmp_path)[0]
+    assert s["id"] == "brief-2026-11-21" and s["title"] == "科技股跌入熊市"
+    assert [x["name"] for x in s["sections"]] == ["财新", "The Economist", "الشرق الأوسط"]
+    assert s["sections"][1]["lead"] and s["sections"][2]["rtl"] and not s["sections"][0]["rtl"]
+    assert s["sections"][0]["items"][0]["url"] == "https://caixin.example/a"
+    assert s["sections"][0]["items"][1]["url"] == ""           # javascript: never reaches an href
+    assert s["links"] == [{"label": "Anki", "url": "https://example.com/anki"}]
 
 
 def test_load_stories_window_order_and_bad_files(tmp_path):
     _store(tmp_path, "2026-11-21")
     _store(tmp_path, "2026-11-19")
     _store(tmp_path, "2026-11-01")                       # outside the 7-day window
-    _store(tmp_path, "2026-11-20", raw="no known layout")  # unparsed: hidden, not a blank card
-    (tmp_path / "economist-junk.json").write_text("{not json")
+    _store(tmp_path, "2026-11-20", sections=[])          # empty brief: hidden, not a blank card
+    _store(tmp_path, "2026-11-18", date="not-a-date")
+    (tmp_path / "brief-junk.json").write_text("{not json")
+    (tmp_path / "brief-list.json").write_text("[1, 2]")
     got = js.load_stories(today=date(2026, 11, 21), stories_dir=tmp_path)
     assert [s["date"] for s in got] == ["2026-11-21", "2026-11-19"]
-    assert got[0]["id"] == "economist-2026-11-21" and got[0]["body"] and len(got[0]["bullets"]) == 2
+
+
+def test_title_falls_back_to_english_then_kind(tmp_path):
+    _store(tmp_path, "2026-11-21", title="", title_en="Tech stocks plunge")
+    _store(tmp_path, "2026-11-20", title="")
+    got = js.load_stories(today=date(2026, 11, 21), stories_dir=tmp_path)
+    assert [s["title"] for s in got] == ["Tech stocks plunge", "世界简讯"]
+
+
+def test_old_files_are_pruned(tmp_path):
+    old = _store(tmp_path, "2026-10-01")
+    os.utime(old, (time.time() - 40 * 86400,) * 2)
+    js.load_stories(today=date(2026, 11, 21), stories_dir=tmp_path)
+    assert not old.exists()
 
 
 def test_build_merges_stories_with_book_events(tmp_path):
@@ -120,7 +81,7 @@ def test_build_merges_stories_with_book_events(tmp_path):
     json.dumps(d)                                        # still serialisable
     assert [(e["type"], e["date"]) for e in d["feed"]] == [
         ("story", "2026-11-21"), ("started", "2026-11-21"), ("story", "2026-11-20")]
-    assert d["feed"][0]["story"]["body"]                 # inline: readable offline
+    assert d["feed"][0]["story"]["sections"][1]["items"][0]["text"]   # inline: readable offline
     assert d["feed"][1]["book"]["title"] == "A Book"
 
 
@@ -130,42 +91,26 @@ def test_build_without_stories_dir_is_books_only(tmp_path):
     assert d["feed"] == []
 
 
-class _Svc:
-    """Minimal Gmail client double: users().messages().list/get/modify().execute()."""
-    def __init__(self, msgs): self.msgs, self.modified = msgs, []
-    def users(self): return self
-    def messages(self): return self
-    def list(self, **kw): self._r = {"messages": [{"id": i} for i in self.msgs]}; return self
-    def get(self, id, **kw): self._r = self.msgs[id]; return self
-    def modify(self, id, body, **kw): self.modified.append((id, body)); self._r = {}; return self
-    def execute(self): return self._r
-
-
-def _msg(mid, raw, labels):
-    import base64
-    return {"id": mid, "internalDate": "1795258952000", "labelIds": labels, "payload": {
-        "mimeType": "multipart/alternative",
-        "headers": [{"name": "Subject", "value": "The World in Brief: Widgets plunge"}],
-        "parts": [{"mimeType": "text/plain", "body": {"data": base64.urlsafe_b64encode(raw.encode()).decode()}},
-                  {"mimeType": "text/html", "body": {"data": ""}}]}}
-
-
-def test_fetch_stores_archives_and_is_idempotent(tmp_path):
-    svc = _Svc({"m1": _msg("m1", SAMPLE, ["INBOX", "UNREAD", "CATEGORY_UPDATES"])})
-    assert js.fetch(stories_dir=tmp_path, service=svc) == 0
-    files = list(tmp_path.glob("*.json"))
-    assert len(files) == 1
-    rec = json.loads(files[0].read_text())
-    assert rec["title"] == "Widgets plunge" and rec["gmail_id"] == "m1" and "top stories" in rec["raw"]
-    assert svc.modified == [("m1", {"removeLabelIds": ["INBOX", "UNREAD"]})]
-    js.fetch(stories_dir=tmp_path, service=svc)          # second run: nothing new, no second modify
-    assert len(svc.modified) == 1
-
-
-def test_fetch_leaves_unparsed_mail_alone(tmp_path):
-    svc = _Svc({"m2": _msg("m2", "A redesigned newsletter", ["INBOX", "UNREAD"])})
-    js.fetch(stories_dir=tmp_path, service=svc)
-    assert not list(tmp_path.glob("*.json")) and svc.modified == []
+def test_x953_feed_writer_output_loads(tmp_path):
+    """Contract with the producer: what ~/code/x953-hcmc0/feed_writer.py writes
+    is what load_stories reads. Skipped where that repo is not checked out."""
+    import pytest
+    x953 = Path.home() / "code" / "x953-hcmc0"
+    if not (x953 / "feed_writer.py").exists():
+        pytest.skip("x953-hcmc0 not on this host")
+    sys.path.insert(0, str(x953))
+    import feed_writer
+    story = feed_writer.build_story(
+        [{"title": "英伟达", "content": "股价下跌。", "url": ""}],
+        caixin_articles=[{"title": "财新题", "content": "摘要", "url": "https://caixin.example/a"}],
+        asharq_articles=[{"title": "عنوان", "content": "نص", "url": "https://aawsat.example/1"}],
+        title="科技股跌入熊市", title_en="Tech stocks plunge", day=date(2026, 11, 21))
+    feed_writer.write_story(story, out_dir=tmp_path)
+    s = js.load_stories(today=date(2026, 11, 21), stories_dir=tmp_path)[0]
+    assert s["title"] == "科技股跌入熊市" and s["kind"] == "世界简讯"
+    lead = [x for x in s["sections"] if x["lead"]]
+    assert len(lead) == 1 and lead[0]["items"][0] == {"title": "英伟达", "text": "股价下跌。", "url": ""}
+    assert s["sections"][-1]["rtl"] and s["links"][0]["url"].startswith("https://")
 
 
 def test_page_script_parses(tmp_path):
