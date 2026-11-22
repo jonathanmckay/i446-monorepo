@@ -21,6 +21,8 @@ cd ~/i446-monorepo/tools/ibx
 python3 m5x2_weekly_links.py --days 21 --archive
 # 2. Everything else that needs no response → ai-no-response-needed
 python3 agent_triage.py m5x2 --all
+# 3. Refresh the ✉N badge on the ibx m5x2 dtd card (skip on --dry-run)
+python3 ibx0.py --counts
 ```
 
 1. `m5x2_weekly_links.py` finds the team's weekly updates (LX, Ian, Andie,
@@ -38,14 +40,21 @@ python3 agent_triage.py m5x2 --all
    a `keep:` line with the reason for everything it leaves. Each filed message is logged to
    `~/.config/ibx/agent_filtered.jsonl` (undo = re-add INBOX). A run that's
    already in progress (the ibx m5x2 timer hook) makes this a no-op.
+3. `ibx0.py --counts` recounts what is still pending and rewrites
+   `~/vault/z_ibx/inbox-counts-<host>.json`, so the `ibx m5x2` card in dtd shows
+   the post-triage `✉N` now instead of at the next 5-minute launchd tick. It
+   prints JSON; N is `habits["ibx m5x2"].count` (`"skipped": "unchanged"` means
+   the badge was already right). It never closes the card. If `ok` is false the
+   Gmail ping failed and dtd shows no badge: say so instead of quoting a count.
 
 ## Report
 
-Two lines:
+Three lines:
 
 ```
 f695 ← N weekly-update links (who, …); M filed out of the inbox
 inbox → K of T filed to ai-no-response-needed; T−K left for you
+dtd ← ibx m5x2 ✉N
 ```
 
 Then list the subjects the triage filed (from its `skip:` lines) so a wrong
