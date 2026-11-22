@@ -65,6 +65,13 @@ class Tabs:
         # depend on the written cell still wait for the save.
         self.write_source = None
         self.write_through: dict = {}
+        # callable(sheet name, excel row, [column letters]) -> ({col: value}, "HH:MM:SS" | None):
+        # the WHOLE live row as the Neon book computes it (seed + ledger writes,
+        # formulas re-evaluated, so a total that depends on a written cell moves
+        # too). When it answers for a sheet, it replaces both sources above for
+        # that sheet; (None, None) falls back to them.
+        self.row_source = None
+        self.book_through: dict = {}
         self._restore()
 
     # --- state ---------------------------------------------------------------
@@ -133,6 +140,10 @@ class Tabs:
             except Exception:
                 writes = {}
         for sh in self.sheets():
+            if self._book_row(sh):
+                changed = True
+            if sh["name"] in self.book_through:
+                continue
             fn = self.live_sources.get(sh["name"])
             if fn is None:
                 row = (sh.get("live") or {}).get("excel_row")
@@ -160,6 +171,29 @@ class Tabs:
             self.live_through[sh["name"]] = through
         if changed:
             self._memo = None
+        return changed
+
+    def _book_row(self, sh: dict) -> bool:
+        """Repaint `sh`'s live row from row_source. True when the grid or its
+        status changed; the sheet is in book_through while the book answers."""
+        live = sh.get("live") or {}
+        values, through = None, None
+        if self.row_source is not None and live.get("excel_row"):
+            try:
+                values, through = self.row_source(sh["name"], live["excel_row"], list(sh["cols"]))
+            except Exception:
+                values, through = None, None
+        if values is None:
+            return self.book_through.pop(sh["name"], None) is not None
+        row = sh["rows"][live["row"]]
+        # a blank stays out unless the grid shows something there (a cleared cell)
+        paint = {c: v for c, v in values.items()
+                 if c in sh["cols"] and not (v == "" and row[sh["cols"].index(c)][0] == "")}
+        changed = bool(paint and neon_grid.overlay(sh, paint, zeros=True))
+        through = through or ""
+        if self.book_through.get(sh["name"]) != through:
+            self.book_through[sh["name"]] = through
+            changed = True
         return changed
 
     def _current_day(self) -> bool:
@@ -335,7 +369,10 @@ class Tabs:
         bits = ["%d–%d/%d" % (top + 1, min(body, top + body_h), body), span, "saved " + built]
         if self.live_through.get(sh["name"]):
             bits.append("today ledger " + str(self.live_through[sh["name"]])[:5])
-        if self.write_through.get(sh["name"]):
+        if sh["name"] in self.book_through:
+            bits = [b for b in bits if not b.startswith(("saved ", "today ledger ", "ledger write "))]
+            bits.insert(1 if bits else 0, "book " + (self.book_through[sh["name"]][:5] or "= save"))
+        elif self.write_through.get(sh["name"]):
             bits.append("ledger write " + self.write_through[sh["name"]][:5])
         if self.building:
             bits.append("refreshing…")

@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-22T06:00:06.256089-08:00"
+  "tasks": {
+    "no bad media": {
+      "todoist_id": "6j4GhQMgCWQfwV42",
+      "minutes": 40
+    },
+    "ibx queues to zero": {
+      "todoist_id": "6j4GhQJ28xfx6vG2",
+      "minutes": 60
+    },
+    "1500分": {
+      "todoist_id": "6j4GhQRGqq8R2j8c",
+      "minutes": 50
+    },
+    "hiit": {
+      "todoist_id": "6j4GhQQrxf9VXQ7P",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-11-22T08:00:05.194941-08:00"
 }

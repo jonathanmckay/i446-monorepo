@@ -572,6 +572,7 @@ class State:
         # answer). Cleared by render_footer once no target is armed.
         self.pending_ask = ""
         self.today_points = 0  # 分 earned today
+        self.neon_read_source = None  # "book" | "excel": who answered the last fetch_points
         self.block_points: dict[str, int] = {}  # per-block 分, straight from Neon's G:O cells
         # Today's per-domain 分 straight from 0分 P:Y, keyed by DOMAIN_PTS_ROW
         # label; empty until the first clean read (third habit-strip line).
@@ -737,6 +738,7 @@ STATE = State()
 # Headless (pytest) gets a throwaway state file and no snapshot, so a tab JM
 # left open can never change what render_all() returns under test.
 import neon_tabs  # noqa: E402
+import neon_book_reads  # noqa: E402
 if sys.stdout.isatty():
     NEON = neon_tabs.Tabs()
 else:
@@ -779,6 +781,9 @@ def _neon_ledger_writes(since_epoch: float) -> dict:
 
 NEON.live_sources["0分"] = _neon_ledger_today
 NEON.write_source = _neon_ledger_writes
+# The whole live row from the Neon book, dependents included (2026-11-22): when
+# it answers, the two ledger overlays above stand down for that sheet.
+NEON.row_source = neon_book_reads.row
 NEON.refresh_live()
 
 
@@ -1953,8 +1958,19 @@ def fetch_points():
     end repeat
     return out
 end tell'''
-            r = _sp.run([IX_OSA], input=script,
-                        capture_output=True, text=True, timeout=15)
+            # The Neon book answers first (2026-11-22, "running without using
+            # excel"): the same reply text, built from the seeded workbook plus
+            # the ledger's writes, no Excel involved. None = the book cannot
+            # answer here (no seed on this host, seed behind the workbook), so
+            # the AppleScript still runs.
+            _book_reply = neon_book_reads.points(now.date())
+            if _book_reply is not None:
+                r = _sp.CompletedProcess([], 0, _book_reply, "")
+                STATE.neon_read_source = "book"
+            else:
+                r = _sp.run([IX_OSA], input=script,
+                            capture_output=True, text=True, timeout=15)
+                STATE.neon_read_source = "excel"
             # Stale-view guard: day-nav spawns a _bg_fetch per settled press,
             # and two presses ~1s apart leave two of these racing over ssh.
             # Whichever finished LAST used to win, so day −1's numbers could
@@ -2905,7 +2921,12 @@ def fetch_habits_today():
     set out to out & "||kcal=" & kv
     return out
 end tell'''
-        proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
+        # The Neon book answers first, same as fetch_points (2026-11-22).
+        _book_reply = neon_book_reads.habits(now.date(), list(HABIT_YTD_CELLS.values()), HCBI_HCB_TOTAL_CELL)
+        if _book_reply is not None:
+            proc = subprocess.CompletedProcess([], 0, _book_reply, "")
+        else:
+            proc = subprocess.run([IX_OSA], input=script, capture_output=True, text=True, timeout=15)
         # Stale-view guard (same race as fetch_points, 2026-07-24): if the
         # user navigated to another day while this ssh read was in flight,
         # committing would overwrite the newer day's strip with this one's.
@@ -9016,6 +9037,8 @@ async def ticker_neon(app):
                 app.invalidate()
             if NEON.needs_build():
                 _bg_fetch(app, NEON.build)
+            if neon_book_reads.reseed_due():
+                _bg_fetch(app, neon_book_reads.maybe_reseed)    # adopt Excel's saves while it still makes them
         except Exception:
             pass
         await asyncio.sleep(NEON_TICK_S if NEON.tab else 20)

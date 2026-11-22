@@ -316,3 +316,25 @@ def test_janus_feeds_the_other_tabs_from_ledger_writes(monkeypatch):
     monkeypatch.setattr(nledger, "writes_since", lambda since: got.append(since) or {"k": 1})
     assert mod._neon_ledger_writes(1795360397) == {"k": 1}
     assert got == [mod.dt.datetime.fromtimestamp(1795360397).isoformat(timespec="seconds")]
+
+
+def test_row_source_repaints_the_whole_live_row_and_stands_the_ledger_overlays_down(tmp_path):
+    """2026-11-22: the Neon book supplies the live row, dependents included."""
+    import neon_tabs
+    t = neon_tabs.Tabs(state_file=tmp_path / "tab.json", grid_file=tmp_path / "grid.json")
+    t.snap = {"day": None, "src_mtime": 0, "sheets": [{
+        "name": "0分", "cols": ["B", "D", "P"], "widths": [5, 5, 5], "styles": [[None, None, 0, "r"]],
+        "header_rows": 0, "frozen_cols": 1, "today_row": 0, "rows": [[["11.22", 0], ["13", 0], ["", 0]]],
+        "live": {"row": 0, "excel_row": 324, "recolor": None,
+                 "cells": {c: {"fmt": "General", "base": [None, None, 0, "r"], "rules": []} for c in ("D", "P")}}}]}
+    asked = []
+    t.write_source = lambda since: asked.append("writes") or {}
+    t.live_sources["0分"] = lambda: asked.append("ledger") or ({"D": 1}, "x")
+    t.row_source = lambda sheet, row, cols: ({"D": 30.0, "P": ""}, "08:04:25")
+    assert t.refresh_live() is True
+    row = t.snap["sheets"][0]["rows"][0]
+    assert row[1][0] == "30" and row[2][0] == ""          # the total moved; a blank that was blank is left alone
+    assert t.book_through == {"0分": "08:04:25"} and "ledger" not in asked
+    t.row_source = lambda sheet, row, cols: (None, None)   # the book stops answering: the old sources return
+    t.refresh_live()
+    assert "0分" not in t.book_through and "ledger" in asked
