@@ -32,6 +32,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 from neon import book, calc  # noqa: E402
 
 LOG = Path.home() / ".cache/neon-rules/book-check.jsonl"
+# Sheets that are not Neon data: 分ledger is the audit job's mirror of the
+# journal, rewritten from the top by scripts/neon-ledger-audit.py outside the
+# daemon (2026-11-22 08:29: 1,829 "differences", every one a shifted mirror
+# row). Counted and reported, never part of the verdict.
+MIRROR_SHEETS = {"分ledger"}
 TOL = 1e-6
 
 
@@ -73,9 +78,13 @@ def check(src: Path, seed_path: Path, limit: int = 20) -> dict:
     # the workbook's save may trail the ledger: compare the book as of that save
     upto = (dt.datetime.fromtimestamp(mtime) - dt.timedelta(seconds=5)).isoformat(timespec="seconds")
     at_save = book.load(seed_path, upto=upto, today=dt.date.fromtimestamp(mtime))
-    content = [(k, at_save.cells.get(k), now_book.cells.get(k))
-               for k in set(at_save.cells) | set(now_book.cells)
-               if not _same_content(at_save.cells.get(k), now_book.cells.get(k))]
+    content_all = [(k, at_save.cells.get(k), now_book.cells.get(k))
+                   for k in set(at_save.cells) | set(now_book.cells)
+                   if not _same_content(at_save.cells.get(k), now_book.cells.get(k))]
+    content = [c for c in content_all if c[0][0] not in MIRROR_SHEETS]
+    by_sheet: dict = {}
+    for k, _, _ in content_all:
+        by_sheet[k[0]] = by_sheet.get(k[0], 0) + 1
     values, unsupported = [], 0
     for k, want in cached.items():
         try:
@@ -83,12 +92,13 @@ def check(src: Path, seed_path: Path, limit: int = 20) -> dict:
         except calc.CalcError:
             unsupported += 1
             continue
-        if not _same_value(got, want):
+        if not _same_value(got, want) and k[0] not in MIRROR_SHEETS:
             values.append((k, got, want))
     out = {"ts": dt.datetime.now().isoformat(timespec="seconds"), "seed_saved": live.meta["saved"],
            "workbook_saved": saved, "writes_applied": at_save.applied, "writes_after_save": live.applied - at_save.applied,
            "unknown_writes": len(at_save.unknown), "cells": len(now_book.cells), "formulas": len(cached),
            "content_differ": len(content), "value_differ": len(values), "unsupported": unsupported,
+           "content_by_sheet": by_sheet, "mirror_differ": len(content_all) - len(content),
            "content_sample": [{"cell": _cell(k), "book": repr(x)[:80], "excel": repr(y)[:80]}
                               for k, x, y in sorted(content, key=lambda t: str(t[0]))[:limit]],
            "value_sample": [{"cell": _cell(k), "book": repr(g)[:40], "excel": repr(w)[:40],
