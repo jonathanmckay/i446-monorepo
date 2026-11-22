@@ -43,7 +43,7 @@ from pathlib import Path
 
 SRC = Path.home() / "Library" / "CloudStorage" / "OneDrive-Personal" / "vault-excel" / "Neon分v12.2.xlsx"
 OUT = Path.home() / ".cache" / "janus" / "neon-grid.json"
-VERSION = 13
+VERSION = 15
 
 # Per-sheet view settings. Neon has no usable freeze panes (only 0s897 has
 # one, and openpyxl reports its scroll position, not the split), so the pinned
@@ -68,10 +68,9 @@ SHEETS = {
     "i9+m5x2": {"header_rows": 1, "date_col": "A", "frozen_cols": 1},
     "1n+":     {"header_rows": 3, "date_col": "B", "frozen_cols": 2},
     "1分+1s":  {"header_rows": 1, "date_col": "A", "frozen_cols": 1},
-    "1g":      {"header_rows": 1, "frozen_cols": 1},
-    "meta":    {"header_rows": 1, "frozen_cols": 1},
-    "分ledger": {"header_rows": 1, "frozen_cols": 1},
 }
+# Visible in Excel, not wanted as janus tabs (JM 2026-11-21; 1g may return in another form).
+SKIP_SHEETS = {"meta", "分ledger", "1g"}
 DEFAULT_VIEW = {"header_rows": 1, "frozen_cols": 1}
 MAX_COL_CHARS = 14          # a notes column must not eat a 58-column pane
 DEFAULT_EXCEL_WIDTH = 8.43
@@ -717,6 +716,41 @@ def overlay(sheet: dict, values: dict) -> int:
     return changed
 
 
+def _week_label(wv, today: dt.date, sheet: str = "0分") -> str:
+    """This week's 周 label ("11.3") as the daily sheet shows it: column A of
+    today's row, read up through the weekly merge."""
+    if sheet not in wv.sheetnames:
+        return ""
+    cells = wv[sheet]._cells
+    max_r, _ = _extent(wv[sheet])
+    for r in range(2, max_r + 1):
+        cell = cells.get((r, 2))
+        v = cell.value if cell is not None else None
+        if isinstance(v, dt.datetime):
+            v = v.date()
+        if v == today:
+            for rr in range(r, max(1, r - 7), -1):
+                wk = cells.get((rr, 1))
+                if wk is not None and wk.value is not None:
+                    return format_value(wk.value, "General")
+            return ""
+    return ""
+
+
+def _anchor_weekly(sheets: list, label: str) -> None:
+    """Weekly sheets have no date column: open them on the row whose leading
+    cell is this week's 周 label instead of at January."""
+    if not label:
+        return
+    for sh in sheets:
+        if sh.get("today_row") is not None:
+            continue
+        for i in range(sh["header_rows"], len(sh["rows"])):
+            if any(c[0].strip() == label for c in sh["rows"][i][:2]):
+                sh["today_row"] = i
+                break
+
+
 def build(src: Path = SRC, today: dt.date | None = None) -> dict:
     """Parse the workbook (a private copy, so a save in progress is never read
     in place) into the snapshot dict."""
@@ -730,9 +764,10 @@ def build(src: Path = SRC, today: dt.date | None = None) -> dict:
         theme = _theme_palette(wb)
         sheets = []
         for ws in wb.worksheets:
-            if ws.sheet_state != "visible" or ws.title not in wv.sheetnames:
+            if ws.sheet_state != "visible" or ws.title not in wv.sheetnames or ws.title in SKIP_SHEETS:
                 continue
             sheets.append(build_sheet(ws, wv[ws.title], theme, today))
+        _anchor_weekly(sheets, _week_label(wv, today))
     body = json.dumps(sheets, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return {"version": VERSION, "hash": hashlib.sha1(body.encode("utf-8")).hexdigest(),
             "built": int(time.time()), "src_mtime": int(src.stat().st_mtime), "sheets": sheets}

@@ -81,7 +81,8 @@ def _workbook(path: Path) -> Path:
     ws.sheet_properties.tabColor = "FF123456"
     hidden = wb.create_sheet("old")
     hidden.sheet_state = "hidden"
-    wb.create_sheet("meta").append(["Time", "Cat"])
+    wb.create_sheet("meta").append(["Time", "Cat"])       # in SKIP_SHEETS
+    wb.create_sheet("hcbi").append(["Time", "Cat"])
     wb.save(path)
     return path
 
@@ -100,7 +101,7 @@ def _cell(sheet, row, col):
 
 
 def test_build_sheets_text_and_extent(snap):
-    assert [s["name"] for s in snap["sheets"]] == ["0分", "meta"]        # hidden sheet dropped
+    assert [s["name"] for s in snap["sheets"]] == ["0分", "hcbi"]        # hidden and skipped sheets dropped
     s = snap["sheets"][0]
     assert s["tab"] == "#123456" and s["header_rows"] == 1 and s["frozen_cols"] == 2
     assert len(s["rows"]) == 10 and 10 not in s["row_nums"]              # hidden row gone, stray row 2000 cut

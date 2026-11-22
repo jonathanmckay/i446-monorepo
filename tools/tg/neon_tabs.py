@@ -71,7 +71,7 @@ class Tabs:
     def _restore(self) -> None:
         try:
             d = json.loads(self.state_file.read_text())
-            self.scroll = {k: [int(v[0]), int(v[1])] for k, v in (d.get("scroll") or {}).items()}
+            self.scroll = {k: [None if v[0] is None else int(v[0]), int(v[1])] for k, v in (d.get("scroll") or {}).items()}
             self._want = d.get("tab_name") or HOME_TAB
         except (OSError, ValueError, TypeError, IndexError):
             self._want = HOME_TAB
@@ -136,6 +136,11 @@ class Tabs:
     def select(self, i: int) -> None:
         n = len(self.names())
         self.tab = i if 0 <= i < n else 0
+        sh = self.sheet()
+        if sh is not None and sh["name"] in self.scroll:
+            # entering a tab lands on today's row again (a position scrolled to weeks
+            # ago must not be what "today" looks like); the column scroll is kept
+            self.scroll[sh["name"]][0] = None
         self.save()
 
     def next(self, step: int = 1) -> None:
@@ -184,11 +189,11 @@ class Tabs:
 
     def _pos(self, sh: dict, body_h: int) -> list:
         pos = self.scroll.get(sh["name"])
-        if pos is None:
+        if pos is None or pos[0] is None:
             top = 0
             if sh.get("today_row") is not None:
                 top = sh["today_row"] - sh["header_rows"] - max(0, body_h - 1 - TODAY_FROM_BOTTOM)
-            pos = self.scroll[sh["name"]] = [top, 0]
+            pos = self.scroll[sh["name"]] = [top, pos[1] if pos else 0]
         pos[0] = max(0, min(pos[0], max(0, self._body(sh) - body_h)))
         pos[1] = max(0, min(pos[1], max(0, len(sh["widths"]) - sh["frozen_cols"] - 1)))
         return pos

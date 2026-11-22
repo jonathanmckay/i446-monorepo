@@ -246,3 +246,21 @@ def test_janus_feeds_0fen_from_the_ledger(monkeypatch):
     assert values == {"D": 1236.143, "P": 42.0, "Y": 70.0, "G": 3.0, "N": 310.0} and through == "18:29:53"
     monkeypatch.setattr(nview, "day_view", lambda iso: None)
     assert mod._neon_ledger_today() == (None, None)
+
+
+def test_entering_a_tab_lands_on_today_again(tmp_path):
+    t = _tabs(tmp_path)
+    t.select(1)
+    t.render(58, 12)
+    home = list(t.scroll["0分"])
+    t.move(-5, 1, body_h=9)
+    assert t.scroll["0分"] != home
+    t.select(0)
+    t.select(1)                                             # back in: today's row, same column
+    t.render(58, 12)
+    assert t.scroll["0分"] == [home[0], 1]
+    again = _tabs(tmp_path)                                 # and the pending re-anchor survives a reload
+    again.select(1)
+    again.load()
+    again.render(58, 12)
+    assert again.scroll["0分"][0] == home[0]
