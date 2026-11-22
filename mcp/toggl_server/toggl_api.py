@@ -267,7 +267,39 @@ def _record_create(entry):
         pass
 
 
+def _store_mod():
+    lib = str(Path.home() / "i446-monorepo" / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import toggl_store
+    return toggl_store
+
+
+def _mark_store_dirty(start_iso=None, entry_id=None):
+    """Tell the entries store a day is about to change, so readers go live for
+    it until the next sync (see lib/toggl_store.dirty_days). Called BEFORE the
+    request: a write that times out may still have landed. Best-effort."""
+    try:
+        ts = _store_mod()
+        days = set()
+        if start_iso:
+            dt_ = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+            if dt_.tzinfo is None:
+                dt_ = dt_.replace(tzinfo=_local_tz())
+            days.add(dt_.astimezone(ts.HOME_TZ).date())
+            days.add(dt_.astimezone(_local_tz()).date())
+        if entry_id is not None:
+            d = ts.day_of(int(entry_id), STORE_PATH)
+            if d:
+                days.add(d)
+        for d in days:
+            ts.mark_dirty(d, STORE_PATH)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def create_entry(description, start_iso, stop_iso, duration_sec, project_id=None, tags=None):
+    _mark_store_dirty(start_iso)
     body = {
         "description": description,
         "start": start_iso,
@@ -302,6 +334,8 @@ def start_timer(description, project_id=None, tags=None, start_time=None):
         body["project_id"] = project_id
     if tags:
         body["tags"] = tags
+    if start_time:
+        _mark_store_dirty(start_time)  # a backdated start can reach a settled day
     entry = _offset_times(_request("POST", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries", body))
     _record_create(entry)
     if isinstance(entry, dict):
@@ -402,13 +436,28 @@ def get_entries(start_date=None, end_date=None, include_running=True):
     s_iso = datetime.combine(start, datetime.min.time(), tzinfo=tz).isoformat()
     e_iso = datetime.combine(end_excl, datetime.min.time(), tzinfo=tz).isoformat()
     from urllib.parse import quote
-    entries = _request("GET", f"/me/time_entries?start_date={quote(s_iso)}&end_date={quote(e_iso)}") or []
+    try:
+        entries = _request("GET", f"/me/time_entries?start_date={quote(s_iso)}&end_date={quote(e_iso)}") or []
+    except Exception as e:
+        # /me/time_entries reaches back about 90 days. A dirty day older than
+        # that cannot be read live, so the store's copy (stale by the write
+        # that dirtied it) beats an error until the weekly sweep re-pulls it.
+        if start < today - timedelta(days=LIVE_REACH_DAYS):
+            stale = _from_store(start, end_excl - timedelta(days=1), ignore_dirty=True)
+            if stale is not None:
+                print(f"WARN toggl live read failed for {start}, serving the store's "
+                      f"pre-edit copy: {e}", file=sys.stderr)
+                return stale
+        raise
     if not include_running:
         entries = [e for e in entries if (e.get("duration") or 0) >= 0 and e.get("stop")]
     return entries
 
 
-def _from_store(start, end_incl):
+LIVE_REACH_DAYS = 80  # /me/time_entries serves roughly the last 90 days
+
+
+def _from_store(start, end_incl, ignore_dirty=False):
     """Entries from the local store when it settles the whole range, else None
     (the caller then goes live). Never raises: a missing or unreadable store
     simply means live."""
@@ -417,7 +466,7 @@ def _from_store(start, end_incl):
     except ImportError:
         return None
     try:
-        if not toggl_store.covers(start, end_incl, STORE_PATH):
+        if not toggl_store.covers(start, end_incl, STORE_PATH, ignore_dirty=ignore_dirty):
             return None
         return toggl_store.entries(start, end_incl, STORE_PATH)
     except Exception as e:  # noqa: BLE001
@@ -486,6 +535,7 @@ def update_entry(entry_id, **fields):
     was_running = isinstance(cur, dict) and cur.get("id") == entry_id
     body = {"workspace_id": TOGGL_WORKSPACE_ID}
     body.update(fields)
+    _mark_store_dirty(fields.get("start"), entry_id)  # the day it leaves and the day it lands on
     entry = _request("PUT", f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}", body)
     if was_running and fields.get("stop"):
         _write_current_cache(None)  # the running entry was closed
@@ -501,6 +551,7 @@ def update_entry(entry_id, **fields):
 def delete_entry(entry_id):
     path = f"/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}"
     was_running = _cached_is(entry_id)  # writes are never refused locally, see _request
+    _mark_store_dirty(entry_id=entry_id)
     _guard_network()
     throttle.acquire()  # same client-side pacing as _request()
     req = urllib.request.Request(f"{BASE_URL}{path}", method="DELETE")

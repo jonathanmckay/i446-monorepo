@@ -103,6 +103,19 @@ def test_toggl_create_and_start_record_entry_ids(logdir, monkeypatch):
     assert [(r["metric"], r["ext_id"]) for r in jmsource.load()] == [("time", "111"), ("time", "222")]
 
 
+def test_a_faked_toggl_write_never_marks_the_real_entries_store(logdir, monkeypatch):
+    """2026-11-22: the dirty-day marker (lib/toggl_store.mark_dirty) made the
+    test above write ~/vault/i156/toggl-dirty.<host>.json for 2026-10-05."""
+    import toggl_store
+    from toggl_server import toggl_api
+    monkeypatch.setattr(toggl_api, "STORE_PATH", toggl_store._REAL_STORE)
+    seen = []
+    monkeypatch.setattr(toggl_store, "_dirty_file", lambda p: seen.append(p) or p.with_name("never.json"))
+    monkeypatch.setattr(toggl_api, "_request", lambda *a, **k: {"id": 333})
+    toggl_api.create_entry("x", "2026-10-05T10:00:00Z", "2026-10-05T10:30:00Z", 1800)
+    assert seen == []
+
+
 # --- net / ssh_from / tty context (2026-11-02, desk vs mobile) ---
 
 def _fake_sh(route, arp="? (192.168.1.1) at 38:94:ed:4b:8c:d5 on en0", router=""):
