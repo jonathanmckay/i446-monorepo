@@ -43,7 +43,7 @@ from pathlib import Path
 
 SRC = Path.home() / "Library" / "CloudStorage" / "OneDrive-Personal" / "vault-excel" / "Neon分v12.2.xlsx"
 OUT = Path.home() / ".cache" / "janus" / "neon-grid.json"
-VERSION = 1
+VERSION = 2
 
 # Per-sheet view settings. Neon has no usable freeze panes (only 0s897 has
 # one, and openpyxl reports its scroll position, not the split), so the pinned
@@ -51,7 +51,10 @@ VERSION = 1
 # the day lives (the same table as services/excel-http DATE_COL); frozen
 # columns default to everything up to and including it.
 SHEETS = {
-    "0分":     {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
+    # 周 is white on black down the whole column (JM 2026-11-21); n156 and the
+    # unlabelled column after it are not part of the view.
+    "0分":     {"header_rows": 1, "date_col": "B", "frozen_cols": 2,
+                "drop_headers": ["n156", ""], "col_style": {"A": ["000000", "ffffff"]}},
     "0n":      {"header_rows": 4, "date_col": "C", "frozen_cols": 3},
     "0s897":   {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
     "hcbi":    {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
@@ -491,6 +494,13 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
             for c in range(lo, min(hi, max_c) + 1):
                 excel_w[c] = dim.width
     cols = [c for c in range(1, max_c + 1) if c not in hidden_cols]
+    drop = view.get("drop_headers")
+    if drop:
+        def _head(c):
+            cell = wsv._cells.get((1, c))
+            return str(cell.value).strip() if cell is not None and cell.value is not None else ""
+        cols = [c for c in cols if _head(c) not in drop]
+    col_style = {_col_index(k): v for k, v in (view.get("col_style") or {}).items()}
     rows = [r for r in range(1, max_r + 1) if not (r in ws.row_dimensions and ws.row_dimensions[r].hidden)]
     widths = {c: max(2, min(MAX_COL_CHARS, int(round(excel_w.get(c, DEFAULT_EXCEL_WIDTH))))) for c in cols}
 
@@ -533,7 +543,10 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
                 bg, fg, bold, halign, numfmt = static(cell)
             else:
                 bg, fg, bold, halign, numfmt = None, None, False, None, "General"
-            rules = cf.get(src)
+            forced = col_style.get(c)
+            if forced and r > (view.get("header_rows") or 0):
+                bg, fg = forced
+            rules = None if forced else cf.get(src)
             if rules:
                 set_bg = set_fg = set_bold = False
                 for _prio, op, operands, rbg, rfg, rbold, stop in sorted(rules, key=lambda x: x[0]):
@@ -572,6 +585,22 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
         out_rows.append(line)
     if today_row is None and best_past is not None:
         today_row = best_past[1]
+    # What it takes to repaint today's row from a fresher source than the
+    # saved workbook (see overlay()): per column, the number format, the
+    # static style and the conditional rules of that one cell.
+    live = None
+    if today_row is not None:
+        rr = rows[today_row]
+        recipe = {}
+        for c in cols:
+            if (rr, c) in anchor or c in col_style:
+                continue
+            cell = cells.get((rr, c))
+            bg, fg, bold, halign, numfmt = static(cell) if cell is not None else (None, None, False, None, "General")
+            recipe[get_column_letter(c)] = {
+                "fmt": numfmt, "base": [bg, fg, bold, halign],
+                "rules": [list(x) for x in sorted(cf.get((rr, c), []), key=lambda x: x[0])]}
+        live = {"row": today_row, "cells": recipe}
     tab = None
     try:
         tab = resolve_color(ws.sheet_properties.tabColor, theme)
@@ -583,7 +612,60 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
             "frozen_cols": frozen, "today_row": today_row,
             "cols": [get_column_letter(c) for c in cols], "row_nums": rows,
             "widths": [widths[c] for c in cols], "styles": styles, "rows": out_rows,
-            "skipped_rules": skipped}
+            "skipped_rules": skipped, "live": live}
+
+
+def paint(value, fmt: str, base: list, rules: list, width: int):
+    """(text, [bg, fg, bold, align]) for one value: number format, static
+    style, then the cell's cellIs rules. The same steps build_sheet applies,
+    for a value that did not come from the workbook."""
+    bg, fg, bold, halign = base
+    set_bg = set_fg = set_bold = False
+    for _prio, op, operands, rbg, rfg, rbold, stop in rules:
+        if not cell_is(value, op, operands):
+            continue
+        if rbg is not None and not set_bg:
+            bg, set_bg = rbg, True
+        if rfg is not None and not set_fg:
+            fg, set_fg = rfg, True
+        if rbold is not None and not set_bold:
+            bold, set_bold = bool(rbold), True
+        if stop:
+            break
+    numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
+    align = {"center": "c", "centerContinuous": "c", "right": "r", "left": "l"}.get(
+        halign or "", "r" if numeric else "l")
+    st = finish_style(bg, fg, bold, align)
+    return ("" if st[4] else format_value(value, fmt, width)), list(st[:4])
+
+
+def overlay(sheet: dict, values: dict) -> int:
+    """Repaint today's row of `sheet` in place with fresher `values`
+    ({column letter: number}), re-running each cell's format and colour rules.
+    Columns the sheet has no recipe for are ignored. Returns cells changed."""
+    live = sheet.get("live")
+    if not live or not values:
+        return 0
+    row = sheet["rows"][live["row"]]
+    index = {tuple(s): i for i, s in enumerate(sheet["styles"])}
+    changed = 0
+    for col, value in values.items():
+        recipe = live["cells"].get(col)
+        if recipe is None or col not in sheet["cols"] or value is None:
+            continue
+        ci = sheet["cols"].index(col)
+        if value == 0 and row[ci][0] == "":
+            continue                    # the workbook shows this cell blank; a ledger 0 is not news
+        text, style = paint(value, recipe["fmt"], recipe["base"], recipe["rules"], sheet["widths"][ci])
+        key = tuple(style)
+        ix = index.get(key)
+        if ix is None:
+            ix = index[key] = len(sheet["styles"])
+            sheet["styles"].append(style)
+        if row[ci][0] != text or row[ci][1] != ix:
+            row[ci] = [text, ix]
+            changed += 1
+    return changed
 
 
 def build(src: Path = SRC, today: dt.date | None = None) -> dict:

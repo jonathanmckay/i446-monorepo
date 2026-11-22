@@ -49,6 +49,12 @@ class Tabs:
         self.built_src_mtime = 0.0      # workbook mtime the last finished build saw
         self.error = ""
         self._memo: tuple | None = None
+        # {sheet name: callable() -> ({col letter: value}, "HH:MM:SS" | None)}:
+        # a fresher source for a sheet's today row than the saved workbook
+        # (janus wires 0分 to the Neon ledger). Applied after every snapshot
+        # load and on refresh_live(); the status line names it.
+        self.live_sources: dict = {}
+        self.live_through: dict = {}
         self._restore()
 
     # --- state ---------------------------------------------------------------
@@ -100,7 +106,32 @@ class Tabs:
         if current is not None:
             names = self.names()
             self.tab = names.index(current) if current in names else 0
+        self.refresh_live()
         return True
+
+    def refresh_live(self) -> bool:
+        """Repaint each sheet's today row from its live source. Cheap (a local
+        sqlite read for the ledger); a source that fails or has nothing leaves
+        the workbook's own values in place. True when something changed."""
+        changed = False
+        for sh in self.sheets():
+            fn = self.live_sources.get(sh["name"])
+            if fn is None:
+                continue
+            try:
+                values, through = fn()
+            except Exception:
+                values, through = None, None
+            if not values:
+                if self.live_through.pop(sh["name"], None) is not None:
+                    changed = True
+                continue
+            if neon_grid.overlay(sh, values) or self.live_through.get(sh["name"]) != through:
+                changed = True
+            self.live_through[sh["name"]] = through
+        if changed:
+            self._memo = None
+        return changed
 
     def select(self, i: int) -> None:
         n = len(self.names())
@@ -263,14 +294,19 @@ class Tabs:
         span = "%s–%s" % (sh["cols"][scrolling[0]], sh["cols"][scrolling[-1]]) if scrolling else "-"
         built = time.strftime("%H:%M", time.localtime((self.snap or {}).get("src_mtime", 0)))
         bits = ["%d–%d/%d" % (top + 1, min(body, top + body_h), body), span, "saved " + built]
+        if self.live_through.get(sh["name"]):
+            bits.append("today ledger " + str(self.live_through[sh["name"]])[:5])
         if self.building:
             bits.append("refreshing…")
         if self.error:
             bits.append("! " + self.error)
         if sh.get("skipped_rules"):
             bits.append("%d colour rules skipped" % sh["skipped_rules"])
-        bits.append("^T tab · ⎋ janus")
-        return _clip(" " + " · ".join(bits), cols)
+        line = " " + " · ".join(bits)
+        hint = " · ^T tab · ⎋ janus"                 # the hint goes first when the pane is narrow
+        if neon_grid.cwidth(line + hint) <= cols:
+            line += hint
+        return _clip(line, cols)
 
 
 def _ink(bg: str) -> str:

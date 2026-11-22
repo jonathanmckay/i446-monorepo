@@ -744,6 +744,30 @@ else:
     NEON = neon_tabs.Tabs(state_file=_neon_tmp / "tab.json", grid_file=_neon_tmp / "grid.json")
 
 
+def _neon_ledger_today() -> tuple:
+    """0分's today row from the Neon ledger (lib/neon/view.day_view): Σ, the
+    block columns and the domain columns, keyed by Excel column letter. The
+    saved workbook trails Excel by minutes; the ledger has every applied write
+    (JM 2026-11-21: "this doesn't seem to be using the ledger, as it's an out
+    of date version"). (None, None) when the ledger has no view of today."""
+    from neon import view as _nview, rules as _nrules
+    v = _nview.day_view(dt.date.today().isoformat())
+    if not v:
+        return None, None
+    values = dict(v.get("cols") or {})
+    if v.get("total") is not None:
+        values["D"] = v["total"]
+    glyph_col = {g: c for c, g in _nrules.BLOCK_COLS.items()}
+    for glyph, pts in (v.get("blocks") or {}).items():
+        if glyph in glyph_col:
+            values[glyph_col[glyph]] = pts
+    return values, (v.get("through") or "")[11:19] or None
+
+
+NEON.live_sources["0分"] = _neon_ledger_today
+NEON.refresh_live()
+
+
 def _neon_pane() -> tuple[int, int]:
     """(cols, lines) the Neon grid may fill: the whole pane width (the 64-col
     cap is for the timeline's prose, not a table) and main_window's height."""
@@ -8965,7 +8989,7 @@ async def ticker_neon(app):
     thread. Also picks up a snapshot another process wrote."""
     while True:
         try:
-            if NEON.load():
+            if NEON.load() or (NEON.tab and NEON.refresh_live()):
                 app.invalidate()
             if NEON.needs_build():
                 _bg_fetch(app, NEON.build)

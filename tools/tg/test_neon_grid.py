@@ -168,3 +168,33 @@ def test_theme_and_error_string_colours():
 def test_html_dump(snap):
     page = ng.to_html(snap["sheets"][0])
     assert "background:#388195" in page and "1,600" in page
+
+
+def test_0fen_view_drops_n156_and_blackens_the_week_column(tmp_path):
+    path = _workbook(tmp_path / "neon.xlsx")
+    wb = openpyxl.load_workbook(path)
+    ws = wb["0分"]
+    ws["G1"], ws["G3"], ws["H3"] = "n156", 7, 9            # n156 and an unlabelled column after it
+    wb.save(path)
+    s = ng.build(path, today=TODAY)["sheets"][0]
+    assert s["cols"] == ["A", "B", "C", "D", "E", "F"]
+    assert _cell(s, 1, "A") == ("11.2", ["#000000", "#ffffff", 0, "r"])
+    assert _cell(s, 4, "A")[1][:2] == ["#000000", "#ffffff"]             # all the way down the merge
+    assert _cell(s, 0, "A")[1][0] is None                                # the header row keeps its own style
+
+
+def test_overlay_repaints_today_from_fresher_values(snap):
+    s = snap["sheets"][0]
+    row = s["live"]["row"]
+    assert row == s["today_row"] and _cell(s, row, "D")[0] == "2,800"
+    assert "A" not in s["live"]["cells"]                                 # merged / forced cells are left alone
+    n = ng.overlay(s, {"D": 900.4, "E": 0, "ZZ": 5, "C": None})
+    assert n == 2
+    assert _cell(s, row, "D") == ("900", ["#aaaaaa", "#000000", 0, "r"])  # now inside the 1–1500 rule
+    assert _cell(s, row, "E")[1][0] == "#808080"                          # 0 trips lessThan 1
+    assert ng.overlay(s, {"D": 900.4}) == 0                               # idempotent
+    json.dumps(s)                                                         # still plain data
+    assert ng.overlay({"live": None}, {"D": 1}) == 0
+    blank = s["cols"].index("E")
+    s["rows"][row][blank] = ["", s["rows"][row][blank][1]]
+    assert ng.overlay(s, {"E": 0.0}) == 0 and s["rows"][row][blank][0] == ""   # a blank cell stays blank on a 0

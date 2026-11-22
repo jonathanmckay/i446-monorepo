@@ -211,3 +211,38 @@ def test_janus_arrows_scroll_the_grid_not_the_selection(tmp_path, monkeypatch):
     mod.input_buffer.text = "0900-0930 x"
     assert live("down") == []                               # typing: ↓ is the input line's own key again
     mod.input_buffer.reset()
+
+
+def test_live_source_repaints_today_and_is_named(tmp_path):
+    sh = _sheet()
+    sh["live"] = {"row": 50, "cells": {"D": {"fmt": "#,##0", "base": [None, None, False, None],
+                                             "rules": [[1, "greaterThan", [1000.0], "00ff00", None, None, False]]}}}
+    t = _tabs(tmp_path, [sh])
+    t.select(1)
+    assert "5003" in _text(t.render(40, 24))
+    feed = {"v": ({"D": 1236.14}, "18:29:53")}
+    t.live_sources["0分"] = lambda: feed["v"]
+    assert t.refresh_live() is True
+    frags = t.render(58, 24)
+    assert ("bg:#00ff00 #000000", "1,236") in frags
+    status = _text(frags).split("\n")[-1]
+    assert "today ledger 18:29" in status and "^T" not in status      # narrow pane: the key hint yields
+    assert t.refresh_live() is False                        # nothing new: no repaint
+    feed["v"] = (None, None)                                # ledger has no view (e.g. before 03:50)
+    t.refresh_live()
+    assert "ledger" not in _text(t.render(58, 24)).split("\n")[-1]
+    t.live_sources["0分"] = lambda: 1 / 0                    # a failing source never breaks the tab
+    assert t.refresh_live() is False
+
+
+def test_janus_feeds_0fen_from_the_ledger(monkeypatch):
+    mod = _load_janus()
+    assert mod.NEON.live_sources["0分"] is mod._neon_ledger_today
+    import neon.view as nview
+    monkeypatch.setattr(nview, "day_view", lambda iso: {
+        "total": 1236.143, "cols": {"P": 42.0, "Y": 70.0}, "blocks": {"卯": 3.0, "戌": 310.0},
+        "through": "2026-11-21T18:29:53"})
+    values, through = mod._neon_ledger_today()
+    assert values == {"D": 1236.143, "P": 42.0, "Y": 70.0, "G": 3.0, "N": 310.0} and through == "18:29:53"
+    monkeypatch.setattr(nview, "day_view", lambda iso: None)
+    assert mod._neon_ledger_today() == (None, None)
