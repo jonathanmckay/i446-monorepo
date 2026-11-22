@@ -39,6 +39,18 @@ The vault (`~/vault`) is **150k+ files, ~70% of them `.stversions` junk**. Never
    content into a cmux surface; always route web/HTML to Chrome. (See the
    `open-links-chrome` memory.)
 
+   **JM at Straylight, session on Ix** (the SessionStart `[device]` line, or
+   `scripts/jm-device.sh`): a local `open` lands on Ix's screen, not his. For
+   a vault `.md`, send the Obsidian link through the Straylight drop box
+   instead, then read the log to confirm (`rc=0`) and park the trigger:
+   ```bash
+   printf 'open obsidian://open?vault=vault&file=%s\n%s\n' "<urlencoded path from vault root, no .md>" "$(date)" \
+     > ~/files/i447/ios-deploy-trigger.txt
+   sleep 15; cat ~/files/i447/ios-deploy.log; echo noop > ~/files/i447/ios-deploy-trigger.txt
+   ```
+   The drop box accepts only `obsidian://open?vault=vault&file=...`. For other
+   file types, say it cannot be opened on his screen from Ix.
+
 4. **Confirm in one line:** `opened <basename> → <app>`.
 
 ## Disambiguation
