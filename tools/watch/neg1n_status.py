@@ -18,9 +18,12 @@ single user).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -113,6 +116,75 @@ def api_neg1n():
     return jsonify(compute_status())
 
 
+# ── Prayer tap from the watch's hcmp complication (2026-11-22) ───────────────
+# The watch sends "ص:<epoch ms>" down the SAME /neg1n_complete message path a
+# ritual swipe uses, so the phone app relays it here unchanged and needs no
+# rebuild. The phone retries a failed POST without bound and times out after
+# 8 s, while salat-fast.py can run longer and a queued Excel write must never
+# be rerun, so a tap is applied AT MOST ONCE: its nonce is claimed before the
+# increment runs and never released, and every answer is ok:true. A lost tap
+# is visible on the watch and re-tappable; a multiplied one is not.
+PRAYER_TAG_PREFIX = "ص:"
+PRAYER_TAP_TTL_MS = 10 * 60 * 1000   # older than this: a retry that outlived its moment
+PRAYER_NONCES = Path.home() / ".local" / "state" / "jm" / "neg1n-prayer-nonces.json"
+PRAYER_NONCES_KEPT = 50
+SALAT_FAST = REPO / "tools" / "did" / "salat-fast.py"
+_prayer_lock = threading.Lock()
+
+
+def prayer_tap_plan(tag: str, now_ms: int, claimed) -> str | None:
+    """What to do with a /complete tag. None: not a prayer tap (a ritual).
+    'bad': prayer prefix, unusable nonce. 'stale': tapped more than
+    PRAYER_TAP_TTL_MS away from now (a retry hours later must not credit
+    another day). 'dup': this tap was already claimed. 'run': increment."""
+    if not tag.startswith(PRAYER_TAG_PREFIX):
+        return None
+    nonce = tag[len(PRAYER_TAG_PREFIX):]
+    if not (nonce.isascii() and nonce.isdigit()):
+        return "bad"
+    if abs(now_ms - int(nonce)) > PRAYER_TAP_TTL_MS:
+        return "stale"
+    return "dup" if nonce in claimed else "run"
+
+
+def _load_prayer_nonces() -> list:
+    try:
+        data = json.loads(PRAYER_NONCES.read_text())
+        return [str(n) for n in data] if isinstance(data, list) else []
+    except Exception:  # noqa: BLE001 — missing or torn file = nothing claimed
+        return []
+
+
+def _prayer_tap(tag: str):
+    with _prayer_lock:
+        claimed = _load_prayer_nonces()
+        plan = prayer_tap_plan(tag, int(time.time() * 1000), claimed)
+        ran_ok, tail = None, ""
+        if plan == "run":
+            # Claim first, persist, THEN run: a crash or timeout mid-run
+            # leaves the nonce claimed, never a second increment.
+            claimed = (claimed + [tag[len(PRAYER_TAG_PREFIX):]])[-PRAYER_NONCES_KEPT:]
+            PRAYER_NONCES.parent.mkdir(parents=True, exist_ok=True)
+            tmp = PRAYER_NONCES.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(claimed))
+            os.replace(tmp, PRAYER_NONCES)
+            try:
+                proc = subprocess.run(["/usr/bin/python3", str(SALAT_FAST)],
+                                      capture_output=True, text=True, timeout=60)
+                ran_ok = proc.returncode == 0
+                tail = (proc.stdout + proc.stderr).strip()[-300:]
+            except Exception as e:  # noqa: BLE001
+                ran_ok, tail = False, f"salat-fast.py failed to run: {e}"
+    return jsonify({
+        "ok": True,            # always: the phone must never retry a prayer tap
+        "tag": tag,
+        "prayer": plan,
+        "applied": ran_ok,
+        "detail": tail,
+        "status": compute_status(),
+    })
+
+
 @app.route("/api/neg1n/complete", methods=["POST"])
 def api_neg1n_complete():
     """Complete one of the current block's rituals from the watch's swipe
@@ -123,6 +195,8 @@ def api_neg1n_complete():
     without a second round trip."""
     body = request.get_json(silent=True) or {}
     tag = body.get("tag", "")
+    if isinstance(tag, str) and tag.startswith(PRAYER_TAG_PREFIX):
+        return _prayer_tap(tag)
     valid_tags = {r["tag"] for r in load_rituals()}
     if tag not in valid_tags:
         return jsonify({"error": f"unknown ritual tag {tag!r}", "known": sorted(valid_tags)}), 400

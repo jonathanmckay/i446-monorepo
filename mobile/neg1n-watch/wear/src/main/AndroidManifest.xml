@@ -85,7 +85,7 @@
                 android:value="900" />
         </service>
 
-        <!-- day-points, hcb, hcmp: status-only, no tap action (same as -1n
+        <!-- day-points, hcb, hcmp: no config activity; hcmp alone has a tap (+1 prayer, PrayerTap.kt). (same as -1n
              before RitualListActivity existed) — the system falls back to
              "open the containing app" (MainActivity) since none of these
              set a tapAction. -->
@@ -185,5 +185,10 @@
             </intent-filter>
         </service>
 
+        <!-- Tap on the prayer (hcmp) complication: +1 prayer, relayed to the
+             phone (PrayerTap.kt). Explicit-component broadcast only. -->
+        <receiver
+            android:name=".PrayerTapReceiver"
+            android:exported="false" />
     </application>
 </manifest>
