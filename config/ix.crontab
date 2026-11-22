@@ -52,9 +52,6 @@
 20 5 1 * * python3 $HOME/i446-monorepo/tools/toggl-db/toggl_db.py sync --days 400 --export >> $HOME/i446-monorepo/tools/toggl-db/.toggl-db.log 2>&1 || $HOME/bin/cron-alert.sh toggl_db monthly_sweep_failed "1st-of-month 400-day toggl_db sweep failed"
 # 1-i446: weekly vault-health review → z_meta report + 😈 Todoist review task (singletons, syncthing, git autopush, backups, alerts)
 40 4 * * 6 python3 $HOME/i446-monorepo/tools/vault/vault_health.py >> $HOME/i446-monorepo/tools/vault/.1-i446.log 2>&1
-# daily watch (2026-11-21): stuck inbox badges, dead inbox counter, dtd claims idle 7+ days -> z_ibx/alerts.jsonl,
-# which the Saturday review's alerts check reads. Re-emits daily while a condition holds.
-35 4 * * * /usr/bin/python3 $HOME/i446-monorepo/tools/vault/daily_watch.py >/dev/null 2>&1 || $HOME/bin/cron-alert.sh daily_watch run_failed "daily_watch.py exited non-zero"
 # neon-reconcile: twice-daily Neon ledger reconcile (was live on Ix but missing here)
 50 3 * * * python3 $HOME/i446-monorepo/scripts/neon-reconcile.py >> $HOME/i446-monorepo/scripts/.neon-reconcile.log 2>&1
 55 23 * * * python3 $HOME/i446-monorepo/scripts/neon-reconcile.py >> $HOME/i446-monorepo/scripts/.neon-reconcile.log 2>&1

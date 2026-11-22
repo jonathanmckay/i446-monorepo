@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Daily watch (2026-11-21): dead inbox counter, inbox badge failing two days
+     running, dtd claims idle 7+ days -> ~/vault/z_ibx/alerts.jsonl, which the
+     Saturday /1-i446 review reads. launchd, not cron: `crontab -` hung on Ix.
+     Install: cp to ~/Library/LaunchAgents, launchctl bootstrap gui/$(id -u) <plist> -->
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/mckay</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>Label</key>
+	<string>com.jm.daily-watch</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/mckay/i446-monorepo/tools/vault/daily_watch.py</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>35</integer>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/mckay/Library/Logs/daily-watch.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/mckay/Library/Logs/daily-watch.log</string>
+</dict>
+</plist>

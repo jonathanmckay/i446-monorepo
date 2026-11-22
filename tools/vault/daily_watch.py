@@ -24,7 +24,10 @@ Watches:
                                 releases anything; it asks JM to resume or
                                 release.
 
-Usage: daily_watch.py [--dry-run]     (cron: config/ix.crontab, 04:35 daily)
+Usage: daily_watch.py [--dry-run]
+Schedule: launchd com.jm.daily-watch, 04:35 daily on Ix (scripts/launchd/). Not
+cron: `crontab -` hung on Ix when this was added, and the weekly launchd check
+then covers this job too. A crash leaves a non-zero exit for that check.
 """
 from __future__ import annotations
 
