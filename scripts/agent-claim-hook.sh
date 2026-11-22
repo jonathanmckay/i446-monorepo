@@ -82,6 +82,9 @@ if [[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.free" \
   rm -f "$D/by-session/$sid.free" 2>/dev/null
 fi
 zmodload zsh/datetime zsh/files 2>/dev/null
+# /fin's exit request (see "/fin closes the tab" below) is void once JM sends
+# anything else here: he kept working in this thread.
+[[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.exit" ]] && rm -f "$D/by-session/$sid.exit" 2>/dev/null
 AGENT_STALE_S=7200
 # In-flight subagents of this session: "<agent_id> <epoch>" per line. Kept
 # for every session (builtins only), claimed or not, so a claim made after
@@ -141,9 +144,25 @@ if [[ "$1" == idle && -n "$sid" && -z "$DTD_NOTE_CHILD" \
       && ( -s "$D/by-session/$sid" || -f "$D/by-session/$sid.note" ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" note >/dev/null 2>&1 &!
 fi
+# /fin closes the tab (2026-11-22, /bug "didn't exit the tab"): when the tab is
+# driven from another host, done_session.mark_tab_close leaves fin-close/<tmux
+# session> for the launchers (claude-tracked) AND by-session/<sid>.exit here.
+# The launchers only act once claude exits, and a skill cannot run /exit, so
+# this types it, the same way the reverse /fin below types /clear: only on a
+# true idle (nothing in the background, input free), detached so the keys land
+# after the hook returns. C-u first: a half-typed line would turn `/exit` into
+# an ordinary prompt. Sits above the "holds a claim" gate because /fin has
+# already cleared the index. One builtin file test in the common case.
+if [[ "$1" == idle && -n "$sid" && -f "$D/by-session/$sid.exit" ]]; then
+  if [[ -n "$TMUX_PANE" && -z "$DTD_NOTE_CHILD" && -z "$(_live_agents)" && -z "$(_live_shells)" ]]; then
+    rm -f "$D/by-session/$sid.exit" 2>/dev/null
+    { sleep 1; tmux send-keys -t "$TMUX_PANE" C-u; tmux send-keys -t "$TMUX_PANE" -l '/exit'; sleep 0.3; tmux send-keys -t "$TMUX_PANE" Enter; } >/dev/null 2>&1 &!
+  fi
+fi
 # SessionEnd: a re-grabbed task (see Re-grab above) returns to ✅, and the
 # markers go so a resumed session starts clean.
 regrabbed=()
+[[ "$1" == release && -n "$sid" ]] && rm -f "$D/by-session/$sid.exit" 2>/dev/null
 if [[ "$1" == release && -n "$sid" ]]; then
   [[ -f "$D/by-session/$sid.regrab" ]] && regrabbed=(${(f)"$(<"$D/by-session/$sid.regrab")"})
   rm -f "$D/by-session/$sid.done" "$D/by-session/$sid.regrab" 2>/dev/null

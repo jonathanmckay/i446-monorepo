@@ -114,12 +114,20 @@ A skill cannot run /exit or /clear, and typing them into this session's own
 terminal is blocked by the auto-mode classifier (tmux self-drive). After the
 report, end with exactly one of:
 
-- `→ /exit` when the JSON has `"tab_close": true` (2026-11-14: this thread's
-  cmux tab is driven from Straylight). The Ix launcher sees /fin's marker and
-  lets the tmux session end; Straylight then closes the tab if the workspace
-  has another Claude tab, or starts a fresh thread in it if it was the only one
-  (JM: one tab per window by default, more only for active threads).
-- `→ /clear` otherwise (a local or phone session keeps its tab).
+- `→ closing this tab` when the JSON has `"tab_close": true` (this thread's
+  cmux tab is driven from another host, normally Straylight). Nothing for JM
+  to type (2026-11-22: "/fin should both stop the thread on ix and close the
+  cmux tab on straylight"). done_session left two things: `fin-close/<tmux
+  session>` for the launchers and `by-session/<sid>.exit` for the Stop hook
+  (`scripts/agent-claim-hook.sh idle`), which types `/exit` about a second
+  after this turn ends, once nothing is running in the background. The Ix
+  launcher then lets the tmux session end, and Straylight closes the tab if
+  the workspace has another Claude tab, or starts a fresh thread in it if it
+  was the only one (JM: one tab per window by default, more only for active
+  threads). So make this the last line and start nothing in the background
+  after the script: a live background agent or shell holds the exit until it
+  finishes, and any new prompt from JM cancels it.
+- `→ /clear` otherwise (a local or phone session keeps its tab), so JM can
+  type it.
 
-so JM can type it. The transcript stays in ~/.claude/projects/ and /resume
-brings it back.
+The transcript stays in ~/.claude/projects/ and /resume brings it back.

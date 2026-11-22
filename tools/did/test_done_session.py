@@ -179,14 +179,21 @@ def test_mark_tab_close_only_for_a_remote_driven_tab(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, "FIN_CLOSE_DIR", tmp_path)
     hosts = tmp_path / "hosts"; hosts.mkdir()
     monkeypatch.setattr(ds, "SESSION_HOSTS_DIR", hosts)
+    exits = tmp_path / "claims" / "by-session"
+    monkeypatch.setattr(ds, "CLAIMS_ROOT", tmp_path / "claims")
     monkeypatch.setattr(ds.socket, "gethostname", lambda: "ix.local")
     run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "cc-fix-bug\n", "")
     env = {"CC_ORIGIN": "straylight", "TMUX_PANE": "%1", "TMUX": "/tmp/x"}
     assert ds.mark_tab_close("S1", env=env, run=run) is True
     assert (tmp_path / "cc-fix-bug").read_text().strip() == "S1"
+    # 2026-11-22 (/bug "didn't exit the tab"): the marker alone closed nothing, because the
+    # chain only starts when claude exits and /fin left the /exit to JM. /fin now also files
+    # by-session/<sid>.exit, which the Stop hook turns into a typed /exit once the turn is over.
+    assert (exits / "S1.exit").exists()
     assert ds.mark_tab_close("S1", env={"TMUX_PANE": "%1", "TMUX": "/tmp/x"}, run=run) is False   # local session
     assert ds.mark_tab_close("S1", env={**env, "CC_ORIGIN": "ix"}, run=run) is False             # driven from this host
     assert ds.mark_tab_close("S1", env={"CC_ORIGIN": "straylight"}, run=run) is False            # not in tmux
+    assert sorted(p.name for p in exits.iterdir()) == ["S1.exit"]                                # no tab, no exit request
     # 2026-11-22: claude-tracked pops CC_ORIGIN before claude starts, so the live signal is
     # CC_TAB_ORIGIN; a session launched before that change is found through session-hosts/<id>.
     tmux = {"TMUX_PANE": "%1", "TMUX": "/tmp/x"}

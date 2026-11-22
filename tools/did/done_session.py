@@ -226,6 +226,7 @@ def defer_days(tid: str, days: int, run=subprocess.run) -> tuple[bool, str]:
 
 
 FIN_CLOSE_DIR = STATE_DIR / "fin-close"
+CLAIMS_ROOT = Path.home() / "vault" / "z_ibx" / "agent-claims"   # agent_claims.CLAIMS_DIR, not imported here
 
 
 SESSION_HOSTS_DIR = STATE_DIR / "session-hosts"
@@ -248,7 +249,8 @@ def tab_origin(session: str, env=os.environ) -> str:
 def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     """/fin closes the cmux tab (2026-11-14): when this thread's tab is driven from another
     host (tab_origin), leave fin-close/<tmux
-    session> = <session id>. The Ix launcher reads it when claude exits (JM's `/exit`) and
+    session> = <session id> and ask the Stop hook to type `/exit` (by-session/<sid>.exit, see
+    below). The Ix launcher reads the marker when claude exits and
     lets the tmux session end; the Straylight launcher then closes the tab or starts a fresh
     thread in it (see claude-tracked, after_ix_exit). Local/phone sessions: nothing."""
     origin = tab_origin(session, env)
@@ -266,6 +268,14 @@ def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
         return False
     FIN_CLOSE_DIR.mkdir(parents=True, exist_ok=True)
     (FIN_CLOSE_DIR / name).write_text(session + "\n")
+    # The launchers only move once claude exits, and nothing in a skill can run /exit: ask the
+    # Stop hook (scripts/agent-claim-hook.sh idle) to type it when this turn is over. Keyed by
+    # session id so the hook's check is one file test and a later prompt here can void it.
+    try:
+        (CLAIMS_ROOT / "by-session").mkdir(parents=True, exist_ok=True)
+        (CLAIMS_ROOT / "by-session" / f"{session}.exit").write_text(session + "\n")
+    except OSError:
+        pass          # the marker stands; JM's own /exit still closes the tab
     return True
 
 

@@ -114,6 +114,75 @@ def _hook(home, state, sid):
                           text=True, env=env, capture_output=True, timeout=10)
 
 
+def _fake_tmux(home):
+    """A tmux that only records its arguments: the hook must never reach the real one from a
+    test (it would type into the pane running pytest)."""
+    log = home / "tmux.log"
+    b = home / "bin" / "tmux"
+    b.parent.mkdir(exist_ok=True)
+    b.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\n")
+    b.chmod(0o755)
+    return log
+
+
+def _hook_pane(home, state, sid, prompt=None):
+    env = dict(os.environ, HOME=str(home), PATH=_fake_ps(home), TMUX_PANE="%99")
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.pop("DTD_NOTE_CHILD", None)
+    payload = {"session_id": sid, **({"prompt": prompt} if prompt else {})}
+    return subprocess.run([str(HOOK), state], input=json.dumps(payload),
+                          text=True, env=env, capture_output=True, timeout=10)
+
+
+def _typed(log, wait=2.5):
+    import time
+    end = time.time() + wait
+    while time.time() < end:
+        if log.exists() and "Enter" in log.read_text():
+            break
+        time.sleep(0.1)
+    return log.read_text() if log.exists() else ""
+
+
+def test_fin_exit_request_is_typed_once_the_turn_is_idle(tmp_path):
+    """2026-11-22 (/bug "didn't exit the tab"): /fin filed its tab-close marker but nothing
+    ended claude, so the tab stayed open. done_session now leaves by-session/<sid>.exit and the
+    Stop hook types /exit, with no claim left in the index (the /fin turn has already cleared it)."""
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    (root / "by-session").mkdir(parents=True)
+    log = _fake_tmux(tmp_path)
+    req = root / "by-session" / "S1.exit"
+    req.write_text("S1\n")
+    assert _hook_pane(tmp_path, "idle", "S1").returncode == 0
+    out = _typed(log)
+    assert "send-keys -t %99 -l /exit" in out and out.rstrip().endswith("send-keys -t %99 Enter")
+    assert not req.exists()                                     # one shot
+    log.unlink()
+    _hook_pane(tmp_path, "idle", "S1")
+    assert _typed(log, wait=1.5) == ""                          # nothing asked, nothing typed
+    _hook_pane(tmp_path, "idle", "OTHER")
+    assert _typed(log, wait=1.5) == ""
+
+
+def test_fin_exit_request_waits_for_background_work_and_dies_with_a_new_prompt(tmp_path):
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    (root / "by-session").mkdir(parents=True)
+    log = _fake_tmux(tmp_path)
+    req = root / "by-session" / "S1.exit"
+    req.write_text("S1\n")
+    (root / "by-session" / "S1.agents").write_text(f"A1 {int(__import__('time').time())}\n")
+    _hook_pane(tmp_path, "idle", "S1")                          # a background agent is still out
+    assert _typed(log, wait=1.5) == "" and req.exists()
+    _hook_pane(tmp_path, "working", "S1", prompt="one more thing")   # JM kept working here
+    assert not req.exists()
+    (root / "by-session" / "S1.agents").unlink()
+    _hook_pane(tmp_path, "idle", "S1")
+    assert _typed(log, wait=1.5) == ""
+    req.write_text("S1\n")
+    _hook_pane(tmp_path, "release", "S1")                       # session ended some other way
+    assert not req.exists()
+
+
 def test_hook_states_and_release(tmp_path):
     root = tmp_path / "vault/z_ibx/agent-claims"
     ac.claim(TASK, "S1", root=root, now=1000)
