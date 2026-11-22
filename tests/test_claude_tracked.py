@@ -252,10 +252,12 @@ def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='
     monkeypatch.setattr(ct, 'FIN_TAB_LOG', tmp_log or Path('/nonexistent-dir/fin.log'), raising=False)
     monkeypatch.setattr(ct, 'other_claude_tabs', lambda: [], raising=False)   # the lone-tab case
     relaunched, calls = [], []
+    envs = _fin_exit.envs = []
     monkeypatch.setattr(ct, 'exec_on_ix', lambda *a, **k: relaunched.append(a))
 
     def fake_run(argv, **k):
         calls.append(list(argv))
+        envs.append(k.get('env') or {})
         return types.SimpleNamespace(returncode=close_rc, stdout='', stderr='no such surface')
     monkeypatch.setattr(ct.subprocess, 'run', fake_run)
     return ct.after_ix_exit('cc-081834', 'ix'), calls, relaunched
@@ -336,3 +338,23 @@ def test_fin_tab_close_leaves_evidence_where_ix_can_read_it(ct, monkeypatch, tmp
     assert [r['step'] for r in rows] == ['start', 'layout', 'close']
     assert rows[0]['CMUX_SURFACE_ID'] == 'SURF-1'
     assert rows[2]['rc'] == 1 and rows[2]['err'] == 'no such surface'
+
+
+def test_fin_tab_close_authenticates_to_the_cmux_socket(ct, monkeypatch, tmp_path):
+    """2026-11-22, from the tab itself: "cc: could not close this tab (Error: auth_required:
+    Authentication required. Send auth <password> first.)". The socket is password-protected and
+    the close went out without CMUX_SOCKET_PASSWORD."""
+    pw = tmp_path / 'socket-control-password'
+    pw.write_text('s3cret\n')
+    monkeypatch.setattr(ct, 'CMUX_PASSWORD_FILE', pw, raising=False)
+    monkeypatch.delenv('CMUX_SOCKET_PASSWORD', raising=False)
+    done, calls, _ = _fin_exit(ct, monkeypatch)
+    assert done is True and calls[-1][1] == 'close-surface'
+    assert _fin_exit.envs[-1].get('CMUX_SOCKET_PASSWORD') == 's3cret'
+    monkeypatch.setenv('CMUX_SOCKET_PASSWORD', 'from-env')          # an explicit one wins
+    _fin_exit(ct, monkeypatch)
+    assert _fin_exit.envs[-1]['CMUX_SOCKET_PASSWORD'] == 'from-env'
+    monkeypatch.delenv('CMUX_SOCKET_PASSWORD')
+    monkeypatch.setattr(ct, 'CMUX_PASSWORD_FILE', tmp_path / 'absent')
+    _fin_exit(ct, monkeypatch)                                      # no file: call still goes out
+    assert 'CMUX_SOCKET_PASSWORD' not in _fin_exit.envs[-1]
