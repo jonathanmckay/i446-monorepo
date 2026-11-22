@@ -623,12 +623,12 @@ def _gh_query(since: dt.datetime, viewer_id: str) -> str:
     for i, (full, push) in enumerate(GH_REPOS):
         owner, name = full.split("/")
         parts.append(
-            f'r{i}: repository(owner:"{owner}",name:"{name}"){{nameWithOwner '
+            f'r{i}: repository(owner:"{owner}",name:"{name}"){{nameWithOwner isPrivate '
             f'defaultBranchRef{{name compare(headRef:"{push}"){{aheadBy}} target{{... on Commit{{committedDate '
             f'mine: history(since:"{iso}",author:{{id:"{viewer_id}"}}){{totalCount}}}}}}}} '
             f'push: ref(qualifiedName:"refs/heads/{push}"){{target{{... on Commit{{'
             f'history(first:5){{nodes{{committedDate author{{user{{login}}}}}}}}}}}}}}}}')
-    return ('{viewer{login contributionsCollection(from:"%s"){commitContributionsByRepository(maxRepositories:100)'
+    return ('{viewer{login contributionsCollection(from:"%s"){restrictedContributionsCount commitContributionsByRepository(maxRepositories:100)'
             '{repository{nameWithOwner} contributions{totalCount}}}} %s}' % (iso, " ".join(parts)))
 
 
@@ -655,6 +655,7 @@ def github_contrib_finding(data: dict, now: dt.datetime, dismissed: list | None 
     login = data["viewer"]["login"]
     counted = {c["repository"]["nameWithOwner"]: c["contributions"]["totalCount"]
                for c in data["viewer"]["contributionsCollection"]["commitContributionsByRepository"]}
+    restricted = data["viewer"]["contributionsCollection"].get("restrictedContributionsCount", 0)
     detail, status, review, heads = [], "ok", False, []
 
     def flag(full: str, rule: str, level: str, msg: str) -> None:
@@ -670,14 +671,18 @@ def github_contrib_finding(data: dict, now: dt.datetime, dismissed: list | None 
             flag(full, "missing", "warn", f"{short}: not found on GitHub (renamed, or the token lost access)"); continue
         dflt = r["defaultBranchRef"]
         nodes = (((r.get("push") or {}).get("target") or {}).get("history") or {}).get("nodes") or []
-        got = counted.get(full, 0)
+        # GitHub never itemises private repos: with "Include private contributions
+        # on my profile" on, their credit arrives as one anonymous total.
+        private = bool(r.get("isPrivate"))
+        got = restricted if private else counted.get(full, 0)
+        got_s = f"{got} private contributions counted (all private repos)" if private else f"{got} counted"
         mine = dflt["target"]["mine"]["totalCount"]
         ahead = (dflt.get("compare") or {}).get("aheadBy", 0) if push != dflt["name"] else 0
         d_age = _gh_age_days(dflt["target"].get("committedDate"), now)
         p_age = _gh_age_days(nodes[0]["committedDate"], now) if nodes else 9999.0
         heads.append(f"{short} {got} counted")
         detail.append(f"{short}: GitHub has {push} as of {p_age * 24:.1f}h ago; default branch {dflt['name']} "
-                      f"last moved {d_age:.0f}d ago; 7 days: {mine} of my commits on {dflt['name']}, {got} counted")
+                      f"last moved {d_age:.0f}d ago; 7 days: {mine} of my commits on {dflt['name']}, {got_s}")
         if not nodes:
             flag(full, "stale", "fail", f"{short}: branch {push} does not exist on GitHub")
         elif p_age > 1:
@@ -690,8 +695,8 @@ def github_contrib_finding(data: dict, now: dt.datetime, dismissed: list | None 
                  f"{dflt['name']} has not moved in {d_age:.0f} days (release, or make {push} the default branch)")
         if mine >= 5 and got == 0:
             flag(full, "uncounted", "warn", f"{short}: {mine} of my commits reached {dflt['name']} in 7 days and "
-                 f"GitHub credited 0 (look at the repo on github.com/{login}; private repos need "
-                 "'Include private contributions on my profile')")
+                 "GitHub credited 0" + (" private contributions: turn on 'Include private contributions on my "
+                 "profile' at github.com/settings/profile" if private else f" (look at the repo on github.com/{login})"))
     return Finding("github-contrib", status, "; ".join(heads) + " in 7 days" if status == "ok" else
                    f"{'; '.join(heads)} in 7 days; see detail", detail, review=review)
 
