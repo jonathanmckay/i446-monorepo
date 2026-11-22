@@ -24,7 +24,7 @@ about them is restated or changed here.
    task (not a habit, not a `😈` ritual, not `@posthoc`) closed in the
    previous 2-hour block with no `[N]` or `{N}`. This is the card's own
    criterion.
-3. **close_card.** Only when no hole over 5m remains in the previous block
+3. **close_card.** Only when no hole of 5m or more (janus's flash threshold) remains in the previous block
    and step 2 found nothing:
    ```bash
    python3 ~/i446-monorepo/tools/did/did-fast.py --ritual -1l >/dev/null 2>&1

@@ -67,7 +67,7 @@ def test_rest_of_today_is_not_a_hole():
     cov = _Cov.load()
     now = dt.datetime.combine(DAY, dt.time(14, 25), cov.TZ)
     entries = [_e(cov, 1, (0, 0), (9, 0)), _e(cov, 2, (9, 30), (14, 0))]
-    got = evidence.find_holes(DAY, now, entries, cov, 6)
+    got = evidence.find_holes(DAY, now, entries, cov, evidence.GAP_MIN)
     want = [((dt.datetime.combine(DAY, dt.time(*a), cov.TZ)).astimezone().strftime("%H:%M"),
              (dt.datetime.combine(DAY, dt.time(*b), cov.TZ)).astimezone().strftime("%H:%M"))
             for a, b in [((9, 0), (9, 30)), ((14, 0), (14, 25))]]
@@ -75,17 +75,30 @@ def test_rest_of_today_is_not_a_hole():
     assert got[1]["before"] == ""
 
 
-def test_five_minute_seam_is_not_a_hole():
+def test_threshold_is_the_one_janus_flashes_at():
+    """JM 2026-11-21: a 17:15-17:20 gap flashed in janus and /-1l skipped it."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "tg" / "janus.py").read_text()
+    assert int(re.search(r"^GAP_MIN = (\d+)", src, re.M).group(1)) == evidence.GAP_MIN
+
+
+def test_five_minute_seam_is_a_hole_and_a_shorter_one_is_not():
     cov = _Cov.load()
     now = dt.datetime.combine(DAY, dt.time(10, 0), cov.TZ)
-    entries = [_e(cov, 1, (0, 0), (9, 0)), _e(cov, 2, (9, 5), (10, 0))]
-    assert evidence.find_holes(DAY, now, entries, cov, 6) == []
+    five = [_e(cov, 1, (0, 0), (9, 0)), _e(cov, 2, (9, 5), (10, 0))]
+    got = evidence.find_holes(DAY, now, five, cov, evidence.GAP_MIN)
+    assert len(got) == 1 and got[0]["minutes"] == 5
+    # 4m59s: janus floors to 4 and stays quiet; rounding would have called it 5.
+    short = [_e(cov, 1, (0, 0), (9, 0)), _e(cov, 2, (9, 5), (10, 0))]
+    short[0]["end"] += dt.timedelta(seconds=1)
+    assert evidence.find_holes(DAY, now, short, cov, evidence.GAP_MIN) == []
 
 
 def test_empty_toggl_is_no_data_not_one_long_hole():
     cov = _Cov.load()
     now = dt.datetime.combine(DAY, dt.time(10, 0), cov.TZ)
-    assert evidence.find_holes(DAY, now, [], cov, 6) is None
+    assert evidence.find_holes(DAY, now, [], cov, evidence.GAP_MIN) is None
 
 
 def test_placeholder_is_a_hole_and_carries_its_id():
@@ -93,5 +106,5 @@ def test_placeholder_is_a_hole_and_carries_its_id():
     now = dt.datetime.combine(DAY, dt.time(10, 0), cov.TZ)
     entries = [_e(cov, 1, (0, 0), (9, 0)), _e(cov, 7, (9, 0), (9, 40), "generic placeholder"),
                _e(cov, 2, (9, 40), (10, 0))]
-    got = evidence.find_holes(DAY, now, entries, cov, 6)
+    got = evidence.find_holes(DAY, now, entries, cov, evidence.GAP_MIN)
     assert len(got) == 1 and got[0]["placeholders"] == [7] and got[0]["minutes"] == 40

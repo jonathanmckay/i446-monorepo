@@ -11,7 +11,7 @@ he writes time entries, and log it. Do not show a draft and wait: the ask is
 the approval, and an entry is one `toggl_delete` from gone.
 
 ```
-/auton156                         # every hole over 5 min today, up to now
+/auton156                         # every hole of 5+ min today, up to now
 /auton156 0612-0631 0633-0638     # just these ranges
 /auton156 yesterday 2100-2130     # another day
 ```
@@ -20,7 +20,7 @@ the approval, and an entry is one `toggl_delete` from gone.
 
 1. **find_ranges.** Run `date`. Named ranges: read the day with `toggl_date`
    (or `toggl_today`) and clip each to the free time. No ranges: the script
-   finds the holes itself (over 5m, midnight to now, the `/0t` gap finder):
+   finds the holes itself (5m or more, the same threshold janus flashes at; midnight to now):
    ```bash
    python3 ~/i446-monorepo/tools/auton156/evidence.py [--date YYYY-MM-DD]             # holes + evidence
    python3 ~/i446-monorepo/tools/auton156/evidence.py 0612-0631 0633-0638 [--date ..]  # named ranges

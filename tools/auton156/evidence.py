@@ -4,8 +4,8 @@
   evidence.py 0612-0631 0633-0638 [--date YYYY-MM-DD]
   evidence.py [--date YYYY-MM-DD]      # no ranges: the day's holes, up to now
 
-With no ranges it finds the holes itself with /0t's gap finder (over 5m,
-placeholders count as holes) and prints a `hole` line for each before the
+With no ranges it finds the holes itself with /0t's gap finder, at janus's
+flash threshold (5 whole minutes or more; placeholders count as holes) and prints a `hole` line for each before the
 events. One line per event, sorted: neon ledger writes, Todoist cards closed through
 did-fast, and prompts typed into Claude sessions on this machine. Toggl and
 Todoist activity come from their MCP tools, see the skill.
@@ -22,6 +22,13 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# A hole is whatever janus flashes as "empty": GAP_MIN in tools/tg/janus.py,
+# on whole minutes (seconds // 60 >= GAP_MIN). JM 2026-11-21: "I want your
+# threshold to match Janus's for when it flashes" (17:15-17:20 flashed there
+# and was skipped here under /0t's rounded "over 5m"). test_evidence.py
+# asserts the two stay equal.
+GAP_MIN = 5
 
 LEDGER = Path.home() / "vault/g245/neon-ledger"
 COMPLETED = Path.home() / ".local/state/jm/completed-today.json"
@@ -134,7 +141,7 @@ def find_holes(day: dt.date, now: dt.datetime, entries: list, cov, min_gap: int)
     out = []
     for g in cov.day_gaps(day, real, 0):
         lo, hi = g["start"], min(g["end"], until)
-        minutes = round((hi - lo).total_seconds() / 60)
+        minutes = int((hi - lo).total_seconds() // 60)  # floored, as janus does
         if minutes < min_gap:
             continue
         out.append({"lo": _naive(lo), "hi": _naive(hi), "minutes": minutes,
@@ -154,7 +161,7 @@ def toggl_holes(day: dt.date):
     spec.loader.exec_module(tc)
     cov = tc.load_coverage(daytime.active_zone())
     os.environ["TOGGL_LIVE"] = "1"      # the nightly store would hide entries made today
-    return find_holes(day, dt.datetime.now(cov.TZ), cov.fetch_entries(day, day), cov, tc.MIN_GAP_MIN)
+    return find_holes(day, dt.datetime.now(cov.TZ), cov.fetch_entries(day, day), cov, GAP_MIN)
 
 
 def main() -> int:
