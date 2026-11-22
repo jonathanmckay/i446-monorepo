@@ -56,6 +56,12 @@ context starting with `[claim hook]`:
   `/d <task>`. The claim also sets the tab title: initial on the cmux tab,
   short name on the tmux title, full name in the statusline
   (`tools/cs/title_tiers.py`).
+- `😈 re-claimed for this follow-up: <task> ...` (2026-11-21) → this session had
+  marked that task ✅ and JM's next ordinary prompt took it back on its own
+  (`agent_claims.py regrab`; only while the task is still open and still this
+  session's ✅). Do the follow-up, then run `agent_claims.py done` again, also
+  when the prompt needed no work on that task, so the card returns to ✅. If the
+  prompt is about something else, `/d off` (restores ✅) or `/d <task>`.
 - `released ...` → done; just confirm.
 - `ambiguous ... Candidates: <id>: <task>; ...` → show them numbered, ask which,
   then run `python3 ~/i446-monorepo/tools/did/agent_claims.py claim <id>`.

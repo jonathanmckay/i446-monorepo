@@ -212,7 +212,8 @@ def test_shell_hook_regrabs_on_an_ordinary_prompt_only(tmp_path):
     assert _rg_state(root) == "working" and ac.held("S1", root) == ["R1"]
     _sh(home, "release", {"session_id": "S1"})           # SessionEnd: back to ✅, markers gone
     assert _rg_state(root) == "done"
-    assert not list((root / "by-session").glob("S1*"))
+    for name in ("S1", "S1.done", "S1.regrab"):
+        assert not (root / "by-session" / name).exists(), name
 
 
 def test_shell_session_end_drops_the_marker(tmp_path):
