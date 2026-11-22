@@ -15,6 +15,11 @@ Checks (v1, 2026-09-27):
   syncthing      device connectivity, folder state, remote completion, errors
   git-autopush   ~/vault and ~/i446-monorepo: stuck rebase, stale commit,
                  unpushed commits, autopush log warnings
+  github-contrib what GitHub holds and credits for both repos: pushed branch
+                 fresh, commits attributed to the account, nothing stranded
+                 off the default branch, the week's commits counted as
+                 contributions (added 2026-11-22: 4,238 wip snapshots had
+                 counted for nothing since main last moved on 09-24)
   skills-backup  ~/.claude/skills (in the monorepo since 10-17) last-commit freshness
   onedrive-neon  Neon workbook mtime (and Ix↔Straylight parity when run off Ix)
   time-machine   destination configured + latest backup age
@@ -51,12 +56,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import importlib.util
 import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -577,6 +584,126 @@ def check_git_autopush(now: dt.datetime) -> Finding:
     return Finding("git-autopush", status, "healthy" if status == "ok" else "see detail", detail, review=review)
 
 
+# GitHub side of the pushes (JM 2026-11-22: "make sure that pushes are making
+# it to github and counting as my code commits"). git-autopush above proves the
+# local push ran; this asks GitHub what it holds and what it credits. GitHub
+# counts a commit only once it is on the repo's DEFAULT branch and its author
+# email is linked to the account, so 4,238 wip snapshots sat uncounted for two
+# months (main last moved 09-24) with every local check green.
+# (owner/name, branch autopush pushes to)
+GH_REPOS = [("jonathanmckay/i446-monorepo", "wip"), ("jonathanmckay/vault", "main")]
+
+
+def _gh_bin() -> str:
+    # cron on Ix has no Homebrew on PATH, so `gh` alone does not resolve there.
+    return shutil.which("gh") or next((c for c in ("/opt/homebrew/bin/gh", "/usr/local/bin/gh") if Path(c).exists()), "")
+
+
+def _gh_graphql(query: str) -> dict:
+    """Run one GraphQL query with gh, here or (no local gh) on Ix. {} on failure,
+    with the reason under "_error"."""
+    gh = _gh_bin()
+    if gh:
+        out = sh([gh, "api", "graphql", "-f", f"query={query}"], timeout=60)
+    else:
+        b64 = base64.b64encode(query.encode()).decode()   # survives ssh's one shell string
+        out = ix(f"echo {b64} | base64 -d | /opt/homebrew/bin/gh api graphql -F query=@-", timeout=60)
+    try:
+        j = json.loads(out[out.index("{"):])
+    except ValueError:
+        return {"_error": out.strip()[:160] or "no output"}
+    if j.get("errors") or not j.get("data"):
+        return {"_error": str((j.get("errors") or [{}])[0].get("message", "no data"))[:160]}
+    return j["data"]
+
+
+def _gh_query(since: dt.datetime, viewer_id: str) -> str:
+    iso = since.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    parts = []
+    for i, (full, push) in enumerate(GH_REPOS):
+        owner, name = full.split("/")
+        parts.append(
+            f'r{i}: repository(owner:"{owner}",name:"{name}"){{nameWithOwner '
+            f'defaultBranchRef{{name compare(headRef:"{push}"){{aheadBy}} target{{... on Commit{{committedDate '
+            f'mine: history(since:"{iso}",author:{{id:"{viewer_id}"}}){{totalCount}}}}}}}} '
+            f'push: ref(qualifiedName:"refs/heads/{push}"){{target{{... on Commit{{'
+            f'history(first:5){{nodes{{committedDate author{{user{{login}}}}}}}}}}}}}}}}')
+    return ('{viewer{login contributionsCollection(from:"%s"){commitContributionsByRepository(maxRepositories:100)'
+            '{repository{nameWithOwner} contributions{totalCount}}}} %s}' % (iso, " ".join(parts)))
+
+
+def _gh_age_days(iso: str | None, now: dt.datetime) -> float:
+    try:
+        return (now.timestamp() - dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()) / 86400
+    except Exception:  # noqa: BLE001
+        return 9999.0
+
+
+def github_contrib_finding(data: dict, now: dt.datetime, dismissed: list | None = None) -> Finding:
+    """Turn the _gh_query() answer into a Finding (pure; tested). Per repo:
+      stale     GitHub's copy of the pushed branch is over 24h old
+      unlinked  none of its last 5 commits is attributed to the account
+      unreleased the pushed branch is ahead of the default branch, which has
+                not moved in a week (those commits count for nothing yet)
+      uncounted my commits reached the default branch this week but GitHub
+                credited none of them
+    `dismissed` = [{"repo", "rule"}] from 1-i446-dismissed.json "github-contrib":
+    the rule still prints in the report but no longer makes a review item."""
+    if data.get("_error") or not data.get("viewer"):
+        return Finding("github-contrib", "warn", f"could not query GitHub: {data.get('_error', 'no viewer')}", review=True)
+    acks = {(d.get("repo"), d.get("rule")) for d in (dismissed or [])}
+    login = data["viewer"]["login"]
+    counted = {c["repository"]["nameWithOwner"]: c["contributions"]["totalCount"]
+               for c in data["viewer"]["contributionsCollection"]["commitContributionsByRepository"]}
+    detail, status, review, heads = [], "ok", False, []
+
+    def flag(full: str, rule: str, level: str, msg: str) -> None:
+        nonlocal status, review
+        if (full, rule) in acks:
+            detail.append(f"{msg} (dismissed)"); return
+        detail.append(msg); review = True
+        status = max(status, level, key=["ok", "warn", "fail"].index)
+
+    for i, (full, push) in enumerate(GH_REPOS):
+        r, short = data.get(f"r{i}"), full.split("/")[1]
+        if not r or not r.get("defaultBranchRef"):
+            flag(full, "missing", "warn", f"{short}: not found on GitHub (renamed, or the token lost access)"); continue
+        dflt = r["defaultBranchRef"]
+        nodes = (((r.get("push") or {}).get("target") or {}).get("history") or {}).get("nodes") or []
+        got = counted.get(full, 0)
+        mine = dflt["target"]["mine"]["totalCount"]
+        ahead = (dflt.get("compare") or {}).get("aheadBy", 0) if push != dflt["name"] else 0
+        d_age = _gh_age_days(dflt["target"].get("committedDate"), now)
+        p_age = _gh_age_days(nodes[0]["committedDate"], now) if nodes else 9999.0
+        heads.append(f"{short} {got} counted")
+        detail.append(f"{short}: GitHub has {push} as of {p_age * 24:.1f}h ago; default branch {dflt['name']} "
+                      f"last moved {d_age:.0f}d ago; 7 days: {mine} of my commits on {dflt['name']}, {got} counted")
+        if not nodes:
+            flag(full, "stale", "fail", f"{short}: branch {push} does not exist on GitHub")
+        elif p_age > 1:
+            flag(full, "stale", "warn", f"{short}: nothing has reached {push} on GitHub in {p_age:.1f} days")
+        if nodes and not any(((n.get("author") or {}).get("user") or {}).get("login") == login for n in nodes):
+            flag(full, "unlinked", "fail", f"{short}: the last {len(nodes)} commits on {push} are not attributed to "
+                 f"{login} (author email not on the GitHub account), so none can count")
+        if ahead and d_age > 7:
+            flag(full, "unreleased", "warn", f"{short}: {ahead} commits sit on {push}, which GitHub does not count; "
+                 f"{dflt['name']} has not moved in {d_age:.0f} days (release, or make {push} the default branch)")
+        if mine >= 5 and got == 0:
+            flag(full, "uncounted", "warn", f"{short}: {mine} of my commits reached {dflt['name']} in 7 days and "
+                 f"GitHub credited 0 (look at the repo on github.com/{login}; private repos need "
+                 "'Include private contributions on my profile')")
+    return Finding("github-contrib", status, "; ".join(heads) + " in 7 days" if status == "ok" else
+                   f"{'; '.join(heads)} in 7 days; see detail", detail, review=review)
+
+
+def check_github_contrib(now: dt.datetime) -> Finding:
+    who = _gh_graphql("{viewer{id}}")
+    if who.get("_error"):
+        return github_contrib_finding(who, now)
+    data = _gh_graphql(_gh_query(now - dt.timedelta(days=7), who["viewer"]["id"]))
+    return github_contrib_finding(data, now, _dismissed().get("github-contrib", []))
+
+
 def check_skills_backup(now: dt.datetime) -> Finding:
     ts = ix("cd ~/.claude/skills && git log -1 --format=%ct -- .").strip().splitlines()[-1] if True else ""
     try:
@@ -1081,7 +1208,7 @@ def check_duplicates() -> Finding:
 # ---------------------------------------------------------------------------
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
-    for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
+    for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now), lambda: check_github_contrib(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
                check_ix_cron, check_launchd, lambda: check_ix_memory(now), lambda: check_lease_signer(now), check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
                check_duplicates):
@@ -1105,6 +1232,7 @@ CHECK_WHAT = {
     "toggl-store": "i156/toggl.sqlite: last completed sync under 36h old, entries on each of the last 7 days, no short sync windows, and the dashboard export caught up.",
     "syncthing": "Syncthing on this host: every device connected, every folder idle and fully synced with no errors. Rescans out-of-sync folders.",
     "git-autopush": "~/vault and ~/i446-monorepo on Ix: no stuck rebase, a commit within 24h, nothing unpushed, no warnings in the autopush logs.",
+    "github-contrib": "What GitHub holds and credits for ~/i446-monorepo and ~/vault: the pushed branch under 24h old, commits attributed to the account, nothing stranded off the default branch for over a week, and the week's default-branch commits showing as contributions.",
     "skills-backup": "~/.claude/skills on Ix has a git auto-commit within 24h (cron runs every 10 min).",
     "perm-sync": "Both Ix and Straylight ran the hourly Claude permission-allowlist sync within 48h (state files in i446-monorepo/scripts/.perm-sync).",
     "onedrive-neon": "The Neon workbook in OneDrive was modified within 3 days, and (run off Ix) the Ix and local copies are within 24h of each other.",
@@ -1123,7 +1251,7 @@ CHECK_WHAT = {
 def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
-             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, "
+             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, GitHub contributions, "
              "skills backup, perm sync, OneDrive Neon, Time Machine, Ix cron, launchd agents, Ix memory, lease signer, skill claims, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed | What it checks |", "|---|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the

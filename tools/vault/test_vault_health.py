@@ -346,3 +346,68 @@ def test_launchd_check_is_registered_and_described():
     vh = _load()
     assert "launchd" in vh.CHECK_WHAT
     assert "check_launchd" in (HERE / "vault_health.py").read_text().split("def run_all")[1].split("def ")[0]
+
+
+def _gh_data(counted=None, mono=None, vault=None):
+    """A _gh_query() answer as of 2026-11-22 16:00Z; healthy unless overridden."""
+    def repo(full, default, mine, ahead, head="2026-11-22T15:50:00Z", dhead="2026-11-22T15:50:00Z", login="jonathanmckay"):
+        return {"nameWithOwner": full, "defaultBranchRef": {"name": default, "compare": {"aheadBy": ahead}, "target": {
+                    "committedDate": dhead, "mine": {"totalCount": mine}}},
+                "push": {"target": {"history": {"nodes": [{"committedDate": head, "author": {"user": {"login": login}}}]}}}}
+    counted = {"jonathanmckay/i446-monorepo": 40, "jonathanmckay/vault": 900} if counted is None else counted
+    return {"viewer": {"login": "jonathanmckay", "contributionsCollection": {"commitContributionsByRepository": [
+                {"repository": {"nameWithOwner": k}, "contributions": {"totalCount": v}} for k, v in counted.items()]}},
+            "r0": repo("jonathanmckay/i446-monorepo", "main", **{"mine": 40, "ahead": 12, **(mono or {})}),
+            "r1": repo("jonathanmckay/vault", "main", **{"mine": 900, "ahead": 0, **(vault or {})})}
+
+
+_GH_NOW = dt.datetime(2026, 11, 22, 16, 0, tzinfo=dt.timezone.utc)
+
+
+def test_github_contrib_ok_when_pushes_land_and_count():
+    vh = _load()
+    f = vh.github_contrib_finding(_gh_data(), _GH_NOW)
+    assert f.status == "ok" and not f.review
+    assert f.summary == "i446-monorepo 40 counted; vault 900 counted in 7 days"
+
+
+def test_github_contrib_flags_wip_stranded_off_the_default_branch():
+    # 2026-11-22: main last moved 09-24, 4,238 wip snapshots counted for nothing.
+    vh = _load()
+    data = _gh_data(counted={"jonathanmckay/vault": 900}, mono={"mine": 0, "ahead": 4238, "dhead": "2026-09-24T20:00:00Z"})
+    f = vh.github_contrib_finding(data, _GH_NOW)
+    assert f.status == "warn" and f.review
+    assert any("4238 commits sit on wip" in d and "59 days" in d for d in f.detail)
+    assert not any("vault:" in d and "credited 0" in d for d in f.detail)
+
+
+def test_github_contrib_flags_uncounted_stale_and_unlinked():
+    vh = _load()
+    f = vh.github_contrib_finding(_gh_data(counted={"jonathanmckay/i446-monorepo": 40}), _GH_NOW)
+    assert f.status == "warn" and any("vault: 900 of my commits reached main" in d and "credited 0" in d for d in f.detail)
+    f = vh.github_contrib_finding(_gh_data(vault={"head": "2026-11-20T10:00:00Z"}), _GH_NOW)
+    assert f.status == "warn" and any("nothing has reached main on GitHub in 2.2 days" in d for d in f.detail)
+    f = vh.github_contrib_finding(_gh_data(mono={"login": "someone-else"}), _GH_NOW)
+    assert f.status == "fail" and any("not attributed to jonathanmckay" in d for d in f.detail)
+
+
+def test_github_contrib_dismissal_keeps_the_line_but_drops_the_review():
+    vh = _load()
+    data = _gh_data(counted={"jonathanmckay/i446-monorepo": 40})
+    f = vh.github_contrib_finding(data, _GH_NOW, [{"repo": "jonathanmckay/vault", "rule": "uncounted"}])
+    assert f.status == "ok" and not f.review
+    assert any("credited 0" in d and d.endswith("(dismissed)") for d in f.detail)
+
+
+def test_github_contrib_never_ok_when_github_is_unreadable():
+    vh = _load()
+    f = vh.github_contrib_finding({"_error": "HTTP 401: Bad credentials"}, _GH_NOW)
+    assert f.status == "warn" and f.review and "could not query GitHub" in f.summary
+
+
+def test_github_contrib_check_is_registered_and_described():
+    vh = _load()
+    assert "github-contrib" in vh.CHECK_WHAT
+    assert "check_github_contrib" in (HERE / "vault_health.py").read_text().split("def run_all")[1].split("def ")[0]
+    q = vh._gh_query(_GH_NOW, "U_x")
+    assert q.count("{") == q.count("}") and 'headRef:"wip"' in q and 'since:"2026-11-22T16:00:00Z"' in q
