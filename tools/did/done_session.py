@@ -228,13 +228,30 @@ def defer_days(tid: str, days: int, run=subprocess.run) -> tuple[bool, str]:
 FIN_CLOSE_DIR = STATE_DIR / "fin-close"
 
 
+SESSION_HOSTS_DIR = STATE_DIR / "session-hosts"
+
+
+def tab_origin(session: str, env=os.environ) -> str:
+    """Host this thread's tab is driven from, lowercased; "" when unknown. claude-tracked hands
+    it to claude as CC_TAB_ORIGIN (2026-11-22: it pops CC_ORIGIN before launching claude, so the
+    CC_ORIGIN this used to read was never set and /fin never closed a tab). session-hosts/<id>,
+    written by the same launcher, covers sessions started before that change."""
+    origin = env.get("CC_TAB_ORIGIN") or env.get("CC_ORIGIN") or ""
+    if not origin and session:
+        try:
+            origin = (SESSION_HOSTS_DIR / session).read_text()
+        except OSError:
+            origin = ""
+    return origin.strip().lower()
+
+
 def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     """/fin closes the cmux tab (2026-11-14): when this thread's tab is driven from another
-    host (claude-tracked exports CC_ORIGIN into the tmux session), leave fin-close/<tmux
+    host (tab_origin), leave fin-close/<tmux
     session> = <session id>. The Ix launcher reads it when claude exits (JM's `/exit`) and
     lets the tmux session end; the Straylight launcher then closes the tab or starts a fresh
     thread in it (see claude-tracked, after_ix_exit). Local/phone sessions: nothing."""
-    origin = (env.get("CC_ORIGIN") or "").lower()
+    origin = tab_origin(session, env)
     if not origin or origin == socket.gethostname().split(".")[0].lower():
         return False
     pane = env.get("TMUX_PANE")

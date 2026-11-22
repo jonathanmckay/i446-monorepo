@@ -58,38 +58,53 @@ The reverse also holds (2026-11-14): closing a claimed task anywhere else
 session is idle (agent_claims.fin_holders + the Stop hook). Only this
 session's own /fin is exempt, which is why step 2 exists.
 
-## 1b. Final report (2026-11-14)
+## 1b. Final report (2026-11-14, layout 2026-11-22)
 
 Each task carries a `report` object (tools/did/fin_report.py). Render one block
-per task, exactly this shape:
+per task inside a code fence, exactly this shape (JM, 2026-11-22: the old
+one-line-per-field block was hard to parse; points first, then turns, then
+cost):
 
 ```
 📋 <task name, annotations stripped>
-  Done:   • <what was accomplished, 2–4 bullets>
-  You:    48m on the timer across 2 entries
-  Model:  1h52m active, 23 turns, 103 calls, 92k new in / 38k out (context avg 257k, 15.9M re-read), ≈ $14.20 API-equivalent
-  Points: 60 分
+   60 分 · 23 turns · ≈ $14.20
+
+   Done
+   • <what was accomplished, 2–4 bullets>
+   • <...>
+
+   You     48m on the timer, 2 entries
+   Model   1h52m active · 103 calls
+   Tokens  92k new in · 38k out
+   Thread  context avg 257k · 15.9M re-read
 ```
 
+- **Headline** (line 2) is the three numbers JM reads first, in this order,
+  joined by ` · `: `report.points` as `N 分` (never `$`; on a defer/snooze
+  `0 分 (deferred)`), `report.model.turns` (his prompts), and
+  `report.model.cost_usd` as `≈ $N.NN`. The cost is the API-equivalent list
+  price (JM is on a Max plan: what it would have cost, not a charge); do not
+  spell that out in the line. `cost_usd: null` → `cost n/a`.
 - **Done** is yours to write: what the thread actually produced, from this
   conversation plus `report.notes` (the 😈 turn summaries posted to the task,
-  which cover turns that have since left your context). Concrete outcomes and
-  where they live (commits, files, cards), not activity. 2–4 bullets, each
-  one line. A deferred/snoozed task says what is done so far and what remains.
+  which cover turns that have since left your context; they are machine
+  summaries, so trust the conversation where the two disagree). Concrete
+  outcomes and where they live (commits, files, cards), not activity. 2–4
+  bullets, each one line, no trailing punctuation needed. A deferred/snoozed
+  task says what is done so far and what remains.
 - **You** is `report.jm.minutes` / `report.jm.entries` (Toggl time on this task
   since the claim). `0m` → `no timer on this task`.
 - **Model** is `report.model`, counted from this task's claim to the session's
   next claim (2026-11-15: windows no longer overlap, so several tasks' reports
-  add up to the session): `active_minutes`, `turns` (your prompts), `messages`
-  as "calls" (append `+ N subagent` when `subagent_calls` > 0), `new_in` as
-  "new in" (how much the context grew: prompts, tool results and files read,
-  the work figure), `tokens.output` as "out", then in brackets `context_avg`
-  and `tokens.cache_read` as "re-read" (the context re-sent on every call: it
-  measures thread length, not work). k/M, one decimal. `cost_usd` is the
-  API-equivalent list price of all of it (JM is on a Max plan: this is what it
-  would have cost, not a charge). `cost_usd: null` → `cost n/a (unpriced model)`.
-  Unclaimed work between two claims is counted on the earlier task.
-- **Points** is `report.points` (0 on a defer/snooze: `0 分 (deferred)`).
+  add up to the session): `active_minutes`, then `messages` as "calls" (append
+  `+ N subagent` when `subagent_calls` > 0). Unclaimed work between two claims
+  is counted on the earlier task.
+- **Tokens** is the work figure: `new_in` as "new in" (how much the context
+  grew: prompts, tool results and files read) and `tokens.output` as "out".
+- **Thread** is thread length, not work: `context_avg` and `tokens.cache_read`
+  as "re-read" (the context re-sent on every call).
+- Numbers: k/M, at most one decimal, drop a trailing `.0`. Labels are padded
+  to one column so the values line up; blank lines exactly as shown.
 - A `report` with `error`, or missing → print the block with `n/a` fields; never
   skip the report or stop on it.
 

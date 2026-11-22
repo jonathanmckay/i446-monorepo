@@ -177,6 +177,8 @@ def test_stop_timer_by_id_beats_name(monkeypatch):
 def test_mark_tab_close_only_for_a_remote_driven_tab(tmp_path, monkeypatch):
     import subprocess
     monkeypatch.setattr(ds, "FIN_CLOSE_DIR", tmp_path)
+    hosts = tmp_path / "hosts"; hosts.mkdir()
+    monkeypatch.setattr(ds, "SESSION_HOSTS_DIR", hosts)
     monkeypatch.setattr(ds.socket, "gethostname", lambda: "ix.local")
     run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "cc-fix-bug\n", "")
     env = {"CC_ORIGIN": "straylight", "TMUX_PANE": "%1", "TMUX": "/tmp/x"}
@@ -185,3 +187,14 @@ def test_mark_tab_close_only_for_a_remote_driven_tab(tmp_path, monkeypatch):
     assert ds.mark_tab_close("S1", env={"TMUX_PANE": "%1", "TMUX": "/tmp/x"}, run=run) is False   # local session
     assert ds.mark_tab_close("S1", env={**env, "CC_ORIGIN": "ix"}, run=run) is False             # driven from this host
     assert ds.mark_tab_close("S1", env={"CC_ORIGIN": "straylight"}, run=run) is False            # not in tmux
+    # 2026-11-22: claude-tracked pops CC_ORIGIN before claude starts, so the live signal is
+    # CC_TAB_ORIGIN; a session launched before that change is found through session-hosts/<id>.
+    tmux = {"TMUX_PANE": "%1", "TMUX": "/tmp/x"}
+    (tmp_path / "cc-fix-bug").unlink()
+    assert ds.mark_tab_close("S2", env={**tmux, "CC_TAB_ORIGIN": "Straylight-Refit"}, run=run) is True
+    assert (tmp_path / "cc-fix-bug").read_text().strip() == "S2"
+    assert ds.mark_tab_close("S2", env={**tmux, "CC_TAB_ORIGIN": "ix"}, run=run) is False          # nested / local cc
+    (hosts / "S3").write_text("straylight-refit")
+    assert ds.mark_tab_close("S3", env=tmux, run=run) is True                                       # host-file fallback
+    (hosts / "S4").write_text("ix")
+    assert ds.mark_tab_close("S4", env=tmux, run=run) is False
