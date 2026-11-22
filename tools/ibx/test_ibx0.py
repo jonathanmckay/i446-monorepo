@@ -617,7 +617,7 @@ def test_publish_snapshot_counts_live_queue_once_per_cycle(tmp_path, monkeypatch
     ns["_snap_dirty"].set()
     snap = ns["_publish_snapshot"](pending)
     assert snap["habits"]["ibx m5x2"] == {"count": 1, "ok": True}
-    assert snap["habits"]["ibx s897"] == {"count": 0, "ok": True}
+    assert snap["habits"]["ibx s897"] == {"count": 0, "ok": True, "badge_count": 0, "badge_ok": True}
     assert list((tmp_path / "z_ibx").glob("inbox-counts-*.json"))
     # ibx s897 was proven empty -> closed; ibx m5x2 still pending -> not
     runs = [c for c in calls if c[0] == "run"]

@@ -40,6 +40,15 @@ HABIT_CHANNELS: dict[str, tuple[str, ...]] = {
     "teams": ("teams",),
 }
 
+# Channels the dtd badge counts, where that is narrower than the habit's full
+# set (JM 2026-11-21: "count by ibx s897 based on the number of emails in my
+# inbox"). ix's launchd counter cannot read chat.db (no Full Disk Access), so
+# requiring iMessage blanked the s897 badge there for good. Auto-close is NOT
+# narrowed: it still needs every channel in HABIT_CHANNELS pinged and empty.
+BADGE_CHANNELS: dict[str, tuple[str, ...]] = {
+    "ibx s897": ("gmail:gmail",),
+}
+
 ALL_CHANNELS: frozenset[str] = frozenset(c for cs in HABIT_CHANNELS.values() for c in cs)
 
 Z_IBX = Path.home() / "vault" / "z_ibx"
@@ -85,6 +94,11 @@ def build_snapshot(items, channel_ok: dict, host: str | None = None, now: float 
     channels have an entry; ``ok`` requires every one to be True. Counts are
     reported even for a failed channel (the items that did arrive are still
     pending), but ``ok`` False stops dtd from badging and ibx0 from closing.
+
+    A habit listed in BADGE_CHANNELS is written as soon as its badge channels
+    reported, and also carries ``badge_count`` / ``badge_ok`` over those
+    channels alone; ``count`` / ``ok`` keep covering every channel (a channel
+    that never reported counts as not ok), so zero_habits is unchanged.
     """
     per_channel: dict[str, int] = {}
     for it in items:
@@ -93,12 +107,17 @@ def build_snapshot(items, channel_ok: dict, host: str | None = None, now: float 
             per_channel[ch] = per_channel.get(ch, 0) + 1
     habits: dict[str, dict] = {}
     for habit, chans in HABIT_CHANNELS.items():
-        if any(c not in channel_ok for c in chans):
+        badge_chans = BADGE_CHANNELS.get(habit, chans)
+        if any(c not in channel_ok for c in badge_chans):
             continue
-        habits[habit] = {
+        rec = {
             "count": sum(per_channel.get(c, 0) for c in chans),
             "ok": all(channel_ok.get(c) is True for c in chans),
         }
+        if badge_chans != chans:
+            rec["badge_count"] = sum(per_channel.get(c, 0) for c in badge_chans)
+            rec["badge_ok"] = all(channel_ok.get(c) is True for c in badge_chans)
+        habits[habit] = rec
     return {
         "ts": now if now is not None else time.time(),
         "host": host or host_slug(),
@@ -131,6 +150,11 @@ def read_badges(z_ibx: Path | None = None, now: float | None = None,
     fresh entry from ``prefer_host`` (dtd passes its own host) therefore wins
     outright, so the badge matches what opening ibx on this machine would
     show; otherwise the newest timestamp wins.
+
+    Display only (auto-close reads the raw snapshot): a record carrying
+    ``badge_count`` / ``badge_ok`` is returned with those AS ``count`` / ``ok``,
+    so every reader (card_badge here, terminal dtd's inline check) badges from
+    the narrowed channels without knowing about them.
     """
     now = time.time() if now is None else now
     out: dict[str, dict] = {}
@@ -154,7 +178,11 @@ def read_badges(z_ibx: Path | None = None, now: float | None = None,
             cur = out.get(key)
             mine, cur_mine = host == prefer_host, bool(cur) and cur["host"] == prefer_host
             if cur is None or (mine and not cur_mine) or (mine == cur_mine and ts > cur["ts"]):
-                out[key] = {"count": int(rec["count"]), "ok": bool(rec.get("ok")),
+                if "badge_ok" in rec and "badge_count" in rec:
+                    count, ok = rec["badge_count"], rec["badge_ok"]
+                else:
+                    count, ok = rec["count"], rec.get("ok")
+                out[key] = {"count": int(count), "ok": bool(ok),
                             "ts": ts, "host": host}
     return out
 

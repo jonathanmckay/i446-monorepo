@@ -46,8 +46,9 @@ def test_snapshot_counts_per_habit_and_requires_every_channel_ok():
     h = snap["habits"]
     assert h["ibx m5x2"] == {"count": 2, "ok": True}
     assert h["slack m5x2"] == {"count": 1, "ok": True}
-    # ibx s897 spans gmail:gmail + imsg; imsg failed -> count kept, ok False
-    assert h["ibx s897"] == {"count": 1, "ok": False}
+    # ibx s897 spans gmail:gmail + imsg; imsg failed -> count kept, ok False;
+    # its badge is email-only, so that half is ok
+    assert h["ibx s897"] == {"count": 1, "ok": False, "badge_count": 1, "badge_ok": True}
     # channels this host never fetched are absent, not zero
     for absent in ("ibx i9", "teams", "slack i9"):
         assert absent not in h
@@ -149,3 +150,37 @@ def test_card_badge_ritual_blank_on_failed_ping_or_no_slack():
     assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "slack i9": _b(0, ok=False)}) == ""
     assert ic.card_badge("-1ibx", {"ibx m5x2": _b(50)}) == ""
     assert ic.card_badge("-1ibx", {}) == ""
+
+
+# ── ibx s897 badge = personal Gmail only (2026-11-21) ───────────────────────
+# Bug: on ix the launchd counter cannot read chat.db, so imsg was always
+# False, "ibx s897" was ok:false and dtd never badged it even at inbox zero.
+
+def test_s897_badge_from_email_alone_when_imsg_unreadable(tmp_path):
+    snap = ic.build_snapshot([], {"gmail:gmail": True, "imsg": False}, host="ix-local", now=1000.0)
+    assert snap["habits"]["ibx s897"] == {"count": 0, "ok": False, "badge_count": 0, "badge_ok": True}
+    ic.write_snapshot(snap, tmp_path)
+    b = ic.read_badges(tmp_path, now=1010.0)
+    # terminal dtd reads rec['ok'] / rec['count'] inline; card_badge is web dtd
+    assert b["ibx s897"]["ok"] is True and b["ibx s897"]["count"] == 0
+    assert ic.card_badge("ibx - s897", b) == "\u27090"
+
+
+def test_s897_unreadable_imsg_never_autocloses():
+    snap = ic.build_snapshot([], {"gmail:gmail": True, "imsg": False}, host="h", now=1.0)
+    assert ic.zero_habits(snap) == []
+    # imsg source timed out entirely: still badged, still not closable
+    snap = ic.build_snapshot([], {"gmail:gmail": True}, host="h", now=1.0)
+    assert snap["habits"]["ibx s897"]["badge_ok"] is True
+    assert ic.zero_habits(snap) == []
+
+
+def test_s897_badge_ignores_imessages_and_blanks_on_gmail_failure(tmp_path):
+    items = [_email("gmail"), {"type": "imsg", "_data": {}}, {"type": "imsg", "_data": {}}]
+    snap = ic.build_snapshot(items, {"gmail:gmail": True, "imsg": True}, host="h", now=1000.0)
+    assert snap["habits"]["ibx s897"] == {"count": 3, "ok": True, "badge_count": 1, "badge_ok": True}
+    ic.write_snapshot(snap, tmp_path)
+    assert ic.card_badge("ibx s897", ic.read_badges(tmp_path, now=1001.0)) == "\u27091"
+    bad = ic.build_snapshot([], {"gmail:gmail": False, "imsg": True}, host="h", now=1000.0)
+    ic.write_snapshot(bad, tmp_path)
+    assert ic.card_badge("ibx s897", ic.read_badges(tmp_path, now=1001.0)) == ""
