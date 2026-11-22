@@ -46,6 +46,17 @@ if [[ "$1" == working && ( "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]
       || "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*\[[0-9]+\][[:space:]]*"' ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" hook 2>/dev/null
 fi
+# Re-grab (2026-11-21): this session marked a task ✅ (agent_claims.mark_done
+# left by-session/<sid>.done) and JM now sends an ordinary follow-up: the
+# thread takes the task back (agent_claims.regrab; python only on this path).
+# Ahead of auto-claim, which then sees the index and stays out of it.
+if [[ "$1" == working && -z "${DTD_NOTE_CHILD:-}" && -n "$sid" \
+      && ( -z "${CLAUDE_CODE_SESSION_ID:-}" || "$CLAUDE_CODE_SESSION_ID" == "$sid" ) \
+      && ! -f "$D/by-session/$sid" && -f "$D/by-session/$sid.done" \
+      && "$j" =~ '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*([^"[:space:]])' \
+      && "${match[1]}" != [/\<\[] ]]; then
+  print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" regrab 2>/dev/null
+fi
 # Auto-claim (2026-11-14): a session's FIRST ordinary prompt is matched to a dtd
 # task without /d (agent_claims.autoclaim: one Haiku call, match-only, never
 # creates). Interactive cc sessions only: CC_SESSION is set by claude-tracked, so
@@ -130,6 +141,13 @@ if [[ "$1" == idle && -n "$sid" && -z "$DTD_NOTE_CHILD" \
       && ( -s "$D/by-session/$sid" || -f "$D/by-session/$sid.note" ) ]]; then
   print -r -- "$j" | python3 "$HOME/i446-monorepo/tools/did/agent_claims.py" note >/dev/null 2>&1 &!
 fi
+# SessionEnd: a re-grabbed task (see Re-grab above) returns to ✅, and the
+# markers go so a resumed session starts clean.
+regrabbed=()
+if [[ "$1" == release && -n "$sid" ]]; then
+  [[ -f "$D/by-session/$sid.regrab" ]] && regrabbed=(${(f)"$(<"$D/by-session/$sid.regrab")"})
+  rm -f "$D/by-session/$sid.done" "$D/by-session/$sid.regrab" 2>/dev/null
+fi
 [[ -n "$sid" && -f "$D/by-session/$sid" ]] || exit 0
 # One id per line (2026-10-22: `claim --also` lets a session hold several
 # tasks it fanned out to subagents); every held task follows the session.
@@ -169,7 +187,9 @@ case "$1" in
     # (2026-10-21): records stay, state 'released' (agent_claims.release does
     # the same; load() prunes after RELEASED_TTL). Only the session index goes.
     for tid in "${tids[@]}"; do
-      print -r -- "$state $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
+      s="$state"
+      [[ "$1" == release && -n "${regrabbed[(r)$tid]}" ]] && s=done
+      print -r -- "$s $EPOCHSECONDS" > "$D/$tid.state.tmp" 2>/dev/null \
         && mv -f "$D/$tid.state.tmp" "$D/$tid.state" 2>/dev/null
     done
     [[ "$1" == release ]] && rm -f "$D/by-session/$sid" "$A" 2>/dev/null ;;

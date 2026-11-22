@@ -28,6 +28,8 @@ Usage:
   agent_claims.py claim --also <query>   claim another task WITHOUT releasing this session's others
   agent_claims.py done [<query>]  the agent thinks it's finished: ✅ on the left in dtd
                                   (default: every task this session holds), until JM completes it
+  agent_claims.py regrab          UserPromptSubmit: a follow-up in the thread that ✅'d a task
+                                  claims it back (see "regrab" below)
   agent_claims.py release         hand this session's task back (stays at the top of dtd, 🕐)
   agent_claims.py list            JSON of claims (+ derived working flag)
   agent_claims.py note            Stop hook: post a two-sentence 😈 summary of the turn
@@ -105,11 +107,16 @@ def release(session: str, root: Path = CLAIMS_DIR, now: float | None = None) -> 
     stays as 'released' so dtd keeps the row at the top (see RELEASED_TTL).
     Returns the first id released."""
     ids = held(session, root)
+    # A task the session only holds because a follow-up re-grabbed it (regrab)
+    # goes back to ✅, not 🕐: the agent had already called it finished. Both
+    # markers go either way, so `/d off` and `/d <other>` end the re-grabbing.
+    back = set(_marker_ids(session, "regrab", root))
+    _drop_markers(session, root)
     if not ids:
         return None
     for tid in ids:
         if (root / f"{tid}.json").exists():
-            set_state(tid, "released", now, root)
+            set_state(tid, "done" if tid in back else "released", now, root)
         else:
             try:
                 (root / f"{tid}.state").unlink()
@@ -133,6 +140,15 @@ def mark_done(session: str, ids: list[str] | None = None, root: Path = CLAIMS_DI
         if (root / f"{tid}.json").exists():
             set_state(tid, "done", now, root)
     _set_held(session, [i for i in mine if i not in targets], root)
+    if targets:
+        # What a follow-up prompt in this thread grabs back (regrab). Only the
+        # latest ✅; a repeat bare `done` with nothing held must not wipe it.
+        _write(root / "by-session" / f"{session}.done", "".join(i + "\n" for i in dict.fromkeys(targets)))
+        left = [i for i in _marker_ids(session, "regrab", root) if i not in targets]
+        if left:
+            _write(root / "by-session" / f"{session}.regrab", "".join(i + "\n" for i in left))
+        else:
+            _unlink(root / "by-session" / f"{session}.regrab")
     # The turn that finishes a task is the one most worth a note, but the id
     # just left the session index; queue it so this turn's Stop still notes it.
     pend = root / "by-session" / f"{session}.note"
@@ -142,6 +158,77 @@ def mark_done(session: str, ids: list[str] | None = None, root: Path = CLAIMS_DI
         old = []
     _write(pend, "".join(i + "\n" for i in dict.fromkeys(old + list(targets))))
     return targets
+
+
+# --- regrab (2026-11-21) ---------------------------------------------------
+# "Is there any good way to have a thread automatically grab back a task when
+# I ask for followups?" `done` takes the task out of the session index on
+# purpose, so JM's next message in the thread used to leave the card at ✅
+# with nobody on it. Now mark_done leaves by-session/<sid>.done, and the next
+# ORDINARY prompt in that session (agent-claim-hook.sh; not a slash command or
+# a bare [N]) claims those tasks back, provided each is still this session's ✅
+# and still open in dtd's cache. by-session/<sid>.regrab remembers which ones,
+# so releasing them (/d off, /d <other task>, SessionEnd) restores ✅ instead
+# of 🕐. The markers go on any claim or release: one /d and the thread has
+# moved on.
+
+def _unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _marker_ids(session: str, kind: str, root: Path = CLAIMS_DIR) -> list[str]:
+    try:
+        return (root / "by-session" / f"{session}.{kind}").read_text().split()
+    except OSError:
+        return []
+
+
+def _drop_markers(session: str, root: Path = CLAIMS_DIR) -> None:
+    for kind in ("done", "regrab"):
+        _unlink(root / "by-session" / f"{session}.{kind}")
+
+
+def regrab(payload: str, root: Path = CLAIMS_DIR, now: float | None = None, open_ids=None) -> str:
+    """UserPromptSubmit: a follow-up in the thread that ✅'d a task takes it
+    back. Returns the context line for the model ('' = nothing grabbed)."""
+    try:
+        d = json.loads(payload)
+    except ValueError:
+        return ""
+    session = d.get("session_id") or ""
+    if not session:
+        return ""
+    ids = _marker_ids(session, "done", root)
+    _unlink(root / "by-session" / f"{session}.done")
+    if not ids or held(session, root):
+        return ""
+    if open_ids is None:
+        # A card JM closed on another host keeps its local ✅ record for a day
+        # (clear_task only reaches the closing host), so the record alone is
+        # not proof the task is still open; dtd's cache is.
+        open_ids = {str(t["id"]) for t in all_tasks(_task_queue())}
+    got = []
+    for tid in ids:
+        try:
+            rec = json.loads((root / f"{tid}.json").read_text())
+            state = (root / f"{tid}.state").read_text().split()[0]
+        except (OSError, ValueError, IndexError):
+            continue
+        if rec.get("session") == session and state == "done" and tid in open_ids:
+            set_state(tid, "working", now, root)
+            got.append((tid, rec.get("task", "")))
+    if not got:
+        return ""
+    _set_held(session, [t for t, _ in got], root)
+    _write(root / "by-session" / f"{session}.regrab", "".join(t + "\n" for t, _ in got))
+    clear_free(session, root)
+    names = "; ".join(f"{name} (id {tid})" for tid, name in got)
+    return (f"[claim hook] 😈 re-claimed for this follow-up: {names}. It was ✅; when the follow-up is "
+            "handled, or if it needs no work on that task, run `python3 ~/i446-monorepo/tools/did/agent_claims.py done` "
+            "again so the card returns to ✅. Unrelated to that task? `/d off` (restores ✅) or `/d <task>`.")
 
 
 def clear_task(tid: str, root: Path = CLAIMS_DIR) -> bool:
@@ -1279,6 +1366,12 @@ def main(argv: list[str]) -> int:
     if cmd == "hook":
         out = hook(sys.stdin.read())
         if out:
+            print(out)
+        return 0
+    if cmd == "regrab":
+        out = regrab(sys.stdin.read())
+        if out:
+            push()
             print(out)
         return 0
     if cmd == "autoclaim":
