@@ -49,6 +49,7 @@ from mcp.toggl_server.config import PROJECT_NAMES  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
 from prompt_toolkit import Application  # noqa: E402
+from prompt_toolkit.output import ColorDepth  # noqa: E402
 from prompt_toolkit.buffer import Buffer  # noqa: E402
 from prompt_toolkit.document import Document  # noqa: E402
 from prompt_toolkit.filters import Condition  # noqa: E402
@@ -724,6 +725,52 @@ class State:
 
 
 STATE = State()
+
+# --- Neon tabs (2026-11-21, "neon frontend -> CLI") ---------------------------
+# JM: "access the views of neon in janus. That means tabs of some sort (still
+# within one CLI window)". Tab 0 is this timeline; the others are the Neon
+# sheets, drawn from the snapshot tools/tg/neon_grid.py builds from the .xlsx
+# (values + Excel's colours; nothing here talks to Excel). All the tab logic is
+# in neon_tabs.py; janus only routes keys and hands over the pane.
+#   ^T next tab · ⌥1-⌥0 jump (⌥1 = timeline) · Esc back to the timeline
+#   on a Neon tab, input empty: arrows scroll, PgUp/PgDn page, Home = today
+# Headless (pytest) gets a throwaway state file and no snapshot, so a tab JM
+# left open can never change what render_all() returns under test.
+import neon_tabs  # noqa: E402
+if sys.stdout.isatty():
+    NEON = neon_tabs.Tabs()
+else:
+    _neon_tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"janus-neon-headless-{os.getpid()}"
+    NEON = neon_tabs.Tabs(state_file=_neon_tmp / "tab.json", grid_file=_neon_tmp / "grid.json")
+
+
+def _neon_pane() -> tuple[int, int]:
+    """(cols, lines) the Neon grid may fill: the whole pane width (the 64-col
+    cap is for the timeline's prose, not a table) and main_window's height."""
+    cols = _pane_cols() or WIDTH_HINT
+    info = getattr(globals().get("main_window"), "render_info", None)
+    lines = int(getattr(info, "window_height", 0) or 0)
+    if not lines:
+        lines = (shutil.get_terminal_size((0, 0)).lines - 6) if _pane_cols() else 40
+    return cols, max(4, lines)
+
+
+def _neon_wheel(mouse_event):
+    """The grid fills the window exactly, so the Window has nothing to scroll:
+    the wheel moves our own row offset instead."""
+    from prompt_toolkit.mouse_events import MouseEventType
+    step = {MouseEventType.SCROLL_DOWN: 3, MouseEventType.SCROLL_UP: -3}.get(mouse_event.event_type)
+    if step is None:
+        return NotImplemented
+    NEON.move(drow=step, body_h=NEON.body_height(_neon_pane()[1]))
+    return None
+
+
+def render_neon_tab() -> list:
+    cols, lines = _neon_pane()
+    # Cursor at line 0: a timeline scrolled halfway down must not carry its
+    # vertical_scroll into the grid (see _hold_scroll).
+    return [("[SetCursorPosition]", "")] + NEON.render(cols, lines, _neon_wheel)
 
 
 # ─── Data fetchers ─────────────────────────────────────────────────────────
@@ -5379,6 +5426,9 @@ def render_block_view() -> list[tuple[str, str]]:
 
 def render_all() -> list[tuple[str, str]]:
     _sync_width()
+    if NEON.tab:
+        STATE.visible_events = []
+        return render_neon_tab()
     if STATE.block_view is not None:
         STATE.visible_events = []
         return _hold_scroll(render_block_view(), _main_scroll())
@@ -8419,8 +8469,91 @@ def _cursor_index(keys: list) -> int | None:
     return None
 
 
-@kb.add("tab", filter=_input_empty)
-@kb.add("down", filter=_input_empty | _edit_armed)  # arrow-key alias (user request 2026-07-17)
+# --- Neon tab keys (see the NEON block near STATE) ---------------------------
+_neon_tab = Condition(lambda: NEON.tab != 0)
+
+
+def _neon_switch(app, index: int | None = None) -> None:
+    """Go to tab `index` (None = the next one). Whatever was selected or armed
+    on the timeline is dropped: ^G/^P/^X/⏎ must not act on a row that is no
+    longer on screen."""
+    STATE.edit_target = STATE.split_target = STATE.points_edit_target = None
+    STATE.event_sel = None
+    STATE.block_view = None
+    if index is None:
+        NEON.next()
+    else:
+        NEON.select(index)
+    if NEON.tab:
+        NEON.load()
+        if NEON.needs_build():
+            _bg_fetch(app, NEON.build)
+    else:
+        STATE.scroll_to_selection_until = time.monotonic() + 0.3
+
+
+@kb.add("c-t")
+def _(event):
+    _neon_switch(event.app)
+
+
+def _bind_neon_jump(digit: str, index: int) -> None:
+    @kb.add("escape", digit)        # ⌥1 = timeline, ⌥2.. = sheets, ⌥0 = the tenth
+    def _(event):
+        if index < len(NEON.names()):
+            _neon_switch(event.app, index)
+
+
+for _i, _d in enumerate("1234567890"):
+    _bind_neon_jump(_d, _i)
+
+
+def _neon_body_h() -> int:
+    return NEON.body_height(_neon_pane()[1])
+
+
+@kb.add("down", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(drow=1, body_h=_neon_body_h())
+
+
+@kb.add("up", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(drow=-1, body_h=_neon_body_h())
+
+
+@kb.add("right", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(dcol=1, body_h=_neon_body_h())
+
+
+@kb.add("left", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(dcol=-1, body_h=_neon_body_h())
+
+
+@kb.add("pagedown", filter=_neon_tab)
+def _(event):
+    NEON.move(drow=max(1, _neon_body_h() - 1), body_h=_neon_body_h())
+
+
+@kb.add("pageup", filter=_neon_tab)
+def _(event):
+    NEON.move(drow=-max(1, _neon_body_h() - 1), body_h=_neon_body_h())
+
+
+@kb.add("home", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.home(_neon_body_h())
+
+
+@kb.add("end", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.end(_neon_body_h())
+
+
+@kb.add("tab", filter=_input_empty & ~_neon_tab)
+@kb.add("down", filter=(_input_empty | _edit_armed) & ~_neon_tab)  # arrow-key alias (user request 2026-07-17)
 def _(event):
     """Move the selection cursor forward (stopping at the last row) through everything currently on
     screen and selectable — calendar events, real tracked entries, and
@@ -8454,8 +8587,8 @@ def _(event):
     STATE.scroll_to_selection_until = time.monotonic() + 0.3
 
 
-@kb.add("s-tab", filter=_input_empty)
-@kb.add("up", filter=_input_empty | _edit_armed)  # arrow-key alias (user request 2026-07-17)
+@kb.add("s-tab", filter=_input_empty & ~_neon_tab)
+@kb.add("up", filter=(_input_empty | _edit_armed) & ~_neon_tab)  # arrow-key alias (user request 2026-07-17)
 def _(event):
     """Move the selection cursor backward, stopping at the first row. See the "tab" binding above —
     same nearest-to-now start for a fresh selection."""
@@ -8479,6 +8612,11 @@ def _(event):
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing;
                     # cancel an armed edit/selection
 def _(event):
+    if NEON.tab:
+        # A Neon tab is one level above everything else: Esc returns to the
+        # timeline (a half-typed command is left in the input box).
+        _neon_switch(event.app, 0)
+        return
     if STATE.block_view is not None:
         # Esc backs out one level: an armed edit first, then the block view.
         if _edit_armed():
@@ -8616,6 +8754,11 @@ def _no_timer_flash_style() -> str:
 app = Application(layout=Layout(root, focused_element=input_window),
                   key_bindings=kb, full_screen=True, style=style,
                   mouse_support=True,
+                  # Neon tabs paint Excel's own fills. mosh/tmux advertise 256
+                  # colours here, so prompt_toolkit snaps every hex to the
+                  # nearest of 256; JANUS_TRUECOLOR=1 sends 24-bit colour for a
+                  # terminal chain that passes it through.
+                  color_depth=(ColorDepth.TRUE_COLOR if os.environ.get("JANUS_TRUECOLOR") == "1" else None),
                   # 0.25s, not 0.1s (2026-10-11): every animation here flips
                   # on a 0.5s phase, so 4 redraws/s still shows each flip
                   # within a quarter second, and the idle redraw loop was
@@ -8814,6 +8957,21 @@ def _bg_fetch(app, fn):
     threading.Thread(target=run, daemon=True).start()
 
 
+async def ticker_neon(app):
+    """Keep the Neon snapshot current while a Neon tab is showing (and build it
+    once if there is none): neon_grid.py in a subprocess, ~2 s, off the UI
+    thread. Also picks up a snapshot another process wrote."""
+    while True:
+        try:
+            if NEON.load():
+                app.invalidate()
+            if NEON.needs_build():
+                _bg_fetch(app, NEON.build)
+        except Exception:
+            pass
+        await asyncio.sleep(20)
+
+
 async def _initial_slow_fetches(app):
     """First gcal + points load, off the event loop. These take ~4-15s
     (Excel-over-ssh, gcal/outlook subprocess timeouts); running them before
@@ -8866,6 +9024,7 @@ async def main():
     app.create_background_task(ticker_gcal(app))
     app.create_background_task(ticker_points(app))
     app.create_background_task(ticker_self_restart(app))
+    app.create_background_task(ticker_neon(app))
     _sz = shutil.get_terminal_size((0, 0))
     JE.emit("session", "start", (), f"{os.uname().nodename.split('.')[0]} {_sz.columns}x{_sz.lines}")
     try:
