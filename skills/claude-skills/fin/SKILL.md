@@ -121,10 +121,10 @@ report, end with exactly one of:
   session>` for the launchers and `by-session/<sid>.exit` for the Stop hook
   (`scripts/agent-claim-hook.sh idle`), which types `/exit` about a second
   after this turn ends, once nothing is running in the background. The Ix
-  launcher then lets the tmux session end, and Straylight closes the tab if
-  the workspace has another Claude tab, or starts a fresh thread in it if it
-  was the only one (JM: one tab per window by default, more only for active
-  threads). So make this the last line and start nothing in the background
+  launcher then lets the tmux session end, and Straylight closes the tab,
+  always (2026-11-22: it used to start a fresh thread when this was the
+  workspace's only Claude tab; JM: "I want /fin to close the entire CMUX
+  tab"). So make this the last line and start nothing in the background
   after the script: a live background agent or shell holds the exit until it
   finishes, and any new prompt from JM cancels it.
 - `→ /clear` otherwise (a local or phone session keeps its tab), so JM can

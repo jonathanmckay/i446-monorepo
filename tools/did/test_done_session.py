@@ -182,10 +182,17 @@ def test_mark_tab_close_only_for_a_remote_driven_tab(tmp_path, monkeypatch):
     exits = tmp_path / "claims" / "by-session"
     monkeypatch.setattr(ds, "CLAIMS_ROOT", tmp_path / "claims")
     monkeypatch.setattr(ds.socket, "gethostname", lambda: "ix.local")
-    run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "cc-fix-bug\n", "")
+    run = lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, "" if "show-option" in cmd else "cc-fix-bug\n", "")
     env = {"CC_ORIGIN": "straylight", "TMUX_PANE": "%1", "TMUX": "/tmp/x"}
     assert ds.mark_tab_close("S1", env=env, run=run) is True
     assert (tmp_path / "cc-fix-bug").read_text().strip() == "S1"
+    # 2026-11-22 (/bug "all it does is start me in a new claude session"): the marker also carries
+    # the tab's cmux surface, so a tab that attached under another tmux name (`cc r`) still finds it.
+    tagged = lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, "SURF-1\n" if "show-option" in cmd else "cc-fix-bug\n", "")
+    assert ds.mark_tab_close("S1", env=env, run=tagged) is True
+    assert (tmp_path / "cc-fix-bug").read_text() == "S1\nsurface=SURF-1\n"
     # 2026-11-22 (/bug "didn't exit the tab"): the marker alone closed nothing, because the
     # chain only starts when claude exits and /fin left the /exit to JM. /fin now also files
     # by-session/<sid>.exit, which the Stop hook turns into a typed /exit once the turn is over.

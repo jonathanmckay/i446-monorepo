@@ -232,3 +232,93 @@ def test_local_tmux_inner_exports_checkpoint(ct, monkeypatch, capsys):
     ct.exec_in_local_tmux(['taxes', 'pdf'])
     out = capsys.readouterr().out
     assert 'CC_RESUME_CHECKPOINT=cc-taxes-pdf' in out
+
+
+# --- /fin closes the tab, always (2026-11-22) -------------------------------------------------
+# JM: "I want /fin to close the entire CMUX tab, all it does is start me in a new claude session."
+# after_ix_exit used to close the surface only when the workspace held another Claude tab and
+# otherwise relaunched a fresh thread in it; with one Claude tab per workspace that was every /fin.
+
+def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux'):
+    """Run after_ix_exit with the ix marker faked; returns (result, cmux argvs, relaunches)."""
+    import types
+    if surface:
+        monkeypatch.setenv('CMUX_SURFACE_ID', surface)
+    else:
+        monkeypatch.delenv('CMUX_SURFACE_ID', raising=False)
+    monkeypatch.setattr(ct, 'fin_closed_on_ix', lambda name, host: marker)
+    monkeypatch.setattr(ct, 'cmux_resume_clear', lambda name: None)
+    monkeypatch.setattr(ct, 'cmux_bin', lambda: cmux, raising=False)
+    monkeypatch.setattr(ct, 'other_claude_tabs', lambda: [], raising=False)   # the lone-tab case
+    relaunched, calls = [], []
+    monkeypatch.setattr(ct, 'exec_on_ix', lambda *a, **k: relaunched.append(a))
+
+    def fake_run(argv, **k):
+        calls.append(list(argv))
+        return types.SimpleNamespace(returncode=close_rc, stdout='', stderr='no such surface')
+    monkeypatch.setattr(ct.subprocess, 'run', fake_run)
+    return ct.after_ix_exit('cc-081834', 'ix'), calls, relaunched
+
+
+def test_fin_closes_the_lone_claude_tab_instead_of_starting_a_fresh_thread(ct, monkeypatch):
+    done, calls, relaunched = _fin_exit(ct, monkeypatch)
+    assert done is True
+    assert relaunched == []                                   # no new claude session in the tab
+    assert calls == [['/x/cmux', 'close-surface', '--surface', 'SURF-1']]
+
+
+def test_fin_close_failure_says_so_and_still_starts_no_thread(ct, monkeypatch, capsys):
+    done, calls, relaunched = _fin_exit(ct, monkeypatch, close_rc=1)
+    assert relaunched == [] and len(calls) == 1
+    assert 'close it by hand' in capsys.readouterr().out
+    assert done is False            # callers end the way a plain exit does
+
+
+def test_fin_outside_cmux_never_calls_cmux(ct, monkeypatch):
+    """No surface id (Terminal.app, phone): a flagless close-surface would take the focused tab."""
+    done, calls, relaunched = _fin_exit(ct, monkeypatch, surface='')
+    assert done is False and calls == [] and relaunched == []
+
+
+def test_ordinary_ix_exit_closes_nothing(ct, monkeypatch):
+    done, calls, relaunched = _fin_exit(ct, monkeypatch, marker=False)
+    assert done is False and calls == [] and relaunched == []
+
+
+def _marker_rc(ct, tmp_path, name, surface):
+    import subprocess
+    return subprocess.run(['zsh', '-c', ct.fin_marker_script(name, surface, marker_dir=str(tmp_path))],
+                          capture_output=True, timeout=10).returncode
+
+
+def test_fin_marker_found_by_surface_when_the_tab_attached_under_another_tmux_name(ct, tmp_path):
+    """`cc r` names its transport cc-HHMMSS but attaches to the live session, so the marker /fin
+    wrote is under that session's name; the surface id on line 2 is what ties it to this tab.
+    Runs the real shell snippet (zsh, as on ix) against tmux names that do not exist."""
+    (tmp_path / 'cc-zz-ended-thread').write_text('sid-1\nsurface=SURF-1\n')
+    (tmp_path / 'cc-zz-other-tab').write_text('sid-2\nsurface=SURF-2\n')
+    assert _marker_rc(ct, tmp_path, 'cc-zz-transport-name', 'SURF-1') == 0
+    assert not (tmp_path / 'cc-zz-ended-thread').exists()          # consumed
+    assert (tmp_path / 'cc-zz-other-tab').exists()                 # another tab's marker untouched
+    assert _marker_rc(ct, tmp_path, 'cc-zz-transport-name', 'SURF-1') == 1   # nothing left for us
+    assert _marker_rc(ct, tmp_path, 'cc-zz-other-tab', '') == 0              # by name, old one-line form too
+
+
+def test_fin_marker_is_left_alone_while_its_tmux_session_is_alive(ct, tmp_path):
+    import subprocess
+    name = 'cc-zz-test-fin-alive'
+    if subprocess.run(['tmux', 'new', '-d', '-s', name, 'sleep 30'], capture_output=True).returncode != 0:
+        pytest.skip('no tmux server available')
+    try:
+        (tmp_path / name).write_text('sid\nsurface=SURF-9\n')
+        assert _marker_rc(ct, tmp_path, name, 'SURF-9') == 1
+        assert (tmp_path / name).exists()
+    finally:
+        subprocess.run(['tmux', 'kill-session', '-t', f'={name}'], capture_output=True)
+
+
+def test_fin_closed_here_reads_the_session_id_from_a_two_line_marker(ct, monkeypatch, tmp_path):
+    monkeypatch.setattr(ct, 'FIN_CLOSE_DIR', tmp_path)
+    monkeypatch.setattr(ct, 'tmux_session_name', lambda: 'cc-x')
+    (tmp_path / 'cc-x').write_text('sid-1\nsurface=SURF-1\n')
+    assert ct.fin_closed_here('sid-1', now=(tmp_path / 'cc-x').stat().st_mtime + 10 * ct.FIN_CLOSE_GRACE_S)

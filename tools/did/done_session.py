@@ -251,8 +251,11 @@ def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     host (tab_origin), leave fin-close/<tmux
     session> = <session id> and ask the Stop hook to type `/exit` (by-session/<sid>.exit, see
     below). The Ix launcher reads the marker when claude exits and
-    lets the tmux session end; the Straylight launcher then closes the tab or starts a fresh
-    thread in it (see claude-tracked, after_ix_exit). Local/phone sessions: nothing."""
+    lets the tmux session end; the Straylight launcher then closes the tab, always (2026-11-22:
+    it used to start a fresh thread in a lone tab; see claude-tracked, after_ix_exit). Line 2 of
+    the marker is `surface=<cmux surface id>` (the tmux session's @cmux_surface tag), which is
+    how a tab that attached under another tmux name (`cc r`, `cc <title>`) finds its marker.
+    Local/phone sessions: nothing."""
     origin = tab_origin(session, env)
     if not origin or origin == socket.gethostname().split(".")[0].lower():
         return False
@@ -267,7 +270,13 @@ def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     if not name:
         return False
     FIN_CLOSE_DIR.mkdir(parents=True, exist_ok=True)
-    (FIN_CLOSE_DIR / name).write_text(session + "\n")
+    try:
+        # "=name:" (exact session, trailing colon): a bare "=name" target reads nothing here
+        surface = run(["tmux", "show-option", "-t", f"={name}:", "-qv", "@cmux_surface"],
+                      capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:  # noqa: BLE001
+        surface = ""
+    (FIN_CLOSE_DIR / name).write_text(session + "\n" + (f"surface={surface}\n" if surface else ""))
     # The launchers only move once claude exits, and nothing in a skill can run /exit: ask the
     # Stop hook (scripts/agent-claim-hook.sh idle) to type it when this turn is over. Keyed by
     # session id so the hook's check is one file test and a later prompt here can void it.
