@@ -288,6 +288,14 @@ def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     return True
 
 
+def no_claim_result(session: str, when, mark=None) -> dict:
+    """/fin on a session that holds no claim. Bare /fin still ends the thread and its tab
+    (2026-11-22: it answered no-claim with no tab_close, so a fresh or already-closed thread kept
+    its tab and JM was told to /clear). With an argument there is nothing to delay: leave it."""
+    tab_close = (mark or mark_tab_close)(session) if when is None else False
+    return {"status": "no-claim", "tasks": [], "tab_close": tab_close}
+
+
 def main() -> int:
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     if not session:
@@ -302,7 +310,7 @@ def main() -> int:
     claims = ac.load()
     ids = session_tasks(session, claims, ac.held(session))
     if not ids:
-        print(json.dumps({"status": "no-claim", "tasks": []}))
+        print(json.dumps(no_claim_result(session, when)))
         return 0
     try:
         tasks = ac.all_tasks(json.loads(TASK_QUEUE.read_text()))

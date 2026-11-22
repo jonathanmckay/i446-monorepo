@@ -50,7 +50,9 @@ Read its JSON:
   has already passed today is a failure, not a no-op.
 - `"status": "no-claim"` → this session holds no claim. Bare /fin behaves
   like `/d off` on an unclaimed session (2026-11-14): say `no claim held`, touch
-  nothing (no /did, no timer, no Todoist), then step 2. With an argument: say
+  nothing (no /did, no timer, no Todoist), then step 2 (its JSON carries
+  `tab_close` too: bare /fin ends the thread and closes the tab even with
+  nothing claimed, 2026-11-22). With an argument: say
   there is nothing to delay and stop; /defer handles a named task.
 
 The reverse also holds (2026-11-14): closing a claimed task anywhere else

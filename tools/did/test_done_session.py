@@ -212,3 +212,16 @@ def test_mark_tab_close_only_for_a_remote_driven_tab(tmp_path, monkeypatch):
     assert ds.mark_tab_close("S3", env=tmux, run=run) is True                                       # host-file fallback
     (hosts / "S4").write_text("ix")
     assert ds.mark_tab_close("S4", env=tmux, run=run) is False
+
+
+def test_bare_fin_without_a_claim_still_closes_the_tab():
+    """2026-11-22 (/bug "it did not work", tmux cc-082249): a fresh thread with nothing claimed
+    answered /fin with {"status": "no-claim"} and no tab_close, so the skill said `→ /clear` and
+    the tab stayed. Bare /fin ends the thread and its tab whether or not a task was claimed; with
+    an argument there is nothing to delay and the thread stays."""
+    marked = []
+    mark = lambda session: marked.append(session) or True
+    assert ds.no_claim_result("S1", None, mark=mark) == {"status": "no-claim", "tasks": [], "tab_close": True}
+    assert marked == ["S1"]
+    assert ds.no_claim_result("S1", ("days", 3), mark=mark) == {"status": "no-claim", "tasks": [], "tab_close": False}
+    assert marked == ["S1"]
