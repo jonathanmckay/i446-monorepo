@@ -108,3 +108,23 @@ def test_placeholder_is_a_hole_and_carries_its_id():
                _e(cov, 2, (9, 40), (10, 0))]
     got = evidence.find_holes(DAY, now, entries, cov, evidence.GAP_MIN)
     assert len(got) == 1 and got[0]["placeholders"] == [7] and got[0]["minutes"] == 40
+
+
+# /-1l fills every blank, not only the 5-minute ones janus flashes (JM
+# 2026-11-22: "if I call -1l and there are blank spots on the cal, fill them
+# in"). The 1-3 minute seams between cards were never reported as holes.
+def test_min_gap_one_reports_the_short_seams_too(monkeypatch, capsys):
+    cov = _Cov.load()
+    now = dt.datetime.combine(DAY, dt.time(10, 0), cov.TZ)
+    entries = [_e(cov, 1, (0, 0), (9, 0)), _e(cov, 2, (9, 3), (9, 30)), _e(cov, 3, (9, 30), (10, 0))]
+    assert evidence.find_holes(DAY, now, entries, cov, evidence.GAP_MIN) == []
+    got = evidence.find_holes(DAY, now, entries, cov, 1)
+    assert [(h["lo"].strftime("%H:%M"), h["minutes"]) for h in got] == [("09:00", 3)]
+    # the CLI passes --min-gap through, and defaults to janus's threshold
+    seen = []
+    monkeypatch.setattr(evidence, "toggl_holes", lambda day, min_gap=evidence.GAP_MIN: seen.append(min_gap) or [])
+    monkeypatch.setattr(evidence.sys, "argv", ["evidence.py", "--min-gap", "1"])
+    evidence.main()
+    monkeypatch.setattr(evidence.sys, "argv", ["evidence.py"])
+    evidence.main()
+    assert seen == [1, evidence.GAP_MIN]

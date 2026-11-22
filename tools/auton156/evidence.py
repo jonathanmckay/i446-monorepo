@@ -3,6 +3,7 @@
 
   evidence.py 0612-0631 0633-0638 [--date YYYY-MM-DD]
   evidence.py [--date YYYY-MM-DD]      # no ranges: the day's holes, up to now
+  evidence.py --min-gap 1              # every blank of a whole minute or more (/-1l)
 
 With no ranges it finds the holes itself with /0t's gap finder, at janus's
 flash threshold (5 whole minutes or more; placeholders count as holes) and prints a `hole` line for each before the
@@ -152,7 +153,7 @@ def find_holes(day: dt.date, now: dt.datetime, entries: list, cov, min_gap: int)
     return out
 
 
-def toggl_holes(day: dt.date):
+def toggl_holes(day: dt.date, min_gap: int = GAP_MIN):
     """find_holes() on live Toggl, through the modules /0t uses."""
     sys.path.insert(0, str(REPO / "lib"))
     import daytime  # noqa: E402
@@ -161,19 +162,21 @@ def toggl_holes(day: dt.date):
     spec.loader.exec_module(tc)
     cov = tc.load_coverage(daytime.active_zone())
     os.environ["TOGGL_LIVE"] = "1"      # the nightly store would hide entries made today
-    return find_holes(day, dt.datetime.now(cov.TZ), cov.fetch_entries(day, day), cov, GAP_MIN)
+    return find_holes(day, dt.datetime.now(cov.TZ), cov.fetch_entries(day, day), cov, min_gap)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("ranges", nargs="*")
     ap.add_argument("--date")
+    ap.add_argument("--min-gap", type=int, default=GAP_MIN, metavar="MIN",
+                    help=f"smallest hole to report, whole minutes (default {GAP_MIN}, janus's flash threshold)")
     a = ap.parse_args()
     day = dt.date.fromisoformat(a.date) if a.date else dt.date.today()
     if a.ranges:
         ranges = parse_ranges(a.ranges, day)
     else:
-        holes = toggl_holes(day)
+        holes = toggl_holes(day, max(1, a.min_gap))
         if holes is None:
             print("no data: Toggl returned nothing for the day")
             return 0

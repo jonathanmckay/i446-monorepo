@@ -6,9 +6,19 @@ user-invocable: true
 
 # Block log sweep (/-1l)
 
-`/auton156` with no ranges, then the `😈 -1l` card. The hole finding, the
-evidence, the fill order and the entry rules are all `/auton156`'s; nothing
-about them is restated or changed here.
+`/auton156` with no ranges, then the `😈 -1l` card. The evidence, the fill
+order and the entry rules are all `/auton156`'s. Two things differ here
+(JM 2026-11-22: "if I call -1l and there are blank spots on the cal, fill
+them in, without affecting other time entries"):
+
+- **Every blank is a hole**, down to one whole minute, not only the 5-minute
+  ones janus flashes. Find them with `evidence.py --min-gap 1`.
+- **New entries only.** A blank is filled by `toggl_create_entry` inside it.
+  Never extend, move, rename or delete an entry that exists to close a gap
+  (placeholders stay the one exception, as in `/auton156`). So a 1-3 minute
+  seam gets its own short entry, which overrides `/auton156`'s "one entry per
+  5-10 minutes" for these; a blank with no evidence still stays empty and is
+  named in the report.
 
 ```
 /-1l              # today, 00:00 to now
@@ -17,8 +27,9 @@ about them is restated or changed here.
 
 ## Steps
 
-1. **sweep.** Do `/auton156` bare (its steps 1-4), for today. On `dry`, stop
-   before `toggl_create_entry` and report the proposed table.
+1. **sweep.** Do `/auton156` bare (its steps 1-4), for today, with the holes
+   from `python3 ~/i446-monorepo/tools/auton156/evidence.py --min-gap 1`. On
+   `dry`, stop before `toggl_create_entry` and report the proposed table.
 2. **check_tasks_pointed.** From the `find-activity` completions the sweep
    already fetched (fetch them if it stopped at `no holes`), list any real
    task (not a habit, not a `😈` ritual, not `@posthoc`) closed in the
