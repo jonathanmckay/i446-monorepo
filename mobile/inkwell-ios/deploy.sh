@@ -25,6 +25,17 @@ if [ "$VERB" = wear ]; then
   # shellcheck disable=SC2086
   LOG="$LOG" exec /bin/zsh "$HOME/i446-monorepo/mobile/neg1n-watch/deploy-wear.sh" $REST
 fi
+# Reserved verb (2026-11-21): `open obsidian://...` opens a vault note in
+# Obsidian on this Mac, so an Ix session can put a doc on JM's screen.
+# Obsidian links only: anything else is refused, this is not a general `open`.
+if [ "$VERB" = open ]; then
+  case "$REST" in
+    obsidian://open\?vault=vault\&file=*) /usr/bin/open "$REST"; RC=$? ;;
+    *) RC=refused ;;
+  esac
+  echo "=== open $REST rc=$RC $(date '+%F %T') ===" > "$LOG"
+  exit 0
+fi
 cd "$DIR" || exit 1
 SCHEMES=$(head -1 "$TRIGGER" 2>/dev/null)
 [ -z "$SCHEMES" ] && SCHEMES="janus dtd"
