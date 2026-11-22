@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 
+import jmreads_stories
+
 REVIEWS_DIR = Path.home() / "vault" / "hcmc" / "reviews"
 BLOG_REVIEWS_DIR = Path.home() / "vault" / "hcmp" / "o315" / "blog" / "content" / "reviews"
 BLOG_URL = "https://jonathanmckay.com/reviews/{slug}/"
@@ -468,7 +470,8 @@ def build_events(books: list[dict]) -> list[dict]:
 
 
 def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
-          blog_dir: Path = BLOG_REVIEWS_DIR, covers: bool = True) -> dict:
+          blog_dir: Path = BLOG_REVIEWS_DIR, covers: bool = True,
+          stories_dir: Path | None = None) -> dict:
     today = today or date.today()
     books = load_books(reviews_dir, blog_dir)
     year = today.year
@@ -502,6 +505,18 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
     def card(b):
         return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in b.items()}
 
+    # Newsletter stories (jmreads_stories.py, 2026-11-21) are built apart from
+    # the book events and merged only here, on ISO-date strings. Bodies ride
+    # along inline so "Read" works from the offline archive (no fetch on click).
+    feed = [{"type": e["type"], "date": e["date"].isoformat(), "book": card(e["book"])}
+            for e in events]
+    try:
+        stories = jmreads_stories.load_stories(today=today, stories_dir=stories_dir)
+    except Exception:
+        stories = []
+    feed += [{"type": "story", "date": s["date"], "story": s} for s in stories]
+    feed.sort(key=lambda e: (e["date"], e["type"] == "story"), reverse=True)   # stable: books keep their order
+
     return {
         "year": year,
         "challenge": {
@@ -516,8 +531,7 @@ def build(today: date | None = None, reviews_dir: Path = REVIEWS_DIR,
         "reading": [card(b) for b in reading],
         "to_read": [card(b) for b in to_read],
         "read": [card(b) for b in read],
-        "feed": [{"type": e["type"], "date": e["date"].isoformat(), "book": card(e["book"])}
-                 for e in events],
+        "feed": feed,
     }
 
 
@@ -689,6 +703,13 @@ __SHARED_STYLE__
 .view-btn { font: 12px Georgia, serif; padding: 5px 12px; margin-right: 10px; border-radius: 3px; cursor: pointer;
             background: var(--badge-bg); color: var(--nav-text); border: 1px solid var(--grid); }
 .shelf .stars { font-size: 9px; letter-spacing: 0; display: block; text-align: center; margin-top: 2px; }
+.story-av { background: #e3120b; color: #fff; font-family: Georgia, serif; font-size: 16px; letter-spacing: 0; }
+.story-bullets { font-family: Georgia, serif; font-size: 14px; line-height: 1.55; margin: 8px 0 10px; padding-left: 18px; }
+.story-bullets li { margin-bottom: 6px; }
+.ev.story-row { padding: 10px 0; align-items: center; }
+.story-row .avatar { width: 24px; height: 24px; font-size: 12px; margin: 0 6px; }
+.story-link { cursor: pointer; }
+.story-link:hover { text-decoration: underline; }
 #draftDlg { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 30;
             display: none; align-items: center; justify-content: center; }
 #draftDlg.show { display: flex; }
@@ -816,13 +837,13 @@ document.getElementById('draftDlg').addEventListener('click', ev => { if (ev.tar
 // View (2026-11-04): read a review in place. Paragraphs split on blank
 // lines; `>` lines (web drafts, quotes) render as blockquotes.
 function mdLite(text) {
-  return String(text || '').split(/\n\s*\n/).map(par => {
-    const lines = par.split('\n');
+  return String(text || '').split(/\\n\s*\\n/).map(par => {
+    const lines = par.split('\\n');
     if (lines.every(l => l.trim().startsWith('>')))
       return '<blockquote>' + esc(lines.map(l => l.replace(/^\s*>\s?/, '')).join(' ')) + '</blockquote>';
     const h = par.match(/^#+\s+(.*)$/);
     if (h && lines.length === 1) return '<p><b>' + esc(h[1]) + '</b></p>';
-    return '<p>' + esc(par.replace(/\n/g, ' ')) + '</p>';
+    return '<p>' + esc(par.replace(/\\n/g, ' ')) + '</p>';
   }).join('');
 }
 function openView(id) {
@@ -839,6 +860,18 @@ function openView(id) {
     document.getElementById('viewBody').innerHTML = j.body ? mdLite(j.body)
       : '<div class="muted">No review written yet.</div>';
   }).catch(() => { document.getElementById('viewTitle').textContent = 'Failed — offline'; });
+}
+// Newsletter stories: the body is already in /api/reads, so this works offline.
+let STORIES = {};
+function openStory(id) {
+  const s = STORIES[id];
+  if (!s) return;
+  document.getElementById('viewTitle').textContent = s.title;
+  document.getElementById('viewMeta').innerHTML = [esc(s.source), esc(s.kind), esc(s.date)].join(' · ');
+  document.getElementById('viewBody').innerHTML = mdLite(s.body);
+  const dlg = document.getElementById('viewDlg');
+  dlg.classList.add('show');
+  dlg.querySelector('.box').scrollTop = 0;
 }
 function closeView() { document.getElementById('viewDlg').classList.remove('show'); }
 document.getElementById('viewDlg').addEventListener('click', ev => { if (ev.target.id === 'viewDlg') closeView(); });
@@ -872,7 +905,33 @@ cachedJSON('/api/reads').then(d => {   // offline-capable, mount-prefix aware (d
 
   // Feed
   const verb = {started: 'started reading', finished: 'finished', reviewed: 'reviewed'};
+  STORIES = {};
+  let storyShown = false;
   document.getElementById('feed').innerHTML = d.feed.map(e => {
+    if (e.type === 'story') {
+      // The newest issue gets a full card; older ones collapse to one line
+      // so a week of newsletters doesn't bury the book updates.
+      const s = e.story; STORIES[s.id] = s;
+      const full = !storyShown; storyShown = true;
+      const read = `<button class="view-btn story-btn" data-story="${esc(s.id)}">Read</button>`;
+      const src = s.url ? `<a href="${esc(s.url)}" target="_blank">Email</a>` : '';
+      if (!full) return `<div class="ev story-row">
+        <div class="avatar story-av">E</div>
+        <div style="flex:1; min-width:0"><div class="head"><div class="who"><span class="muted">${esc(s.kind)}</span>
+          <b class="serif story-link" data-story="${esc(s.id)}">${esc(s.title)}</b></div>
+          <div class="when">${esc(ago(e.date))}</div></div></div>
+      </div>`;
+      return `<div class="ev">
+        <div class="avatar story-av">E</div>
+        <div style="flex:1; min-width:0">
+          <div class="head"><div class="who"><b>${esc(s.source)}</b> · ${esc(s.kind)}</div>
+            <div class="when">${esc(ago(e.date))}</div></div>
+          <div class="hl">${esc(s.title)}</div>
+          <ul class="story-bullets">${s.bullets.slice(0, 3).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+          <div class="links">${read}${s.bullets.length > 3 ? `<span class="muted" style="margin-right:10px">+${s.bullets.length - 3} more stories and the agenda</span>` : ''}${src}</div>
+        </div>
+      </div>`;
+    }
     const b = e.book;
     const rating = e.type === 'reviewed' && b.score ? `<div>Rating ${stars(b.score)}</div>` : '';
     const hl = e.type === 'reviewed' && b.headline ? `<div class="hl">${esc(b.headline)}</div>` : '';
@@ -913,6 +972,8 @@ cachedJSON('/api/reads').then(d => {   // offline-capable, mount-prefix aware (d
         }).catch(() => { rv.textContent = 'Failed'; rv.disabled = false; });
       return;
     }
+    const st = ev.target.closest('[data-story]');
+    if (st) { openStory(st.dataset.story); return; }
     const vw = ev.target.closest('.view-btn');
     if (vw) { openView(vw.dataset.id); return; }
     const sv = ev.target.closest('.shelf-item');
