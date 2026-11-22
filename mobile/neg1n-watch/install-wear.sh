@@ -27,7 +27,7 @@ export PATH="/opt/homebrew/share/android-commandlinetools/platform-tools:$PATH"
 if [[ "${1:-}" == pair ]]; then
   [[ $# -eq 4 ]] || { echo "usage: $0 pair <ip:pairport> <code> <ip:port>"; exit 1; }
   echo "→ adb pair $2"
-  out=$(adb pair "$2" "$3" 2>&1); echo "  $out"
+  out=$(adb pair "$2" "$3" 2>&1) || true; echo "  $out"
   [[ "$out" == *Successfully* ]] || { echo "✗ pairing failed (code expired? pair port changed?)"; exit 1; }
   shift 3
 fi
@@ -62,11 +62,14 @@ mdns_addr() {
 # pair-auto <code>: pair with the watch whose Pair new device screen is open,
 # found over mDNS, so only the 6-digit code has to be read off the watch.
 if [[ "${1:-}" == pair-auto ]]; then
-  [[ $# -eq 2 ]] || { echo "usage: $0 pair-auto <code>"; exit 1; }
+  [[ $# -eq 2 || $# -eq 3 ]] || { echo "usage: $0 pair-auto <code> [ip:pairport]"; exit 1; }
   adb start-server >/dev/null 2>&1 || true
-  pa=$(mdns_addr _adb-tls-pairing) || { echo "✗ no watch is showing Pair new device on this Wi-Fi"; exit 1; }
+  # Optional explicit pair address (2026-11-22): adb's own mDNS browser can
+  # list nothing while Bonjour (dns-sd -B _adb-tls-pairing._tcp) sees the watch.
+  pa="${3:-}"
+  [[ -n "$pa" ]] || pa=$(mdns_addr _adb-tls-pairing) || { echo "✗ no watch is showing Pair new device on this Wi-Fi"; exit 1; }
   echo "→ adb pair $pa"
-  out=$(adb pair "$pa" "$2" 2>&1); echo "  $out"
+  out=$(adb pair "$pa" "$2" 2>&1) || true; echo "  $out"
   [[ "$out" == *Successfully* ]] || { echo "✗ pairing failed (code expired?)"; exit 1; }
   exit 0
 fi
@@ -80,7 +83,7 @@ if [[ -z "$addr" ]] && ! adb devices | awk 'NR>1 && $2=="device"{f=1} END{exit !
 fi
 if [[ -n "$addr" ]]; then
   echo "→ adb connect $addr"
-  out=$(adb connect "$addr" 2>&1); echo "  $out"
+  out=$(adb connect "$addr" 2>&1) || true; echo "  $out"
   [[ "$out" == *connected* ]] || { echo "✗ could not connect (Wireless debugging on? current port? this Mac paired?)"; exit 1; }
 fi
 serial="${addr:-$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')}"

@@ -205,26 +205,73 @@ def maybe_reseed(run=None) -> bool:
         return False
 
 
-def points(day: dt.date):
+REMOTE_TIMEOUT_S = 8
+
+
+def _ask_ix(args: list, run=None):
+    """Off Ix there is no book (the seed and the ledger live on Ix): ask Ix's
+    copy of this module over ssh. None on any failure, and under pytest."""
+    if run is None and os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    if os.environ.get("NEON_BOOK_READS", "1") in ("0", "off"):
+        return None
+    try:
+        import subprocess
+        import neon_tabs
+        if run is None and neon_tabs.on_ix():
+            return None                              # here the local book already said no
+        r = (run or subprocess.run)(
+            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+             os.environ.get("IX_HOST", "ix"), "/usr/bin/python3 ~/i446-monorepo/tools/tg/neon_book_reads.py " + " ".join(args)],
+            capture_output=True, text=True, timeout=REMOTE_TIMEOUT_S, stdin=subprocess.DEVNULL)
+        out = (r.stdout or "").strip("\n")
+        if r.returncode != 0 or not out.startswith("OK\t"):
+            return None
+        return out[3:]
+    except Exception:
+        return None
+
+
+def points(day: dt.date, run=None):
     with _lock:
         b = live_book()
         try:
-            return raw_points(b, day) if b is not None else None
+            if b is not None:
+                return raw_points(b, day)
         except Exception:
             return None
+    return _ask_ix(["points", day.isoformat()], run)
 
 
-def habits(day: dt.date, ytd_cells, total_cell: str):
+def habits(day: dt.date, ytd_cells, total_cell: str, run=None):
     with _lock:
         b = live_book()
         try:
-            return raw_habits(b, day, ytd_cells, total_cell) if b is not None else None
+            if b is not None:
+                return raw_habits(b, day, ytd_cells, total_cell)
         except Exception:
             return None
+    return _ask_ix(["habits", day.isoformat(), ",".join(ytd_cells), total_cell], run)
+
+
+def main(argv) -> int:
+    """points YYYY-MM-DD | habits YYYY-MM-DD AQ375,AR375 X388 → "OK\t<reply>"
+    (the reply janus parses), or exit 1 when the book cannot answer."""
+    os.environ.setdefault("NEON_TEST_DB_OK", "1")
+    try:
+        day = dt.date.fromisoformat(argv[1])
+        b = live_book()
+        out = None
+        if b is not None:
+            out = raw_points(b, day) if argv[0] == "points" else raw_habits(b, day, argv[2].split(","), argv[3])
+    except Exception as e:
+        print("error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+        return 1
+    if out is None:
+        return 1
+    sys.stdout.write("OK\t" + out + "\n")
+    return 0
 
 
 if __name__ == "__main__":
-    os.environ.setdefault("NEON_TEST_DB_OK", "1")
-    d = dt.date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else dt.date.today()
-    print(points(d))
-    print(habits(d, ["AQ375", "AR375", "AS375"], "X388"))
+    sys.exit(main(sys.argv[1:]))

@@ -29,6 +29,18 @@ import neon_grid  # noqa: E402
 STATE_FILE = Path.home() / ".cache" / "janus" / "neon-tab.json"
 HOME_TAB = "janus"
 REBUILD_MIN_S = 90          # never rebuild more often than this
+REMOTE_EVERY_S = 45         # off Ix: refetch the snapshot from Ix this often while a Neon tab shows
+REMOTE_HOST = os.environ.get("IX_HOST", "ix")
+REMOTE_CMD = "/usr/bin/python3 ~/i446-monorepo/tools/tg/neon_grid.py emit"
+
+
+def on_ix() -> bool:
+    """This process runs on Ix, the one Mac whose workbook, ledger and book
+    are current (same test as did-fast's _on_ix)."""
+    import socket
+    host = socket.gethostname().lower()
+    return host in ("ix", "ix.local") or host.startswith("ix.") or "mac-mini" in host
+
 BUILD_TIMEOUT_S = 120
 WRITE_MARGIN_S = 30         # ledger writes this long before the save still overlay (a save in flight)
 TODAY_FROM_BOTTOM = 3       # a sheet opens with today's row this far above the last line
@@ -38,7 +50,19 @@ STATUS_STYLE = "#8a8a8a"
 
 class Tabs:
     def __init__(self, state_file: Path | None = None, grid_file: Path | None = None,
-                 src: Path | None = None):
+                 src: Path | None = None, remote: bool | None = None):
+        # Off Ix the local workbook is somebody's OneDrive copy (Straylight's
+        # stopped syncing on 2026-10-12 and the tabs showed zeros from then
+        # on): the snapshot is fetched from Ix instead, never built here.
+        # Explicit files (tests, tools) and pytest always stay local.
+        if remote is None:
+            env = os.environ.get("NEON_GRID_REMOTE", "")
+            if env in ("0", "1"):
+                remote = env == "1"
+            else:
+                remote = (grid_file is None and src is None and not on_ix()
+                          and not os.environ.get("PYTEST_CURRENT_TEST"))
+        self.remote = remote
         self.state_file = state_file or STATE_FILE
         self.grid_file = grid_file or neon_grid.OUT
         self.src = src or neon_grid.SRC
@@ -130,6 +154,15 @@ class Tabs:
         """Repaint each sheet's today row from its live source. Cheap (a local
         sqlite read for the ledger); a source that fails or has nothing leaves
         the workbook's own values in place. True when something changed."""
+        if (self.snap or {}).get("host"):
+            # fetched from Ix with the book's rows already painted there: this
+            # host has no ledger worth overlaying (at best a stale copy)
+            book = dict((self.snap or {}).get("book") or {})
+            if book == self.book_through and not self.live_through and not self.write_through:
+                return False
+            self.book_through, self.live_through, self.write_through = book, {}, {}
+            self._memo = None
+            return True
         if not self._current_day():
             return False                # yesterday's snapshot: its "today" row is the wrong row
         changed = False
@@ -199,7 +232,11 @@ class Tabs:
     def _current_day(self) -> bool:
         """The snapshot was built for today (older snapshots carry no day)."""
         day = (self.snap or {}).get("day")
-        return day is None or day == dt.date.today().isoformat()
+        if day is None or day == dt.date.today().isoformat():
+            return True
+        # a snapshot Ix emitted moments ago is current even if the two clocks
+        # sit on either side of midnight
+        return time.time() - ((self.snap or {}).get("emitted") or 0) < 2 * REMOTE_EVERY_S
 
     def select(self, i: int) -> None:
         n = len(self.names())
@@ -221,6 +258,10 @@ class Tabs:
         another day), and the last build is not too recent. Excel's forced save bumps the mtime every ~2 minutes, so
         this is at most one ~2 s subprocess per REBUILD_MIN_S."""
         now = time.monotonic() if now is None else now
+        if self.remote:
+            if self.building or (self.last_build and now - self.last_build < REMOTE_EVERY_S):
+                return False
+            return self.snap is None or not (self.snap or {}).get("host") or self.tab != 0
         if self.building or (self.last_build and now - self.last_build < REBUILD_MIN_S):
             return False
         try:
@@ -234,6 +275,8 @@ class Tabs:
     def build(self, run=subprocess.run) -> None:
         """Blocking: run neon_grid.py build in a subprocess, then reload.
         Call from a worker thread."""
+        if self.remote:
+            return self._fetch(run)
         self.building, self.last_build = True, time.monotonic()
         try:
             src_m = self.src.stat().st_mtime
@@ -247,6 +290,36 @@ class Tabs:
                 self.error = (r.stderr or r.stdout or "build failed").strip().splitlines()[-1][:200]
         except Exception as e:                      # timeout, missing file, …
             self.error = "%s: %s" % (type(e).__name__, str(e)[:160])
+        finally:
+            self.building = False
+            self._memo = None
+
+    def _fetch(self, run=subprocess.run) -> None:
+        """Remote mode's build: ask Ix for its snapshot (neon_grid.py emit)
+        and keep it as this host's grid file. A failure leaves the last
+        fetched snapshot on screen with the reason in the status line."""
+        self.building, self.last_build = True, time.monotonic()
+        try:
+            r = run(["ssh", "-C", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes",
+                     "-o", "StrictHostKeyChecking=accept-new", REMOTE_HOST, REMOTE_CMD],
+                    capture_output=True, text=True, timeout=BUILD_TIMEOUT_S, stdin=subprocess.DEVNULL)
+            if r.returncode != 0:
+                tail = (r.stderr or r.stdout or "").strip().splitlines()
+                self.error = "ix: " + (tail[-1][:160] if tail else "ssh exit %d" % r.returncode)
+                return
+            snap = json.loads(r.stdout)
+            if not isinstance(snap, dict) or snap.get("version") != neon_grid.VERSION or not snap.get("host"):
+                self.error = "ix sent snapshot v%s, this janus reads v%s" % (
+                    snap.get("version") if isinstance(snap, dict) else "?", neon_grid.VERSION)
+                return
+            self.grid_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.grid_file.with_suffix(".fetch.%d.tmp" % os.getpid())
+            tmp.write_text(r.stdout, encoding="utf-8")
+            os.replace(tmp, self.grid_file)
+            self.error = ""
+            self.load()
+        except Exception as e:                      # timeout, bad JSON, no ssh, …
+            self.error = "ix: %s: %s" % (type(e).__name__, str(e)[:140])
         finally:
             self.building = False
             self._memo = None
@@ -365,8 +438,18 @@ class Tabs:
         body = self._body(sh)
         scrolling = [c for c in shown if c >= sh["frozen_cols"]]
         span = "%s–%s" % (sh["cols"][scrolling[0]], sh["cols"][scrolling[-1]]) if scrolling else "-"
-        built = time.strftime("%H:%M", time.localtime((self.snap or {}).get("src_mtime", 0)))
+        saved_at = time.localtime((self.snap or {}).get("src_mtime", 0))
+        built = time.strftime("%H:%M", saved_at)
+        if ((self.snap or {}).get("src_mtime") or 0) > 1e9 and saved_at[:3] != time.localtime()[:3]:
+            # a save from another day is not "current as of HH:MM" (2026-11-22:
+            # a workbook copy six weeks stale read "saved 12:34")
+            built = time.strftime("%m-%d %H:%M", saved_at) + " ⚠ stale"
         bits = ["%d–%d/%d" % (top + 1, min(body, top + body_h), body), span, "saved " + built]
+        host = (self.snap or {}).get("host")
+        if self.remote and not host:
+            bits.append("⚠ this Mac's copy, not ix")
+        elif host and self.remote:
+            bits.insert(1, host)
         if self.live_through.get(sh["name"]):
             bits.append("today ledger " + str(self.live_through[sh["name"]])[:5])
         if sh["name"] in self.book_through:

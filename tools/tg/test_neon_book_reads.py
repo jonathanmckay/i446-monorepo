@@ -69,3 +69,25 @@ def test_no_row_for_the_day_means_no_answer():
 def test_under_pytest_the_live_book_is_never_read(monkeypatch):
     monkeypatch.delenv("NEON_TEST_DB_OK", raising=False)
     assert nbr.live_book() is None and nbr.points(DAY) is None
+
+
+class _P:
+    def __init__(self, rc, out):
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def test_off_ix_the_reply_is_asked_of_ix(monkeypatch):
+    """A janus on Straylight has no seed and no ledger: Ix's book answers."""
+    monkeypatch.delenv("NEON_TEST_DB_OK", raising=False)       # live_book() is None, as on Straylight
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(cmd)
+        return _P(0, "OK\t57.0|16.0\n")
+    assert nbr.points(DAY, run) == "57.0|16.0"
+    assert seen[0][0] == "ssh" and seen[0][-1].endswith("neon_book_reads.py points 2026-11-22")
+    assert nbr.habits(DAY, ["AQ375", "AR375"], "X388", run) == "57.0|16.0"
+    assert seen[1][-1].endswith("habits 2026-11-22 AQ375,AR375 X388")
+    assert nbr.points(DAY, lambda cmd, **kw: _P(255, "")) is None            # ix unreachable: the caller falls back
+    assert nbr.points(DAY, lambda cmd, **kw: _P(0, "Last login: Sun")) is None
+    assert nbr.points(DAY) is None                                           # pytest never opens an ssh connection

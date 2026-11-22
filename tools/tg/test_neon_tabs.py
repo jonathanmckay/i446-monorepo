@@ -1,5 +1,6 @@
 """Neon tabs in janus (2026-11-21): tab state, scrolling, the rendered grid,
 and the janus key bindings that drive them. No tty, no Excel."""
+import datetime as dt
 import importlib.util
 import json
 import sys
@@ -338,3 +339,82 @@ def test_row_source_repaints_the_whole_live_row_and_stands_the_ledger_overlays_d
     t.row_source = lambda sheet, row, cols: (None, None)   # the book stops answering: the old sources return
     t.refresh_live()
     assert "0分" not in t.book_through and "ledger" in asked
+
+
+# ── off Ix: the snapshot comes from Ix (2026-11-22, Straylight's stale OneDrive copy) ──
+
+def _remote_snap(**kw):
+    import neon_grid, time as _t
+    sh = _sheet()
+    sh["live"] = {"row": 50, "excel_row": 324, "cells": {}}
+    snap = {"version": neon_grid.VERSION, "hash": "h", "built": 1, "src_mtime": int(_t.time()),
+            "day": dt.date.today().isoformat(), "sheets": [sh], "host": "ix", "emitted": int(_t.time()),
+            "book": {"0分": "08:12:05"}}
+    snap.update(kw)
+    return snap
+
+
+class _Proc:
+    def __init__(self, rc=0, out="", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_remote_mode_fetches_from_ix_and_never_reads_the_local_workbook(tmp_path):
+    import neon_tabs
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return _Proc(0, json.dumps(_remote_snap(), ensure_ascii=False))
+    t = neon_tabs.Tabs(state_file=tmp_path / "tab.json", grid_file=tmp_path / "grid.json",
+                       src=tmp_path / "no-such.xlsx", remote=True)
+    t.write_source = lambda since: 1 / 0            # the local ledger overlays must stay out of it
+    t.live_sources["0分"] = lambda: 1 / 0
+    t.row_source = lambda *a: 1 / 0
+    assert t.needs_build() is True                  # no snapshot yet, whatever the local file is
+    t.build(run)
+    assert calls and calls[0][0] == "ssh" and "ix" in calls[0] and calls[0][-1].endswith("neon_grid.py emit")
+    assert t.error == "" and t.names() == ["janus", "0分"]
+    assert t.book_through == {"0分": "08:12:05"} and not t.live_through
+    t.select(1)
+    status = _text(t.render(120, 24)).split("\n")[-1]
+    assert " ix " in status and "book 08:12" in status and "stale" not in status
+    assert t.needs_build() is False                 # just fetched
+    t.last_build -= neon_tabs.REMOTE_EVERY_S + 1
+    assert t.needs_build() is True                  # a Neon tab is showing: refetch on the timer
+    t.select(0)
+    assert t.needs_build() is False                 # timeline showing: no ssh traffic
+
+
+def test_remote_fetch_failure_keeps_the_last_snapshot_and_says_so(tmp_path):
+    import neon_tabs
+    t = neon_tabs.Tabs(state_file=tmp_path / "tab.json", grid_file=tmp_path / "grid.json", remote=True)
+    t.build(lambda cmd, **kw: _Proc(0, json.dumps(_remote_snap())))
+    before = (tmp_path / "grid.json").read_text()
+    t.build(lambda cmd, **kw: _Proc(255, "", "ssh: connect to host ix port 22: Operation timed out"))
+    assert "timed out" in t.error and (tmp_path / "grid.json").read_text() == before and t.names() == ["janus", "0分"]
+    t.build(lambda cmd, **kw: _Proc(0, json.dumps(_remote_snap(version=1))))
+    assert "snapshot v1" in t.error and (tmp_path / "grid.json").read_text() == before
+    t.build(lambda cmd, **kw: _Proc(0, "Last login: banner, not JSON"))
+    assert t.error.startswith("ix: ") and (tmp_path / "grid.json").read_text() == before
+
+
+def test_a_stale_workbook_save_shows_its_date(tmp_path):
+    """The status line read 'saved 12:34' for a copy six weeks old."""
+    import neon_tabs, time as _t
+    old = _t.mktime((2026, 10, 12, 12, 34, 0, 0, 0, -1))
+    t = _tabs(tmp_path, [_sheet()])
+    t.snap["src_mtime"] = old
+    t.select(1)
+    status = _text(t.render(140, 24)).split("\n")[-1]
+    assert "saved 10-12 12:34 ⚠ stale" in status
+
+
+def test_local_mode_is_the_default_under_pytest_and_with_explicit_files(tmp_path, monkeypatch):
+    import neon_tabs
+    monkeypatch.setattr(neon_tabs, "on_ix", lambda: False)
+    assert neon_tabs.Tabs(state_file=tmp_path / "t.json", grid_file=tmp_path / "g.json").remote is False
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    assert neon_tabs.Tabs(state_file=tmp_path / "t.json", grid_file=tmp_path / "g.json").remote is False
+    monkeypatch.setenv("NEON_GRID_REMOTE", "1")
+    assert neon_tabs.Tabs(state_file=tmp_path / "t.json", grid_file=tmp_path / "g.json").remote is True

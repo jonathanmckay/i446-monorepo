@@ -24,6 +24,7 @@ Snapshot shape (see build()):
 (the renderer shows it on the first visible row of the merge).
 
 CLI:  neon_grid.py build [--src X.xlsx] [--out grid.json] [--force]
+      neon_grid.py emit                               (JSON on stdout, for a janus on another Mac)
       neon_grid.py html <sheet> [--out page.html]     (eyeball a sheet)
 """
 from __future__ import annotations
@@ -805,6 +806,45 @@ def write_snapshot(src: Path = SRC, out: Path = OUT, force: bool = False) -> str
     return result
 
 
+def emit(src: Path = SRC, out: Path = OUT) -> dict:
+    """The snapshot another Mac should show, built HERE (Ix): the saved
+    workbook's grid with each sheet's live row repainted from the Neon book
+    (seed + ledger writes, recomputed). 2026-11-22: a janus running on
+    Straylight read Straylight's OneDrive copy, six weeks stale.
+
+    Read-only on this host: reuses `out` when it matches the workbook's save
+    and today, builds in memory otherwise, never writes (the januses running
+    here own that file). Adds "host", "emitted" (epoch) and "book"
+    ({sheet: "HH:MM:SS" of the newest write painted}; absent when the book
+    could not answer)."""
+    import socket
+    src_mtime = int(os.path.getmtime(src))
+    snap = load_snapshot(out)
+    if snap is None or snap.get("src_mtime") != src_mtime or snap.get("day") != dt.date.today().isoformat():
+        snap = build(src)
+    book: dict = {}
+    try:
+        import neon_book_reads
+        os.environ.setdefault("NEON_TEST_DB_OK", "1")
+        for sh in snap["sheets"]:
+            live = sh.get("live") or {}
+            if not live.get("excel_row"):
+                continue
+            values, through = neon_book_reads.row(sh["name"], live["excel_row"], list(sh["cols"]))
+            if values is None:
+                continue
+            row = sh["rows"][live["row"]]
+            paint_ = {c: v for c, v in values.items()
+                      if c in sh["cols"] and not (v == "" and row[sh["cols"].index(c)][0] == "")}
+            if paint_:
+                overlay(sh, paint_, zeros=True)
+            book[sh["name"]] = through or ""
+    except Exception:                                # the saved grid alone is still worth sending
+        pass
+    snap.update(host=socket.gethostname().split(".")[0].lower(), emitted=int(time.time()), book=book)
+    return snap
+
+
 def load_snapshot(out: Path = OUT) -> dict | None:
     try:
         snap = json.loads(out.read_text(encoding="utf-8"))
@@ -842,6 +882,9 @@ def main(argv: list | None = None) -> int:
     b.add_argument("--src", type=Path, default=SRC)
     b.add_argument("--out", type=Path, default=OUT)
     b.add_argument("--force", action="store_true")
+    e = sub.add_parser("emit")
+    e.add_argument("--src", type=Path, default=SRC)
+    e.add_argument("--out", type=Path, default=OUT)
     h = sub.add_parser("html")
     h.add_argument("sheet")
     h.add_argument("--src", type=Path, default=SRC)
@@ -851,6 +894,13 @@ def main(argv: list | None = None) -> int:
         try:
             print(write_snapshot(args.src, args.out, args.force))
         except Exception as e:                      # janus shows this line in the tab
+            print("error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+            return 1
+        return 0
+    if args.cmd == "emit":
+        try:
+            sys.stdout.write(json.dumps(emit(args.src, args.out), ensure_ascii=False, separators=(",", ":")))
+        except Exception as e:
             print("error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
             return 1
         return 0
