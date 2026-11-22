@@ -768,9 +768,7 @@ def _neon_wheel(mouse_event):
 
 def render_neon_tab() -> list:
     cols, lines = _neon_pane()
-    # Cursor at line 0: a timeline scrolled halfway down must not carry its
-    # vertical_scroll into the grid (see _hold_scroll).
-    return [("[SetCursorPosition]", "")] + NEON.render(cols, lines, _neon_wheel)
+    return NEON.render(cols, lines, _neon_wheel)
 
 
 # ─── Data fetchers ─────────────────────────────────────────────────────────
@@ -5428,7 +5426,9 @@ def render_all() -> list[tuple[str, str]]:
     _sync_width()
     if NEON.tab:
         STATE.visible_events = []
-        return render_neon_tab()
+        # Held at line 0: a timeline scrolled halfway down must not carry its
+        # vertical_scroll into the grid, which fills the window exactly.
+        return _hold_scroll(render_neon_tab(), 0)
     if STATE.block_view is not None:
         STATE.visible_events = []
         return _hold_scroll(render_block_view(), _main_scroll())
@@ -8508,50 +8508,6 @@ for _i, _d in enumerate("1234567890"):
     _bind_neon_jump(_d, _i)
 
 
-def _neon_body_h() -> int:
-    return NEON.body_height(_neon_pane()[1])
-
-
-@kb.add("down", filter=_neon_tab & _input_empty)
-def _(event):
-    NEON.move(drow=1, body_h=_neon_body_h())
-
-
-@kb.add("up", filter=_neon_tab & _input_empty)
-def _(event):
-    NEON.move(drow=-1, body_h=_neon_body_h())
-
-
-@kb.add("right", filter=_neon_tab & _input_empty)
-def _(event):
-    NEON.move(dcol=1, body_h=_neon_body_h())
-
-
-@kb.add("left", filter=_neon_tab & _input_empty)
-def _(event):
-    NEON.move(dcol=-1, body_h=_neon_body_h())
-
-
-@kb.add("pagedown", filter=_neon_tab)
-def _(event):
-    NEON.move(drow=max(1, _neon_body_h() - 1), body_h=_neon_body_h())
-
-
-@kb.add("pageup", filter=_neon_tab)
-def _(event):
-    NEON.move(drow=-max(1, _neon_body_h() - 1), body_h=_neon_body_h())
-
-
-@kb.add("home", filter=_neon_tab & _input_empty)
-def _(event):
-    NEON.home(_neon_body_h())
-
-
-@kb.add("end", filter=_neon_tab & _input_empty)
-def _(event):
-    NEON.end(_neon_body_h())
-
-
 @kb.add("tab", filter=_input_empty & ~_neon_tab)
 @kb.add("down", filter=(_input_empty | _edit_armed) & ~_neon_tab)  # arrow-key alias (user request 2026-07-17)
 def _(event):
@@ -8607,6 +8563,52 @@ def _(event):
         i = past[-1] if past else len(keys) - 1
     STATE.event_sel = keys[i]
     STATE.scroll_to_selection_until = time.monotonic() + 0.3
+
+
+# Neon grid scrolling. Registered AFTER the timeline's own ↑/↓ so those stay
+# the first `up`/`down` bindings in kb (their tests look them up by position).
+def _neon_body_h() -> int:
+    return NEON.body_height(_neon_pane()[1])
+
+
+@kb.add("down", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(drow=1, body_h=_neon_body_h())
+
+
+@kb.add("up", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(drow=-1, body_h=_neon_body_h())
+
+
+@kb.add("right", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(dcol=1, body_h=_neon_body_h())
+
+
+@kb.add("left", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.move(dcol=-1, body_h=_neon_body_h())
+
+
+@kb.add("pagedown", filter=_neon_tab)
+def _(event):
+    NEON.move(drow=max(1, _neon_body_h() - 1), body_h=_neon_body_h())
+
+
+@kb.add("pageup", filter=_neon_tab)
+def _(event):
+    NEON.move(drow=-max(1, _neon_body_h() - 1), body_h=_neon_body_h())
+
+
+@kb.add("home", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.home(_neon_body_h())
+
+
+@kb.add("end", filter=_neon_tab & _input_empty)
+def _(event):
+    NEON.end(_neon_body_h())
 
 
 @kb.add("escape")  # snap the detail band back to now; reset to today if browsing;

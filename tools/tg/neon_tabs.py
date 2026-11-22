@@ -334,8 +334,8 @@ def _row(sh: dict, r: int, shown: list, cols: int, first_visible: int) -> list:
             text = " " * pad + text
         elif align == "c":
             text = " " * (pad // 2) + text + " " * (pad - pad // 2)
-        else:
-            text = text + " " * pad
+        elif pad:
+            text = " " + text + " " * (pad - 1)               # Excel's cell padding: text never touches the cell to its left
         style = " ".join(x for x in (("bg:" + bg) if bg else "", fg or "", "bold" if bold else "") if x)
         out.append((style, text))
         used += w

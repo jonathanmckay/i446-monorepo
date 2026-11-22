@@ -1,0 +1,213 @@
+"""Neon tabs in janus (2026-11-21): tab state, scrolling, the rendered grid,
+and the janus key bindings that drive them. No tty, no Excel."""
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import neon_grid as ng  # noqa: E402
+import neon_tabs as nt  # noqa: E402
+
+
+def _sheet(name="0分", nrows=60, ncols=12, today=50, tab="#123456"):
+    styles = [[None, None, 0, "r"], ["#ff0000", "#ffffff", 1, "r"], [None, None, 0, "l"]]
+    rows = [[["H%d" % c, 2] for c in range(ncols)]]
+    for r in range(1, nrows):
+        rows.append([["w%d" % r if c == 0 else "d%d" % r if c == 1 else str(r * 100 + c), 1 if c == 3 else 0]
+                     for c in range(ncols)])
+    rows[10][0] = ["11.1", 2]
+    for r in range(11, 17):
+        rows[r][0] = ["", 2, r - 10]                       # vertical merge under row 10
+    return {"name": name, "tab": tab, "header_rows": 1, "frozen_cols": 2, "today_row": today,
+            "cols": [chr(65 + c) for c in range(ncols)], "row_nums": list(range(1, nrows + 1)),
+            "widths": [5, 6] + [5] * (ncols - 2), "styles": styles, "rows": rows, "skipped_rules": 0}
+
+
+def _tabs(tmp_path, sheets=None):
+    grid = tmp_path / "grid.json"
+    grid.write_text(json.dumps({"version": ng.VERSION, "hash": "h1", "built": 1, "src_mtime": 1,
+                                "sheets": sheets or [_sheet(), _sheet("0n", today=None, tab=None)]}))
+    return nt.Tabs(state_file=tmp_path / "tab.json", grid_file=grid, src=tmp_path / "neon.xlsx")
+
+
+def _text(frags):
+    return "".join(f[1] for f in frags)
+
+
+def test_tabs_cycle_and_persist(tmp_path):
+    t = _tabs(tmp_path)
+    assert t.names() == ["janus", "0分", "0n"] and t.tab == 0
+    t.next(); t.next()
+    assert t.sheet()["name"] == "0n"
+    t.next()
+    assert t.tab == 0                                       # wraps back to the timeline
+    t.select(1)
+    t.move(drow=-5, dcol=2, body_h=20)
+    again = nt.Tabs(state_file=tmp_path / "tab.json", grid_file=tmp_path / "grid.json")
+    assert again.tab == 1 and again.scroll["0分"] == t.scroll["0分"]   # survives a janus self-restart
+    again.select(99)
+    assert again.tab == 0
+
+
+def test_sheet_opens_on_today_and_clamps(tmp_path):
+    t = _tabs(tmp_path)
+    t.select(1)
+    lines = _text(t.render(40, 24)).split("\n")
+    assert len(lines) == 24                                 # exactly fills the pane
+    body = lines[2:-1]
+    assert body[-1 - nt.TODAY_FROM_BOTTOM].lstrip().startswith("w50")   # today sits a few rows above the bottom
+    t.move(drow=999, body_h=t.body_height(24))
+    assert "w59" in _text(t.render(40, 24))
+    t.move(drow=-9999, body_h=t.body_height(24))
+    assert _text(t.render(40, 24)).split("\n")[2].lstrip().startswith("w1")
+    t.home(t.body_height(24))
+    assert _text(t.render(40, 24)).split("\n")[2:-1][-1 - nt.TODAY_FROM_BOTTOM].lstrip().startswith("w50")
+
+
+def test_frozen_columns_stay_while_others_scroll(tmp_path):
+    t = _tabs(tmp_path)
+    t.select(1)
+    head = _text(t.render(31, 12)).split("\n")[1]
+    assert head.split() == ["H0", "H1", "H2", "H3", "H4", "H5"]         # 5+6 frozen, four 5-wide columns fit
+    t.move(dcol=3, body_h=10)
+    assert _text(t.render(31, 12)).split("\n")[1].split() == ["H0", "H1", "H5", "H6", "H7", "H8"]
+    t.move(dcol=99, body_h=10)
+    assert _text(t.render(31, 12)).split("\n")[1].split() == ["H0", "H1", "H11"]
+    assert "L–L" in _text(t.render(31, 12)).split("\n")[-1]
+
+
+def test_cell_styles_and_merge_label(tmp_path):
+    t = _tabs(tmp_path)
+    t.select(1)
+    t.scroll["0分"] = [12, 0]                                # top of the merge (row 10) is off-screen
+    frags = t.render(40, 12)
+    assert ("bg:#ff0000 #ffffff bold", " 1303") in frags    # coloured cell, right-aligned in 5 chars
+    first_body = _text(frags).split("\n")[2]
+    assert first_body.startswith(" 11.1")                   # the merged week label shows on the first visible row
+    assert _text(frags).split("\n")[3].startswith("     ")
+
+
+def test_strip_marks_current_tab_and_scrolls(tmp_path):
+    sheets = [_sheet("sheet%02d" % i, today=None, tab=None) for i in range(12)]
+    t = _tabs(tmp_path, sheets)
+    t.select(11)
+    strip = _text(t.render(40, 10)).split("\n")[0]
+    assert "sheet10" in strip and strip.startswith("‹") and len(strip) == 40
+    t.select(1)
+    frags = t.render(40, 10)
+    assert frags[1][0].startswith("bold bg:") and frags[1][1] == " sheet00 "
+    assert _text(frags).split("\n")[0].rstrip().endswith("›")
+
+
+def test_wide_glyph_columns_keep_their_width(tmp_path):
+    sh = _sheet()
+    sh["rows"][0][2] = ["卯辰巳午", 2]                      # 8 cells wide in a 5-wide column
+    t = _tabs(tmp_path, [sh])
+    t.select(1)
+    head = _text(t.render(40, 10)).split("\n")[1]
+    assert ng.cwidth(head) <= 40 and "卯辰" in head and "卯辰巳" not in head
+
+
+def test_needs_build_only_for_a_visible_stale_tab(tmp_path):
+    t = _tabs(tmp_path)
+    (tmp_path / "neon.xlsx").write_text("x")
+    assert not t.needs_build(now=1000)                      # timeline showing, snapshot exists
+    t.select(1)
+    assert t.needs_build(now=1000)
+    calls = []
+
+    class R:
+        returncode, stdout, stderr = 0, "written", ""
+    t.build(run=lambda cmd, **kw: calls.append(cmd) or R())
+    assert calls and calls[0][2] == "build" and not t.error
+    assert not t.needs_build()                              # workbook unchanged since that build
+    R.returncode, R.stderr = 1, "error: PermissionError: denied"
+    t.built_src_mtime = 0
+    t.last_build = 0
+    t.build(run=lambda cmd, **kw: R())
+    assert "PermissionError" in t.error
+    assert "PermissionError" in _text(t.render(80, 10)).split("\n")[-1]   # said in the status line, not hidden
+
+
+def test_no_snapshot_says_so(tmp_path):
+    t = nt.Tabs(state_file=tmp_path / "tab.json", grid_file=tmp_path / "none.json", src=tmp_path / "neon.xlsx")
+    assert t.names() == ["janus"] and t.needs_build(now=5) is False     # no workbook either: nothing to build
+    (tmp_path / "neon.xlsx").write_text("x")
+    assert t.needs_build(now=5) is True
+
+
+# --- janus glue --------------------------------------------------------------
+
+def _load_janus():
+    spec = importlib.util.spec_from_file_location("janus_neon_tabs", HERE / "janus.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["janus_neon_tabs"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Event:
+    def __init__(self, app):
+        self.app = app
+
+
+class _App:
+    def invalidate(self):
+        pass
+
+
+def _binding(mod, *keys):
+    want = tuple(keys)
+    got = [b for b in mod.kb.bindings if tuple(getattr(k, "value", k) for k in b.keys) == want]
+    assert got, want
+    return got
+
+
+def test_janus_tab_keys_and_render(tmp_path, monkeypatch):
+    mod = _load_janus()
+    assert mod.NEON.tab == 0 and mod.NEON.snap is None      # headless never picks up JM's open tab
+    timeline = _text(mod.render_all())
+    mod.NEON = _tabs(tmp_path)
+    monkeypatch.setattr(mod, "_bg_fetch", lambda app, fn: None)
+    ev = _Event(_App())
+    mod.STATE.event_sel = ("x", 1)
+    _binding(mod, "c-t")[0].handler(ev)
+    assert mod.NEON.tab == 1 and mod.STATE.event_sel is None   # a hidden selection must not take ^X/⏎
+    out = mod.render_all()
+    assert out[0] == ("[SetCursorPosition]", "") and " 0分 " in _text(out) and _text(out) != timeline
+    assert all(len(f) == 3 for f in out[1:])                # every fragment carries the wheel handler
+    assert sum(1 for f in out if f[0] == "[SetCursorPosition]") == 1
+    _binding(mod, "escape", "3")[0].handler(ev)             # ⌥3 = second sheet
+    assert mod.NEON.sheet()["name"] == "0n"
+    _binding(mod, "escape", "0")[0].handler(ev)             # no tenth tab: stays put
+    assert mod.NEON.sheet()["name"] == "0n"
+    esc = [b for b in _binding(mod, "escape") if b.filter()][0]
+    esc.handler(ev)
+    assert mod.NEON.tab == 0 and _text(mod.render_all()) == timeline
+
+
+def test_janus_arrows_scroll_the_grid_not_the_selection(tmp_path, monkeypatch):
+    mod = _load_janus()
+    mod.NEON = _tabs(tmp_path)
+    monkeypatch.setattr(mod, "_bg_fetch", lambda app, fn: None)
+    ev = _Event(_App())
+    live = lambda key: [b for b in _binding(mod, key) if b.filter()]
+    assert len(live("down")) == 1 and len(live("c-i")) == 1  # timeline: selection keys
+    mod.NEON.select(1)
+    mod.render_all()
+    assert live("c-i") == []                                # Tab no longer selects timeline rows
+    down = live("down")
+    assert len(down) == 1
+    before = list(mod.NEON.scroll["0分"])
+    down[0].handler(ev)
+    live("up")[0].handler(ev)
+    live("up")[0].handler(ev)
+    live("right")[0].handler(ev)
+    assert mod.NEON.scroll["0分"] == [before[0] - 1, 1]
+    live("home")[0].handler(ev)
+    assert mod.NEON.scroll["0分"] == before
+    mod.input_buffer.text = "0900-0930 x"
+    assert live("down") == []                               # typing: ↓ is the input line's own key again
+    mod.input_buffer.reset()

@@ -198,7 +198,7 @@ def _strip_literals(sec: str):
     lits = re.findall(r'"([^"]*)"|\\(.)', sec)
     core = re.sub(r'"[^"]*"|\\.', "\x00", sec)
     m = re.search(r"[0#?][0#?,.]*(?:E[+-]0+)?%?|%", core)
-    if not m:
+    if not m or not re.search(r"[0#%]", m.group(0)):       # `"-"??`: only space placeholders, no number
         return None, "".join(a or b for a, b in lits), ""
     pre_n = core[:m.start()].count("\x00")
     flat = [a or b for a, b in lits]

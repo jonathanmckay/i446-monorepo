@@ -58,3 +58,14 @@ right pane is a different size.
 ### Dependencies
 Already present: `rich` (unused but available), `prompt_toolkit`,
 `google-api-python-client`, `google-auth`, `wcwidth`. No new deps required.
+
+## Neon tabs (2026-11-21)
+
+janus also shows the Neon workbook's sheets, one per tab, with Excel's cell colours.
+
+- `^T` next tab · `⌥1`–`⌥0` jump (`⌥1` is the timeline) · `Esc` back to the timeline
+- On a Neon tab with the input box empty: arrows scroll, `PgUp`/`PgDn` page, `Home` returns to today's row, `End` goes to the bottom. The mouse wheel scrolls rows. The input box still takes /tg commands.
+- Data comes from the workbook file on Ix, not from Excel: `neon_grid.py build` writes `~/.cache/janus/neon-grid.json` (text + resolved colours for every visible sheet) and janus re-runs it in a subprocess while a Neon tab is showing and the file has been re-saved. The view trails Excel by up to the daemon's save interval (~2 min) plus the 90 s rebuild floor.
+- Pinned header rows and frozen columns per sheet are declared in `neon_grid.SHEETS`.
+- Colours are snapped to the terminal's 256 colours unless janus is started with `JANUS_TRUECOLOR=1` on a terminal chain that passes 24-bit colour (mosh ≥ 1.4, tmux with the `RGB` feature).
+- `neon_tabs.py` holds the tab state and rendering (no prompt_toolkit); janus.py only routes keys.
