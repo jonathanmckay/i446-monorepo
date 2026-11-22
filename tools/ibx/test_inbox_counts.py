@@ -1,4 +1,4 @@
-"""inbox_counts: per-habit pending counts + success flags (2026-11-12).
+-"""inbox_counts: per-habit pending counts + success flags (2026-11-12).
 
 JM: show `ibx i9 (4) [20] ✉3` in dtd and close the card only when every
 source behind it was pinged successfully and came back empty. The old
@@ -27,8 +27,7 @@ def test_channel_of_maps_every_queue_type():
     assert ic.channel_of(_slack("github")) == "slack:github"
     assert ic.channel_of({"type": "outlook", "_data": {}}) == "outlook"
     assert ic.channel_of({"type": "teams", "_data": {}}) == "teams"
-    assert ic.channel_of({"type": "weird"}) is None
-
+---------
 
 def test_every_channel_in_the_map_is_reachable_from_channel_of():
     # a typo in HABIT_CHANNELS would silently make a habit uncountable
