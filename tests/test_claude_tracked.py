@@ -239,7 +239,7 @@ def test_local_tmux_inner_exports_checkpoint(ct, monkeypatch, capsys):
 # after_ix_exit used to close the surface only when the workspace held another Claude tab and
 # otherwise relaunched a fresh thread in it; with one Claude tab per workspace that was every /fin.
 
-def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux'):
+def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux', tmp_log=None):
     """Run after_ix_exit with the ix marker faked; returns (result, cmux argvs, relaunches)."""
     import types
     if surface:
@@ -249,6 +249,7 @@ def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='
     monkeypatch.setattr(ct, 'fin_closed_on_ix', lambda name, host: marker)
     monkeypatch.setattr(ct, 'cmux_resume_clear', lambda name: None)
     monkeypatch.setattr(ct, 'cmux_bin', lambda: cmux, raising=False)
+    monkeypatch.setattr(ct, 'FIN_TAB_LOG', tmp_log or Path('/nonexistent-dir/fin.log'), raising=False)
     monkeypatch.setattr(ct, 'other_claude_tabs', lambda: [], raising=False)   # the lone-tab case
     relaunched, calls = [], []
     monkeypatch.setattr(ct, 'exec_on_ix', lambda *a, **k: relaunched.append(a))
@@ -264,12 +265,13 @@ def test_fin_closes_the_lone_claude_tab_instead_of_starting_a_fresh_thread(ct, m
     done, calls, relaunched = _fin_exit(ct, monkeypatch)
     assert done is True
     assert relaunched == []                                   # no new claude session in the tab
-    assert calls == [['/x/cmux', 'close-surface', '--surface', 'SURF-1']]
+    assert calls[-1] == ['/x/cmux', 'close-surface', '--surface', 'SURF-1']
+    assert [c for c in calls if c[1] == 'close-surface' and '--help' not in c] == calls[-1:]
 
 
 def test_fin_close_failure_says_so_and_still_starts_no_thread(ct, monkeypatch, capsys):
     done, calls, relaunched = _fin_exit(ct, monkeypatch, close_rc=1)
-    assert relaunched == [] and len(calls) == 1
+    assert relaunched == [] and len([c for c in calls if c[1:2] == ['close-surface'] and '--help' not in c]) == 1
     assert 'close it by hand' in capsys.readouterr().out
     assert done is False            # callers end the way a plain exit does
 
@@ -322,3 +324,15 @@ def test_fin_closed_here_reads_the_session_id_from_a_two_line_marker(ct, monkeyp
     monkeypatch.setattr(ct, 'tmux_session_name', lambda: 'cc-x')
     (tmp_path / 'cc-x').write_text('sid-1\nsurface=SURF-1\n')
     assert ct.fin_closed_here('sid-1', now=(tmp_path / 'cc-x').stat().st_mtime + 10 * ct.FIN_CLOSE_GRACE_S)
+
+
+def test_fin_tab_close_leaves_evidence_where_ix_can_read_it(ct, monkeypatch, tmp_path):
+    """2026-11-22: "it closed the claude session, but not the cmux tab" and ix had nothing to say
+    why. The close attempt, its rc and stderr, and the layout before it go to a synced log."""
+    import json
+    log = tmp_path / 'fin.log'
+    _fin_exit(ct, monkeypatch, close_rc=1, tmp_log=log)
+    rows = [json.loads(l) for l in log.read_text().splitlines()]
+    assert [r['step'] for r in rows] == ['start', 'layout', 'close']
+    assert rows[0]['CMUX_SURFACE_ID'] == 'SURF-1'
+    assert rows[2]['rc'] == 1 and rows[2]['err'] == 'no such surface'
