@@ -9418,5 +9418,25 @@
     "unit": "J206",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-22",
+    "effective": "2026-11-30",
+    "kind": "leased",
+    "unit_id": "1203",
+    "prop": "tc68",
+    "unit": "B54",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-22",
+    "effective": "2026-11-22",
+    "kind": "movein",
+    "unit_id": "806",
+    "prop": "tc34",
+    "unit": "A101",
+    "tenant": null,
+    "baseline": false
   }
 ]
