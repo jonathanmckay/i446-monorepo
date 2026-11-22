@@ -3044,6 +3044,25 @@ def _habit_chip_style(name: str) -> str:
     return f"bold bg:{hexv or '#444444'} #ffffff"
 
 
+# 0n habit columns whose Todoist card carries a different name, so a lookup by
+# the column name finds no card and a delay on the card never hid the chip
+# (2026-11-22: xk20/xk22 stayed up with 轩轩中文/琪琪中文 delayed to 14:00).
+# Mirrors the one-column entries of did-fast.py's SPLIT_HABITS (a parity test
+# pins the two together). `bigs` is left out: it fed both columns and has no
+# card any more.
+HABIT_CARD_ALIASES: dict[str, tuple[str, ...]] = {
+    "xk20": ("轩轩中文",),
+    "xk22": ("琪琪中文",),
+}
+
+
+def _habit_card_keys(name: str) -> list[str]:
+    """Normalized HABIT_DUES / HABIT_CARDS keys for a habit column: its own
+    name plus any differently-named card that feeds it."""
+    key = _norm_key(name)
+    return [key] + [_norm_key(a) for a in HABIT_CARD_ALIASES.get(key, ())]
+
+
 def _habit_deferred(name: str) -> bool:
     """True when the habit's 0neon Todoist card(s) have ALL been pushed past
     today — i.e. the habit was deferred, so it can't be completed today and
@@ -3060,7 +3079,7 @@ def _habit_deferred(name: str) -> bool:
     skip the check: the cache only describes today."""
     if STATE.day_offset != 0:
         return False
-    dues = HABIT_DUES.get(_norm_key(name))
+    dues = [d for k in _habit_card_keys(name) for d in HABIT_DUES.get(k, [])]
     if not dues:
         return False
     today = dt.datetime.now(_tz()).date().isoformat()
@@ -3068,48 +3087,92 @@ def _habit_deferred(name: str) -> bool:
 
 
 BLOCK_SNOOZE = Path.home() / ".local/state/jm/dtd-block-snooze.json"
-_snooze_cache: dict = {"mtime": None, "map": {}}
+# Every host mirrors its own snooze file here (Syncthing); dtd unions them
+# (tools/dtd/dtd.py _snoozed_ids) and so must this, or a delay made in dtd on
+# one Mac never reaches a janus running on another (2026-11-22: 1st hci and
+# both 中文 cards delayed on Straylight, all three still on Ix's strip).
+SNOOZE_MIRROR_DIR = Path.home() / "vault" / "z_ibx"
+SNOOZE_TTL = 2.0   # seconds between directory scans; this runs on every repaint
+_snooze_cache: dict = {"sig": None, "at": 0.0, "docs": []}
 
 
-def _load_block_snoozes() -> dict[str, int]:
-    """dtd's same-day block delays: {todoist card id: block start hour},
-    date-gated to today. mtime-cached — this is read on every repaint."""
+def _snooze_docs() -> list[dict]:
+    """Raw {date, snoozes} dicts from this host's snooze file and every
+    host's mirror. Cached on each file's (mtime_ns, size) and rescanned at
+    most every SNOOZE_TTL. The date is NOT judged here: a janus left running
+    past midnight would otherwise keep yesterday's delays hiding today's
+    habits, so _snoozed_card_ids gates on it at read time."""
+    now_m = time.monotonic()
+    if _snooze_cache["sig"] is not None and now_m - _snooze_cache["at"] < SNOOZE_TTL:
+        return _snooze_cache["docs"]
+    paths = [BLOCK_SNOOZE]
     try:
-        mtime = BLOCK_SNOOZE.stat().st_mtime
+        paths += sorted(SNOOZE_MIRROR_DIR.glob("dtd-block-snooze-*.json"))
     except OSError:
-        return {}
-    if _snooze_cache["mtime"] != mtime:
+        pass
+    sig = []
+    for path in paths:
         try:
-            data = json.loads(BLOCK_SNOOZE.read_text())
-            ok = data.get("date") == dt.datetime.now(_tz()).date().isoformat()
-            _snooze_cache["map"] = ({str(k): int(v) for k, v in
-                                     (data.get("snoozes") or {}).items()}
-                                    if ok else {})
-        except Exception:
-            _snooze_cache["map"] = {}
-        _snooze_cache["mtime"] = mtime
-    return _snooze_cache["map"]
+            st = path.stat()
+        except OSError:
+            continue
+        sig.append((str(path), st.st_mtime_ns, st.st_size))
+    sig = tuple(sig)
+    if sig != _snooze_cache["sig"]:
+        docs = []
+        for spath, _m, _sz in sig:
+            try:
+                data = json.loads(Path(spath).read_text())
+            except Exception:
+                continue          # mid-sync or partial mirror: skip it
+            if isinstance(data, dict):
+                docs.append(data)
+        _snooze_cache["docs"] = docs
+        _snooze_cache["sig"] = sig
+    _snooze_cache["at"] = now_m
+    return _snooze_cache["docs"]
+
+
+def _snoozed_card_ids(now: dt.datetime | None = None) -> set[str]:
+    """Todoist card ids still delayed right now, on any host. dtd stores a
+    block delay as an hour of day and a minute or free-form delay as an
+    absolute epoch; anything over 24 is the epoch. A card is hidden while ANY
+    host still holds it, the same union dtd's own list applies."""
+    now = now or dt.datetime.now(_tz())
+    today = now.date().isoformat()
+    out: set[str] = set()
+    for data in _snooze_docs():
+        if data.get("date") != today:
+            continue
+        for cid, v in (data.get("snoozes") or {}).items():
+            try:
+                still = now.timestamp() < float(v) if float(v) > 24 else now.hour < int(v)
+            except (TypeError, ValueError):
+                continue
+            if still:
+                out.add(str(cid))
+    return out
 
 
 def _habit_block_snoozed(name: str) -> bool:
-    """True when every one of the habit's cards still due today has been
-    block-delayed (dtd ctrl-v) to a block that hasn't started yet — same
-    hide-until-the-hour-arrives rule dtd's own list applies, mirrored onto
-    the habit strip's pending row (user request 2026-07-27: "tasks that are
-    delayed for a different block don't show up in the 1st few rows").
-    Reappears on its own once the chosen block starts (now.hour >= hour)."""
+    """True when every one of the habit's cards still due today is delayed in
+    dtd (ctrl-v block, minute or free-form delay, on any host) to a time that
+    hasn't come yet: the same hide-until-then rule dtd's own list applies,
+    mirrored onto the habit strip (user request 2026-07-27: "tasks that are
+    delayed for a different block don't show up in the 1st few rows"; widened
+    2026-11-22 to other hosts' delays, epoch delays and aliased cards).
+    Reappears on its own once the time arrives."""
     if STATE.day_offset != 0:
         return False
-    snoozes = _load_block_snoozes()
-    if not snoozes:
-        return False
-    today = dt.datetime.now(_tz()).date().isoformat()
-    todays = [cid for cid, due in HABIT_CARDS.get(_norm_key(name), [])
+    now = dt.datetime.now(_tz())
+    today = now.date().isoformat()
+    todays = [cid for k in _habit_card_keys(name)
+              for cid, due in HABIT_CARDS.get(k, [])
               if cid and (due or "")[:10] <= today]
     if not todays:
         return False
-    now_h = dt.datetime.now(_tz()).hour
-    return all(cid in snoozes and now_h < snoozes[cid] for cid in todays)
+    snoozed = _snoozed_card_ids(now)
+    return all(cid in snoozed for cid in todays)
 
 
 def _habit_row(chips: list[tuple[str, str]], budget: int = WIDTH_HINT) -> list[tuple[str, str]]:
@@ -3159,7 +3222,10 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
       overall "hcb" standing (always, signed — HCBI_ALWAYS_SHOWN) and a
       "behind" chip for any other HCBI_BEHIND_DOMAINS total that's negative.
     - line 3 (2026-09-17): today's 分 by domain, one padded cell per 0分
-      column P:Y in sheet order/fills — see _domain_pts_chips.
+      column P:Y in sheet order/fills — see _domain_pts_chips — closed by
+      the ص prayer counter (2026-11-22).
+    2026-11-22: line 1 lost its leading -1n score chip and the prayer
+    counter, and hides habits whose card is delayed in dtd on any host.
     Each line independently drops whatever doesn't fit in WIDTH_HINT."""
     if not (STATE.habits_today or STATE.habits_ytd or STATE.daily_dozen
             or STATE.hcbi_behind or STATE.domain_points):
@@ -3167,20 +3233,12 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
     # An explicit zero is already filtered out at fetch time -- here it's
     # just "has a value" (done) vs. "blank" (v is None, pending) that split
     # the two rows.
-    # -1n leads the done row as ONE chip: the current block's ritual score so
-    # far, a bare number on the red chip — never a strip of ritual emojis
-    # (user request 2026-07-21: "numbers with colors [rather] than emojis").
-    # Local build-order read, same source as the block-line scores.
-    neon_chip: list[tuple[str, str]] = []
-    if STATE.day_offset == 0:
-        blk = hour_to_block(view_now().hour)
-        label = (bo_emojis if bo_emojis is not None else _read_block_emojis()).get(blk[0]) if blk else ""
-        if label:
-            neon_chip = [(NEON_PTS_STYLE, f"{label}")]
-    # Done habits no longer render at all (JM 2026-11-10: "only show the -1n
-    # tasks that are not done"): the line is the ritual-score chip, then what
-    # is still open. A habit with a value today simply drops off it.
-    done_chips = _pack_number_chips(neon_chip)
+    # No -1n score chip here any more (JM 2026-11-22: "What is the remaining
+    # '1'? Not sure we need that"): it was the current block's ritual score, a
+    # bare number that read as noise, and the block line already shows it.
+    # `bo_emojis` stays in the signature for the callers that pass it.
+    # Done habits don't render either (JM 2026-11-10: "only show the -1n tasks
+    # that are not done"), so line 1 is purely what is still open.
     # Minimum-commitment habits: one ±N YTD-standing chip each (same numbers
     # as the jm dashboard "2026" header cards) on the pending line AFTER the
     # pending 0neon names, each in its own purple (HABIT_YTD_COLORS —
@@ -3195,15 +3253,13 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
     pending_chips += [(f"bold bg:{HABIT_YTD_COLORS.get(name, '#7c4dff')} #ffffff",
                        f"{name} {v:+g} ")
                       for name, v in STATE.habits_ytd.items() if v <= 0]
-    # ص prayer counter: always-visible labeled chip ("ص 3") closing the
-    # pending line, after the 其他人 YTD chip — a count toward 5, so the
-    # bare-number done-chip format (or disappearing into the pending names)
-    # never fit it (user request 2026-07-27; placement follow-up same day).
-    # Kept OUT of pending_chips and reserved its own width budget below: a
-    # busy day (many done habits, several pending names) was packing the row
-    # full before reaching it, so "always-visible" silently wasn't (bug
-    # report 2026-08-30, "-1n habits not showing up" — the prayer chip and
-    # trailing pending names were the ones actually getting dropped).
+    # ص prayer counter: always-visible labeled chip ("ص 3"), a count rather
+    # than a done/pending habit (user request 2026-07-27). It closes line 3,
+    # the 分-by-domain row (JM 2026-11-22: "for the prayers, we can put that
+    # down in the third row"), which leaves line 1 as only what is still
+    # open. Its width is reserved below so a full row drops a domain cell
+    # before it drops the counter (the 2026-08-30 "always-visible silently
+    # wasn't" bug, when it was packed last on a crowded line 1).
     prayer_chip = None
     if STATE.prayer_count is not None:
         prayer_chip = (_habit_chip_style("ص"), f"ص {STATE.prayer_count:g} ")
@@ -3218,11 +3274,7 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
                     for name, color in HCBI_BEHIND_DOMAINS.items()
                     if name in STATE.hcbi_behind
                     and (name in HCBI_ALWAYS_SHOWN or STATE.hcbi_behind[name] < 0)]
-    habit_line = done_chips + pending_chips
-    reserve = dwidth(prayer_chip[1]) if prayer_chip else 0
-    habit_row = _habit_row(habit_line, budget=max(0, WIDTH_HINT - reserve))
-    if prayer_chip:
-        habit_row.append(prayer_chip)
+    habit_row = _habit_row(pending_chips)
     # Today's calories close the hcb line as a labeled chip (JM 2026-11-10).
     # Its width is reserved like the prayer chip's: appended last and packed
     # with the rest, a crowded dozen row would drop it first (the 2026-08-30
@@ -3234,8 +3286,12 @@ def render_habits_today(bo_emojis: dict[str, str] | None = None) -> list[tuple[s
     dozen_row = _habit_row(dozen_chips, budget=max(0, WIDTH_HINT - reserve2))
     if kcal_chip:
         dozen_row.append(kcal_chip)
+    reserve3 = dwidth(prayer_chip[1]) if prayer_chip else 0
+    pts_row = _habit_row(_domain_pts_chips(), budget=max(0, WIDTH_HINT - reserve3))
+    if prayer_chip:
+        pts_row.append(prayer_chip)
     out: list[tuple[str, str]] = []
-    for chips in (habit_row, dozen_row, _habit_row(_domain_pts_chips())):
+    for chips in (habit_row, dozen_row, pts_row):
         if chips:
             out.extend(chips)
             out.append(("", "\n"))

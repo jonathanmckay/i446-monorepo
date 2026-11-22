@@ -60,16 +60,20 @@ def test_strip_has_no_ritual_emoji_chips(monkeypatch):
         assert emoji not in text
 
 
-def test_neon_score_chip_leads_done_row(monkeypatch):
+def test_no_neon_score_chip_on_habit_strip(monkeypatch):
+    """JM 2026-11-22: "What is the remaining '1'? Not sure we need that". The
+    leading chip was the current block's -1n ritual score; the block line
+    already shows it, so the strip no longer does."""
     mod = _load_tui()
     monkeypatch.setattr(mod, "_read_block_emojis", lambda: {"巳": "7"})
     monkeypatch.setattr(mod, "hour_to_block", lambda h: ("巳", 8, 9))
     mod.STATE.day_offset = 0
-    mod.STATE.habits_today = [("0l", 1.0)]
+    mod.STATE.habits_today = [("0l", 1.0), ("hiit", None)]
     mod.STATE.habits_ytd = {}
     frags = mod.render_habits_today()
-    sty, txt = frags[0]
-    assert txt.strip() == "7" and sty == mod.NEON_PTS_STYLE
+    assert frags, "the pending habit still renders"
+    assert all(sty != mod.NEON_PTS_STYLE for sty, *_ in frags)
+    assert "7" not in "".join(t for _s, t, *_ in frags)
 
 
 def test_ytd_chips_trail_pending_row_in_purples(monkeypatch):
