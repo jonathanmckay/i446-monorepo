@@ -1351,19 +1351,46 @@ def _frag(style: str, text: str, handler=None) -> tuple:
     return (style, text, handler) if handler is not None else (style, text)
 
 
+# Kid tags (2026-11-21): kid time is Toggl project xk87 + a kid tag
+# (config.SUBPROJECTS), so the tag is the only thing telling Theo's 中文 from
+# Ren's. They get their own chips (light oranges in xk87's family, dark text)
+# and keep two same-named entries apart in the merge loops (_kid_tags).
+KID_TAG_COLORS = {"xk20": "#ff9100", "xk22": "#ffab40", "xk26": "#ffcc80"}
+_KID_TAG_FALLBACK = "#ffcc80"
+
+
+def _kid_codes() -> set:
+    return set(globals().get("SUBPROJECTS") or {}) | set(KID_TAG_COLORS)
+
+
+def _kid_tags(tags) -> frozenset:
+    """The kid codes among an entry's tags. Two same-desc entries merge into
+    one row only when these match: "中文 #xk20" then "中文 #xk22" are two
+    sessions, not a stop/resume split (JM 2026-11-21). Other tags (-1, a
+    habit tag added to one fragment) never block a merge."""
+    kids = _kid_codes()
+    return frozenset(t.lower() for t in (tags or []) if str(t).lower() in kids)
+
+
 def _visible_tags(tags) -> list[str]:
     """Entry tags worth showing as a chip on a block row: the -1/-2/-3
-    media-value tiers (VALUE_TAG_COLORS) plus any tag that's itself a
+    media-value tiers (VALUE_TAG_COLORS), any tag that's itself a
     project/domain code (credit-sharing tags like xk87/家 on a swim that
-    also counts toward family time) — colored via PROJECT_COLORS. Anything
-    else (e.g. incidental Toggl tags with no display color) stays hidden,
-    same as the old VALUE_TAGS-only filter."""
-    return [t for t in (tags or []) if t in VALUE_TAG_COLORS or t in PROJECT_COLORS]
+    also counts toward family time) — colored via PROJECT_COLORS — and the
+    kid codes (KID_TAG_COLORS). Anything else (e.g. incidental Toggl tags
+    with no display color) stays hidden."""
+    kids = _kid_codes()
+    return [t for t in (tags or [])
+            if t in VALUE_TAG_COLORS or t in PROJECT_COLORS or str(t).lower() in kids]
 
 
 def _tag_chip_style(tag: str) -> str:
     hexv = VALUE_TAG_COLORS.get(tag) or PROJECT_COLORS.get(tag)
-    return f"bold bg:{hexv} #ffffff" if hexv else ""
+    if hexv:
+        return f"bold bg:{hexv} #ffffff"
+    if str(tag).lower() in _kid_codes():
+        return f"bold bg:{KID_TAG_COLORS.get(str(tag).lower(), _KID_TAG_FALLBACK)} #000000"
+    return ""
 
 
 def _tag_chips_width(tags: list[str]) -> int:
@@ -4553,6 +4580,7 @@ def render_morning(bo_emojis: dict[str, str] | None = None) -> list[tuple[str, s
         # otherwise vanish, glued onto the earlier block's span).
         if merged and merged[-1]["desc"] == e["desc"] \
                 and _mergeable_desc(e["desc"]) \
+                and _kid_tags(merged[-1].get("tags")) == _kid_tags(e.get("tags")) \
                 and _same_block(merged[-1]["start_dt"], e["start_dt"]):
             # "contiguous" tracks whether every sub-entry butts directly up
             # against the next with no gap -- true for the common case (a
@@ -4714,6 +4742,9 @@ def _detail_merge_past(win_start, win_end) -> list[dict]:
         if en <= s:
             continue
         desc = display_desc(e["desc"]) or "(blank)"
+        # This band draws no chips, so a kid tag rides in the text: it keeps
+        # Theo's and Ren's 中文 apart and says which is which.
+        desc += "".join(f" #{k}" for k in sorted(_kid_tags(e.get("tags"))))
         if (segs and segs[-1]["desc"] == desc and _mergeable_desc(e["desc"])
                 and (s - segs[-1]["end"]).total_seconds() <= 60):
             segs[-1]["end"] = en
@@ -5152,6 +5183,7 @@ def _current_block_lines(blk_name, blk_sh, blk_eh, now, emojis) -> list[tuple[st
         # otherwise vanish, glued onto the earlier block's span).
         if merged and merged[-1]["desc"] == e["desc"] \
                 and _mergeable_desc(e["desc"]) \
+                and _kid_tags(merged[-1].get("tags")) == _kid_tags(e.get("tags")) \
                 and _same_block(merged[-1]["start_dt"], e["start_dt"]):
             # See render_morning's identical merge loop for why this is
             # tracked (bug report 2026-09-10: multi-id merges blanked the
