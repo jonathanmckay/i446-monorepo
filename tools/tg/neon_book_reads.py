@@ -182,10 +182,10 @@ def reseed_due() -> bool:
 
 
 def maybe_reseed(run=None) -> bool:
-    """While Excel is still saving the workbook: every RESEED_EVERY_S, when the
-    file is newer than the seed, run book_check.py check --reseed (compare the
-    book with the save, log any hand edit, adopt the save). A subprocess: the
-    openpyxl loads are ~2 s and ~140 MB. True when one ran."""
+    """Every RESEED_EVERY_S: run the backend shadow over the journal, and when
+    the workbook file is newer than the seed, book_check.py check --reseed
+    (compare the book with the save, log any hand edit, adopt the save).
+    Subprocesses: the openpyxl loads are ~2 s and ~140 MB. True when one ran."""
     if os.environ.get("PYTEST_CURRENT_TEST") and run is None:
         return False
     now = time.monotonic()
@@ -194,13 +194,23 @@ def maybe_reseed(run=None) -> bool:
     try:
         from neon import book
         _reseed["at"] = now
-        if not book.SEED.exists() or not book.stale():
+        if not book.SEED.exists():
             return False
         import subprocess
-        (run or subprocess.run)(
-            ["/usr/bin/python3", str(Path.home() / "i446-monorepo/tools/neon-ledger/book_check.py"), "check", "--reseed"],
-            capture_output=True, text=True, timeout=180, stdin=subprocess.DEVNULL)
-        return True
+        tools = Path.home() / "i446-monorepo/tools/neon-ledger"
+        ran = False
+        # The backend shadow judges every journaled write since its last run
+        # against the book; it keeps its own state, so it runs whether or not
+        # the workbook moved.
+        if (Path.home() / ".local/share/neon/backend-shadow.pickle").exists():
+            (run or subprocess.run)(["/usr/bin/python3", str(tools / "backend_shadow.py"), "run"],
+                                    capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+            ran = True
+        if book.stale():
+            (run or subprocess.run)(["/usr/bin/python3", str(tools / "book_check.py"), "check", "--reseed"],
+                                    capture_output=True, text=True, timeout=180, stdin=subprocess.DEVNULL)
+            ran = True
+        return ran
     except Exception:
         return False
 
