@@ -247,18 +247,23 @@ def tab_origin(session: str, env=os.environ) -> str:
 
 
 def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
-    """/fin closes the cmux tab (2026-11-14): when this thread's tab is driven from another
-    host (tab_origin), leave fin-close/<tmux
-    session> = <session id> and ask the Stop hook to type `/exit` (by-session/<sid>.exit, see
-    below). The Ix launcher reads the marker when claude exits and
-    lets the tmux session end; the Straylight launcher then closes the tab, always (2026-11-22:
-    it used to start a fresh thread in a lone tab; see claude-tracked, after_ix_exit). Line 2 of
-    the marker is `surface=<cmux surface id>` (the tmux session's @cmux_surface tag), which is
-    how a tab that attached under another tmux name (`cc r`, `cc <title>`) finds its marker.
-    Local/phone sessions: nothing."""
-    origin = tab_origin(session, env)
-    if not origin or origin == socket.gethostname().split(".")[0].lower():
-        return False
+    """/fin ends the thread and closes its tab, the same everywhere (2026-11-22, JM: "I'd like to
+    keep consistent behavior"). When the thread's tmux session is the launcher's own
+    (CC_FIN_ENDS_TMUX, set by claude-tracked when it is the top process of its tmux pane), or,
+    for a session launched before that flag existed, its tab is driven from another host
+    (tab_origin): leave fin-close/<tmux session> and ask the Stop hook to type `/exit`
+    (by-session/<sid>.exit, see below). The inner launcher reads the marker when claude exits
+    and lets the tmux session end; the outer launcher (claude-tracked: after_ix_exit for a
+    thread on ix, after_local_exit for a local one) then closes the cmux tab; from the phone
+    there is no tab and the ssh simply drops. Marker line 2 is `surface=<cmux surface id>` (the
+    tmux session's @cmux_surface tag), which is how a tab that attached under another tmux name
+    (`cc r`, `cc <title>`) finds its marker. Not the launcher's own tmux (a cc typed at a shell
+    in a hand-made tmux, a bare claude): nothing, /fin says → /clear."""
+    owns = env.get("CC_FIN_ENDS_TMUX") == "1"
+    if not owns:
+        origin = tab_origin(session, env)
+        if not origin or origin == socket.gethostname().split(".")[0].lower():
+            return False
     pane = env.get("TMUX_PANE")
     if not pane or not env.get("TMUX"):
         return False
@@ -282,7 +287,9 @@ def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     # session id so the hook's check is one file test and a later prompt here can void it.
     try:
         (CLAIMS_ROOT / "by-session").mkdir(parents=True, exist_ok=True)
-        (CLAIMS_ROOT / "by-session" / f"{session}.exit").write_text(session + "\n")
+        # tmux=<name>: a prompt typed after /fin voids the request, and the hook then drops
+        # the marker too, so a later ordinary exit keeps its shell.
+        (CLAIMS_ROOT / "by-session" / f"{session}.exit").write_text(f"{session}\ntmux={name}\n")
     except OSError:
         pass          # the marker stands; JM's own /exit still closes the tab
     return True

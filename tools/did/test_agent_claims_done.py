@@ -222,3 +222,19 @@ def test_shell_session_end_drops_the_marker(tmp_path):
     ac.mark_done("S1", root=root, now=1010)
     _sh(tmp_path, "release", {"session_id": "S1"})
     assert not (root / "by-session/S1.done").exists() and _rg_state(root) == "done"
+
+
+def test_prompt_after_fin_voids_the_exit_request_and_the_tab_marker(tmp_path):
+    """2026-11-22: /fin now ends local and phone threads too. A prompt typed after /fin cancelled
+    the typed /exit but left fin-close/<tmux>, so the thread's next ordinary exit would have
+    ended its tmux session and closed the tab. Another thread's marker is not touched."""
+    root = tmp_path / "vault/z_ibx/agent-claims"
+    (root / "by-session").mkdir(parents=True)
+    fin = tmp_path / ".local/state/jm/fin-close"
+    fin.mkdir(parents=True)
+    (fin / "cc-mine").write_text("S1\nsurface=SURF-1\n")
+    (fin / "cc-other").write_text("S2\n")
+    (root / "by-session/S1.exit").write_text("S1\ntmux=cc-mine\n")
+    _sh(tmp_path, "working", {"session_id": "S1", "prompt": "one more thing"})
+    assert not (root / "by-session/S1.exit").exists()
+    assert not (fin / "cc-mine").exists() and (fin / "cc-other").exists()

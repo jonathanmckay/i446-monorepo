@@ -84,7 +84,14 @@ fi
 zmodload zsh/datetime zsh/files 2>/dev/null
 # /fin's exit request (see "/fin closes the tab" below) is void once JM sends
 # anything else here: he kept working in this thread.
-[[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.exit" ]] && rm -f "$D/by-session/$sid.exit" 2>/dev/null
+# The fin-close marker goes with it (2026-11-22): left behind, the next ordinary
+# exit of this thread would end its tmux session and close the tab.
+if [[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.exit" ]]; then
+  for _l in ${(f)"$(<"$D/by-session/$sid.exit")"}; do
+    [[ "$_l" == tmux=?* && "${_l#tmux=}" != */* ]] && rm -f "${FIN_CLOSE_DIR:-$HOME/.local/state/jm/fin-close}/${_l#tmux=}" 2>/dev/null
+  done
+  rm -f "$D/by-session/$sid.exit" 2>/dev/null
+fi
 AGENT_STALE_S=7200
 # In-flight subagents of this session: "<agent_id> <epoch>" per line. Kept
 # for every session (builtins only), claimed or not, so a claim made after

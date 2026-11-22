@@ -115,7 +115,10 @@ def test_exact_match_tmux_targets_are_quoted_for_zsh(ct, monkeypatch, capsys):
     monkeypatch.delenv('CC_DRY', raising=False)
     monkeypatch.setenv('CC_NO_MOSH', '1')
     got = []
-    monkeypatch.setattr(os, 'execvp', lambda f, argv: got.append(argv))
+    # exec_on_ix runs the transport as a child since 2026-11-14; patching os.execvp let a real ssh out
+    monkeypatch.setattr(ct, 'run_transport', lambda cmd: got.append(cmd) or 0)
+    monkeypatch.setattr(ct, 'after_ix_exit', lambda name, host: True)
+    monkeypatch.setattr(ct, 'cmux_resume_bind', lambda name: None)
     ct.exec_on_ix(['taxes'])
     remote = got[0][-1]
     assert "has-session -t '=cc-taxes'" in remote and "attach -d -t '=cc-taxes'" in remote
@@ -405,3 +408,68 @@ def test_end_tab_shell_hangs_up_only_a_parent_shell_outside_tmux(ct, monkeypatch
     monkeypatch.setenv('TMUX', '/tmp/tmux-501/default,1,0')
     assert ct.end_tab_shell()['sent'] is False                 # local tmux pane, not the tab's shell
     assert len(killed) == 1
+
+
+# --- /fin behaves the same everywhere (2026-11-22, JM: "I'd like to keep consistent behavior") ---
+
+def test_local_thread_keeps_the_launcher_alive_and_closes_its_tab_after_fin(ct, monkeypatch, capsys):
+    """exec_in_local_tmux used to exec tmux, so nothing was left to close the tab of a /fin'd
+    `cc --local` thread."""
+    import os
+    monkeypatch.delenv('CC_DRY', raising=False)
+    monkeypatch.delenv('CMUX_SURFACE_ID', raising=False)
+    monkeypatch.setattr(ct, 'live_attach_probe', lambda args: '')
+    monkeypatch.setattr(ct, 'cmux_resume_bind', lambda name: None)
+    monkeypatch.setattr(os, 'execvp', lambda *a: pytest.fail('launcher replaced itself'))
+    ran, closed = [], []
+    monkeypatch.setattr(ct, 'run_transport', lambda cmd: ran.append(cmd) or 0)
+    monkeypatch.setattr(ct, 'fin_closed_locally', lambda name: True)
+    monkeypatch.setattr(ct, 'close_this_tab', lambda name: closed.append(name) or True)
+    ct.exec_in_local_tmux(['taxes', 'pdf'])
+    assert len(ran) == 1 and closed == ['cc-taxes-pdf']
+    monkeypatch.setattr(ct, 'fin_closed_locally', lambda name: False)      # plain exit: no close
+    with pytest.raises(SystemExit):
+        ct.exec_in_local_tmux(['taxes', 'pdf'])
+    assert closed == ['cc-taxes-pdf']
+
+
+def test_off_lan_handoff_keeps_the_launcher_alive_for_the_tab_close(ct, monkeypatch, capsys):
+    import os
+    monkeypatch.setattr(os, 'execvp', lambda *a: pytest.fail('launcher replaced itself'))
+    monkeypatch.setattr(ct, 'cmux_resume_bind', lambda name: None)
+    ran, after = [], []
+    monkeypatch.setattr(ct, 'run_transport', lambda cmd: ran.append(cmd) or 0)
+    monkeypatch.setattr(ct, 'after_ix_exit', lambda name, host: after.append((name, host)) or True)
+    _handoff(ct, monkeypatch, IX_LIVE)
+    monkeypatch.delenv('CC_DRY')
+    assert ct.ix_handoff(['janus']) is True
+    assert len(ran) == 1 and after == [('cc-062745', ct.IX_TS_HOST)]
+
+
+def test_stale_marker_for_this_surface_is_purged_before_the_tab_attaches(ct, tmp_path, monkeypatch):
+    """The phone took a session this tab had tagged and ran /fin there: nobody consumed the
+    marker, and by surface id it would have closed this tab on its next plain detach."""
+    import subprocess
+    (tmp_path / 'cc-zz-dead-session').write_text('sid\nsurface=SURF-1\n')
+    (tmp_path / 'cc-zz-other-surface').write_text('sid\nsurface=SURF-2\n')
+    subprocess.run(['zsh', '-c', ct.fin_marker_purge('SURF-1', marker_dir=str(tmp_path))], timeout=10)
+    assert not (tmp_path / 'cc-zz-dead-session').exists()
+    assert (tmp_path / 'cc-zz-other-surface').exists()
+    monkeypatch.setenv('CMUX_SURFACE_ID', 'SURF-1')
+    assert 'surface=SURF-1' in ct.surface_tag('cc-x')            # every attach script carries it
+    monkeypatch.delenv('CMUX_SURFACE_ID')
+    assert ct.surface_tag('cc-x') == '' and ct.fin_marker_purge('') == ''
+
+
+def test_only_a_launcher_at_the_top_of_its_tmux_pane_owns_the_session(ct, monkeypatch):
+    import types
+    parent = {'comm': 'tmux'}
+    monkeypatch.setattr(ct.subprocess, 'run',
+                        lambda argv, **k: types.SimpleNamespace(stdout=parent['comm'] + '\n', returncode=0))
+    monkeypatch.setenv('TMUX', '/tmp/tmux-501/default,1,0')
+    assert ct.tmux_top() is True
+    parent['comm'] = '-zsh'                                       # cc typed at a shell inside tmux
+    assert ct.tmux_top() is False
+    parent['comm'] = 'tmux'
+    monkeypatch.delenv('TMUX')
+    assert ct.tmux_top() is False

@@ -116,20 +116,22 @@ A skill cannot run /exit or /clear, and typing them into this session's own
 terminal is blocked by the auto-mode classifier (tmux self-drive). After the
 report, end with exactly one of:
 
-- `→ closing this tab` when the JSON has `"tab_close": true` (this thread's
-  cmux tab is driven from another host, normally Straylight). Nothing for JM
-  to type (2026-11-22: "/fin should both stop the thread on ix and close the
-  cmux tab on straylight"). done_session left two things: `fin-close/<tmux
-  session>` for the launchers and `by-session/<sid>.exit` for the Stop hook
+- `→ closing this tab` when the JSON has `"tab_close": true`. Nothing for JM
+  to type, and the same wherever the thread runs (2026-11-22: "/fin should
+  both stop the thread on ix and close the cmux tab on straylight", then "I'd
+  like to keep consistent behavior"): on ix from a Straylight tab, off the LAN
+  over Tailscale, local on Straylight, or from the phone (no tab there: the
+  ssh drops). done_session left two things: `fin-close/<tmux session>` for the
+  launchers and `by-session/<sid>.exit` for the Stop hook
   (`scripts/agent-claim-hook.sh idle`), which types `/exit` about a second
-  after this turn ends, once nothing is running in the background. The Ix
-  launcher then lets the tmux session end, and Straylight closes the tab,
-  always (2026-11-22: it used to start a fresh thread when this was the
-  workspace's only Claude tab; JM: "I want /fin to close the entire CMUX
-  tab"). So make this the last line and start nothing in the background
-  after the script: a live background agent or shell holds the exit until it
-  finishes, and any new prompt from JM cancels it.
-- `→ /clear` otherwise (a local or phone session keeps its tab), so JM can
-  type it.
+  after this turn ends, once nothing is running in the background. The inner
+  launcher then lets the tmux session end and the outer one closes the cmux
+  tab, always, including the workspace's only Claude tab. So make this the
+  last line and start nothing in the background after the script: a live
+  background agent or shell holds the exit until it finishes, and any new
+  prompt from JM cancels it (the hook drops the marker too).
+- `→ /clear` otherwise: the thread is not in a tmux session of its own (a
+  bare `claude`, or `cc` typed at a shell inside a hand-made tmux), so nothing
+  can type /exit for it. JM types it.
 
 The transcript stays in ~/.claude/projects/ and /resume brings it back.

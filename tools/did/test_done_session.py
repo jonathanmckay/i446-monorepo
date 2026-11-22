@@ -225,3 +225,23 @@ def test_bare_fin_without_a_claim_still_closes_the_tab():
     assert marked == ["S1"]
     assert ds.no_claim_result("S1", ("days", 3), mark=mark) == {"status": "no-claim", "tasks": [], "tab_close": False}
     assert marked == ["S1"]
+
+
+def test_fin_marks_any_thread_that_owns_its_tmux_session(tmp_path, monkeypatch):
+    """2026-11-22 (JM: "I'd like to keep consistent behavior"): /fin closed the tab only for a
+    thread on ix driven from Straylight; `cc --local` and phone threads were told → /clear.
+    The launcher now says when the tmux session is its own (CC_FIN_ENDS_TMUX), whatever the host."""
+    import subprocess
+    monkeypatch.setattr(ds, "FIN_CLOSE_DIR", tmp_path)
+    monkeypatch.setattr(ds, "SESSION_HOSTS_DIR", tmp_path / "hosts")
+    monkeypatch.setattr(ds, "CLAIMS_ROOT", tmp_path / "claims")
+    monkeypatch.setattr(ds.socket, "gethostname", lambda: "straylight-refit.local")
+    run = lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, "" if "show-option" in cmd else "cc-local-thread\n", "")
+    tmux = {"TMUX_PANE": "%1", "TMUX": "/tmp/x", "CC_TAB_ORIGIN": "straylight-refit"}   # same host
+    assert ds.mark_tab_close("L1", env=tmux, run=run) is False                  # cc at a shell in a hand-made tmux
+    assert ds.mark_tab_close("L1", env={**tmux, "CC_FIN_ENDS_TMUX": "1"}, run=run) is True
+    assert (tmp_path / "cc-local-thread").read_text() == "L1\n"
+    # the exit request names the tmux session, so a later prompt can void the marker with it
+    assert (tmp_path / "claims/by-session/L1.exit").read_text() == "L1\ntmux=cc-local-thread\n"
+    assert ds.mark_tab_close("L1", env={"CC_FIN_ENDS_TMUX": "1"}, run=run) is False   # flag but no tmux: nothing can type /exit
