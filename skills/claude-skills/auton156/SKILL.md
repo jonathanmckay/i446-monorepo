@@ -50,22 +50,24 @@ the approval, and an entry is one `toggl_delete` from gone.
 
    A meeting outranks prompts typed during it. Evidence covering part of a
    range fills that part only. Create each entry with `toggl_create_entry`.
-   Not `toggl_batch`: its shorthand splits on commas, and these descriptions
-   have commas.
 4. Report the table of what was logged, plus any range left empty.
 
 ## Entry rules
 
 - **Description: 3-30 characters**, lowercase shorthand, like JM's own entries:
-  `neon cutover plan`, `leo packet, rename bug`. Name the work, not the
-  mechanics. No sentences, no "(inferred)".
+  `neon cutover plan`, `fin bug`. Name the work, not the mechanics. No
+  sentences, no "(inferred)".
+- **One activity per entry, no commas.** Name the single most prominent thing
+  in the stretch (most minutes or prompts) and drop the rest: `fin bug`, never
+  `fin bug, janus data fix`.
 - **One entry per 5-10 minutes.** Merge the small actions in a stretch into one
-  entry. A 1-minute card close is part of the entry around it, never its own.
+  entry, named for its most prominent activity. A 1-minute card close is part
+  of the entry around it, never its own.
 - **Times at 1-minute granularity**, HH:MM. Consecutive entries share a
   boundary.
 - **Every entry gets a project**, from the task's Todoist label first, then the
-  toggl_server domain mapping. A mixed stretch takes the project of most of
-  its minutes.
+  toggl_server domain mapping. A mixed stretch takes the project of the
+  activity it is named for.
 - **Only JM's own actions count.** A request he typed into a session is one.
   Agent writes and automated sessions are not: `evidence.py` drops the ones it
   can recognize, so skip any others you spot.
@@ -79,7 +81,7 @@ the approval, and an entry is one `toggl_delete` from gone.
 ```
 | Time | Entry | Project | From |
 |---|---|---|---|
-| 06:12-06:22 | slack, neon report | i447 | cc |
+| 06:12-06:22 | neon report | i447 | cc |
 | 06:22-06:31 | neon cutover plan | i447 | cc |
 | 09:05-09:35 | kn47 standup | m5x2 | cal |
 
