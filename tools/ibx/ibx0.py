@@ -927,7 +927,7 @@ def do_open(item):
         d = item["_data"]
         ch = d["thread"]["channel_id"]
         url = f"https://app.slack.com/client/T/{ch}"
-        # Slack workspace context: m5x2 slack → m5x2, github slack → msft
+        # Slack workspace context: m5x2 slack → m5x2, XBOX slack → msft
         ws = d.get("workspace", "")
         if "m5x2" in ws.lower() or "mckay" in ws.lower():
             profile = "m5x2"

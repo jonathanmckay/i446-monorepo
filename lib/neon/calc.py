@@ -1,4 +1,4 @@
--------"""Workbook calculation engine for Neon (Neon off Excel, 2026-11-22).
+"""Workbook calculation engine for Neon (Neon off Excel, 2026-11-22).
 
 `formula.py` recomputes one hcbi composite for the rule engine. This is the
 whole workbook: every formula Neon uses, evaluated from the cells alone, so

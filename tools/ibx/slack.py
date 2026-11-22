@@ -423,7 +423,7 @@ def main():
     if not CONFIG_FILE.exists():
         console.print(f"[yellow]No Slack tokens configured.[/yellow]\n")
         console.print(f"Create [dim]{CONFIG_FILE}[/dim]:")
-        console.print('[dim]  {{"m5x2": "xoxp-...", "github": "xoxp-..."}}[/dim]\n')
+        console.print('[dim]  {{"m5x2": "xoxp-...", "XBOX": "xoxp-..."}}[/dim]\n')
         console.print("To get a User OAuth Token:")
         console.print("  1. api.slack.com/apps → Create New App → From Scratch")
         console.print("  2. OAuth & Permissions → User Token Scopes:")

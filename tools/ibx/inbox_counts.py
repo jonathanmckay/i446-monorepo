@@ -35,7 +35,7 @@ HABIT_CHANNELS: dict[str, tuple[str, ...]] = {
     "ibx m5x2": ("gmail:m5c7",),
     "ibx s897": ("gmail:gmail", "imsg"),
     "ibx i9": ("outlook",),
-    "slack i9": ("slack:github",),
+    "slack i9": ("slack:XBOX",),
     "slack m5x2": ("slack:m5x2",),
     "teams": ("teams",),
 }

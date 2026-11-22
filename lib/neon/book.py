@@ -1,4 +1,4 @@
-----"""The Neon workbook without Excel: a seed of every cell plus the ledger's
+"""The Neon workbook without Excel: a seed of every cell plus the ledger's
 writes since, evaluated by `neon.calc` (Neon off Excel, 2026-11-22).
 
   seed(src)        read a COPY of the saved xlsx once and keep every cell's

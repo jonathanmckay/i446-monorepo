@@ -1,4 +1,4 @@
--"""inbox_counts: per-habit pending counts + success flags (2026-11-12).
+"""inbox_counts: per-habit pending counts + success flags (2026-11-12).
 
 JM: show `ibx i9 (4) [20] ✉3` in dtd and close the card only when every
 source behind it was pinged successfully and came back empty. The old
@@ -24,15 +24,16 @@ def test_channel_of_maps_every_queue_type():
     assert ic.channel_of(_email("m5c7")) == "gmail:m5c7"
     assert ic.channel_of(_email("gmail")) == "gmail:gmail"
     assert ic.channel_of({"type": "imsg", "_data": {}}) == "imsg"
-    assert ic.channel_of(_slack("github")) == "slack:github"
+    assert ic.channel_of(_slack("XBOX")) == "slack:XBOX"
     assert ic.channel_of({"type": "outlook", "_data": {}}) == "outlook"
     assert ic.channel_of({"type": "teams", "_data": {}}) == "teams"
----------
+    assert ic.channel_of({"type": "weird"}) is None
+
 
 def test_every_channel_in_the_map_is_reachable_from_channel_of():
     # a typo in HABIT_CHANNELS would silently make a habit uncountable
     seen = {ic.channel_of(_email("m5c7")), ic.channel_of(_email("gmail")),
-            "imsg", ic.channel_of(_slack("github")), ic.channel_of(_slack("m5x2")),
+            "imsg", ic.channel_of(_slack("XBOX")), ic.channel_of(_slack("m5x2")),
             "outlook", "teams"}
     assert ic.ALL_CHANNELS <= seen
 
