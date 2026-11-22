@@ -1076,6 +1076,25 @@ CHROME_PEAK_MB = 6000
 SWAP_PEAK_PCT = 90
 
 
+def _jetsam_line(r: dict) -> str:
+    """One report line for a JetsamEvent: what macOS killed and why.
+    2026-11-21: the old line was only the largest process-name group ("Python
+    1.4 GB ×18"), which read as a Python leak when the one kill was an Apple
+    daemon over its own limit. The group total is shown only when the system
+    itself ran short, where it is the useful number (10-29: Chrome 23.6 GB)."""
+    at, killed = r["at"][:16], r.get("killed") or []
+    if not killed:                                   # old summary, or unreadable .ips
+        return f"jetsam {at}: {r.get('top', '?')}"
+    names = list(dict.fromkeys(k["name"] for k in killed))
+    who = ", ".join(names[:3]) + (f" +{len(names) - 3} more" if len(names) > 3 else "")
+    reasons = list(dict.fromkeys(k["reason"] for k in killed))
+    if reasons == ["per-process-limit"]:
+        free = f"; {r['free_pct']}% memory free at {r['free_at'][11:16]}" if r.get("free_pct") is not None and r.get("free_at") else ""
+        return f"jetsam {at}: killed {who} (over its own limit, not system pressure){free}"
+    why = ", ".join("over its own limit" if x == "per-process-limit" else x for x in reasons)
+    return f"jetsam {at}: killed {who} ({why}); largest group {r.get('top', '?')}"
+
+
 def ix_memory_finding(sm: dict, now: dt.datetime) -> Finding:
     """Turn ix_mem_sample.py --summary into a Finding (pure; tested).
     2026-11-03: Chrome renderers hit 23.6 GB on 10-29 and macOS jetsammed; Chrome
@@ -1088,7 +1107,7 @@ def ix_memory_finding(sm: dict, now: dt.datetime) -> Finding:
 
     for r in sm.get("reports", []):
         if r["kind"] == "jetsam":
-            bump("fail"); detail.append(f"jetsam {r['at'][:16]}: {r.get('top', '?')}")
+            bump("fail"); detail.append(_jetsam_line(r))
         elif r["kind"] == "panic":
             bump("fail"); detail.append(f"kernel panic {r['at'][:16]}: {r['file']}")
         else:

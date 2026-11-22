@@ -3,6 +3,7 @@
 import datetime as dt
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -55,9 +56,20 @@ def test_summary_flags_restart_extra_instance_jetsam_and_ignores_old(tmp_path, m
     log = tmp_path / "ix-mem.jsonl"; log.write_text("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
     diag = tmp_path / "diag"; diag.mkdir()
     ips = {"memoryStatus": {"pageSize": 16384}, "largestProcess": "R",
-           "processes": [{"name": "R", "rpages": 65536}, {"name": "R", "rpages": 65536}, {"name": "node", "rpages": 10}]}
-    (diag / "JetsamEvent-2026-11-04-100000.ips").write_text('{"bug_type":"298"}\n' + json.dumps(ips))
+           "processes": [{"name": "R", "rpages": 65536}, {"name": "R", "rpages": 65536}, {"name": "node", "rpages": 10},
+                         {"name": "daemond", "rpages": 1280, "reason": "per-process-limit"}, {"name": "idle", "reason": None}]}
+    ips_path = diag / "JetsamEvent-2026-11-05-100500.ips"
+    ips_path.write_text('{"bug_type":"298"}\n' + json.dumps(ips))
+    at = dt.datetime.fromisoformat("2026-11-05T10:05:00-08:00").timestamp()
+    os.utime(ips_path, (at, at))
+    rows[1]["free_pct"] = 68; rows[2]["free_pct"] = None       # nearest reading wins; None is skipped
+    log.write_text("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
     sm = m.summarize(now, log, diag)
+    rep = sm["reports"][0]
+    assert rep["killed"] == [{"name": "daemond", "reason": "per-process-limit", "mb": 20}]
+    assert rep["free_pct"] == 68 and rep["free_at"].startswith("2026-11-05T10:00")
+    os.utime(ips_path, (at + 7200, at + 7200))                  # no sample within 30 min: no free reading
+    assert "free_pct" not in m.summarize(now, log, diag)["reports"][0]
     assert sm["samples"] == 2 and sm["chrome_restarts"] == ["Thu Nov  5 10:10:00 2026"]
     assert list(sm["extra_browsers"]) == ["Google Chrome udd=/tmp/login-xyz"]
     assert sm["chrome_peak_mb"] == 7000 and sm["swap_peak_pct"] == 92
@@ -82,3 +94,27 @@ def test_ix_memory_finding_flags_stale_sampler():
     vh = _load("vault_health", "vault_health.py")
     f = vh.ix_memory_finding({"last": None}, dt.datetime(2026, 11, 7, tzinfo=vh.TZ))
     assert f.status == "warn" and "sampler stale" in f.detail[0]
+
+
+def test_jetsam_line_names_what_was_killed_and_why():
+    vh = _load("vault_health", "vault_health.py")
+    base = {"kind": "jetsam", "at": "2026-11-21T03:04-08:00", "top": "Python 1.4 GB ×18"}
+    assert vh._jetsam_line(base) == "jetsam 2026-11-21T03:04: Python 1.4 GB ×18"            # old summary shape
+    own = dict(base, killed=[{"name": "knowledgeconstructiond", "reason": "per-process-limit", "mb": 17}],
+               free_pct=68, free_at="2026-11-21T03:00:00-08:00")
+    line = vh._jetsam_line(own)
+    assert line == ("jetsam 2026-11-21T03:04: killed knowledgeconstructiond "
+                    "(over its own limit, not system pressure); 68% memory free at 03:00")
+    assert "Python" not in line
+    assert vh._jetsam_line(dict(own, free_pct=None)).endswith("not system pressure)")
+    pressure = dict(base, top="Google Chrome He 23.6 GB ×17", free_pct=68, free_at="2026-11-21T03:00:00-08:00",
+                    killed=[{"name": n, "reason": r, "mb": 1} for n, r in
+                            [("a", "vm-pageshortage"), ("a", "vm-pageshortage"), ("b", "per-process-limit"),
+                             ("c", "vm-pageshortage"), ("d", "vm-pageshortage")]])
+    line = vh._jetsam_line(pressure)
+    assert line == ("jetsam 2026-11-21T03:04: killed a, b, c +1 more (vm-pageshortage, over its own limit); "
+                    "largest group Google Chrome He 23.6 GB ×17")
+    assert "free" not in line
+    f = vh.ix_memory_finding({"last": "2026-11-07T04:30:00-08:00", "reports": [own]},
+                             dt.datetime(2026, 11, 7, 4, 40, tzinfo=vh.TZ))
+    assert f.status == "fail" and f.summary == "1 memory event(s) this week" and f.detail[0] == vh._jetsam_line(own)

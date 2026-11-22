@@ -118,7 +118,27 @@ def _jetsam(path: Path) -> dict:
     for p in d.get("processes", []):
         a = agg.setdefault(p.get("name", "?"), [0.0, 0]); a[0] += p.get("rpages", 0) * page / 2**30; a[1] += 1
     name, (gb, n) = max(agg.items(), key=lambda kv: kv[1][0]) if agg else ("?", (0.0, 0))
-    return {"file": path.name, "top": f"{name} {gb:.1f} GB ×{n}", "largest": d.get("largestProcess")}
+    # Who macOS actually killed, and why. `top` alone misled on 2026-11-21: it read
+    # "Python 1.4 GB ×18" (18 unrelated scripts summed) when the only kill was an
+    # Apple daemon over its own limit, with the machine two-thirds free.
+    killed = [{"name": p.get("name", "?"), "reason": p["reason"], "mb": round(p.get("rpages", 0) * page / 2**20)}
+              for p in d.get("processes", []) if p.get("reason")]
+    return {"file": path.name, "top": f"{name} {gb:.1f} GB ×{n}", "largest": d.get("largestProcess"), "killed": killed}
+
+
+def _free_near(samples: list[dict], at: dt.datetime, within_min: int = 30) -> dict:
+    """free_pct of the sample closest to `at`, if one with a reading exists within the window."""
+    best = None
+    for s in samples:
+        if s.get("free_pct") is None:
+            continue
+        try:
+            gap = abs((dt.datetime.fromisoformat(s["ts"]) - at).total_seconds())
+        except Exception:  # noqa: BLE001
+            continue
+        if gap <= within_min * 60 and (best is None or gap < best[0]):
+            best = (gap, s)
+    return {"free_pct": best[1]["free_pct"], "free_at": best[1]["ts"]} if best else {}
 
 
 def summarize(now: dt.datetime, log: Path = LOG, diag: Path = DIAG, days: int = 7) -> dict:
@@ -158,7 +178,8 @@ def summarize(now: dt.datetime, log: Path = LOG, diag: Path = DIAG, days: int = 
             if mt < cutoff:
                 continue
             if p.name.startswith("JetsamEvent-"):
-                reports.append({"kind": "jetsam", "at": mt.isoformat(timespec="minutes"), **_jetsam(p)})
+                reports.append({"kind": "jetsam", "at": mt.isoformat(timespec="minutes"), **_jetsam(p),
+                                **_free_near(samples, mt)})
             elif p.suffix == ".panic" or p.name.startswith("Kernel-"):
                 reports.append({"kind": "panic", "at": mt.isoformat(timespec="minutes"), "file": p.name})
             elif p.name.startswith("Google Chrome"):
