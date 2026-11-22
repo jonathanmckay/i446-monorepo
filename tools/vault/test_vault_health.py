@@ -298,3 +298,51 @@ def test_lease_signer_finding_states():
     assert f.status == "warn" and "never probed" in f.summary
     f = vh.lease_signer_finding("ERROR: ssh timed out", now)
     assert f.status == "warn" and "could not reach Ix" in f.summary
+
+
+# ── launchd agents stopped on a failed exit (2026-11-21) ────────────────────
+# Bug: com.jm.lease-report failed daily on a deleted script and
+# com.jm.extract-creds had pointed at a vanished /tmp script since May; no
+# check read launchd exit codes, so neither was ever seen.
+_LAUNCHD = """gui/501 = {
+	services = {
+		       0      0 	com.jm.claude-export
+		    2158      - 	com.jm.neg1n-status
+		   28663    -15 	com.jm.dashboard-personal
+		       0      2 	com.jm.lease-report
+		       0     78 	com.jm.extract-creds
+		       0      - 	com.jm.never-ran
+		       0      1 	com.apple.not-ours
+	}
+}
+"""
+
+
+def test_launchd_flags_only_stopped_agents_with_a_failed_exit():
+    vh = _load()
+    seen, bad = vh.launchd_failing(_LAUNCHD)
+    assert seen == 6                                   # com.apple.* is not ours
+    assert bad == [("com.jm.extract-creds", 78), ("com.jm.lease-report", 2)]
+    f = vh.launchd_finding(_LAUNCHD, {"com.jm.lease-report": "/x/lease_report.py"})
+    assert f.status == "warn" and f.review and "2 of 6" in f.summary
+    assert any("lease-report: last exit 2; its program is gone: /x/lease_report.py" in d for d in f.detail)
+    assert not any("dashboard-personal" in d or "never-ran" in d for d in f.detail)
+
+
+def test_launchd_ok_when_clean_and_never_ok_when_unreadable(monkeypatch):
+    vh = _load()
+    clean = _LAUNCHD.replace("      2 \tcom.jm.lease-report", "      0 \tcom.jm.lease-report").replace(
+        "     78 \tcom.jm.extract-creds", "      0 \tcom.jm.extract-creds")
+    f = vh.launchd_finding(clean)
+    assert f.status == "ok" and not f.review
+    for unreadable in ("", "ERROR: ssh timed out", "Could not find domain for user gui: 501"):
+        f = vh.launchd_finding(unreadable)
+        assert f.status == "warn" and f.review and "could not read" in f.summary
+    monkeypatch.setitem(vh.LAUNCHD_OK, "com.jm.lease-report", "known")
+    assert vh.launchd_failing(_LAUNCHD)[1] == [("com.jm.extract-creds", 78)]
+
+
+def test_launchd_check_is_registered_and_described():
+    vh = _load()
+    assert "launchd" in vh.CHECK_WHAT
+    assert "check_launchd" in (HERE / "vault_health.py").read_text().split("def run_all")[1].split("def ")[0]

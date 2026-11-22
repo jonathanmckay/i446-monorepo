@@ -19,6 +19,9 @@ Checks (v1, 2026-09-27):
   onedrive-neon  Neon workbook mtime (and Ix↔Straylight parity when run off Ix)
   time-machine   destination configured + latest backup age
   ix-cron        Ix's live crontab matches the committed config/ix.crontab
+  launchd        Ix's com.jm.* launch agents: any that is stopped with a non-zero
+                 last exit (added 2026-11-21: lease-report had failed daily
+                 on a deleted script, extract-creds since May, unseen)
   ix-memory      Ix over 7 days (tools/vault/ix_mem_sample.py, cron */15): reboots,
                  jetsam / panic / Chrome hang reports, Chrome restarts, extra Chrome
                  instances (non-default user-data-dir), Chrome footprint and swap
@@ -53,6 +56,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -728,6 +732,62 @@ def check_ix_cron() -> Finding:
     return Finding("ix-cron", "ok", f"{len(have)} jobs match config/ix.crontab")
 
 
+# Agents allowed to sit stopped with a non-zero exit (label -> why). Empty by
+# design: an agent that fails every run should be fixed or unloaded.
+LAUNCHD_OK: dict[str, str] = {}
+LAUNCHD_ROW = re.compile(r"^\s*(\d+)\s+(-?\d+|-)\s+(com\.jm\.\S+)\s*$", re.M)
+# `print gui/<uid>`, not `launchctl list`: the Saturday cron on Ix is outside
+# the gui domain and `list` shows it none of these agents.
+LAUNCHD_CMD = "launchctl print gui/$(id -u) 2>&1"
+
+
+def launchd_failing(out: str) -> tuple[int, list[tuple[str, int]]]:
+    """(agents seen, [(label, exit code)]) from LAUNCHD_CMD's output. Rows are
+    `pid status label`. Failing = stopped (pid 0) with a non-zero last exit; a
+    running agent whose previous exit was -15 was just restarted, and `-`
+    means it has not exited yet."""
+    rows = LAUNCHD_ROW.findall(out)
+    bad = [(label, int(st)) for pid, st, label in rows
+           if pid == "0" and st not in ("-", "0") and label not in LAUNCHD_OK]
+    return len(rows), sorted(bad)
+
+
+def launchd_finding(out: str, missing: dict[str, str] | None = None) -> Finding:
+    """Pure part of check_launchd. `missing` maps a failing label to the
+    program path its plist names that no longer exists."""
+    seen, bad = launchd_failing(out)
+    if seen == 0:
+        # Never report ok on an unreadable domain: that is how a dead agent hides.
+        return Finding("launchd", "warn", f"could not read Ix's launch agents: {out.strip()[:100] or 'no com.jm.* rows'}",
+                       review=True)
+    if not bad:
+        return Finding("launchd", "ok", f"{seen} com.jm.* agents, none stopped on a failed exit")
+    detail = []
+    for label, code in bad:
+        gone = (missing or {}).get(label)
+        detail.append(f"{label}: last exit {code}" + (f"; its program is gone: {gone}" if gone else "")
+                      + f" — fix it, or unload: launchctl bootout gui/$(id -u)/{label}")
+    return Finding("launchd", "warn", f"{len(bad)} of {seen} com.jm.* agent(s) stopped on a failed exit",
+                   detail, review=True)
+
+
+def check_launchd() -> Finding:
+    out = ix(LAUNCHD_CMD)
+    _, bad = launchd_failing(out)
+    missing: dict[str, str] = {}
+    for label, _code in bad:
+        args = ix(f"plutil -extract ProgramArguments json -o - ~/Library/LaunchAgents/{label}.plist 2>/dev/null")
+        try:
+            paths = [a for a in json.loads(args) if isinstance(a, str) and a.startswith("/")]
+        except ValueError:
+            continue
+        for path in paths:
+            if "MISSING" in ix("test -e " + shlex.quote(path) + " || echo MISSING"):
+                missing[label] = path
+                break
+    return launchd_finding(out, missing)
+
+
 LEASE_SESSION_MAX_AGE = dt.timedelta(days=2)
 # One ssh round trip: process state, alert flag, and the session_ok JSON that
 # lease_signerd writes on every sign / relogin / daily probe. pgrep rather than
@@ -1023,7 +1083,7 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, lambda: check_ix_memory(now), lambda: check_lease_signer(now), check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
+               check_ix_cron, check_launchd, lambda: check_ix_memory(now), lambda: check_lease_signer(now), check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
                check_duplicates):
         try:
             out.append(fn())
@@ -1050,6 +1110,7 @@ CHECK_WHAT = {
     "onedrive-neon": "The Neon workbook in OneDrive was modified within 3 days, and (run off Ix) the Ix and local copies are within 24h of each other.",
     "time-machine": "A Time Machine destination is configured and the latest backup is at most 2 days old (Ix; Straylight is exempt).",
     "ix-cron": "Ix's live crontab matches the committed config/ix.crontab.",
+    "launchd": "Ix's com.jm.* launch agents: any that is stopped with a non-zero last exit code (a job failing on every run).",
     "ix-memory": "Ix over 7 days: reboots, jetsam/panic/Chrome hang reports, Chrome restarts or extra instances, Chrome over 6 GB, swap over 90%.",
     "lease-signer": "The AppFolio lease countersigner on Ix: daemon running, no open 2FA-expired alert, and the session proven to work (sign, auto-relogin or daily probe) within 2 days.",
     "skill-claims": "Skills named like a recurring Todoist card but neither linked to dtd (SKILL_CLAIMS) nor declined (SKILL_NO_CLAIM).",
@@ -1063,7 +1124,7 @@ def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
              f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, "
-             "skills backup, perm sync, OneDrive Neon, Time Machine, Ix cron, Ix memory, lease signer, skill claims, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
+             "skills backup, perm sync, OneDrive Neon, Time Machine, Ix cron, launchd agents, Ix memory, lease signer, skill claims, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed | What it checks |", "|---|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.

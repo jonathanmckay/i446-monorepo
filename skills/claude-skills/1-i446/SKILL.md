@@ -71,5 +71,18 @@ hand does the same thing interactively, from whichever machine you are on
   listed, not flagged. The review question is which spawner to fix: name it
   from the instance's parent pid / user-data-dir, file a task, don't kill
   processes from the review.
+- launchd (`check_launchd`, 2026-11-21): reads `launchctl print gui/<uid>` on
+  Ix and flags any `com.jm.*` agent that is stopped with a non-zero last exit
+  (a running agent restarted with -15 is fine; no readable rows = warn, never
+  ok). The review question per agent: fix the program, or unload it
+  (`launchctl bootout gui/$(id -u)/<label>`, then move the plist aside). A
+  deliberate exception goes in `LAUNCHD_OK`.
+- Daily, not weekly (`tools/vault/daily_watch.py`, 2026-11-21): a dead inbox
+  counter, an inbox badge failing on two consecutive daily runs, and dtd
+  claims idle 7+ days are written to `z_ibx/alerts.jsonl` every day while
+  they hold, so they reach this review through the `alerts` check. Dismissing
+  one hides it only up to that date; if it is still true it is back next week.
+  Stale claims are never auto-released: resume the thread (`cc <title>`) or
+  release it.
 - New rules go into `vault_health.py` as a `check_*` returning a `Finding`;
   set `review=True` only when JM has to decide something.
