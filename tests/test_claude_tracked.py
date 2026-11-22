@@ -356,5 +356,25 @@ def test_fin_tab_close_authenticates_to_the_cmux_socket(ct, monkeypatch, tmp_pat
     assert _fin_exit.envs[-1]['CMUX_SOCKET_PASSWORD'] == 'from-env'
     monkeypatch.delenv('CMUX_SOCKET_PASSWORD')
     monkeypatch.setattr(ct, 'CMUX_PASSWORD_FILE', tmp_path / 'absent')
+    monkeypatch.setattr(ct, 'CMUX_CONFIG', tmp_path / 'no-config.json')
     _fin_exit(ct, monkeypatch)                                      # no file: call still goes out
     assert 'CMUX_SOCKET_PASSWORD' not in _fin_exit.envs[-1]
+
+
+@pytest.mark.parametrize('text', [
+    '{"automation": {"socketControlMode": "password", "socketPassword": "c0nfig"}}',
+    '{\n  // jsonc\n  "automation": {"socketControlMode": "password", "socketPassword": "c0nfig",},\n}',
+])
+def test_cmux_password_falls_back_to_cmux_config(ct, monkeypatch, tmp_path, text):
+    """2026-11-22, second run: the log said password=false. Straylight has no
+    socket-control-password file; password mode keeps it in cmux.json (automation.socketPassword)."""
+    cfg = tmp_path / 'cmux.json'
+    cfg.write_text(text)
+    monkeypatch.setattr(ct, 'CMUX_CONFIG', cfg)
+    monkeypatch.setattr(ct, 'CMUX_PASSWORD_FILE', tmp_path / 'absent')
+    monkeypatch.delenv('CMUX_SOCKET_PASSWORD', raising=False)
+    assert ct.cmux_password() == ('c0nfig', 'config')
+    assert ct.cmux_env()['CMUX_SOCKET_PASSWORD'] == 'c0nfig'
+    facts = ct.cmux_auth_facts('/usr/bin/true')
+    assert facts['mode'] == 'password' and facts['config_has_password'] is True
+    assert 'c0nfig' not in repr(facts)                      # the log never carries the password
