@@ -764,7 +764,21 @@ def _neon_ledger_today() -> tuple:
     return values, (v.get("through") or "")[11:19] or None
 
 
+def _neon_ledger_writes(since_epoch: float) -> dict:
+    """Cell writes the Neon ledger journaled since the workbook was last saved
+    (lib/neon/ledger.writes_since), for every sheet. JM 2026-11-22: the other
+    tabs "should go through today (like right now even)": they showed the
+    saved file only, up to a save interval plus a rebuild behind. {} when the
+    ledger is not on this host, and under pytest (never the live ledger)."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("NEON_TEST_DB_OK"):
+        return {}
+    from neon import ledger as _nledger
+    since = dt.datetime.fromtimestamp(max(0, since_epoch)).isoformat(timespec="seconds")
+    return _nledger.writes_since(since)
+
+
 NEON.live_sources["0分"] = _neon_ledger_today
+NEON.write_source = _neon_ledger_writes
 NEON.refresh_live()
 
 
@@ -8509,7 +8523,8 @@ def _neon_switch(app, index: int | None = None) -> None:
     else:
         NEON.select(index)
     if NEON.tab:
-        NEON.load()
+        if not NEON.load():
+            _bg_fetch(app, NEON.refresh_live)       # ledger writes since the save, now rather than at the next tick
         if NEON.needs_build():
             _bg_fetch(app, NEON.build)
     else:
@@ -8983,19 +8998,27 @@ def _bg_fetch(app, fn):
     threading.Thread(target=run, daemon=True).start()
 
 
+NEON_TICK_S = 5     # while a Neon tab is showing: a ledger write shows within this
+
+
 async def ticker_neon(app):
     """Keep the Neon snapshot current while a Neon tab is showing (and build it
     once if there is none): neon_grid.py in a subprocess, ~2 s, off the UI
     thread. Also picks up a snapshot another process wrote."""
     while True:
         try:
-            if NEON.load() or (NEON.tab and NEON.refresh_live()):
+            # the ledger reads are sqlite: off the event loop, so a writer
+            # holding the DB can never stall a keystroke
+            fresh = NEON.load()
+            if not fresh and NEON.tab:
+                fresh = await asyncio.get_event_loop().run_in_executor(None, NEON.refresh_live)
+            if fresh:
                 app.invalidate()
             if NEON.needs_build():
                 _bg_fetch(app, NEON.build)
         except Exception:
             pass
-        await asyncio.sleep(20)
+        await asyncio.sleep(NEON_TICK_S if NEON.tab else 20)
 
 
 async def _initial_slow_fetches(app):

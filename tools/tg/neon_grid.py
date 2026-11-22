@@ -15,7 +15,7 @@ renders the snapshot; janus-mobile can serve the same file. Nothing here
 talks to Excel, and nothing imports prompt_toolkit.
 
 Snapshot shape (see build()):
-  {"version", "hash", "built", "src_mtime", "error"?,
+  {"version", "hash", "built", "src_mtime", "day": "YYYY-MM-DD" it was built for, "error"?,
    "sheets": [{"name", "tab": "#rrggbb"|None, "header_rows", "frozen_cols",
                "today_row": index into rows | None, "widths": [chars],
                "styles": [[bg|None, fg|None, bold 0/1, align "l"|"r"|"c"]],
@@ -43,7 +43,7 @@ from pathlib import Path
 
 SRC = Path.home() / "Library" / "CloudStorage" / "OneDrive-Personal" / "vault-excel" / "Neon分v12.2.xlsx"
 OUT = Path.home() / ".cache" / "janus" / "neon-grid.json"
-VERSION = 15
+VERSION = 16
 
 # Per-sheet view settings. Neon has no usable freeze panes (only 0s897 has
 # one, and openpyxl reports its scroll position, not the split), so the pinned
@@ -503,7 +503,7 @@ def week_date(week, day) -> str:
     return "%02d.%s.%s" % (int(m.group(1)), m.group(2), wd) if m else "%02d/%02d" % (day.month, day.day)
 
 
-def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
+def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> dict:
     from openpyxl.utils import get_column_letter
     view = dict(DEFAULT_VIEW, **SHEETS.get(ws.title, {}))
     max_r, max_c = _extent(wsv)
@@ -630,6 +630,14 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
         out_rows.append(line)
     if today_row is None and best_past is not None:
         today_row = best_past[1]
+    if today_row is None and week_label:
+        # weekly sheets have no date column: "today" is the row whose leading
+        # cell is this week's 周 label (anchored here, not after the fact, so
+        # the row gets a live recipe like the daily sheets do)
+        for i, r in enumerate(rows):
+            if r > header_n and any(c[0].strip() == week_label for c in out_rows[i][:2]):
+                today_row = i
+                break
     # What it takes to repaint today's row from a fresher source than the
     # saved workbook (see overlay()): per column, the number format, the
     # static style and the conditional rules of that one cell.
@@ -646,7 +654,7 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
             recipe[get_column_letter(c)] = {
                 "fmt": numfmt, "base": [bg, fg, bold, halign],
                 "rules": [list(x) for x in sorted(cf.get((rr, c), []), key=lambda x: x[0])]}
-        live = {"row": today_row, "cells": recipe, "recolor": recolor}
+        live = {"row": today_row, "excel_row": rr, "cells": recipe, "recolor": recolor}
     tab = None
     try:
         tab = resolve_color(ws.sheet_properties.tabColor, theme)
@@ -686,10 +694,13 @@ def paint(value, fmt: str, base: list, rules: list, width: int, recolor: dict | 
     return ("" if st[4] else format_value(value, fmt, width)), list(st[:4])
 
 
-def overlay(sheet: dict, values: dict) -> int:
+def overlay(sheet: dict, values: dict, zeros: bool = False) -> int:
     """Repaint today's row of `sheet` in place with fresher `values`
-    ({column letter: number}), re-running each cell's format and colour rules.
-    Columns the sheet has no recipe for are ignored. Returns cells changed."""
+    ({column letter: number or text}), re-running each cell's format and
+    colour rules. Columns the sheet has no recipe for are ignored. Returns
+    cells changed. `zeros`: the values are actual writes, so a 0 (or a
+    cleared "") is painted even where the workbook shows a blank; without it
+    a 0 is a derived total and a blank cell stays blank."""
     live = sheet.get("live")
     if not live or not values:
         return 0
@@ -701,7 +712,9 @@ def overlay(sheet: dict, values: dict) -> int:
         if recipe is None or col not in sheet["cols"] or value is None:
             continue
         ci = sheet["cols"].index(col)
-        if value == 0 and row[ci][0] == "":
+        if len(row[ci]) > 2:
+            continue                    # inside a vertical merge: its text lives rows above
+        if not zeros and value == 0 and row[ci][0] == "":
             continue                    # the workbook shows this cell blank; a ledger 0 is not news
         text, style = paint(value, recipe["fmt"], recipe["base"], recipe["rules"], sheet["widths"][ci],
                             live.get("recolor"))
@@ -737,25 +750,14 @@ def _week_label(wv, today: dt.date, sheet: str = "0分") -> str:
     return ""
 
 
-def _anchor_weekly(sheets: list, label: str) -> None:
-    """Weekly sheets have no date column: open them on the row whose leading
-    cell is this week's 周 label instead of at January."""
-    if not label:
-        return
-    for sh in sheets:
-        if sh.get("today_row") is not None:
-            continue
-        for i in range(sh["header_rows"], len(sh["rows"])):
-            if any(c[0].strip() == label for c in sh["rows"][i][:2]):
-                sh["today_row"] = i
-                break
-
-
 def build(src: Path = SRC, today: dt.date | None = None) -> dict:
     """Parse the workbook (a private copy, so a save in progress is never read
     in place) into the snapshot dict."""
     import openpyxl
     today = today or dt.date.today()
+    # stat BEFORE the copy: a save landing mid-build must not stamp the old
+    # content with the new mtime (readers overlay ledger writes newer than this)
+    src_mtime = int(src.stat().st_mtime)
     with tempfile.TemporaryDirectory(prefix="neon-grid-") as tmp:
         copy = Path(tmp) / "neon.xlsx"
         shutil.copyfile(src, copy)
@@ -763,14 +765,17 @@ def build(src: Path = SRC, today: dt.date | None = None) -> dict:
         wv = openpyxl.load_workbook(copy, data_only=True)
         theme = _theme_palette(wb)
         sheets = []
+        label = _week_label(wv, today)
         for ws in wb.worksheets:
             if ws.sheet_state != "visible" or ws.title not in wv.sheetnames or ws.title in SKIP_SHEETS:
                 continue
-            sheets.append(build_sheet(ws, wv[ws.title], theme, today))
-        _anchor_weekly(sheets, _week_label(wv, today))
+            sheets.append(build_sheet(ws, wv[ws.title], theme, today, label))
     body = json.dumps(sheets, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    return {"version": VERSION, "hash": hashlib.sha1(body.encode("utf-8")).hexdigest(),
-            "built": int(time.time()), "src_mtime": int(src.stat().st_mtime), "sheets": sheets}
+    # the day is part of the hash: at midnight "today's row" moves even when no
+    # cell did, and an unchanged hash would leave yesterday's file in place
+    day = today.isoformat()
+    return {"version": VERSION, "hash": hashlib.sha1((day + body).encode("utf-8")).hexdigest(),
+            "built": int(time.time()), "src_mtime": src_mtime, "day": day, "sheets": sheets}
 
 
 def write_snapshot(src: Path = SRC, out: Path = OUT, force: bool = False) -> str:

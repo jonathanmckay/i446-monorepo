@@ -14,6 +14,7 @@ Everything here is plain data in / plain tuples out, so tests need no tty.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import subprocess
@@ -29,6 +30,7 @@ STATE_FILE = Path.home() / ".cache" / "janus" / "neon-tab.json"
 HOME_TAB = "janus"
 REBUILD_MIN_S = 90          # never rebuild more often than this
 BUILD_TIMEOUT_S = 120
+WRITE_MARGIN_S = 30         # ledger writes this long before the save still overlay (a save in flight)
 TODAY_FROM_BOTTOM = 3       # a sheet opens with today's row this far above the last line
 STRIP_STYLE = "bg:#303030 #9a9a9a"
 STATUS_STYLE = "#8a8a8a"
@@ -55,6 +57,14 @@ class Tabs:
         # load and on refresh_live(); the status line names it.
         self.live_sources: dict = {}
         self.live_through: dict = {}
+        # callable(since_epoch) -> {(sheet, excel row, col): (value, "…THH:MM:SS")}:
+        # the cell writes journaled since the workbook was saved (janus wires
+        # the Neon ledger). Every sheet WITHOUT a live source gets its today
+        # (or this-week) row repainted from it, so a write shows within a tick
+        # instead of after Excel's next save plus a rebuild. Formula cells that
+        # depend on the written cell still wait for the save.
+        self.write_source = None
+        self.write_through: dict = {}
         self._restore()
 
     # --- state ---------------------------------------------------------------
@@ -113,10 +123,29 @@ class Tabs:
         """Repaint each sheet's today row from its live source. Cheap (a local
         sqlite read for the ledger); a source that fails or has nothing leaves
         the workbook's own values in place. True when something changed."""
+        if not self._current_day():
+            return False                # yesterday's snapshot: its "today" row is the wrong row
         changed = False
+        writes = {}
+        if self.write_source is not None:
+            try:
+                writes = self.write_source((self.snap or {}).get("src_mtime", 0) - WRITE_MARGIN_S) or {}
+            except Exception:
+                writes = {}
         for sh in self.sheets():
             fn = self.live_sources.get(sh["name"])
             if fn is None:
+                row = (sh.get("live") or {}).get("excel_row")
+                mine = {k[2]: v for k, v in writes.items() if k[0] == sh["name"] and k[1] == row}
+                through = max((str(v[1])[11:19] for v in mine.values()), default="") or None
+                if mine and neon_grid.overlay(sh, {c: v[0] for c, v in mine.items()}, zeros=True):
+                    changed = True
+                if self.write_through.get(sh["name"]) != through:
+                    changed = True
+                    if through:
+                        self.write_through[sh["name"]] = through
+                    else:
+                        self.write_through.pop(sh["name"], None)
                 continue
             try:
                 values, through = fn()
@@ -132,6 +161,11 @@ class Tabs:
         if changed:
             self._memo = None
         return changed
+
+    def _current_day(self) -> bool:
+        """The snapshot was built for today (older snapshots carry no day)."""
+        day = (self.snap or {}).get("day")
+        return day is None or day == dt.date.today().isoformat()
 
     def select(self, i: int) -> None:
         n = len(self.names())
@@ -149,8 +183,8 @@ class Tabs:
     # --- rebuilds ------------------------------------------------------------
     def needs_build(self, now: float | None = None) -> bool:
         """Only while a Neon tab is showing (or nothing has ever been built):
-        the workbook moved on since the last build, and the last build is not
-        too recent. Excel's forced save bumps the mtime every ~2 minutes, so
+        the workbook moved on since the last build (or the snapshot is from
+        another day), and the last build is not too recent. Excel's forced save bumps the mtime every ~2 minutes, so
         this is at most one ~2 s subprocess per REBUILD_MIN_S."""
         now = time.monotonic() if now is None else now
         if self.building or (self.last_build and now - self.last_build < REBUILD_MIN_S):
@@ -161,7 +195,7 @@ class Tabs:
             return False
         if self.snap is None:
             return True
-        return self.tab != 0 and src_m > self.built_src_mtime
+        return self.tab != 0 and (src_m > self.built_src_mtime or not self._current_day())
 
     def build(self, run=subprocess.run) -> None:
         """Blocking: run neon_grid.py build in a subprocess, then reload.
@@ -301,6 +335,8 @@ class Tabs:
         bits = ["%d–%d/%d" % (top + 1, min(body, top + body_h), body), span, "saved " + built]
         if self.live_through.get(sh["name"]):
             bits.append("today ledger " + str(self.live_through[sh["name"]])[:5])
+        if self.write_through.get(sh["name"]):
+            bits.append("ledger write " + self.write_through[sh["name"]][:5])
         if self.building:
             bits.append("refreshing…")
         if self.error:

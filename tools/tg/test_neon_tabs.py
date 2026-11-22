@@ -264,3 +264,55 @@ def test_entering_a_tab_lands_on_today_again(tmp_path):
     again.load()
     again.render(58, 12)
     assert again.scroll["0分"][0] == home[0]
+
+
+def test_ledger_writes_since_the_save_repaint_today_on_other_tabs(tmp_path):
+    """2026-11-22: only 0分 had a source fresher than the saved workbook. The
+    other sheets take the cell writes journaled since the save, on their
+    today row only, and never from a snapshot built for another day."""
+    import datetime as dt
+    recipe = {"fmt": "General", "base": [None, None, False, None], "rules": []}
+    zero = _sheet("0分")
+    zero["live"] = {"row": 50, "excel_row": 51, "cells": {"D": recipe}}
+    other = _sheet("0n", tab=None)
+    other["live"] = {"row": 50, "excel_row": 51, "cells": {"D": recipe, "E": recipe}}
+    other["rows"][50][4] = ["", 0]
+    t = _tabs(tmp_path, [zero, other])
+    zero, other = t.sheets()
+    t.live_sources["0分"] = lambda: (None, None)
+    seen = []
+    feed = {("0n", 51, "D"): (7.0, "2026-11-22T07:16:05"), ("0n", 51, "E"): (0.0, "2026-11-22T07:15:00"),
+            ("0n", 40, "D"): (9.0, "2026-11-22T07:17:00"),         # another row: waits for the rebuild
+            ("0分", 51, "D"): (1.0, "2026-11-22T07:18:00")}         # 0分 has its own source
+    t.write_source = lambda since: seen.append(since) or feed
+    assert t.refresh_live() is True and seen == [1 - nt.WRITE_MARGIN_S]
+    assert other["rows"][50][3][0] == "7" and other["rows"][50][4][0] == "0"     # a written 0 is news here
+    assert other["rows"][40][3][0] == "4003" and zero["rows"][50][3][0] == "5003"
+    t.select(2)
+    assert "ledger write 07:16" in _text(t.render(80, 24)).split("\n")[-1]
+    assert t.refresh_live() is False                        # nothing new: no repaint
+    t.write_source = lambda since: 1 / 0                    # a failing source never breaks the tab
+    assert t.refresh_live() is True and "ledger write" not in _text(t.render(80, 24))
+    # a snapshot built yesterday: its today row is yesterday's, so nothing is
+    # painted on it and the tab asks for a rebuild though the workbook is unmoved
+    t.write_source = lambda since: feed
+    other["rows"][50][3] = ["5003", 0]
+    t.snap["day"] = "2026-01-01"
+    assert t.refresh_live() is False and other["rows"][50][3][0] == "5003"
+    (tmp_path / "neon.xlsx").write_text("x")
+    t.built_src_mtime = (tmp_path / "neon.xlsx").stat().st_mtime
+    assert t.needs_build(now=1000)
+    t.snap["day"] = dt.date.today().isoformat()
+    assert not t.needs_build(now=1000) and t.refresh_live() is True
+
+
+def test_janus_feeds_the_other_tabs_from_ledger_writes(monkeypatch):
+    mod = _load_janus()
+    assert mod.NEON.write_source is mod._neon_ledger_writes
+    assert mod._neon_ledger_writes(0) == {}                 # pytest never reads the live ledger
+    import neon.ledger as nledger
+    monkeypatch.setenv("NEON_TEST_DB_OK", "1")
+    got = []
+    monkeypatch.setattr(nledger, "writes_since", lambda since: got.append(since) or {"k": 1})
+    assert mod._neon_ledger_writes(1795360397) == {"k": 1}
+    assert got == [mod.dt.datetime.fromtimestamp(1795360397).isoformat(timespec="seconds")]

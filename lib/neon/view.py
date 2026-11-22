@@ -58,7 +58,8 @@ def _round(v: Optional[float]) -> Optional[float]:
     return None if v is None else round(float(v), 3)
 
 
-def day_view(date_iso: str, conn=None, now: Optional[_dt.datetime] = None) -> Optional[dict]:
+def day_view(date_iso: str, conn=None, now: Optional[_dt.datetime] = None,
+             with_pending: bool = True) -> Optional[dict]:
     """{"date", "total", "cols": {col: 分}, "blocks": {glyph: 分}, "live_block",
     "unknown": [...], "pending": [...], "through": ts|None, "source": "ledger"}.
 
@@ -67,6 +68,8 @@ def day_view(date_iso: str, conn=None, now: Optional[_dt.datetime] = None) -> Op
     unknown: inputs the ledger never observed (derivation is partial).
     pending: columns with no derivation yet (P before its first ritual set).
     pending_writes (also in the dict): pending_writes() for today, else 0.
+    with_pending=False skips that daemon /health call (up to 25 s when the
+    daemon is slow): for readers with a short timeout of their own.
     """
     if conn is None and not db_present():
         return None
@@ -129,7 +132,89 @@ def day_view(date_iso: str, conn=None, now: Optional[_dt.datetime] = None) -> Op
         return {"date": date_iso, "total": total, "cols": cols, "blocks": out_blocks,
                 "live_block": live, "unknown": sorted(set(unknown)), "pending": pending,
                 "through": through, "source": "ledger",
-                "pending_writes": pending_writes() if date_iso == today else 0}
+                "pending_writes": pending_writes() if (with_pending and date_iso == today) else 0}
+    finally:
+        if own:
+            try:
+                c.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _sheet_row(c, sheet: str, date_iso: str) -> Optional[int]:
+    r = c.execute("SELECT row FROM row_dates WHERE sheet=? AND date=? ORDER BY row DESC LIMIT 1",
+                  (sheet, date_iso)).fetchone()
+    return r[0] if r else None
+
+
+def _cell(book, sheet: str, col: str, row: int) -> Optional[float]:
+    """One strict cell as a float; None when no writer or baseline gave it a
+    number, or its formula cannot be evaluated. Never raises."""
+    try:
+        v = book.get(sheet, col, row)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _sum_cells(book, sheet: str, cols, row: Optional[int]) -> Optional[float]:
+    """Σ of the cells that hold a number; None when the row is unknown or
+    none of them does."""
+    if row is None:
+        return None
+    vals = [v for v in (_cell(book, sheet, col, row) for col in cols) if v is not None]
+    return sum(vals) if vals else None
+
+
+WATCH_KCAL = ("hcbi", ("U",))                 # calories eaten
+WATCH_HCB = ("hcbi", ("Y", "AA"))             # hcbp + hcbc, the day's score
+WATCH_SALAT = ("0n", ("AP",))                 # ص
+WATCH_HCMP = ("0n", ("AQ", "AR", "AS"))       # o314 + 冥想 + 其他人, minutes
+
+
+def watch_view(date_iso: str, conn=None) -> Optional[dict]:
+    """The neg1n watch's numbers from the ledger alone (2026-11-22, replaces
+    the xlwings-built .points-cache.json, which stopped carrying them on
+    2026-10-08): {"points", "calories", "hcbp_hcbc", "prayers", "hcmp_minutes",
+    "through"}, each None when the ledger has no value for it.
+
+    points is day_view's Σ. The rest are strict cells (rules._Book): what
+    writers sent through the daemon on top of the 03:50 baseline, formulas
+    re-evaluated here, so an edit typed into Excel is not seen. calories is
+    None until something is eaten (the old cache's rule); hcmp_minutes is 0 on
+    a known row with nothing logged.
+
+    No daemon call and no Excel call. None when the DB is absent or the day
+    has no 0分 baseline yet (00:00 to 03:50). Never raises."""
+    if conn is None and not db_present():
+        return None
+    if conn is None and os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("NEON_TEST_DB_OK"):
+        return None
+    own = conn is None
+    try:
+        c = conn or ledger.connect()
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        day = day_view(date_iso, conn=c, with_pending=False)
+        if day is None:
+            return None
+        out = {"points": day.get("total"), "through": day.get("through"),
+               "calories": None, "hcbp_hcbc": None, "prayers": None, "hcmp_minutes": None}
+        try:
+            book = rules._Book(c, True)
+            rows = {s: _sheet_row(c, s, date_iso) for s in ("hcbi", "0n")}
+            kcal = _sum_cells(book, WATCH_KCAL[0], WATCH_KCAL[1], rows["hcbi"])
+            out["calories"] = kcal if kcal is not None and kcal > 0 else None
+            out["hcbp_hcbc"] = _sum_cells(book, WATCH_HCB[0], WATCH_HCB[1], rows["hcbi"])
+            out["prayers"] = _sum_cells(book, WATCH_SALAT[0], WATCH_SALAT[1], rows["0n"])
+            hcmp = _sum_cells(book, WATCH_HCMP[0], WATCH_HCMP[1], rows["0n"])
+            out["hcmp_minutes"] = hcmp if hcmp is not None else (0.0 if rows["0n"] is not None else None)
+        except Exception:  # noqa: BLE001 — points still stand
+            pass
+        return out
     finally:
         if own:
             try:

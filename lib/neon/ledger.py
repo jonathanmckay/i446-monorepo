@@ -463,6 +463,61 @@ def state(date_iso: str, sheet: str, conn: Optional[sqlite3.Connection] = None,
             c.close()
 
 
+def writes_since(ts_iso: str, conn: Optional[sqlite3.Connection] = None,
+                 path: Optional[Path] = None) -> dict:
+    """What each cell holds after the writes journaled later than `ts_iso`
+    (local naive ISO, as events.ts): {(sheet, row, col): (value, ts)}, the
+    newest event per cell. For a reader that has the workbook as of a known
+    save time and wants what landed since (janus's Neon tabs).
+
+    Only writes count, plus hand edits the daemon noticed (excel-edit):
+    baseline/snapshot observations are stale by design. value is a float, a
+    text, or "" for a cleared cell. Cells whose content cannot be known from
+    the event are absent: a '+N' credit or '=formula' set with no read-back.
+    Formula cells that DEPEND on a written cell are not here either.
+
+    Without `conn` this opens the DB read-only with a short timeout and never
+    creates or migrates it (safe to call from a UI loop); {} when there is no
+    DB. Raises sqlite3.Error only on an injected conn."""
+    own = conn is None
+    if own:
+        p = Path(path or DB_PATH)
+        if not p.exists():
+            return {}
+        try:
+            conn = sqlite3.connect("file:%s?mode=ro" % p, uri=True, timeout=0.5)
+        except sqlite3.Error:
+            return {}
+    out: dict = {}
+    try:
+        rows = conn.execute(
+            """SELECT sheet, row, col, kind, jsonl_kind, ts, after_value, value, after_formula
+                 FROM events
+                WHERE ts > ? AND row IS NOT NULL
+                  AND (kind IN ('set','credit','credit_ref','text','lock') OR jsonl_kind = 'excel-edit')
+                ORDER BY ts, id""", (ts_iso,)).fetchall()
+    except sqlite3.Error:
+        if own:
+            return {}
+        raise
+    finally:
+        if own:
+            conn.close()
+    for sheet, row, col, kind, jk, ts, av, raw, formula in rows:
+        key = (sheet, int(row), col)
+        value, text = _cell_value(kind, av, raw, formula)
+        if value is None:
+            if kind == "text" and jk == "append":
+                text = formula              # the request is a fragment; the read-back is the cell
+            if text is None or (kind != "text" and str(text).startswith(("=", "+", "-"))) \
+                    or (kind == "text" and str(text).startswith("=")):
+                out.pop(key, None)          # unknown now: an older value for the cell would be wrong
+                continue
+            value = text
+        out[key] = (value, ts)
+    return out
+
+
 def repair_dates(conn: Optional[sqlite3.Connection] = None) -> int:
     """Fill `date` (and block) on row-addressed events recorded before their
     row's date was learned (e.g. the 06:00 block lock that beat the day's

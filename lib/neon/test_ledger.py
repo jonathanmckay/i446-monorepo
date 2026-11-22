@@ -295,3 +295,29 @@ def test_requested_ts_column_is_added_to_an_existing_db(tmp_path):
     ledger.record({"ts": "2026-11-19T10:07:00", "kind": "append", "sheet": "0分", "col": "R", "row": 321,
                    "date": "11/19", "value": "+15", "before": "=1", "after": "=1+15"}, c)
     assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+
+
+def test_writes_since_is_the_newest_known_content_per_cell(db, tmp_path):
+    """janus's Neon tabs paint these over the saved workbook: writes only,
+    newest per cell, and nothing where the event cannot say what the cell holds."""
+    def w(ts, col, **kw):
+        ledger.record(_e(**dict(dict(ts="2026-10-19T" + ts, kind="write", sheet="0n", col=col, row=290,
+                                     value="1", after="1", after_value="1.0", before="", before_value=""), **kw)), db)
+    w("08:00:00", "E")                                           # before the cut: not returned
+    w("09:00:00", "F")
+    w("09:05:00", "F", value="0", after="0", after_value="0.0")  # a later write to the same cell wins
+    w("09:06:00", "G", value="3", after="3", after_value=None)   # no read-back: the request value
+    w("09:07:00", "H", value="=A1+2", after="=A1+2", after_value=None)   # a formula's result is unknown
+    ledger.record(_e(ts="2026-10-19T09:08:00", kind="append", sheet="hcbi", col="AZ", row=291,
+                     value=", tea", before="soup", after="soup, tea", after_value=None, before_value=None), db)
+    ledger.record(_e(ts="2026-10-19T09:09:00", kind="baseline", sheet="0n", col="K", row=290,
+                     value=None, after="=SUM(E290:J290)", after_value="5.0"), db)    # an observation, not a write
+    db.commit()
+    got = ledger.writes_since("2026-10-19T08:30:00", conn=db)
+    assert got[("0n", 290, "F")] == (0.0, "2026-10-19T09:05:00")
+    assert got[("0n", 290, "G")][0] == 3.0
+    assert got[("hcbi", 291, "AZ")][0] == "soup, tea"            # the whole cell, not the appended fragment
+    assert set(got) == {("0n", 290, "F"), ("0n", 290, "G"), ("hcbi", 291, "AZ")}
+    assert ledger.writes_since("2026-10-19T08:30:00", path=tmp_path / "absent.db") == {}
+    assert not (tmp_path / "absent.db").exists()                 # read-only: never creates the DB
+    assert ("0n", 290, "F") in ledger.writes_since("2026-10-19T08:30:00", path=tmp_path / "neon.db")

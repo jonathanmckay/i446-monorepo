@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -31,15 +32,13 @@ RITUALS_CFG = REPO / "config" / "block-rituals.json"
 BUILD_ORDER = Path.home() / "vault" / "g245" / "5e-1" / "build-order.md"
 DID_FAST = REPO / "tools" / "did" / "did-fast.py"
 
-# Shared with day-points/hcb/hcmp below: refreshed every 30min by
-# personal-dashboard/refresh-points-cache.sh straight from the live Neon
-# workbook. A plain file read here (no xlwings/AppleScript in this
-# process) — those complications don't need per-request freshness (nothing
-# else in this whole sync chain promises sub-15min anyway: the phone syncs
-# every 15min, complications refresh every 15min), and it keeps this
-# process from ever blocking on Excel/AppleEvents, which would stall the
-# -1n route too since they'd share this one Flask process/thread.
-POINTS_CACHE = REPO / "tools" / "personal-dashboard" / ".points-cache.json"
+# day-points/hcb/hcmp below come from the Neon ledger (lib/neon/view.
+# watch_view: a local SQLite read, ~10 ms, no Excel and no daemon call in this
+# process). Until 2026-11-22 they read personal-dashboard/.points-cache.json,
+# built from the live workbook by xlwings; that feed stopped carrying these
+# keys on 2026-10-08 and the three complications showed nothing for six weeks.
+sys.path.insert(0, str(REPO / "lib"))
+from neon import view as neon_view  # noqa: E402
 
 # Block start hour (24h local) -> glyph. A block runs from its start hour up
 # to (not including) the next block's start hour. Mirrors g245/CLAUDE.md's
@@ -260,55 +259,57 @@ def api_neg1n_goal():
     return jsonify(out)
 
 
-def _today_cache_entry() -> dict:
-    """Today's row from .points-cache.json, or {} if the cache is missing/
-    stale/unreadable — callers treat a missing key as 'no data yet', not an
-    error, since the cache only refreshes every 30min and today's row won't
-    exist until the first refresh after midnight."""
+def _int(v):
+    return None if v is None else int(round(float(v)))
+
+
+def _today_watch() -> dict:
+    """Today's numbers from the ledger, or {} when it has none yet (before the
+    03:50 baseline, or the DB is missing): callers answer null, which the
+    watch draws as an empty track."""
     try:
-        cache = json.loads(POINTS_CACHE.read_text())
-    except (OSError, json.JSONDecodeError):
+        return neon_view.watch_view(datetime.now().date().isoformat()) or {}
+    except Exception:  # noqa: BLE001 — a complication must never 500
         return {}
-    return cache.get(datetime.now().date().isoformat(), {})
 
 
 @app.route("/api/day-points")
 def api_day_points():
-    """Today's total 分 (0分!D, the grand-total column) for the quarter-circle
-    arc complication. `max` is a fixed reference scale (not a real ceiling —
-    days can and do exceed it), matching what the user asked the arc to be
-    scaled against."""
-    entry = _today_cache_entry()
+    """Today's total 分 (0分 Σ) for the quarter-circle arc complication. `max`
+    is a fixed reference scale (not a real ceiling: days can and do exceed
+    it), matching what the user asked the arc to be scaled against."""
+    w = _today_watch()
     return jsonify({
         "date": datetime.now().date().isoformat(),
-        "points": entry.get("__total__"),
+        "points": _int(w.get("points")),
         "max": 1440,
+        "through": w.get("through"),
     })
 
 
 @app.route("/api/hcb")
 def api_hcb():
-    """Today's calories eaten (hcbi!U) + today's hcbp+hcbc score
-    (hcbi!Y+AA, today's row — a daily figure, matching the 131 daily goal;
-    NOT the Q2+Q3 running total, which is a different, year-scale number)."""
-    entry = _today_cache_entry()
+    """Today's calories eaten (hcbi U) + today's hcbp+hcbc score (hcbi Y+AA,
+    today's row: a daily figure, matching the 131 daily goal; NOT the Q2+Q3
+    running total, which is a different, year-scale number)."""
+    w = _today_watch()
     return jsonify({
         "date": datetime.now().date().isoformat(),
-        "calories": entry.get("__hcb_kcal__"),
-        "hcbp_hcbc": entry.get("__hcbp_hcbc__"),
+        "calories": _int(w.get("calories")),
+        "hcbp_hcbc": _int(w.get("hcbp_hcbc")),
         "goal": 131,
     })
 
 
 @app.route("/api/hcmp")
 def api_hcmp():
-    """Today's prayer count (0n!AP, ص) and combined hcmp minutes (0n!AQ+AR+AS
+    """Today's prayer count (0n AP, ص) and combined hcmp minutes (0n AQ+AR+AS
     = o314 + 冥想 + 其他人)."""
-    entry = _today_cache_entry()
+    w = _today_watch()
     return jsonify({
         "date": datetime.now().date().isoformat(),
-        "prayers": entry.get("__salat__"),
-        "hcmp_minutes": entry.get("__hcmp_min__"),
+        "prayers": _int(w.get("prayers")),
+        "hcmp_minutes": _int(w.get("hcmp_minutes")),
     })
 
 

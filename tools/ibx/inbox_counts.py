@@ -197,18 +197,19 @@ def badge_text(rec: dict | None) -> str:
     return "✉" + str(rec["count"])
 
 
-# Habits the 😈 -1ibx block-ritual card totals. Slack only for now (JM,
-# 2026-11-15); widen to tuple(HABIT_CHANNELS) when it should be all comms.
-RITUAL_HABITS: tuple[str, ...] = ("slack i9", "slack m5x2")
+# Habits the 😈 -1ibx block-ritual card totals: Slack and ibx for s897 and
+# m5x2, i.e. the sum of the ✉N shown on those three cards (JM, 2026-11-22;
+# was Slack-only incl. i9 from 2026-11-15). s897 has no Slack. i9 is out.
+RITUAL_HABITS: tuple[str, ...] = ("ibx s897", "ibx m5x2", "slack m5x2")
 
 
 def card_badge(name: str, badges: dict[str, dict]) -> str:
     """Badge for any dtd card name (annotations already stripped).
 
     An inbox habit gets its own count. The -1ibx ritual card gets the sum over
-    RITUAL_HABITS: habits no host reports are left out (ix has no github
-    Slack), but one that reported a failed ping blanks the badge, because a
-    partial sum would read as a full count.
+    RITUAL_HABITS: habits no host reports are left out, but one that reported
+    a failed ping blanks the badge, because a partial sum would read as a
+    full count.
     """
     if not badges:
         return ""

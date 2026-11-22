@@ -215,3 +215,29 @@ def test_overlay_repaints_today_from_fresher_values(snap):
     blank = s["cols"].index("E")
     s["rows"][row][blank] = ["", s["rows"][row][blank][1]]
     assert ng.overlay(s, {"E": 0.0}) == 0 and s["rows"][row][blank][0] == ""   # a blank cell stays blank on a 0
+
+
+def test_snapshot_names_its_day_and_weekly_sheets_get_a_live_row(tmp_path, monkeypatch):
+    """2026-11-22: readers overlay ledger writes on the today row, so the
+    snapshot says which day that row is for (and midnight changes the hash),
+    and a weekly sheet's this-week row carries a recipe like a daily one."""
+    import openpyxl
+    path = _workbook(tmp_path / "neon.xlsx")
+    wb = openpyxl.load_workbook(path)
+    ws = wb.create_sheet("wk")
+    ws.append(["周", "x"])
+    for label in (11.1, 11.2, 11.3):
+        ws.append([label, 1])
+    wb.save(path)
+    day = dt.date(2026, 11, 20)                                  # in the fixture's merged week 11.2
+    a = ng.build(path, today=day)
+    assert a["day"] == "2026-11-20"
+    monkeypatch.setattr(ng, "build_sheet", lambda *x, **k: {"name": "same"})
+    assert ng.build(path, today=day)["hash"] != ng.build(path, today=TODAY)["hash"]   # midnight alone moves the hash
+    daily = a["sheets"][0]
+    assert daily["live"]["excel_row"] == daily["row_nums"][daily["today_row"]]
+    weekly = [s for s in a["sheets"] if s["name"] == "wk"][0]
+    assert weekly["today_row"] == 2 and weekly["live"]["excel_row"] == 3 and "B" in weekly["live"]["cells"]
+    weekly["rows"][2][1] = ["", weekly["rows"][2][1][1]]
+    assert ng.overlay(weekly, {"B": 0}) == 0                     # a derived 0 leaves a blank cell blank
+    assert ng.overlay(weekly, {"B": 0}, zeros=True) == 1 and weekly["rows"][2][1][0] == "0"   # a written 0 shows
