@@ -43,7 +43,7 @@ from pathlib import Path
 
 SRC = Path.home() / "Library" / "CloudStorage" / "OneDrive-Personal" / "vault-excel" / "Neon分v12.2.xlsx"
 OUT = Path.home() / ".cache" / "janus" / "neon-grid.json"
-VERSION = 2
+VERSION = 13
 
 # Per-sheet view settings. Neon has no usable freeze panes (only 0s897 has
 # one, and openpyxl reports its scroll position, not the split), so the pinned
@@ -54,7 +54,14 @@ SHEETS = {
     # 周 is white on black down the whole column (JM 2026-11-21); n156 and the
     # unlabelled column after it are not part of the view.
     "0分":     {"header_rows": 1, "date_col": "B", "frozen_cols": 2,
-                "drop_headers": ["n156", ""], "col_style": {"A": ["000000", "ffffff"]}},
+                "drop_headers": ["n156", "", "地", "0₦t", "∀₦t"],
+                # 周 is hidden; the date reads mm.dd, white on black. "date_label": "week"
+                # folds 周 into it instead, as MM.W.Dd ("08.4.Su", 7 wide)
+                "week_col": "A", "date_label": "mm.dd", "col_style": {"B": ["000000", "ffffff"]},
+                # compact: 3 chars by default, a few busier columns 4, Σ 5 (no thousands comma) for a gap after the date
+                # the workbook's dark greys read better as black in a terminal
+                "recolor": {"7f7f7f": "000000", "808080": "000000", "404040": "000000"},
+                "widths": {"*": 3, "B": 5, "D": 5, "I": 4, "J": 4, "N": 4, "P": 4, "Q": 4, "R": 4}, "formats": {"D": "0"}},
     "0n":      {"header_rows": 4, "date_col": "C", "frozen_cols": 3},
     "0s897":   {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
     "hcbi":    {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
@@ -476,6 +483,27 @@ def _extent(ws_values) -> tuple:
     return max_r, max_c
 
 
+def _recolor(bg, fg, table):
+    """Swap a fill per the view's "recolor" table; text that would vanish on
+    the new fill (black on black) turns white."""
+    if not table or bg not in table:
+        return bg, fg
+    new = table[bg]
+    if _lum(new) < 0.2 and (fg is None or _lum(fg) < 0.2):
+        fg = "ffffff"
+    return new, fg
+
+
+_WEEKDAYS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
+
+
+def week_date(week, day) -> str:
+    """周 value (month.week, e.g. 8.4) and a date as one label: "08.4.Su"."""
+    wd = _WEEKDAYS[day.weekday()]
+    m = re.match(r"\s*(\d+)\.(\d+)", _general(week, 8) if isinstance(week, (int, float)) else str(week or ""))
+    return "%02d.%s.%s" % (int(m.group(1)), m.group(2), wd) if m else "%02d/%02d" % (day.month, day.day)
+
+
 def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
     from openpyxl.utils import get_column_letter
     view = dict(DEFAULT_VIEW, **SHEETS.get(ws.title, {}))
@@ -500,9 +528,18 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
             cell = wsv._cells.get((1, c))
             return str(cell.value).strip() if cell is not None and cell.value is not None else ""
         cols = [c for c in cols if _head(c) not in drop]
+    week_c = _col_index(view["week_col"]) if view.get("week_col") else None
+    cols = [c for c in cols if c != week_c]
     col_style = {_col_index(k): v for k, v in (view.get("col_style") or {}).items()}
     rows = [r for r in range(1, max_r + 1) if not (r in ws.row_dimensions and ws.row_dimensions[r].hidden)]
     widths = {c: max(2, min(MAX_COL_CHARS, int(round(excel_w.get(c, DEFAULT_EXCEL_WIDTH))))) for c in cols}
+    fixed_w = view.get("widths") or {}
+    if fixed_w:
+        by_ix = {_col_index(k): v for k, v in fixed_w.items() if k != "*"}
+        widths = {c: by_ix.get(c, fixed_w.get("*", widths[c])) for c in cols}
+    formats = {_col_index(k): v for k, v in (view.get("formats") or {}).items()}
+    header_n = view.get("header_rows") or 0
+    recolor = view.get("recolor") or None
 
     # merges: every covered cell points at its anchor
     anchor = {}
@@ -543,6 +580,8 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
                 bg, fg, bold, halign, numfmt = static(cell)
             else:
                 bg, fg, bold, halign, numfmt = None, None, False, None, "General"
+            if c in formats and r > header_n:
+                numfmt = formats[c]
             forced = col_style.get(c)
             if forced and r > (view.get("header_rows") or 0):
                 bg, fg = forced
@@ -560,7 +599,14 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
                         bold, set_bold = bool(rbold), True
                     if stop:
                         break
+            bg, fg = _recolor(bg, fg, recolor)
             text = format_value(value, numfmt, widths[c]) if src == (r, c) else ""
+            if week_c and c == date_c and src == (r, c) and isinstance(value, (dt.datetime, dt.date)):
+                if view.get("date_label") == "mm.dd":
+                    text = "%02d.%02d" % (value.month, value.day)
+                else:
+                    wk = vcells.get(anchor.get((r, week_c), (r, week_c)))
+                    text = week_date(wk.value if wk is not None else None, value)
             up = 0
             if src != (r, c) and src[1] == c and src[0] in row_pos:
                 up = row_pos[r] - row_pos[src[0]]             # vertical merge: text lives `up` rows above
@@ -597,10 +643,11 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
                 continue
             cell = cells.get((rr, c))
             bg, fg, bold, halign, numfmt = static(cell) if cell is not None else (None, None, False, None, "General")
+            numfmt = formats.get(c, numfmt)
             recipe[get_column_letter(c)] = {
                 "fmt": numfmt, "base": [bg, fg, bold, halign],
                 "rules": [list(x) for x in sorted(cf.get((rr, c), []), key=lambda x: x[0])]}
-        live = {"row": today_row, "cells": recipe}
+        live = {"row": today_row, "cells": recipe, "recolor": recolor}
     tab = None
     try:
         tab = resolve_color(ws.sheet_properties.tabColor, theme)
@@ -615,7 +662,7 @@ def build_sheet(ws, wsv, theme: list, today: dt.date) -> dict:
             "skipped_rules": skipped, "live": live}
 
 
-def paint(value, fmt: str, base: list, rules: list, width: int):
+def paint(value, fmt: str, base: list, rules: list, width: int, recolor: dict | None = None):
     """(text, [bg, fg, bold, align]) for one value: number format, static
     style, then the cell's cellIs rules. The same steps build_sheet applies,
     for a value that did not come from the workbook."""
@@ -632,6 +679,7 @@ def paint(value, fmt: str, base: list, rules: list, width: int):
             bold, set_bold = bool(rbold), True
         if stop:
             break
+    bg, fg = _recolor(bg, fg, recolor)
     numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
     align = {"center": "c", "centerContinuous": "c", "right": "r", "left": "l"}.get(
         halign or "", "r" if numeric else "l")
@@ -656,7 +704,8 @@ def overlay(sheet: dict, values: dict) -> int:
         ci = sheet["cols"].index(col)
         if value == 0 and row[ci][0] == "":
             continue                    # the workbook shows this cell blank; a ledger 0 is not news
-        text, style = paint(value, recipe["fmt"], recipe["base"], recipe["rules"], sheet["widths"][ci])
+        text, style = paint(value, recipe["fmt"], recipe["base"], recipe["rules"], sheet["widths"][ci],
+                            live.get("recolor"))
         key = tuple(style)
         ix = index.get(key)
         if ix is None:

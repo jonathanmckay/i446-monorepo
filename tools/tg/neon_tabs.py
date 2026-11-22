@@ -364,6 +364,8 @@ def _row(sh: dict, r: int, shown: list, cols: int, first_visible: int) -> list:
         text = _cell_text(sh, r, c, first_visible)
         if neon_grid.cwidth(text) > w and "," in text:
             text = text.replace(",", "")                      # 1,744 -> 1744 before clipping
+        if neon_grid.cwidth(text) > w and text.lstrip("-").isdigit():
+            text = "#" * w                                    # Excel's way: a cut-off integer reads as a wrong number
         text = _clip(text, w)
         pad = w - neon_grid.cwidth(text)
         if align == "r":

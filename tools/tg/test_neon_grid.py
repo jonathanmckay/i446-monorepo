@@ -87,7 +87,10 @@ def _workbook(path: Path) -> Path:
 
 
 @pytest.fixture()
-def snap(tmp_path):
+def snap(tmp_path, monkeypatch):
+    # the engine tests want the sheet as Excel lays it out, not 0分's compact view
+    monkeypatch.setitem(ng.SHEETS, "0分", {
+        "header_rows": 1, "date_col": "B", "frozen_cols": 2, "col_style": {"A": ["000000", "ffffff"]}})
     return ng.build(_workbook(tmp_path / "neon.xlsx"), today=TODAY)
 
 
@@ -134,9 +137,9 @@ def test_vertical_merge_points_at_its_anchor(snap):
 def test_today_row_and_fallback_to_latest_past_day(tmp_path):
     path = _workbook(tmp_path / "neon.xlsx")
     s = ng.build(path, today=TODAY)["sheets"][0]
-    assert _cell(s, s["today_row"], "B")[0] == "11/21"
+    assert _cell(s, s["today_row"], "B")[0] == "11.21"
     s = ng.build(path, today=dt.date(2026, 12, 25))["sheets"][0]
-    assert _cell(s, s["today_row"], "B")[0] == "11/23"
+    assert _cell(s, s["today_row"], "B")[0] == "11.23"
     assert ng.build(path, today=TODAY)["sheets"][1]["today_row"] is None
 
 
@@ -170,17 +173,30 @@ def test_html_dump(snap):
     assert "background:#388195" in page and "1,600" in page
 
 
-def test_0fen_view_drops_n156_and_blackens_the_week_column(tmp_path):
+def test_0fen_view_drops_n156_and_blackens_the_week_column(tmp_path, monkeypatch):
     path = _workbook(tmp_path / "neon.xlsx")
     wb = openpyxl.load_workbook(path)
     ws = wb["0分"]
     ws["G1"], ws["G3"], ws["H3"] = "n156", 7, 9            # n156 and an unlabelled column after it
     wb.save(path)
     s = ng.build(path, today=TODAY)["sheets"][0]
-    assert s["cols"] == ["A", "B", "C", "D", "E", "F"]
-    assert _cell(s, 1, "A") == ("11.2", ["#000000", "#ffffff", 0, "r"])
-    assert _cell(s, 4, "A")[1][:2] == ["#000000", "#ffffff"]             # all the way down the merge
-    assert _cell(s, 0, "A")[1][0] is None                                # the header row keeps its own style
+    assert s["cols"] == ["B", "D", "E", "F"]                              # 地 and 周 hidden
+    assert s["widths"] == [5, 5, 3, 3] and s["frozen_cols"] == 1         # compact: 3 wide, Σ and date 5
+    assert _cell(s, 1, "B") == ("11.14", ["#000000", "#ffffff", 0, "r"])  # mm.dd, white on black
+    assert _cell(s, 5, "D")[0] == "1600" and s["live"]["cells"]["D"]["fmt"] == "0"
+    assert _cell(s, 1, "E")[1][:2] == ["#000000", "#ffffff"]             # the dark grey (lessThan 1) fill is black
+    row = s["live"]["row"]
+    ng.overlay(s, {"E": 0.5})
+    assert _cell(s, row, "E")[1][:2] == ["#000000", "#ffffff"]           # and stays black through the ledger overlay
+    monkeypatch.setitem(ng.SHEETS["0分"], "date_label", "week")
+    s = ng.build(path, today=TODAY)["sheets"][0]
+    assert _cell(s, 5, "D")[0] == "1600"                                 # Σ loses its thousands comma
+    assert s["live"]["cells"]["D"]["fmt"] == "0"                         # and so does the ledger overlay
+    assert _cell(s, 1, "B") == ("11.2.Sa", ["#000000", "#ffffff", 0, "r"])   # 2026-11-14, week 11.2
+    assert _cell(s, 4, "B")[0] == "11.2.Tu"                              # week read through the merge
+    assert _cell(s, 8, "B")[0] == "11/21"                                # no 周 value: plain date
+    assert _cell(s, 0, "B")[1][0] is None                                # the header row keeps its own style
+    assert ng.week_date(8.4, dt.date(2026, 8, 23)) == "08.4.Su" and ng.week_date("1.1", dt.date(2026, 1, 4)) == "01.1.Su"
 
 
 def test_overlay_repaints_today_from_fresher_values(snap):
