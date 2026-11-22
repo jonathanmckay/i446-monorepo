@@ -807,6 +807,47 @@ def check_perm_sync(now: dt.datetime) -> Finding:
     return Finding("perm-sync", "ok", "last syncs " + "; ".join(detail))
 
 
+NEON_PEER_MAX_GAP_H = 24      # a peer's copy may trail Ix's by this much
+NEON_STAMP_MAX_AGE_H = 48     # older than this, the peer's stamp says nothing about now
+
+
+def _neon_peer_copies(now: dt.datetime, m_ix: float, state_dir: Path | None = None) -> dict:
+    """{"behind": [host], "unknown": [host], "detail": [str]} for every other
+    Mac in PERM_SYNC_HOSTS, from the "neon" field of its perm-sync stamp.
+    behind: its copy trails Ix's by more than NEON_PEER_MAX_GAP_H.
+    unknown: no usable stamp (missing, too old, written before the field
+    existed, or the OS refused the stat there): never reported as in step."""
+    out = {"behind": [], "unknown": [], "detail": []}
+    me = socket.gethostname().split(".")[0].lower()
+    for host in PERM_SYNC_HOSTS:
+        if host == me or me.startswith(host):
+            continue
+        try:
+            data = json.loads(((state_dir or PERM_SYNC_DIR) / f"{host}.json").read_text())
+            stamp_age_h = (now.timestamp() - float(data["synced_at"])) / 3600
+        except (OSError, ValueError, KeyError, TypeError):
+            out["unknown"].append(host); out["detail"].append(f"{host}: no readable stamp")
+            continue
+        neon = data.get("neon")
+        if stamp_age_h > NEON_STAMP_MAX_AGE_H:
+            out["unknown"].append(host); out["detail"].append(f"{host}: stamp is {stamp_age_h:.0f}h old")
+        elif not isinstance(neon, dict):
+            out["unknown"].append(host); out["detail"].append(f"{host}: stamp has no workbook field yet (job not rerun since the field was added)")
+        elif neon.get("error"):
+            out["unknown"].append(host); out["detail"].append(f"{host}: could not read its copy ({str(neon['error'])[:60]})")
+        elif neon.get("mtime") is None:
+            out["detail"].append(f"{host}: holds no copy of the workbook")
+        else:
+            gap_h = (m_ix - float(neon["mtime"])) / 3600
+            when = dt.datetime.fromtimestamp(float(neon["mtime"]), TZ)
+            if gap_h > NEON_PEER_MAX_GAP_H:
+                out["behind"].append(host)
+                out["detail"].append(f"{host}: copy last changed {when:%m-%d %H:%M}, {gap_h / 24:.0f} days behind ix")
+            else:
+                out["detail"].append(f"{host}: copy last changed {when:%m-%d %H:%M}, in step")
+    return out
+
+
 def check_onedrive_neon(now: dt.datetime) -> Finding:
     detail = []
     def mtime_local():
@@ -820,7 +861,23 @@ def check_onedrive_neon(now: dt.datetime) -> Finding:
     if on_ix():
         if age_h > 72:
             status, review = "warn", True; detail.append("no writes in 3 days — is the daemon / Excel up?")
-        return Finding("onedrive-neon", status, "see detail" if status != "ok" else "fresh", detail, review=review)
+        # Ix cannot ssh to the other Macs, so their copies are compared through
+        # the stamp each one publishes hourly (scripts/claude-perm-sync.py's
+        # "neon" field). Until 2026-11-22 this branch returned "fresh" without
+        # looking at any other copy, and Straylight's sat six weeks stale.
+        peers = _neon_peer_copies(now, m_here)
+        detail += peers["detail"]
+        if peers["behind"]:
+            status, review = "fail", True
+            detail.append("a stale copy shows old data to anything that reads the file on that Mac "
+                          "(restart OneDrive there, or stop syncing vault-excel to it)")
+        elif peers["unknown"] and status == "ok":
+            status, review = "warn", True
+        summary = ("stale copy on " + ", ".join(peers["behind"]) if peers["behind"]
+                   else "fresh on ix; not compared: " + ", ".join(peers["unknown"]) if peers["unknown"]
+                   else "see detail" if status != "ok"
+                   else "fresh on ix; other Macs in step or hold no copy")
+        return Finding("onedrive-neon", status, summary, detail, review=review)
     out = ix("stat -f %m ~/OneDrive/vault-excel/Neon分v12.2.xlsx").strip().splitlines()[-1]
     try:
         m_ix = int(out)
@@ -1281,7 +1338,7 @@ CHECK_WHAT = {
     "github-contrib": "What GitHub holds and credits for ~/i446-monorepo and ~/vault: the pushed branch under 24h old, commits attributed to the account, nothing stranded off the default branch for over a week, at least half of the week's default-branch commits credited, a contribution on each of the last 7 days, and a week total at least half the prior 4-week average.",
     "skills-backup": "~/.claude/skills on Ix has a git auto-commit within 24h (cron runs every 10 min).",
     "perm-sync": "Both Ix and Straylight ran the hourly Claude permission-allowlist sync within 48h (state files in i446-monorepo/scripts/.perm-sync).",
-    "onedrive-neon": "The Neon workbook in OneDrive was modified within 3 days, and (run off Ix) the Ix and local copies are within 24h of each other.",
+    "onedrive-neon": "Ix's Neon workbook was modified within 3 days, and every other Mac's copy (from its hourly stamp) is within 24h of it or absent. A Mac with no usable stamp is reported as not compared, never as in step.",
     "time-machine": "A Time Machine destination is configured and the latest backup is at most 2 days old (Ix; Straylight is exempt).",
     "ix-cron": "Ix's live crontab matches the committed config/ix.crontab.",
     "launchd": "Ix's com.jm.* launch agents: any that is stopped with a non-zero last exit code (a job failing on every run).",

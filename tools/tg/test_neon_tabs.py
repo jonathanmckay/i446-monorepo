@@ -418,3 +418,17 @@ def test_local_mode_is_the_default_under_pytest_and_with_explicit_files(tmp_path
     assert neon_tabs.Tabs(state_file=tmp_path / "t.json", grid_file=tmp_path / "g.json").remote is False
     monkeypatch.setenv("NEON_GRID_REMOTE", "1")
     assert neon_tabs.Tabs(state_file=tmp_path / "t.json", grid_file=tmp_path / "g.json").remote is True
+
+
+def test_janus_header_marks_a_local_run(monkeypatch):
+    """A janus that is not the one on Ix says so in its header (2026-11-22)."""
+    mod = _load_janus()
+    import socket
+    monkeypatch.setattr(mod, "_LOCAL_TAG", None)
+    monkeypatch.setattr(mod.neon_tabs, "on_ix", lambda: False)
+    monkeypatch.setattr(socket, "gethostname", lambda: "Straylight-Refit.local")
+    assert mod._local_tag() == " · LOCAL straylight-ref"
+    assert "LOCAL straylight-ref" in "".join(f[1] for f in mod.render_header())
+    monkeypatch.setattr(mod, "_LOCAL_TAG", None)
+    monkeypatch.setattr(mod.neon_tabs, "on_ix", lambda: True)
+    assert mod._local_tag() == "" and "LOCAL" not in "".join(f[1] for f in mod.render_header())

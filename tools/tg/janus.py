@@ -2481,6 +2481,24 @@ def _fit_clock_line(left: str, rights: list[str], width: int, fill: str = "─")
     return left + fill * max(0, room - dwidth(left)) + right
 
 
+_LOCAL_TAG: str | None = None
+
+
+def _local_tag() -> str:
+    """" · LOCAL <host>" when this janus is not the one on Ix (2026-11-22: a
+    local fallback ran unnoticed for two days, reading that Mac's stale Neon
+    file). janus normally lives in Ix's tmux; a local run still works (reads
+    and writes go to Ix over ssh) but should never be mistaken for it."""
+    global _LOCAL_TAG
+    if _LOCAL_TAG is None:
+        try:
+            import socket
+            _LOCAL_TAG = "" if neon_tabs.on_ix() else " · LOCAL " + socket.gethostname().split(".")[0].lower()[:14]
+        except Exception:
+            _LOCAL_TAG = ""
+    return _LOCAL_TAG
+
+
 def render_header() -> list[tuple[str, str]]:
     now = dt.datetime.now(_tz())
     # int(round()) at every 分 render site: the sheet now carries fractional
@@ -2516,7 +2534,7 @@ def render_header() -> list[tuple[str, str]]:
         line = _fit_clock_line(left, [f"{now:%a %-m/%-d} " + clock, clock], width)
         return [("class:no_entry", line + "\n")]
     if STATE.day_offset == 0:
-        left = f" {pts_str}janus "
+        left = f" {pts_str}janus{_local_tag()} "
         line = _fit_clock_line(left, [f"{now:%a %-m/%-d} " + clock, clock], width)
         return [("class:header", line + "\n")]
     # Viewing a past day: badge it (◀ ... ⎋ today) so it's never mistaken for

@@ -89,3 +89,23 @@ def test_reordered_but_identical_allowlist_is_left_alone(tmp_path):
     ix = _host(tmp_path, "ix", ["Bash(b)", "Bash(a)"])
     ps.sync("ix", ix, shared, now=1)
     assert _allow(ix) == ["Bash(b)", "Bash(a)"]
+
+
+def test_state_carries_this_hosts_neon_workbook_time(tmp_path, monkeypatch):
+    """vault_health's onedrive-neon check reads it (2026-11-22)."""
+    book = tmp_path / "Neon.xlsx"
+    book.write_text("x")
+    assert ps.neon_copy(book) == {"mtime": int(book.stat().st_mtime), "error": None}
+    assert ps.neon_copy(tmp_path / "gone.xlsx") == {"mtime": None, "error": None}
+    monkeypatch.setattr(ps, "NEON_COPY", book)
+    state = ps.sync("ix", _host(tmp_path, "ix", ["Bash(a)"]), tmp_path / "state", now=100)
+    assert state["neon"]["mtime"] == int(book.stat().st_mtime)
+    assert json.loads((tmp_path / "state" / "ix.json").read_text())["neon"] == state["neon"]
+
+
+def test_neon_copy_reports_a_refused_stat_instead_of_raising(tmp_path, monkeypatch):
+    def refuse(self, *a, **k):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(ps.Path, "stat", refuse)
+    r = ps.neon_copy(tmp_path / "x.xlsx")
+    assert r["mtime"] is None and "PermissionError" in r["error"]

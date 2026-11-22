@@ -447,3 +447,49 @@ def test_github_contrib_ignores_a_calendar_from_the_wrong_weeks():
     f = vh.github_contrib_finding(data, _GH_NOW)
     assert f.status == "warn" and any("returned no contribution calendar" in d for d in f.detail)
     assert not any("no contribution at all" in d for d in f.detail)
+
+
+# ── onedrive-neon: other Macs' copies, from their hourly stamps (2026-11-22) ──
+
+def _stamp(tmp_path, host, synced_at, neon="absent"):
+    d = {"host": host, "synced_at": synced_at, "allow": [], "tombstones": [], "merged": {}}
+    if neon != "absent":
+        d["neon"] = neon
+    (tmp_path / f"{host}.json").write_text(json.dumps(d))
+
+
+def test_neon_peer_copy_six_weeks_behind_is_called_out(tmp_path, monkeypatch):
+    """Straylight's copy stopped syncing on 10-12; the review on Ix said "fresh"."""
+    vh = _load()
+    monkeypatch.setattr(vh.socket, "gethostname", lambda: "ix.local")
+    now = dt.datetime(2026, 11, 22, 8, 30, tzinfo=vh.TZ)
+    stale = dt.datetime(2026, 10, 12, 12, 34, tzinfo=vh.TZ).timestamp()
+    _stamp(tmp_path, "straylight", now.timestamp() - 600, {"mtime": int(stale), "error": None})
+    r = vh._neon_peer_copies(now, now.timestamp() - 60, tmp_path)
+    assert r["behind"] == ["straylight"] and r["unknown"] == []
+    assert "10-12 12:34" in r["detail"][0] and "41 days behind ix" in r["detail"][0]
+
+
+def test_neon_peer_copy_in_step_or_absent_is_fine(tmp_path, monkeypatch):
+    vh = _load()
+    monkeypatch.setattr(vh.socket, "gethostname", lambda: "ix.local")
+    now = dt.datetime(2026, 11, 22, 8, 30, tzinfo=vh.TZ)
+    _stamp(tmp_path, "straylight", now.timestamp() - 600, {"mtime": int(now.timestamp() - 3 * 3600), "error": None})
+    assert vh._neon_peer_copies(now, now.timestamp(), tmp_path)["behind"] == []
+    _stamp(tmp_path, "straylight", now.timestamp() - 600, {"mtime": None, "error": None})
+    r = vh._neon_peer_copies(now, now.timestamp(), tmp_path)
+    assert r["behind"] == [] and r["unknown"] == [] and "holds no copy" in r["detail"][0]
+
+
+def test_neon_peer_without_a_usable_stamp_is_never_reported_in_step(tmp_path, monkeypatch):
+    vh = _load()
+    monkeypatch.setattr(vh.socket, "gethostname", lambda: "ix.local")
+    now = dt.datetime(2026, 11, 22, 8, 30, tzinfo=vh.TZ)
+    assert vh._neon_peer_copies(now, now.timestamp(), tmp_path)["unknown"] == ["straylight"]      # no file
+    _stamp(tmp_path, "straylight", now.timestamp() - 600)                                          # old-format stamp
+    assert vh._neon_peer_copies(now, now.timestamp(), tmp_path)["unknown"] == ["straylight"]
+    _stamp(tmp_path, "straylight", now.timestamp() - 72 * 3600, {"mtime": int(now.timestamp()), "error": None})
+    assert vh._neon_peer_copies(now, now.timestamp(), tmp_path)["unknown"] == ["straylight"]      # job dead
+    _stamp(tmp_path, "straylight", now.timestamp() - 600, {"mtime": None, "error": "PermissionError: Operation not permitted"})
+    r = vh._neon_peer_copies(now, now.timestamp(), tmp_path)
+    assert r["unknown"] == ["straylight"] and "could not read" in r["detail"][0]

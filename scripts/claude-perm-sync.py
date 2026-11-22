@@ -60,6 +60,26 @@ def default_host():
     raise SystemExit(f"unknown host {h!r}: pass --host explicitly")
 
 
+NEON_COPY = Path.home() / "Library/CloudStorage/OneDrive-Personal/vault-excel/Neon分v12.2.xlsx"
+
+
+def neon_copy(path=None):
+    """This host's copy of the Neon workbook, for vault_health's
+    "onedrive-neon" check: {"mtime": epoch | None, "error": str | None}.
+    Rides this stamp because it is the one job that already runs hourly on
+    every Mac and publishes per host (2026-11-22: Straylight's copy sat six
+    weeks stale and the review, which runs on Ix and cannot ssh out, never
+    compared it). mtime None + error None = no copy here, which is fine.
+    Never raises: a stat the OS refuses is reported, not fatal."""
+    p = Path(path) if path is not None else NEON_COPY
+    try:
+        return {"mtime": int(p.stat().st_mtime), "error": None}
+    except FileNotFoundError:
+        return {"mtime": None, "error": None}
+    except OSError as e:
+        return {"mtime": None, "error": "%s: %s" % (type(e).__name__, e.strerror or e)}
+
+
 def read_json(path, default):
     if not path.exists():
         return default
@@ -159,6 +179,7 @@ def sync(host, claude_dir, state_dir, now=None):
         "allow": merged,
         "tombstones": sorted(tombstones, key=str.lower),
         "merged": {name: p["synced_at"] for name, p in sorted(peers.items())},
+        "neon": neon_copy(),
     }
     atomic_write(state_dir / f"{host}.json", json.dumps(state, indent=1, ensure_ascii=False) + "\n")
     log(f"published {host}.json; peers merged: {', '.join(peers) or 'none'}")
