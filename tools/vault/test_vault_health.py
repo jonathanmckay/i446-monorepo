@@ -348,14 +348,18 @@ def test_launchd_check_is_registered_and_described():
     assert "check_launchd" in (HERE / "vault_health.py").read_text().split("def run_all")[1].split("def ")[0]
 
 
-def _gh_data(counted=None, mono=None, vault=None, restricted=900):
+def _gh_data(counted=None, mono=None, vault=None, restricted=900, week=None, base=300):
     """A _gh_query() answer as of 2026-11-22 16:00Z; healthy unless overridden."""
     def repo(full, default, mine, ahead, private=False, head="2026-11-22T15:50:00Z", dhead="2026-11-22T15:50:00Z", login="jonathanmckay"):
         return {"nameWithOwner": full, "isPrivate": private, "defaultBranchRef": {"name": default, "compare": {"aheadBy": ahead}, "target": {
                     "committedDate": dhead, "mine": {"totalCount": mine}}},
                 "push": {"target": {"history": {"nodes": [{"committedDate": head, "author": {"user": {"login": login}}}]}}}}
     counted = {"jonathanmckay/i446-monorepo": 40} if counted is None else counted
-    return {"viewer": {"login": "jonathanmckay", "contributionsCollection": {"restrictedContributionsCount": restricted, "commitContributionsByRepository": [
+    counts = [base] * 28 + (week or [300] * 7) + [5]            # 28 baseline days, the week, partial today
+    d0 = dt.date(2026, 11, 22) - dt.timedelta(days=35)
+    cal = [{"date": (d0 + dt.timedelta(days=i)).isoformat(), "contributionCount": c} for i, c in enumerate(counts)]
+    return {"viewer": {"login": "jonathanmckay", "cal": {"contributionCalendar": {"weeks": [
+                {"contributionDays": cal[i:i + 7]} for i in range(0, len(cal), 7)]}}, "contributionsCollection": {"restrictedContributionsCount": restricted, "commitContributionsByRepository": [
                 {"repository": {"nameWithOwner": k}, "contributions": {"totalCount": v}} for k, v in counted.items()]}},
             "r0": repo("jonathanmckay/i446-monorepo", "main", **{"mine": 40, "ahead": 12, **(mono or {})}),
             "r1": repo("jonathanmckay/vault", "main", **{"mine": 900, "ahead": 0, "private": True, **(vault or {})})}
@@ -368,7 +372,7 @@ def test_github_contrib_ok_when_pushes_land_and_count():
     vh = _load()
     f = vh.github_contrib_finding(_gh_data(), _GH_NOW)
     assert f.status == "ok" and not f.review
-    assert f.summary == "i446-monorepo 40 counted; vault 900 counted in 7 days"
+    assert f.summary == "i446-monorepo 40 counted; vault 900 counted; 300/day on the graph in 7 days"
     assert any("900 private contributions counted (all private repos)" in d for d in f.detail)
 
 
@@ -414,3 +418,32 @@ def test_github_contrib_check_is_registered_and_described():
     assert "check_github_contrib" in (HERE / "vault_health.py").read_text().split("def run_all")[1].split("def ")[0]
     q = vh._gh_query(_GH_NOW, "U_x")
     assert q.count("{") == q.count("}") and 'headRef:"wip"' in q and 'since:"2026-11-22T16:00:00Z"' in q
+    assert 'cal: contributionsCollection(from:"2026-10-24T16:00:00Z",to:"2026-11-29T16:00:00Z")' in q
+
+
+def test_github_contrib_flags_an_unreasonable_week():
+    # JM 2026-11-22: "make sure that I'm getting a reasonable number of contributions".
+    vh = _load()
+    f = vh.github_contrib_finding(_gh_data(week=[300, 300, 0, 300, 0, 300, 300]), _GH_NOW)
+    assert f.status == "warn" and f.review and any("no contribution at all on 11-17, 11-19" in d for d in f.detail)
+    assert not any("is under" in d for d in f.detail)            # 1500 of a usual 2100 is fine
+    f = vh.github_contrib_finding(_gh_data(week=[100] * 7), _GH_NOW)
+    assert f.status == "warn" and any("700 contributions this week is under 50% of the usual 2100" in d for d in f.detail)
+    # Credited for under half of what a repo sent (was: only a flat zero warned).
+    f = vh.github_contrib_finding(_gh_data(counted={"jonathanmckay/i446-monorepo": 15}), _GH_NOW)
+    assert f.status == "warn" and any("i446-monorepo: 40 of my commits reached main" in d and "credited 15" in d for d in f.detail)
+    f = vh.github_contrib_finding(_gh_data(week=[100] * 7), _GH_NOW, [{"repo": "*", "rule": "low-week"}])
+    assert f.status == "ok" and not f.review
+
+
+def test_github_contrib_ignores_a_calendar_from_the_wrong_weeks():
+    # 2026-11-22: asked without `to`, GitHub returned October days; the check
+    # reported "0/day" and seven zero days on a 300-a-day week.
+    vh = _load()
+    data = _gh_data()
+    for w in data["viewer"]["cal"]["contributionCalendar"]["weeks"]:
+        for d in w["contributionDays"]:
+            d["date"] = (dt.date.fromisoformat(d["date"]) - dt.timedelta(days=40)).isoformat()
+    f = vh.github_contrib_finding(data, _GH_NOW)
+    assert f.status == "warn" and any("returned no contribution calendar" in d for d in f.detail)
+    assert not any("no contribution at all" in d for d in f.detail)

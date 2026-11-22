@@ -594,6 +594,14 @@ def check_git_autopush(now: dt.datetime) -> Finding:
 GH_REPOS = [("jonathanmckay/i446-monorepo", "wip"), ("jonathanmckay/vault", "main")]
 
 
+# "A reasonable number" (JM 2026-11-22), measured against his own recent pace:
+# the last 7 full days must each show a contribution, total at least GH_MIN_SHARE
+# of the average week over the GH_BASELINE_DAYS before them, and each repo must
+# be credited for at least GH_MIN_SHARE of the commits it sent.
+GH_BASELINE_DAYS = 28
+GH_MIN_SHARE = 0.5
+
+
 def _gh_bin() -> str:
     # cron on Ix has no Homebrew on PATH, so `gh` alone does not resolve there.
     return shutil.which("gh") or next((c for c in ("/opt/homebrew/bin/gh", "/usr/local/bin/gh") if Path(c).exists()), "")
@@ -628,8 +636,14 @@ def _gh_query(since: dt.datetime, viewer_id: str) -> str:
             f'mine: history(since:"{iso}",author:{{id:"{viewer_id}"}}){{totalCount}}}}}}}} '
             f'push: ref(qualifiedName:"refs/heads/{push}"){{target{{... on Commit{{'
             f'history(first:5){{nodes{{committedDate author{{user{{login}}}}}}}}}}}}}}}}')
+    fmt = lambda t: t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    # Without an explicit `to`, GitHub answers with a window that starts at `from`
+    # but ends wherever it likes (2026-11-22: it returned October for a November ask).
+    cal, cal_to = fmt(since - dt.timedelta(days=GH_BASELINE_DAYS + 1)), fmt(since + dt.timedelta(days=7))
     return ('{viewer{login contributionsCollection(from:"%s"){restrictedContributionsCount commitContributionsByRepository(maxRepositories:100)'
-            '{repository{nameWithOwner} contributions{totalCount}}}} %s}' % (iso, " ".join(parts)))
+            '{repository{nameWithOwner} contributions{totalCount}}} '
+            'cal: contributionsCollection(from:"%s",to:"%s"){contributionCalendar{weeks{contributionDays{date contributionCount}}}}} %s}'
+            % (iso, cal, cal_to, " ".join(parts)))
 
 
 def _gh_age_days(iso: str | None, now: dt.datetime) -> float:
@@ -646,7 +660,11 @@ def github_contrib_finding(data: dict, now: dt.datetime, dismissed: list | None 
       unreleased the pushed branch is ahead of the default branch, which has
                 not moved in a week (those commits count for nothing yet)
       uncounted my commits reached the default branch this week but GitHub
-                credited none of them
+                credited under GH_MIN_SHARE of them
+    Across the account (repo "*"):
+      zero-day  a full day in the last 7 with no contribution at all
+      low-week  the last 7 full days total under GH_MIN_SHARE of the average
+                week over the GH_BASELINE_DAYS before them
     `dismissed` = [{"repo", "rule"}] from 1-i446-dismissed.json "github-contrib":
     the rule still prints in the report but no longer makes a review item."""
     if data.get("_error") or not data.get("viewer"):
@@ -693,10 +711,33 @@ def github_contrib_finding(data: dict, now: dt.datetime, dismissed: list | None 
         if ahead and d_age > 7:
             flag(full, "unreleased", "warn", f"{short}: {ahead} commits sit on {push}, which GitHub does not count; "
                  f"{dflt['name']} has not moved in {d_age:.0f} days (release, or make {push} the default branch)")
-        if mine >= 5 and got == 0:
+        if mine >= 5 and got < mine * GH_MIN_SHARE:
             flag(full, "uncounted", "warn", f"{short}: {mine} of my commits reached {dflt['name']} in 7 days and "
-                 "GitHub credited 0" + (" private contributions: turn on 'Include private contributions on my "
+                 f"GitHub credited {got}" + (" private contributions: turn on 'Include private contributions on my "
                  "profile' at github.com/settings/profile" if private else f" (look at the repo on github.com/{login})"))
+    # Volume, from the contribution calendar (what the profile graph shows; private
+    # credit included). Today is partial, so it is left out of both windows.
+    today = now.astimezone(dt.timezone.utc).date().isoformat()
+    days = sorted((d for w in ((data["viewer"].get("cal") or {}).get("contributionCalendar") or {}).get("weeks", [])
+                   for d in w["contributionDays"] if d["date"] < today), key=lambda d: d["date"])
+    if not days or days[-1]["date"] < (now.astimezone(dt.timezone.utc).date() - dt.timedelta(days=2)).isoformat():
+        days = []                                  # a calendar that stops short of yesterday is not this week's
+        flag("*", "no-calendar", "warn", "graph: GitHub returned no contribution calendar for the last week")
+    week, base = days[-7:], days[-7 - GH_BASELINE_DAYS:-7]
+    if len(week) == 7:
+        total = sum(d["contributionCount"] for d in week)
+        heads.append(f"{total / 7:.0f}/day on the graph")
+        line = f"graph: {total} contributions over {week[0]['date'][5:]}..{week[-1]['date'][5:]} ({total / 7:.0f}/day)"
+        zero = [d["date"][5:] for d in week if d["contributionCount"] == 0]
+        if zero:
+            flag("*", "zero-day", "warn", f"graph: no contribution at all on {', '.join(zero)}")
+        if len(base) >= 7:
+            norm = sum(d["contributionCount"] for d in base) / len(base) * 7
+            line += f"; the {len(base)} days before averaged {norm:.0f} a week"
+            if total < norm * GH_MIN_SHARE:
+                flag("*", "low-week", "warn", f"graph: {total} contributions this week is under "
+                     f"{GH_MIN_SHARE:.0%} of the usual {norm:.0f}")
+        detail.append(line)
     return Finding("github-contrib", status, "; ".join(heads) + " in 7 days" if status == "ok" else
                    f"{'; '.join(heads)} in 7 days; see detail", detail, review=review)
 
@@ -1237,7 +1278,7 @@ CHECK_WHAT = {
     "toggl-store": "i156/toggl.sqlite: last completed sync under 36h old, entries on each of the last 7 days, no short sync windows, and the dashboard export caught up.",
     "syncthing": "Syncthing on this host: every device connected, every folder idle and fully synced with no errors. Rescans out-of-sync folders.",
     "git-autopush": "~/vault and ~/i446-monorepo on Ix: no stuck rebase, a commit within 24h, nothing unpushed, no warnings in the autopush logs.",
-    "github-contrib": "What GitHub holds and credits for ~/i446-monorepo and ~/vault: the pushed branch under 24h old, commits attributed to the account, nothing stranded off the default branch for over a week, and the week's default-branch commits showing as contributions.",
+    "github-contrib": "What GitHub holds and credits for ~/i446-monorepo and ~/vault: the pushed branch under 24h old, commits attributed to the account, nothing stranded off the default branch for over a week, at least half of the week's default-branch commits credited, a contribution on each of the last 7 days, and a week total at least half the prior 4-week average.",
     "skills-backup": "~/.claude/skills on Ix has a git auto-commit within 24h (cron runs every 10 min).",
     "perm-sync": "Both Ix and Straylight ran the hourly Claude permission-allowlist sync within 48h (state files in i446-monorepo/scripts/.perm-sync).",
     "onedrive-neon": "The Neon workbook in OneDrive was modified within 3 days, and (run off Ix) the Ix and local copies are within 24h of each other.",
