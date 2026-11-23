@@ -3629,10 +3629,29 @@ if posthoc and keep_rem and (didfast_out or didfast_bonus):
     except Exception as _e:
         print(f'split: completed-today id tie failed: {_e}', file=sys.stderr)
 
+# 3b. The same points on the time entry they were earned in (2026-11-23):
+#     janus and the phone show them on that row and the later close adds to
+#     them (lib/entry_points.py credit_part). Only what did-fast credited.
+_landed = ((pts_today if (didfast_out or {}).get('results') else 0)
+           + (bonus_today if (didfast_bonus or {}).get('results') else 0))
+entry_part = None
+if _landed > 0:
+    try:
+        import time as _time
+        _key = posthoc['id'] if posthoc else f'{tid}@{int(_time.time())}'
+        _ep = subprocess.run(['python3', '$HOME/i446-monorepo/lib/entry_points.py', 'credit-part',
+                              '--task', str(tid), '--key', str(_key), '--pts', str(_landed),
+                              '--name', clean, '--name', safe_name, '--name', today_label],
+                             capture_output=True, text=True, timeout=30)
+        entry_part = json.loads(_ep.stdout) if _ep.stdout.strip() else None
+    except Exception as _e:
+        print(f'split: entry part failed: {_e}', file=sys.stderr)
+
 # 4. Journal for ctrl-z undo
 record = {
     'type': 'split',
     'names': [clean],
+    'entry_part': entry_part,
     'task_id': tid,
     'prev_content': prev_content,
     'prev_due': prev_due,

@@ -161,3 +161,108 @@ def test_credit_lines_stay_out_of_entry_records(store):
 def test_no_credits_is_a_no_op_and_tests_stay_out(monkeypatch):
     monkeypatch.delenv("ENTRY_POINTS_DIR", raising=False)
     assert ep.link([_entry()], TODAY) == {} and ep.claim("9", "1 i447", TODAY) is None
+
+
+# ── split parts (2026-11-23): "the points still are not attaching to the time
+# entry". A dtd split's 分 are a part on the entry; the close adds to them. ──
+
+def test_a_split_part_shows_on_the_entry_and_the_close_adds_to_it(store):
+    ep.record_part(DAY, "7", "PH1", 100, "split")
+    assert ep.for_day(DAY) == {"7": 100}
+    ep.record(DAY, {"7": 420}, "did-fast")          # the close writes its own points
+    assert ep.for_day(DAY) == {"7": 520}
+    assert ep.base_for_day(DAY) == {"7": 420}
+
+
+def test_a_part_alone_is_not_a_completion(store):
+    ep.record_part(DAY, "7", "PH1", 100)
+    assert ep.base_for_day(DAY) == {} and ep.logged_for_day(DAY) == {}
+    assert ep.overlay({}, DAY) == {"7": 100}
+
+
+def test_undoing_the_close_leaves_the_split_and_undoing_the_split_leaves_the_close(store):
+    ep.record_part(DAY, "7", "PH1", 100)
+    ep.record(DAY, {"7": 420})
+    ep.record(DAY, {"7": None}, "undo")
+    assert ep.for_day(DAY) == {"7": 100}
+    ep.record(DAY, {"7": 420})
+    ep.record_part(DAY, "7", "PH1", None, "undo split")
+    assert ep.for_day(DAY) == {"7": 420}
+    ep.record(DAY, {"7": None})
+    assert ep.for_day(DAY) == {"7": None}           # nothing left: a plain tombstone
+
+
+def test_two_splits_of_one_entry_sum_and_one_key_never_counts_twice(store):
+    ep.record_part(DAY, "7", "PH1", 100)
+    ep.record_part(DAY, "7", "PH1", 100)            # a retried write
+    ep.record_part(DAY, "7", "PH2", 30)
+    assert ep.for_day(DAY) == {"7": 130} and ep.parts_sum(DAY, ["7", "8"]) == 130
+
+
+def test_a_whole_total_writer_subtracts_the_parts(store):
+    # ^G / pin / mobile adjust hold the shown total; a clock-skewed host must
+    # not be able to resurrect a part on top of it, so parts are never cleared.
+    ep.record_part(DAY, "7", "PH1", 100)
+    ep.record(DAY, {"7": 520})
+    ep.record(DAY, {"7": 600 - ep.parts_sum(DAY, ["7"])}, "janus pin")
+    assert ep.for_day(DAY) == {"7": 600}
+
+
+def test_parts_follow_a_recreated_entry(store):
+    ep.record_part(DAY, "7", "PH1", 100)
+    assert ep.move_parts(DAY, ["7"], "9") == 100
+    ep.record(DAY, {"9": 420})
+    assert ep.for_day(DAY) == {"9": 520}
+    assert ep.move_parts(DAY, ["9"], "9") == 0
+
+
+def test_a_part_only_entry_can_still_take_an_open_credit(store):
+    import datetime as dt
+    ep.record_part(DAY, "7", "PH1", 100)
+    ep.record_credit("T@" + DAY, ["write memo"], 25, DAY, DAY)
+    start = dt.datetime.fromisoformat(DAY + "T09:00:00")
+    at = dt.datetime.fromtimestamp(__import__("time").time() + 5).isoformat()
+    got = ep.link([{"id": "7", "desc": "write memo", "start": start, "at": at}], today=DAY)
+    assert got == {"7": 25} and ep.for_day(DAY) == {"7": 125}
+
+
+RUN = {"id": 50, "description": "Allergies -> Checkin (82) [520]", "start": DAY + "T12:54:00-08:00",
+       "duration": -1}
+OLD = {"id": 40, "description": "allergies -> checkin", "start": DAY + "T09:00:00-08:00"}
+NAMES = ["Allergies -> Checkin"]
+
+
+def test_pick_the_running_timer_started_for_the_task():
+    assert ep.pick_entry(["other name"], "T1", RUN, [], lambda i: "T1") is RUN
+
+
+def test_a_timer_linked_to_another_task_is_never_picked_by_name():
+    assert ep.pick_entry(NAMES, "T1", RUN, [], lambda i: "T2") is None
+    assert ep.pick_entry(NAMES, "T1", RUN, [OLD], lambda i: "T2") is OLD
+
+
+def test_an_unlinked_running_timer_matches_by_name_else_the_latest_entry_today():
+    assert ep.pick_entry(NAMES, "T1", RUN, [], lambda i: None) is RUN
+    other = dict(RUN, description="vibing")
+    later = dict(OLD, id=41, start=DAY + "T11:00:00-08:00")
+    assert ep.pick_entry(NAMES, "T1", other, [OLD, later, other], None) is later
+    assert ep.pick_entry(NAMES, "T1", other, [other], None) is None
+
+
+def test_credit_part_records_on_the_entrys_own_day_and_reports_it(store):
+    got = ep.credit_part(NAMES, 100, "PH1", task_id="T1",
+                         toggl=lambda: (RUN, lambda: []), task_for_entry=lambda i: "T1")
+    assert got == {"day": DAY, "id": "50", "pts": 100, "key": "PH1"}
+    assert ep.for_day(DAY) == {"50": 100}
+
+
+def test_credit_part_with_no_matching_entry_records_nothing(store):
+    assert ep.credit_part(NAMES, 100, "PH1", toggl=lambda: (None, lambda: []),
+                          task_for_entry=lambda i: None) is None
+    assert ep.for_day(DAY) == {}
+
+
+def test_credit_part_never_raises(store):
+    def boom():
+        raise RuntimeError("toggl down")
+    assert ep.credit_part(NAMES, 100, "PH1", toggl=boom) is None

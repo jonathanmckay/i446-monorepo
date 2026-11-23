@@ -6412,7 +6412,10 @@ def _entry_pts_add(day: dt.date, pts_by_id: dict, add: bool = False) -> None:
     data = _entry_pts(day)
     shown = entry_points.overlay(data, day)   # a ^G delta sums on the row's real total
     for k, v in pts_by_id.items():
-        data[str(k)] = (int(shown.get(str(k), 0)) if add else 0) + int(v)
+        # A delta lands on the shown total, which includes any split parts
+        # (lib/entry_points.py); the record is the base, so take them back out.
+        data[str(k)] = ((int(shown.get(str(k), 0)) - entry_points.parts_sum(day, [k]))
+                        if add else 0) + int(v)
     entry_points.record(day, {str(k): data[str(k)] for k in pts_by_id}, "janus")
     try:
         _ENTRY_PTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -6432,6 +6435,9 @@ def _entry_pts_pin(day: dt.date, entry_ids, total: int) -> None:
     data = _entry_pts(day)
     for i in entry_ids[1:]:
         data.pop(str(i), None)
+    # `total` is the whole row, split parts included: they stay on their ids
+    # (a tombstone leaves parts showing), so the base is the rest.
+    total = int(total) - entry_points.parts_sum(day, entry_ids)
     data[str(entry_ids[0])] = int(total)
     entry_points.record(day, {str(entry_ids[0]): int(total),
                               **{str(i): None for i in entry_ids[1:]}}, "janus pin")
@@ -6450,6 +6456,19 @@ def _recorded_entry_pts(day: dt.date, entry_ids) -> int | None:
     data = entry_points.overlay(_entry_pts(day), day)
     hits = [int(data[str(i)]) for i in (entry_ids or []) if str(i) in data]
     return sum(hits) if hits else None
+
+
+def _entry_logged(day: dt.date, entry_ids) -> bool:
+    """A completion was already logged on one of a row's entries, here or on
+    any client. A dtd split's part is not one: the row shows those 分 and can
+    still be completed (2026-11-23)."""
+    data = {str(k): v for k, v in _entry_pts(day).items()}
+    for k, v in entry_points.logged_for_day(day).items():
+        if v is None:
+            data.pop(k, None)
+        else:
+            data[k] = v
+    return any(str(i) in data for i in (entry_ids or []))
 
 
 def _holds_done_claim(desc: str, entry_ids) -> bool:
@@ -8189,8 +8208,8 @@ def _(event):
     # no entry yet is this row's points too, even before a fetch linked it.
     if item.get("entry_ids"):
         entry_points.claim(item["entry_ids"][0], desc, start.date())
-    rec = _recorded_entry_pts(start.date(), item.get("entry_ids") or [])
-    if rec is not None:
+    if _entry_logged(start.date(), item.get("entry_ids") or []):
+        rec = _recorded_entry_pts(start.date(), item.get("entry_ids") or [])
         flash(f"already logged [{rec}]: not re-running", 6.0)
         return
     STATE.event_sel = None
@@ -8258,7 +8277,10 @@ def _run_row_did(app, cmd: str, key: str, flags: tuple[str, ...] | None = None,
         # for points that never landed (2026-11-12).
         if day is not None and data and not res.startswith("err") \
                 and not janus_done.refusal(data) and not janus_done.write_failures(data):
-            _entry_pts_add(day, janus_done.entry_points_by_id(data, entry_ids or []))
+            by_id = janus_done.entry_points_by_id(data, entry_ids or [])
+            _entry_pts_add(day, by_id)
+            # did-fast replaced the row's entry: its split parts follow.
+            entry_points.move_parts(day, entry_ids or [], next(iter(by_id), None), "janus")
         flash(res, 8.0)
         app.invalidate()
         await asyncio.to_thread(fetch_today, True)

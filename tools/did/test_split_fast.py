@@ -107,3 +107,52 @@ def test_run_falls_back_to_cache_when_live_title_is_blank(tmp_path):
                  credit=lambda item: {"results": [{}]},
                  label_for=lambda labels: "", tie=lambda n, i: None)
     assert res["new_content"] == "cached (60) [25]"
+
+
+# ── the split's 分 land on the time entry too (2026-11-23) ───────────────────
+
+def _run_with_part(tmp_path, credit, **kw):
+    task = {"id": "A1", "content": "write memo (60) [40] {10}", "labels": ["m5x2"], "project_id": "P"}
+    api, _ = _fake(task)
+    parts = []
+
+    def part(names, pts, key, task_id):
+        parts.append((names, pts, key, task_id))
+        return {"day": T, "id": "777", "pts": pts, "key": key}
+    res = sf.run("A1", cache_file=tmp_path / "none.json", api=api, credit=credit,
+                 label_for=lambda labels: "@m5x2", tie=lambda n, i: None, part=part, **kw)
+    return res, parts
+
+
+def test_run_puts_the_credited_points_on_the_time_entry(tmp_path):
+    res, parts = _run_with_part(tmp_path, lambda item: {"results": [{}]}, pts=15, bonus=4,
+                                done_name="drafted")
+    names, pts, key, task_id = parts[0]
+    assert (pts, key, task_id) == (19, "PH1", "A1")          # [15] + {4}, keyed by the done record
+    assert "write memo" in names and "drafted" in names
+    assert res["entry_part"] == {"day": T, "id": "777", "pts": 19, "key": "PH1"}
+
+
+def test_run_puts_nothing_on_the_entry_when_the_credit_was_lost(tmp_path):
+    res, parts = _run_with_part(tmp_path, lambda item: {"results": []}, pts=15)
+    assert parts == [] and res["entry_part"] is None
+
+
+def test_run_journals_the_entry_part_for_undo(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["record"] = kw.get("input")
+        return None
+    monkeypatch.setattr(sf.subprocess, "run", fake_run)
+    _run_with_part(tmp_path, lambda item: {"results": [{}]}, pts=15, journal="/tmp/j")
+    import json
+    assert json.loads(seen["record"])["entry_part"]["id"] == "777"
+
+
+def test_dtd_sh_split_writer_credits_the_entry_part_too():
+    # dtd.sh's heredoc is a copy of run(): keep the two in step.
+    body = (Path(__file__).parent / "dtd.sh").read_text().split("<< 'SPLITEOF'", 1)[1].split("\nSPLITEOF", 1)[0]
+    assert "lib/entry_points.py', 'credit-part'" in body
+    assert "'entry_part': entry_part," in body
+    assert body.index("credit-part") < body.index("# 4. Journal for ctrl-z undo")

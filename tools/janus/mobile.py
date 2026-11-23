@@ -408,12 +408,18 @@ def _logged_view(day: _dt.date) -> tuple[dict, dict]:
         if isinstance(v, (int, float)):
             ledger.setdefault(eid, "logged in janus")
             pts[eid] = {"points": int(v), "credits": (pts.get(eid) or {}).get("credits") or []}
+    # A dtd split's part shows its 分 on the row but is not a completion
+    # (lib/entry_points.py): only a base record ledgers the entry.
+    base = entry_points.logged_for_day(day)
     for eid, v in entry_points.for_day(day).items():
         if v is None:
             ledger.pop(eid, None)
             pts.pop(eid, None)
         else:
-            ledger.setdefault(eid, "logged elsewhere")
+            if base.get(eid) is not None:
+                ledger.setdefault(eid, "logged elsewhere")
+            elif eid in base:
+                ledger.pop(eid, None)      # undone; its split parts remain
             pts[eid] = {"points": v, "credits": (pts.get(eid) or {}).get("credits") or []}
     return ledger, pts
 
@@ -433,7 +439,7 @@ def _logged_points_add(day: _dt.date, entry_id: str, points: int | None,
     d = _logged_points(day)
     d[str(entry_id)] = {"points": points, "credits": credits}
     # did-fast's own record wins: this total can be a minutes fallback.
-    if points is not None and str(entry_id) not in entry_points.for_day(day):
+    if points is not None and str(entry_id) not in entry_points.logged_for_day(day):
         entry_points.record(day, {str(entry_id): points}, "mobile")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = _points_path(day).with_suffix(".tmp")
@@ -1884,6 +1890,10 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
         r["points"] = _credited_total(r.get("credits") or [], pts if pts is not None else minutes)
         _logged_points_add(today, entry_id, r["points"], r.get("credits") or [])
         _ledger_segments(today, r, note)
+        # did-fast replaced the swiped entry: its split parts follow.
+        new_ids = [i for seg in r.get("segments") or [] for i in seg.get("ids") or []]
+        if new_ids:
+            entry_points.move_parts(today, [entry_id], new_ids[0], "mobile")
     return r
 
 
@@ -2122,7 +2132,9 @@ def adjust_points(entry_id: str, desc: str, project: str, answer: str,
         r = _run_did_fast(cmd, ("--past-ok",) if day is not None else ())
         if r["ok"]:
             _logged_points_add(today, entry_id, new, r.get("credits") or [])
-            entry_points.record(today, {str(entry_id): new}, "mobile adjust")
+            entry_points.record(      # `new` is the shown total: parts stay parts
+                today, {str(entry_id): new - entry_points.parts_sum(today, [entry_id])},
+                "mobile adjust")
             _ledger_add(today, entry_id, f"{desc} points {cur} → {new} ({delta:+d})")
             r.update(points=new, delta=delta)
         return r

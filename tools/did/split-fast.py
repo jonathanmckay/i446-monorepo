@@ -38,6 +38,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -178,6 +179,14 @@ def credit(item: str):
         return None
 
 
+def entry_part(names: list, pts: int, key: str, task_id: str):
+    """The split's 分 on the Toggl entry JM is working in (lib/entry_points.py
+    credit_part): janus and the phone show them on that row, and the later
+    close adds to them. None when no entry of today's is this task."""
+    import entry_points
+    return entry_points.credit_part(names, pts, key, task_id=task_id)
+
+
 def domain_label(labels: list[str]) -> str:
     """The [N] credit's @label: the first label with a 0分 column (did-fast's
     own LABEL_TO_0FEN, never a hardcoded copy: bug 2026-10-09), else 个's
@@ -226,7 +235,7 @@ def _cache_content(cache_file: Path, task_id: str) -> str:
 def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes=None,
         done_name="", rem_name="", rem_pts=None, rem_min=None, rem_bonus=None, rem_due="",
         keep=True, journal: str = "", dry_run=False, api=api, credit=credit,
-        label_for=domain_label, tie=tie_completed) -> dict:
+        label_for=domain_label, tie=tie_completed, part=None) -> dict:
     if not (isinstance(pts, int) and pts >= 0) and not (isinstance(bonus, int) and bonus >= 0):
         return {"ok": False, "error": "split needs pts (or bonus) done"}
     try:
@@ -270,8 +279,21 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
             tie(p["safe_name"].strip(), posthoc["id"])
         except Exception as e:  # noqa: BLE001
             print(f"split: completed-today id tie failed: {e}", file=sys.stderr)
+    # 5. the same 分 on the time entry they were earned in (2026-11-23). Only
+    #    what did-fast credited: a lost credit must not show on the row.
+    landed = ((p["pts_today"] if (didfast_out or {}).get("results") else 0)
+              + (p["bonus_today"] if (didfast_bonus or {}).get("results") else 0))
+    part_out = None
+    if landed > 0:
+        try:
+            part_out = (part or entry_part)(
+                [p["clean"], p["safe_name"], done_name],
+                landed, posthoc["id"] if posthoc else f"{tid}@{int(time.time())}", tid)
+        except Exception as e:  # noqa: BLE001
+            print(f"split: entry part failed: {e}", file=sys.stderr)
     if journal:
         record = {"type": "split", "names": [p["clean"]], "task_id": tid,
+                  "entry_part": part_out,
                   "prev_content": task.get("content", ""),
                   "prev_due": (task.get("due") or {}).get("date", ""),
                   "posthoc_id": posthoc["id"] if posthoc else None,
@@ -284,7 +306,8 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
     return {"ok": True, "message": msg, "task_id": tid,
             "posthoc_id": posthoc["id"] if posthoc else None,
             "new_content": p["new_content"], "rem_date": p["rem_date"],
-            "closed": not p["keep"], "lost": msg.startswith("⚠")}
+            "closed": not p["keep"], "lost": msg.startswith("⚠"),
+            "entry_part": part_out}
 
 
 def main(argv=None) -> int:

@@ -547,6 +547,14 @@ def reverse_record(record: dict, errors: list[str]) -> None:
         for key in ("didfast", "didfast_bonus"):
             if record.get(key):
                 reverse_didfast_output(record[key], target_md, today_iso, errors)
+        part = record.get("entry_part") or {}
+        if part.get("id") and part.get("key"):
+            # The split's 分 come off the time entry too. They may have moved
+            # to a recreated entry since (move_parts), so clear the key
+            # wherever it sits that day.
+            for eid, held in entry_points.parts_for_day(part.get("day")).items():
+                if part["key"] in held:
+                    entry_points.record_part(part["day"], eid, part["key"], None, "undo split")
         mc.remove_names(record.get("names", []))
 
     elif rtype == "delete":

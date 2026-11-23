@@ -396,6 +396,29 @@ def test_reverse_split_record(monkeypatch, tmp_path):
                                   "due_date": "2026-06-04"}) in api_calls
 
 
+def test_reverse_split_takes_its_part_off_the_time_entry(monkeypatch, tmp_path):
+    # 2026-11-23: a split's 分 sit on the Toggl entry as a part; undo clears
+    # that key wherever it is now (it may have moved to a recreated entry) and
+    # leaves the entry's own completion alone.
+    monkeypatch.setenv("ENTRY_POINTS_DIR", str(tmp_path / "ep"))
+    monkeypatch.setattr(uf, "_api", lambda m, p, b=None, timeout=15.0: None)
+    monkeypatch.setattr(uf.mc, "COMPLETED", tmp_path / "completed.json")
+    ep = uf.entry_points
+    day = "2026-11-23"
+    ep.record_part(day, "50", "PH1", 100)
+    ep.move_parts(day, ["50"], "60")
+    ep.record(day, {"60": 420})
+    errors = []
+    uf.reverse_record({
+        "type": "split", "names": ["big task"], "task_id": "t5",
+        "prev_content": "big task (60) [520]", "prev_due": day, "posthoc_id": "PH1",
+        "entry_part": {"day": day, "id": "50", "pts": 100, "key": "PH1"},
+        "date": date.today().isoformat(),
+    }, errors)
+    assert errors == []
+    assert ep.for_day(day).get("60") == 420 and ep.parts_for_day(day) == {}
+
+
 # ---------------------------------------------------------------------------
 # Delete undo (ctrl-x journaled, ctrl-z recreates)
 # ---------------------------------------------------------------------------
