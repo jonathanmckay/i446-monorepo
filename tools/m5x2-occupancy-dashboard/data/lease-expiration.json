@@ -100,7 +100,7 @@
     "property_name": "j312",
     "unit": "3112",
     "tenant_name": "Ramak, Raezhelle  R.",
-    "status": "Eligible",
+    "status": "Notice Given",
     "lease_sign_date": "2025-10-16",
     "move_in": "2025-10-18",
     "renewal_start_date": null,
@@ -744,18 +744,6 @@
     "rent": "1175.00"
   },
   {
-    "unit_id": 334,
-    "property_name": "k104- LeFevre",
-    "unit": "507-2",
-    "tenant_name": "Neher, Bryan",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2022-05-17",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-07-01",
-    "rent": "1267.00"
-  },
-  {
     "unit_id": 856,
     "property_name": "kn47 K1",
     "unit": "C204",
@@ -994,18 +982,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-02-01",
     "rent": "1371.00"
-  },
-  {
-    "unit_id": 747,
-    "property_name": "c313",
-    "unit": "39",
-    "tenant_name": "Lawson, Allan",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2022-05-23",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-02-01",
-    "rent": "987.00"
   },
   {
     "unit_id": 1311,
@@ -1428,18 +1404,6 @@
     "rent": "828.00"
   },
   {
-    "unit_id": 683,
-    "property_name": "j312",
-    "unit": "3110",
-    "tenant_name": "Beavers, Jamie R.",
-    "status": "Pending",
-    "lease_sign_date": "2026-02-03",
-    "move_in": "2026-03-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1290.00"
-  },
-  {
     "unit_id": 691,
     "property_name": "j312",
     "unit": "3126",
@@ -1570,18 +1534,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": "2026-03-01",
     "rent": "1089.00"
-  },
-  {
-    "unit_id": 1013,
-    "property_name": "kn47 K2",
-    "unit": "B106",
-    "tenant_name": "Uribe-Clay, Serena  E.",
-    "status": "Pending",
-    "lease_sign_date": "2026-03-03",
-    "move_in": "2026-03-04",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "931.00"
   },
   {
     "unit_id": 1027,
