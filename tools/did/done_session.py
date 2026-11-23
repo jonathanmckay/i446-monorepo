@@ -249,7 +249,8 @@ def tab_origin(session: str, env=os.environ) -> str:
 def mark_tab_close(session: str, env=os.environ, run=subprocess.run) -> bool:
     """/fin ends the thread and closes its tab, the same everywhere (2026-11-22, JM: "I'd like to
     keep consistent behavior"). When the thread's tmux session is the launcher's own
-    (CC_FIN_ENDS_TMUX, set by claude-tracked when it is the top process of its tmux pane), or,
+    (CC_FIN_ENDS_TMUX, set by claude-tracked when it is the top process of its tmux pane, or was
+    relaunched from the shell an earlier launcher dropped to in that pane, 2026-11-23), or,
     for a session launched before that flag existed, its tab is driven from another host
     (tab_origin): leave fin-close/<tmux session> and ask the Stop hook to type `/exit`
     (by-session/<sid>.exit, see below). The inner launcher reads the marker when claude exits

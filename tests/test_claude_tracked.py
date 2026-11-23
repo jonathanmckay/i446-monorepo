@@ -480,3 +480,77 @@ def test_only_a_launcher_at_the_top_of_its_tmux_pane_owns_the_session(ct, monkey
     parent['comm'] = 'tmux'
     monkeypatch.delenv('TMUX')
     assert ct.tmux_top() is False
+
+
+# ── /fin on a thread relaunched from the dropped shell (2026-11-23) ─────────────────────────
+# tmux -> zsh -il (pane_pid, the shell the first launcher dropped to) -> claude-tracked.
+# tmux_top() is False there and CC_ORIGIN is gone, so /fin answered "→ /clear" and the tab stayed.
+IX_START = "zsh -lic 'export CC_ORIGIN=straylight-refit; exec /Users/mckay/vault/i447/i446/claude-tracked'"
+
+
+def _fake_tmux(ct, monkeypatch, *, parent_comm, pane_pid, start, calls=None):
+    import types
+
+    def run(argv, **k):
+        if calls is not None:
+            calls.append(argv)
+        if argv[0] == 'ps':
+            return types.SimpleNamespace(stdout=parent_comm + '\n', returncode=0)
+        if argv[:2] == ['tmux', 'display-message']:
+            return types.SimpleNamespace(stdout=f'{pane_pid}\t{start}\n', returncode=0)
+        return types.SimpleNamespace(stdout='', returncode=0)
+    monkeypatch.setattr(ct.subprocess, 'run', run)
+    monkeypatch.setenv('TMUX', '/tmp/tmux-501/default,1,0')
+    monkeypatch.setenv('TMUX_PANE', '%61')
+
+
+def test_relaunch_from_the_dropped_shell_still_owns_the_pane(ct, monkeypatch):
+    import os
+    _fake_tmux(ct, monkeypatch, parent_comm='-zsh', pane_pid=os.getppid(), start=IX_START)
+    assert ct.tmux_top() is False
+    assert ct.tmux_pane_ours() is True
+
+
+@pytest.mark.parametrize('pane_pid_is_parent,start', [
+    (True, 'zsh -il'),              # hand-made tmux: the pane was not created for the launcher
+    (False, IX_START),              # a split, or a cc nested under claude: not the pane's shell
+])
+def test_cc_in_a_pane_that_is_not_ours_does_not_own_it(ct, monkeypatch, pane_pid_is_parent, start):
+    import os
+    pid = os.getppid() if pane_pid_is_parent else os.getppid() + 1
+    _fake_tmux(ct, monkeypatch, parent_comm='-zsh', pane_pid=pid, start=start)
+    assert ct.tmux_pane_ours() is False
+    assert ct.end_relaunched_pane() is False
+
+
+def test_relaunch_recovers_the_tab_origin_from_the_pane(ct, monkeypatch, tmp_path):
+    import os
+    _fake_tmux(ct, monkeypatch, parent_comm='-zsh', pane_pid=os.getppid(), start=IX_START)
+    monkeypatch.delenv('CC_ORIGIN', raising=False)
+    monkeypatch.setattr(ct, 'HOSTS_DIR', tmp_path)
+    assert ct.record_host(['--session-id', 'abc']) == 'straylight-refit'
+    assert (tmp_path / 'abc').read_text() == 'straylight-refit'
+
+
+def test_fin_on_a_relaunched_thread_kills_the_pane_only(ct, monkeypatch):
+    import os
+    calls = []
+    _fake_tmux(ct, monkeypatch, parent_comm='-zsh', pane_pid=os.getppid(), start=IX_START, calls=calls)
+    assert ct.end_relaunched_pane() is True
+    assert ['tmux', 'kill-pane', '-t', '%61'] in calls
+    assert not any('kill-session' in c for c in calls)
+
+
+def test_fin_at_the_top_of_the_pane_just_exits(ct, monkeypatch):
+    import os
+    calls = []
+    _fake_tmux(ct, monkeypatch, parent_comm='tmux', pane_pid=os.getpid(), start=IX_START, calls=calls)
+    assert ct.end_relaunched_pane() is False
+    assert not any(c[:2] == ['tmux', 'kill-pane'] for c in calls)
+
+
+def test_main_uses_pane_ownership_for_the_fin_flag_and_ends_the_pane():
+    src = SCRIPT.read_text()
+    assert "'CC_FIN_ENDS_TMUX': '1' if tmux_pane_ours() else ''" in src
+    fin = src.index('print("↩ /fin ended this thread")')
+    assert 'end_relaunched_pane()' in src[fin:fin + 120]
