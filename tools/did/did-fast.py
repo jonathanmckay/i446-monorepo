@@ -518,10 +518,76 @@ def _split_credit(splits, default_code: Optional[str]) -> tuple[str, int, list]:
     return first_col, first_pts, rest
 
 
+GROUP_JOURNAL = _sp.STATE_DIR / "group-decrements.jsonl"
+
+
+def _group_live_content(task: dict) -> None:
+    """A group parent's [N] is its REMAINING value and is rewritten every time
+    one of its subtasks is paid (lib/dtd_groups.py, 2026-11-23), so the cached
+    content can be stale by the time JM closes the parent. Re-read it once,
+    in place, before any points are worked out from it. Only for tasks
+    carrying the group label; a failed read keeps the cached content."""
+    try:
+        import dtd_groups
+        if dtd_groups.GROUP_LABEL not in (task.get("labels") or []) or task.get("_group_live"):
+            return
+        live = _fetch_task_by_id(str(task.get("id")))
+        if live and live.get("content"):
+            task["content"] = live["content"]
+        task["_group_live"] = True
+    except Exception:  # noqa: BLE001 — never block a completion on this
+        pass
+
+
+def _group_decrements(fast: list, close_results: dict, defer_results: dict,
+                      uncredited: set, day: str, *, journal=None,
+                      get_task=None, update_task=None) -> dict:
+    """After the 分 batch landed: for every paid subtask, take what was paid
+    off its parent's remaining [N]. Returns {task id: record} for the ones
+    that changed the parent (so the output can carry them to undo-fast).
+    Idempotent per (child, day), so a retried run cannot take twice."""
+    out: dict = {}
+    try:
+        import dtd_groups
+        import todoist as _tdl
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN groups unavailable: {e}", file=sys.stderr)
+        return out
+    get_task = get_task or _tdl.get_task
+    update_task = update_task or (lambda i, body: _tdl._request("POST", f"/tasks/{i}", body))
+    for r in fast:
+        tt = r.todoist_task or {}
+        tid, pid = str(tt.get("id") or ""), str(tt.get("parent_id") or "")
+        if not tid or not pid or tid in out or r.item.name in uncredited:
+            continue
+        closed = close_results.get(tt.get("id"), (False, None))[0]
+        deferred = defer_results.get(tt.get("id"), (False, None))[0]
+        if not (closed or deferred):
+            continue
+        paid = int(round(sum((x.fen_points or 0) + sum(p for _, p in x.fen_extra)
+                             for x in fast
+                             if str((x.todoist_task or {}).get("id") or "") == tid
+                             and x.item.name not in uncredited)))
+        try:
+            rec = dtd_groups.decrement_parent(
+                tid, pid, paid, day if closed else f"{day}:defer",
+                journal=journal or GROUP_JOURNAL, get_task=get_task, update_task=update_task)
+        except Exception as e:  # noqa: BLE001
+            print(f"WARN group decrement {tid}: {e}", file=sys.stderr)
+            continue
+        if rec.get("status") == "ok":
+            out[tid] = {"parent": rec["parent"], "key": rec["key"], "taken": rec["taken"],
+                        "parent_content": rec.get("after", "")}
+        elif rec.get("status") == "error":
+            print(f"WARN group decrement {tid}: {rec.get('why')}", file=sys.stderr)
+    return out
+
+
 def _task_credit(item, task: dict) -> tuple[int, str, list]:
     """(fen_points, fen_col, fen_extra) for a matched Todoist task: the
     typed split wins, then a typed [N] total (one column), then the task's
     own content, which may itself be a "[N] @code [N] @code" split."""
+    _group_live_content(task)
     default_code = _first_fen_label(task.get("labels", []))
     content = task.get("content", "")
     # An explicit kid route (@xk20/@xk22/@xk26) beats the card's own label
@@ -1219,6 +1285,14 @@ def _live_claim_ids(root: Path) -> list[str]:
     return out
 
 
+def _pid(t: dict) -> dict:
+    """{"parent_id": id} for a Todoist subtask, {} for a top-level task, to
+    splat into a shaped row. Groups (lib/dtd_groups.py, 2026-11-23) need the
+    parent on every row; top-level rows stay byte-identical to before."""
+    pid = (t or {}).get("parent_id")
+    return {"parent_id": str(pid)} if pid else {}
+
+
 def union_claimed_tasks(today: list, known_ids: set, today_iso: str,
                         root: Path | None = None, get=None) -> list:
     """Append to `today` every task a session is working on that the fetch did
@@ -1246,7 +1320,8 @@ def union_claimed_tasks(today: list, known_ids: set, today_iso: str,
                "labels": t.get("labels", []), "priority": t.get("priority", "p4"),
                "due": due, "due_datetime": _due_datetime(t),
                "due_string": (t.get("due") or {}).get("string", "") or "",
-               "recurring": bool((t.get("due") or {}).get("is_recurring"))}
+               "recurring": bool((t.get("due") or {}).get("is_recurring")),
+               **_pid(t)}
         today.append(row)
         known_ids.add(t["id"])
         added.append(row)
@@ -1287,7 +1362,8 @@ def _refresh_task_queue_inner() -> dict:
                          "due": t.get("due", {}).get("date", "") if t.get("due") else "",
                          "due_datetime": _due_datetime(t),
                          "due_string": (t.get("due") or {}).get("string", "") or "",
-                         "recurring": bool((t.get("due") or {}).get("is_recurring"))}
+                         "recurring": bool((t.get("due") or {}).get("is_recurring")),
+                         **_pid(t)}
                         for t in tasks]
         except Exception as e:
             print(f"WARN: fetch {label}: {e}", file=sys.stderr)
@@ -1330,6 +1406,7 @@ def _refresh_task_queue_inner() -> dict:
                     "due_datetime": _due_datetime(t),
                     "due_string": (t.get("due") or {}).get("string", "") or "",
                     "recurring": bool(t.get("due", {}).get("is_recurring")) if t.get("due") else False,
+                    **_pid(t),
                 })
             cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
             if not cursor:
@@ -1574,6 +1651,14 @@ def _refresh_task_queue_inner() -> dict:
         shorten.attach_to_cache(cache)
     except Exception as e:
         print(f"shorten skipped: {e}", file=sys.stderr)
+    # Groups: stamp each subtask row with its parent's due/content so dtd can
+    # apply "child shows only when its parent is due" without a second fetch.
+    try:
+        import dtd_groups
+        import todoist as _td_groups
+        dtd_groups.attach_parents(cache, get_task=_td_groups.get_task)
+    except Exception as e:  # noqa: BLE001 — never fail a refresh over grouping
+        print(f"groups skipped: {e}", file=sys.stderr)
     tmp_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n")
     tmp_path.rename(TASK_QUEUE_PATH)
     return cache
@@ -3139,6 +3224,7 @@ def _fetch_task_by_id(task_id: str) -> Optional[dict]:
             "due": due.get("date", ""),
             "due_string": due.get("string", "") or "",
             "recurring": bool(due.get("is_recurring")),
+            **_pid(t),
         }
     except Exception:
         return None
@@ -3208,6 +3294,7 @@ def _live_todoist_search(query: str) -> Optional[dict]:
                         "due": (t.get("due") or {}).get("date", ""),
                         "due_string": (t.get("due") or {}).get("string", "") or "",
                         "recurring": bool((t.get("due") or {}).get("is_recurring")),
+                        **_pid(t),
                     })
                 cursor = raw.get("next_cursor") if isinstance(raw, dict) else None
                 if not cursor:
@@ -5266,6 +5353,9 @@ def main():
     completed_ids = {id_to_name[tid]: tid
                      for tid, (ok, _err) in close_results.items()
                      if ok and tid in id_to_name}
+    # Task groups: a paid subtask comes off its parent's remaining [N].
+    group_recs = _group_decrements(fast, close_results, defer_results, uncredited,
+                                   _daytime.today_iso())
     # A closed task's agent claim goes with it (2026-10-24): a repeating card
     # keeps its id, so a leftover released/done claim showed on the next day's
     # card as if an agent were still on it.
@@ -5372,6 +5462,8 @@ def main():
             td_entry["due_string"] = r.todoist_task.get("due_string", "")
             td_entry["recurring"] = r.todoist_task.get("recurring", False)
             entry["todoist"] = td_entry
+            if str(tid) in group_recs:
+                entry["group"] = group_recs[str(tid)]   # undo-fast adds it back
         if (r.step == "variable" and r.item.name in posthoc_results
                 and not _is_later_split_part(r)):
             entry["posthoc"] = posthoc_results[r.item.name]

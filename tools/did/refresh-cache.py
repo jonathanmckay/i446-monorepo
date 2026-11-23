@@ -50,12 +50,21 @@ def _shape(t: dict) -> dict:
     # runs most often and used to strip the flag, leaving that filter inert
     # (bug 2026-07-21: a deferred habit popped straight back into today).
     due = t.get("due")
-    return {
+    row = {
         "id": t.get("id"), "content": t.get("content"), "labels": t.get("labels", []),
         "due": (due or {}).get("date") if isinstance(due, dict) else due,
         "recurring": bool((due or {}).get("is_recurring")) if isinstance(due, dict)
                      else bool(t.get("recurring")),
     }
+    # Groups (lib/dtd_groups.py, 2026-11-23): a subtask keeps its parent id, and
+    # an already-shaped row keeps the parent stamps attach_parents() gave it, so
+    # a failed parent GET this run cannot turn "parent due later" into "unknown".
+    if t.get("parent_id"):
+        row["parent_id"] = str(t["parent_id"])
+        for k in ("parent_due", "parent_content", "parent_recurring", "parent_closed"):
+            if k in t:
+                row[k] = t[k]
+    return row
 
 
 def _nudge_janus() -> None:
@@ -222,6 +231,11 @@ def main() -> int:
         shorten.attach_to_cache(data)
     except Exception as e:
         print(f"shorten skipped: {e}", file=sys.stderr)
+    try:
+        import dtd_groups  # noqa: E402
+        dtd_groups.attach_parents(data, get_task=todoist.get_task)
+    except Exception as e:  # noqa: BLE001 — never fail a refresh over grouping
+        print(f"groups skipped: {e}", file=sys.stderr)
 
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     # Atomic write (tmp + rename): dtd's auto-reload watcher polls this file's

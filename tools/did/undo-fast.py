@@ -447,6 +447,24 @@ def reverse_didfast_output(out: dict, target_md: str, today_iso: str,
         if td:
             _reverse_todoist_entry(td, today_iso, errors)
 
+        # Task group (lib/dtd_groups.py): give the parent back exactly what
+        # this completion took off its remaining [N].
+        grp = e.get("group")
+        if grp and grp.get("key"):
+            try:
+                import dtd_groups
+                import state_paths
+                child, _, gday = grp["key"].partition(":")
+                res = dtd_groups.restore_parent(
+                    child, gday,
+                    journal=state_paths.STATE_DIR / "group-decrements.jsonl",
+                    get_task=lambda i: _api("GET", f"/tasks/{i}"),
+                    update_task=lambda i, body: _api("POST", f"/tasks/{i}", body))
+                if res.get("status") == "error":
+                    errors.append(f"group restore {child}: {res.get('why')}")
+            except Exception as ex:
+                errors.append(f"group restore: {ex}")
+
         ph = e.get("posthoc")
         if ph and ph.get("id"):
             try:

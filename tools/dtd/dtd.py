@@ -49,6 +49,7 @@ SUMMARY_MAX_AGE = 45  # seconds; day-total (points + done) cache
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import daytime  # noqa: E402  — device-priority 'today' (lib/where.py), not Ix's own clock
+import dtd_groups  # noqa: E402  — parent + subtasks collapse to one row
 sys.path.insert(0, str(Path.home() / "i446-monorepo/tools/ibx"))
 import inbox_counts as _inbox_counts  # noqa: E402  — ✉N badges on inbox habit cards
 
@@ -556,8 +557,11 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
              if has(t, "#0g") and not has(t, "-1neon") and not has(t, "#-1g")]
     critical = sec("关键路径", today)
     placed = lambda t: has(t, "-1neon") or has(t, "#-1g") or has(t, "#0g")
+    # Priority, then 分 per minute: the same order terminal dtd has used
+    # since 2026-10-10 (the web was priority-only until 2026-11-23).
     rest = sorted([t for t in today_tasks if not placed(t)],
-                  key=lambda t: _prank(t.get("priority")))
+                  key=lambda t: (_prank(t.get("priority")),
+                                 -dtd_groups.ppm(t.get("content") or "")))
     completed_ids = _completed_ids()
     form_hidden = _form_hidden_ids(d.get("updated", ""))
     snoozed_ids = _snoozed_ids()
@@ -614,22 +618,20 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     # match apply, and then to the first visible card only — the recurring
     # parent and its same-named one-off copy both lit up before.
     run_taken = False
-    for t in ordered:
+
+    def row_hidden(t) -> bool:
         tid = t.get("id")
-        if not t.get("content") or tid in seen:
-            continue
-        seen.add(tid)
         if tid is not None and str(tid) in completed_ids:
-            continue
+            return True
         if tid is not None and str(tid) in form_hidden:
-            continue
+            return True
         # Block-snoozed (ctrl-v in desktop dtd): hidden until the chosen
         # block's hour arrives — same file/semantics as terminal dtd.
         if tid is not None and str(tid) in snoozed_ids:
-            continue
+            return True
         blk = next((block_hours[l] for l in t.get("labels", []) if l in block_hours), None)
         if blk is not None and now_hour < blk:
-            continue
+            return True
         # Later-today defer (2026-10-22): a task whose Todoist due carries a
         # time-of-day still ahead of now is hidden until that moment arrives —
         # the hide the `scheduled` field's comment always promised but that no
@@ -638,7 +640,33 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         # and is never hidden here; a timed due already past today still shows.
         sched_dt = _parse_scheduled(t.get("due_datetime") or "")
         if sched_dt is not None and sched_dt > _now():
+            return True
+        return False
+
+    # Task groups (2026-11-23, lib/dtd_groups.py): a Todoist parent with one
+    # level of subtasks is ONE row, its densest due child, with groupMore =
+    # the count of its other due children. Collapsed over the rows that
+    # survived every hide above, so a just-completed child cannot win the row;
+    # a parent hidden by any of those hides takes its children with it.
+    survivors, grp_hidden = [], set()
+    for t in ordered:
+        tid = t.get("id")
+        if not t.get("content") or tid in seen:
             continue
+        seen.add(tid)
+        if row_hidden(t):
+            grp_hidden.add(str(tid))
+        else:
+            survivors.append(t)
+    grp_hidden |= {str(i) for i in completed_ids} | {str(i) for i in snoozed_ids}
+    grp_hidden |= {str(i) for i in _deferred_ids} | {str(i) for i in form_hidden}
+    try:
+        survivors = dtd_groups.collapse(survivors, today, grp_hidden)
+    except Exception as e:  # noqa: BLE001 — never lose the list over grouping
+        print("WARN groups:", e, file=sys.stderr)
+
+    for t in survivors:
+        tid = t.get("id")
         raw = t["content"]
         if running_id:
             is_running = tid is not None and str(tid) == running_id
@@ -662,6 +690,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "title": title,
             "est": est,
             "badge": badge,
+            # Group row: how many other due inputs of the same outcome are
+            # folded under this one, and the outcome's name ("" / 0 otherwise).
+            "groupMore": int(t.get("group_more") or 0),
+            "groupName": strip_ann(t.get("group_name") or ""),
             "points": pts,
             "color": color,
             "domain": dom,
@@ -2085,7 +2117,7 @@ function makeRow(t){
   ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.recurring?'↻ ':'') + t.title;
   const est = document.createElement('span');
   est.className = 'est';
-  est.textContent = (t.badge ? t.badge + ' ' : '') + (t.est || '');
+  est.textContent = (t.groupMore ? '+' + t.groupMore + ' ' : '') + (t.badge ? t.badge + ' ' : '') + (t.est || '');
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 

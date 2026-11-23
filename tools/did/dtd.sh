@@ -2617,13 +2617,13 @@ if not running_id and running_clean:
                       if strip_ann(t['content']).lower() == running_clean
                       and str(t.get('id', '')) in started_at), None)
 
-for t in unique:
+def _row_hidden(t):
     raw = t['content']
     clean = strip_ann(raw).lower()
     prefix = clean.split(' - ')[0]
     # Hide by id first: definitive, and immune to same-name collisions.
     if t.get('id') is not None and str(t['id']) in completed_ids:
-        continue
+        return True
     # Cross-machine done-today (2026-09-07 fix, mirrors tools/dtd/dtd.py's
     # build_tasks): a recurring habit whose due date has advanced past today
     # was completed today -- each close bumps a daily/weekly recurrence by
@@ -2644,22 +2644,22 @@ for t in unique:
     # name and dated catch-up copies (NAME M.D). Still tracked by neon and
     # completable via /did, janus or inbound -- only hidden from this picker.
     if any(clean == h or clean.startswith(h + ' ') for h in DTD_HIDE_NAMES):
-        continue
+        return True
     if t.get('recurring', True) and t.get('due') and t['due'] > today:
-        continue
+        return True
     # Block-snoozed (ctrl-v): hidden until the chosen block's hour arrives.
     if t.get('id') is not None and str(t['id']) in _snoozed:
-        continue
+        return True
     # Block-labeled (地支 glyph label from /todo): hidden until its block.
     _blk_h = next((_BLOCK_LABEL_HOURS[l] for l in t.get('labels', [])
                    if l in _BLOCK_LABEL_HOURS), None)
     if _blk_h is not None and _now_hour < _blk_h:
-        continue
+        return True
     # Optimistic id-hide: a just-completed card (esp. a name-exempt ritual)
     # whose id was recorded by enter.sh/done.sh — hide it at once, not after
     # the ~7s worker+refresh.
     if t.get('id') is not None and str(t['id']) in removed_ids:
-        continue
+        return True
     # -1neon ritual cards (😈 سمش / -1g / -1ibx / -1t / -1l) RECUR every 2h block
     # with IDENTICAL names. Name-based hiding therefore suppresses the current
     # block's fresh card whenever an earlier block's same-named card was
@@ -2674,7 +2674,35 @@ for t in unique:
     # open task with the same name (regression 2026-06-26: 'stats').
     if not is_ritual and (clean in name_only_completed or prefix in name_only_completed
             or any(clean == r or (r and clean.startswith(r)) for r in removed)):
-        continue
+        return True
+    return False
+
+# Task groups (2026-11-23, lib/dtd_groups.py): a Todoist parent with one
+# level of subtasks shows as ONE row, its densest due child plus a +N count
+# of the other due children, and a child is hidden while its parent is not
+# due (deferred, snoozed, block-held, closed). Runs over the rows that
+# survived every hide above, so a just-completed child can never win the
+# row and take its siblings down with it. Any failure shows every row.
+_grp_hidden = set()
+_survivors = []
+for t in unique:
+    if _row_hidden(t):
+        _grp_hidden.add(str(t.get('id')))
+    else:
+        _survivors.append(t)
+try:
+    import dtd_groups as _dg
+    _grp_hidden |= {str(i) for i in completed_ids} | {str(i) for i in removed_ids}
+    _grp_hidden |= {str(i) for i in _snoozed} | {str(i) for i in _deferred_ids}
+    unique = _dg.collapse(_survivors, today, _grp_hidden)
+except Exception:
+    unique = _survivors
+
+for t in unique:
+    raw = t['content']
+    clean = strip_ann(raw).lower()
+    prefix = clean.split(' - ')[0]
+    is_ritual = '-1neon' in t.get('labels', [])
 
     is_skipped = clean in skipped
 
@@ -2704,6 +2732,12 @@ for t in unique:
     # append keeps the row layout.
     if is_ritual and _PREFILL and clean.replace('\U0001F608', '').strip() == '-1g':
         display = raw + ' \U0001F608 ' + _PREFILL
+    # Group row (lib/dtd_groups.py): +N other due inputs of the same outcome,
+    # ahead of the trailing estimates like the inbox badge.
+    if t.get('group_more'):
+        _emg = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
+        _cutg = _emg.start() if _emg else len(display)
+        display = display[:_cutg].rstrip() + ' +' + str(t['group_more']) + display[_cutg:]
     # Inbox habit badge: the count goes AHEAD of the trailing estimates so
     # rjust_est still finds them and strip_ann/done routing never see it.
     # Plain U+2709 (no VS16) so _dwidth counts one cell.
