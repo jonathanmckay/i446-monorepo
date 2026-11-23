@@ -1,18 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "ibx queues to zero": {
-      "todoist_id": "6j4GhQJ28xfx6vG2",
-      "minutes": 60
-    },
-    "1500分": {
-      "todoist_id": "6j4GhQRGqq8R2j8c",
-      "minutes": 50
-    },
-    "hiit": {
-      "todoist_id": "6j4GhQQrxf9VXQ7P",
-      "minutes": 40
-    }
-  },
-  "last_sync": "2026-11-23T03:55:00.986369-08:00"
+  "tasks": {},
+  "last_sync": "2026-11-23T04:00:07.504004-08:00"
 }
