@@ -4047,7 +4047,7 @@ def _compact_block_lines(blk_name, blk_sh, picks, pts, emojis, cont=None,
             # the whole-minute duration just recomputes on each repaint).
             # Selectable like any other entry — editing a running timer's
             # description/project doesn't require stopping it first.
-            dur = fmt_dur(p["dur_min"])
+            dur = _running_dur_display(p["dur_min"], p.get("entry_ids"))
             prefix = "▶ "
             # 🎙 sits right of the task name (user request 2026-08-02); a
             # filed doc for this entry gets 📝 instead (see _has_d357_doc).
@@ -6561,6 +6561,16 @@ def _entry_dur_display(dur_min: int, raw_desc: str | None, entry_ids=None) -> st
         if recorded:
             return f"{fmt_dur(dur_min)} [{pts}]"
     return fmt_dur(dur_min)
+
+
+def _running_dur_display(dur_min: int, entry_ids=None) -> str:
+    """Duration text for the running timer's body row. Its 分 so far come only
+    from the per-entry record (a dtd split credits a task whose timer is still
+    going); the name-keyed completed-today fallback belongs to a finished
+    session of that name, not this one. Bug 2026-11-23: this row printed bare
+    minutes, so a split's 100分 stayed invisible until the timer stopped."""
+    rec = _recorded_entry_pts(view_now().date(), entry_ids)
+    return f"{fmt_dur(dur_min)} [{rec}]" if rec else fmt_dur(dur_min)
 
 
 _POINTS_BRACKET_RE = re.compile(r"\[(\d+)\]")
