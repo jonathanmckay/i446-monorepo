@@ -63,7 +63,16 @@ SHEETS = {
                 # the workbook's dark greys read better as black in a terminal
                 "recolor": {"7f7f7f": "000000", "808080": "000000", "404040": "000000"},
                 "widths": {"*": 3, "B": 5, "D": 5, "I": 4, "J": 4, "N": 4, "P": 4, "Q": 4, "R": 4}, "formats": {"D": "0"}},
-    "0n":      {"header_rows": 4, "date_col": "C", "frozen_cols": 3},
+    # View-only overrides (JM 2026-11-22); the workbook keeps its own columns
+    # and formats. push (X) is the i446 habit: relabelled, drawn between charge
+    # and tmrw, grey like i447 with no fill while blank. ibx i9 (W) leaves the
+    # stats/notes blue for cyan. 1st hci (L) is light blue from 1, not from 2.
+    "0n":      {"header_rows": 4, "date_col": "C", "frozen_cols": 3,
+                "labels": {"X": "i446"}, "after": {"X": "I"}, "widths": {"X": 4},
+                "fills": {"X": {"head": "bfbfbf", "body": None}},
+                "cf": {"W": [[4, "greaterThan", [0.0], "00b8d4", "ffffff", False, False]],
+                       "L": [[16, "greaterThan", [0.1], "e5f8fc", None, None, False]],
+                       "X": [[4, "greaterThan", [0.0], "bfbfbf", "000000", False, False]]}},
     "0s897":   {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
     "hcbi":    {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
     "i9+m5x2": {"header_rows": 1, "date_col": "A", "frozen_cols": 1},
@@ -530,6 +539,16 @@ def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> d
         cols = [c for c in cols if _head(c) not in drop]
     week_c = _col_index(view["week_col"]) if view.get("week_col") else None
     cols = [c for c in cols if c != week_c]
+    # "after": draw a column right after another one. sheet["cols"] is then in
+    # display order; every reader resolves a letter with cols.index().
+    for mover, anchor_col in (view.get("after") or {}).items():
+        m, a = _col_index(mover), _col_index(anchor_col)
+        if m in cols and a in cols and m != a:
+            cols.remove(m)
+            cols.insert(cols.index(a) + 1, m)
+    labels = {_col_index(k): v for k, v in (view.get("labels") or {}).items()}
+    cf_over = {_col_index(k): [tuple(x) for x in v] for k, v in (view.get("cf") or {}).items()}
+    fills = {_col_index(k): v for k, v in (view.get("fills") or {}).items()}
     col_style = {_col_index(k): v for k, v in (view.get("col_style") or {}).items()}
     rows = [r for r in range(1, max_r + 1) if not (r in ws.row_dimensions and ws.row_dimensions[r].hidden)]
     widths = {c: max(2, min(MAX_COL_CHARS, int(round(excel_w.get(c, DEFAULT_EXCEL_WIDTH))))) for c in cols}
@@ -540,6 +559,17 @@ def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> d
     formats = {_col_index(k): v for k, v in (view.get("formats") or {}).items()}
     header_n = view.get("header_rows") or 0
     recolor = view.get("recolor") or None
+
+    def view_fill(c, r, bg):
+        """A column's static fill as the view overrides it: "head" for the
+        header rows under row 1, "body" for the day rows."""
+        f = fills.get(c)
+        if f:
+            if 1 < r <= header_n and "head" in f:
+                return f["head"]
+            if r > header_n and "body" in f:
+                return f["body"]
+        return bg
 
     # merges: every covered cell points at its anchor
     anchor = {}
@@ -582,10 +612,15 @@ def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> d
                 bg, fg, bold, halign, numfmt = None, None, False, None, "General"
             if c in formats and r > header_n:
                 numfmt = formats[c]
+            bg = view_fill(c, r, bg)
             forced = col_style.get(c)
             if forced and r > (view.get("header_rows") or 0):
                 bg, fg = forced
             rules = None if forced else cf.get(src)
+            if not forced and c in cf_over and r > header_n:
+                rules = cf_over[c]
+            elif 1 < r <= header_n and "head" in (fills.get(c) or {}):
+                rules = None                       # the header fill is the view's, not a rule's
             if rules:
                 set_bg = set_fg = set_bold = False
                 for _prio, op, operands, rbg, rfg, rbold, stop in sorted(rules, key=lambda x: x[0]):
@@ -601,6 +636,8 @@ def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> d
                         break
             bg, fg = _recolor(bg, fg, recolor)
             text = format_value(value, numfmt, widths[c]) if src == (r, c) else ""
+            if r == 1 and c in labels:
+                text = labels[c]
             if week_c and c == date_c and src == (r, c) and isinstance(value, (dt.datetime, dt.date)):
                 if view.get("date_label") == "mm.dd":
                     text = "%02d.%02d" % (value.month, value.day)
@@ -652,9 +689,11 @@ def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> d
             cell = cells.get((rr, c))
             bg, fg, bold, halign, numfmt = static(cell) if cell is not None else (None, None, False, None, "General")
             numfmt = formats.get(c, numfmt)
+            bg = view_fill(c, rr, bg)
+            cell_rules = cf_over[c] if c in cf_over and rr > header_n else cf.get((rr, c), [])
             recipe[get_column_letter(c)] = {
                 "fmt": numfmt, "base": [bg, fg, bold, halign],
-                "rules": [list(x) for x in sorted(cf.get((rr, c), []), key=lambda x: x[0])]}
+                "rules": [list(x) for x in sorted(cell_rules, key=lambda x: x[0])]}
         live = {"row": today_row, "excel_row": rr, "cells": recipe, "recolor": recolor}
     tab = None
     try:

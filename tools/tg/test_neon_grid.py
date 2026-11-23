@@ -241,3 +241,45 @@ def test_snapshot_names_its_day_and_weekly_sheets_get_a_live_row(tmp_path, monke
     weekly["rows"][2][1] = ["", weekly["rows"][2][1][1]]
     assert ng.overlay(weekly, {"B": 0}) == 0                     # a derived 0 leaves a blank cell blank
     assert ng.overlay(weekly, {"B": 0}, zeros=True) == 1 and weekly["rows"][2][1][0] == "0"   # a written 0 shows
+
+
+def test_view_overrides_relabel_move_refill_and_recolour(tmp_path, monkeypatch):
+    """JM 2026-11-22: push shows as i446 between charge and tmrw, ibx i9 gets
+    its own colour, 1st hci is light blue from 1. All view-side: a label, an
+    order, a static fill and a column's colour rules, in the grid and in the
+    live recipe overlay() repaints from."""
+    path = _workbook(tmp_path / "neon.xlsx")
+    monkeypatch.setitem(ng.SHEETS, "0分", {"header_rows": 1, "date_col": "B", "frozen_cols": 2})
+    plain = ng.build(path, today=TODAY)["sheets"][0]
+    assert plain["cols"].index("E") > plain["cols"].index("D")
+    head_e = _cell(plain, 0, "E")[0]
+    monkeypatch.setitem(ng.SHEETS, "0分", {
+        "header_rows": 1, "date_col": "B", "frozen_cols": 2,
+        "labels": {"E": "i446"}, "after": {"E": "B"}, "widths": {"E": 4},
+        "fills": {"D": {"body": None}},
+        "cf": {"D": [[1, "greaterThan", [0.5], "112233", "ffffff", False, False]]}})
+    s = ng.build(path, today=TODAY)["sheets"][0]
+    assert s["cols"].index("E") == s["cols"].index("B") + 1          # drawn right after B
+    assert sorted(s["cols"]) == sorted(plain["cols"])                 # nothing lost or doubled
+    assert _cell(s, 0, "E")[0] == "i446" != head_e
+    assert s["widths"][s["cols"].index("E")] == 4
+    assert s["widths"][s["cols"].index("D")] == plain["widths"][plain["cols"].index("D")]
+    row = s["live"]["row"]
+    assert _cell(plain, row, "D")[1][0] not in (None, "#112233")      # the workbook's own fill and rules
+    assert _cell(s, row, "D")[1][:2] == ["#112233", "#ffffff"]        # replaced by the view's rule
+    assert s["live"]["cells"]["D"]["base"][0] is None                 # static fill dropped
+    assert [r[3] for r in s["live"]["cells"]["D"]["rules"]] == ["112233"]
+    ng.overlay(s, {"D": 0}, zeros=True)
+    assert _cell(s, row, "D")[1][0] is None                           # blank again: no fill, not the old one
+    ng.overlay(s, {"D": 1}, zeros=True)
+    assert _cell(s, row, "D")[1][0] == "#112233"
+    assert _cell(s, 0, "D")[1] == _cell(plain, 0, "D")[1]             # row 1 keeps its own style
+
+
+def test_0n_view_carries_the_2026_11_22_overrides():
+    v = ng.SHEETS["0n"]
+    assert v["labels"] == {"X": "i446"} and v["after"] == {"X": "I"} and v["widths"]["X"] == 4
+    assert v["cf"]["L"][0][1:3] == ["greaterThan", [0.1]]             # 1st hci: 1 is enough
+    stats_blue = "2979ff"
+    assert v["cf"]["W"][0][3] not in (stats_blue, "00a3ee")           # ibx i9 != stats/notes, != push's old header
+    assert v["cf"]["X"][0][3] != "b3b3b3" and v["fills"]["X"]["body"] is None
