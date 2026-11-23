@@ -128,3 +128,45 @@ def test_split_per_block_keeps_minutes_and_points_whole(df):
     assert len(parts) == 2
     assert sum(p.variable_value for p in parts) == 147
     assert all(p.item.tag_companion_of for p in parts)
+
+
+# ── #relax (2026-11-23): 1分/min to the weekly relax habit, 个 column ────────
+RELAX_HEADERS = {"0n": {}, "1n": {"relax {60}": "AH", "业写": "AB"}}
+RELAX_CARD = {"id": "6h8rcv4JgH2qP99x", "content": "relax (60) [15]",
+              "labels": ["1neon", "hcm"]}
+RELAX_TQ = {"0neon": [], "夜neon": [], "1neon": [RELAX_CARD], "today": []}
+
+
+def _run_relax(df, text):
+    items = df.parse_input(text)
+    df.infer_range_blocks(items)
+    routes = df.route_items(items, RELAX_HEADERS, RELAX_TQ, skip_todoist=True)
+    return routes, df.tag_habit_companions(routes, RELAX_HEADERS, RELAX_TQ)
+
+
+def test_relax_tag_credits_minutes_to_the_weekly_habit(df):
+    routes, comps = _run_relax(df, "movie with LX 2000-2130 @xk88 #relax [30]")
+    assert routes[0].item.points_override == 30    # the task keeps its own [30]
+    assert routes[0].item.toggl_tags == ["relax"]
+    assert len(comps) == 1
+    c = comps[0]
+    assert c.step == "1n"
+    assert c.write_value == 90                     # minutes to the week cell
+    assert c.variable_value == 90                  # 1分/min
+    assert c.fen_col == "T"                        # relax pays 个
+    assert c.item.tag_companion_of
+
+
+def test_relax_tag_stands_down_when_janus_already_added_it(df):
+    """janus appends ", relax <minutes>" for a habit tag (mobile.py habit_tags);
+    the batch then resolves to header "relax {60}" and the tag must not add a
+    second credit. Compared alias-resolved, or this doubles."""
+    routes, comps = _run_relax(df, "movie 2000-2130 @xk88 #relax [30], relax 90")
+    assert [r.item.name for r in routes if r.step == "1n"] == ["relax"]
+    assert comps == []
+
+
+def test_relax_self_tag_is_one_credit(df):
+    routes, comps = _run_relax(df, "relax 60 #relax")
+    assert [r.step for r in routes] == ["1n"]
+    assert comps == []

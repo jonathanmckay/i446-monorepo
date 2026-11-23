@@ -250,6 +250,8 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 
 **Habit tag (`TAG_1N_HABITS`, JM 2026-11-19):** `#业写` on any item also earns 业写 for that item's minutes, in the same call: `strategy deck 1955-2145 @i9 #业写 [100]` credits the deck's 100 and runs this step as if `业写 110` had been typed (110 minutes to the week cell, 4/3 × minutes = 147 to the i9 column, weekly card closed, no second Toggl entry). So `[N]` is the task's own value only; never fold the habit into it. Needs a range or typed minutes: a bare timer `/fin` warns and credits nothing, log `业写 <minutes>` then. did-fast does this itself (`tag_habit_companions`); do not add a second 业写 item.
 
+**`#relax` (JM 2026-11-23)** works the same way at 1分/min: `movie with LX 2000-2130 @xk88 #relax [30]` keeps the 30 on xk and adds 90 minutes to the `relax {60}` week cell, +90 to 个, and closes the weekly relax card (any length closes it; the 60 is not enforced). Same limit: `/do movie #relax` then a bare `/did` or `/fin` credits nothing for relax, so give a range or minutes, or swipe it in janus (which appends `, relax <minutes>` itself; did-fast then stands down, one credit).
+
 ## Step 6b: Posthoc Habit
 
 0₦ match + past date. No Neon write. Create posthoc Todoist task (same as Step 6.3 but with labels `["posthoc", "0neon"]`).

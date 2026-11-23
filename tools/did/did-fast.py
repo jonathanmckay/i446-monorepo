@@ -162,7 +162,10 @@ VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
 # typed "strategy deck 1955-2145 @i9 #业写 [100]" keeps its own [100] AND
 # credits 业写 for the 110 minutes, as if ", 业写 110" had been typed with it.
 # See tag_habit_companions.
-TAG_1N_HABITS: dict[str, str] = {"业写": "业写"}
+# #relax (JM 2026-11-23): 1分/min to the weekly relax habit (个 column). The
+# value is the ALIAS, never the header "relax {60}": the name is echoed in a
+# "log it with ..." hint and a typed {60} would fire the 0g bonus.
+TAG_1N_HABITS: dict[str, str] = {"业写": "业写", "relax": "relax"}
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
 # Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
 # Keys are header_normalize()d (lowercase).
@@ -4197,7 +4200,12 @@ def tag_habit_companions(routes: list, headers: dict, tq: dict, *,
             continue
         for tag in it.toggl_tags or []:
             habit = TAG_1N_HABITS.get(tag)
-            if not habit or header_normalize(habit) in have:
+            # `have` holds alias-RESOLVED headers ("relax {60}"), so resolve
+            # the habit the same way or "x #relax, relax 90" (janus's shape)
+            # and "relax 60 #relax" would each credit twice.
+            habit_key = (header_normalize(ONENEON_ALIASES.get(habit.lower(), habit))
+                         if habit else None)
+            if not habit or habit_key in have:
                 continue
             minutes = (time_range_minutes(*it.time_range) if it.time_range
                        else it.time_value)
@@ -4227,7 +4235,7 @@ def tag_habit_companions(routes: list, headers: dict, tq: dict, *,
                         != neon_weeks.habit_week_label(habit, _daytime.today())):
                     for c in landed:
                         c.todoist_task = None
-            have.add(header_normalize(habit))
+            have.add(habit_key)
             out.extend(landed)
     return out
 
