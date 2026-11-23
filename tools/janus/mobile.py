@@ -1096,7 +1096,10 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
     dtd_entry = janus_done.done_entry_claims(
         [(e["id"], e.get("desc"), e["start"].timestamp(), e["end"].timestamp())
          for e in sorted(entries, key=lambda e: e["start"])],
-        {k: dtd_times.get(k) for k in dtd_done}, {str(i) for i in logged}, _norm_key)
+        {k: dtd_times.get(k) for k in dtd_done},
+        # An entry holding a split part is spoken for: the later close of that
+        # name was not earned in it (JM 2026-11-23).
+        {str(i) for i in logged} | set(entry_points.parts_for_day(today)), _norm_key)
     known_habits = registered_habit_names()  # computed once, not per row
     day0 = _dt.datetime.combine(today, _dt.time(0, 0), _tz())
     # The timeline's "live edge": gaps and dividers run to now on today, but a
