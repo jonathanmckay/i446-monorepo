@@ -573,6 +573,19 @@ def reverse_record(record: dict, errors: list[str]) -> None:
             for eid, held in entry_points.parts_for_day(part.get("day")).items():
                 if part["key"] in held:
                     entry_points.record_part(part["day"], eid, part["key"], None, "undo split")
+        # Task group: the split's points go back onto the parent's [N].
+        grp = record.get("group") or {}
+        if grp.get("key"):
+            try:
+                import dtd_groups
+                res = dtd_groups.unpay_child(
+                    grp["key"],
+                    get_task=lambda i: _api("GET", f"/tasks/{i}"),
+                    update_task=lambda i, body: _api("POST", f"/tasks/{i}", body))
+                if res.get("status") == "error":
+                    errors.append(f"group restore: {res.get('why')}")
+            except Exception as ex:
+                errors.append(f"group restore: {ex}")
         mc.remove_names(record.get("names", []))
 
     elif rtype == "delete":

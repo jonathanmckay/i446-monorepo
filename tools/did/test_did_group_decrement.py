@@ -134,3 +134,49 @@ def test_undo_gives_the_parent_back_what_the_completion_took(tmp_path, monkeypat
         "11/23", "2026-11-23", errors)
     assert errors == [] and td.tasks["P"]["content"] == "o [100]"
     sys.modules.pop("state_paths", None)
+
+
+def test_undo_of_a_split_restores_the_parent(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    sys.modules.pop("state_paths", None)
+    import dtd_groups
+    import state_paths
+    td = Todoist(P={"content": "o [100]", "labels": ["grp"]},
+                 C={"content": "x (10) [5]", "labels": []})
+    journal = state_paths.STATE_DIR / "group-decrements.jsonl"
+    kw = dict(journal=journal, get_task=td.get, update_task=td.update)
+    r1 = dtd_groups.decrement_parent("C", "P", 15, "2026-11-23:split:PH1", **kw)
+    r2 = dtd_groups.decrement_parent("C", "P", 10, "2026-11-23:split:PH2", **kw)
+    assert (r1["status"], r2["status"]) == ("ok", "ok")      # two splits in a day both count
+    assert td.tasks["P"]["content"] == "o [75]"
+    uf = _load("undo_fast_groups_split", "undo-fast.py")
+    monkeypatch.setattr(uf, "_api", lambda method, path, body=None, timeout=15.0:
+                        td.get(path.rsplit("/", 1)[-1]) if method == "GET"
+                        else (td.update(path.rsplit("/", 1)[-1], body) if body else None))
+    monkeypatch.setattr(uf.mc, "remove_names", lambda names: None)
+    errors = []
+    uf.reverse_record({"type": "split", "names": ["x"], "task_id": "C", "prev_content": "x (20) [20]",
+                       "prev_due": "2026-11-23", "posthoc_id": None, "closed": False,
+                       "group": {"key": r1["key"], "parent": "P", "taken": r1["taken"]}}, errors)
+    assert errors == [] and td.tasks["P"]["content"] == "o [90]"     # only the first split came back
+    sys.modules.pop("state_paths", None)
+
+
+def test_run_one_off_lowers_the_parent_once_with_an_iso_key(monkeypatch):
+    run = _load("run_groups", "run.py")
+    child = {"id": "C", "content": "send ticor reply (5) [40]", "labels": ["m5x2"], "parent_id": "P"}
+    monkeypatch.setattr(run.todoist, "find_tasks", lambda **k: [child])
+    monkeypatch.setattr(run.todoist, "close_task", lambda i: None)
+    monkeypatch.setattr(run.excel, "append", lambda *a, **k: None)
+    monkeypatch.setattr(run, "_drop_from_queue", lambda i: None)
+    monkeypatch.setattr(run, "_append_completed", lambda *a, **k: None)
+    monkeypatch.setattr(run, "_fire_refresh", lambda: None)
+    monkeypatch.setattr(run.registry, "resolve_fen_col", lambda d: "S")
+    import dtd_groups
+    paid = []
+    monkeypatch.setattr(dtd_groups, "pay_child",
+                        lambda c, p, n, day: paid.append((c, p, n, day)) or
+                        {"status": "ok", "taken": [[n, None]]})
+    assert run.run_one_off("send ticor reply", "11/23", "send ticor reply") == 0
+    assert len(paid) == 1 and paid[0][:3] == ("C", "P", 40)
+    assert len(paid[0][3]) == 10 and paid[0][3][4] == "-"            # ISO day, not M/D

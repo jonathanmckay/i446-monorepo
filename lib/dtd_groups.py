@@ -34,6 +34,8 @@ from typing import Callable, Iterable, Optional
 import fen_split
 
 GROUP_LABEL = "grp"          # marks a group parent in Todoist (set on first decrement)
+AGENT_LABEL = "agent"        # an agent is doing this input; dimmed, never the group's row
+WAITING_LABEL = "waiting"    # the next move is someone else's; shown on its follow-up day
 MAX_PARENT_FETCH = 25        # live GETs per cache refresh for parents not in the cache
 _MIN_RE = re.compile(r"\((\d+)\)")
 
@@ -122,6 +124,20 @@ def attach_parents(cache: dict, get_task: Optional[Callable[[str], Optional[dict
 # Rendering: collapse each group to one row
 # ---------------------------------------------------------------------------
 
+def parent_ids(cache: dict) -> set:
+    """Ids of every task some cached group child points at, whether or not
+    that child is currently shown."""
+    return {str(t["parent_id"]) for t in _list_rows(cache) if is_group_child(t)}
+
+
+def is_group_parent(t: dict, parents: Iterable = ()) -> bool:
+    """A row that is an outcome: it carries the group label or has a cached
+    subtask. Never a recurring task."""
+    if t.get("recurring"):
+        return False
+    return GROUP_LABEL in (t.get("labels") or []) or str(t.get("id")) in parents
+
+
 def is_group_child(t: dict) -> bool:
     return bool(t.get("parent_id")) and not t.get("parent_recurring")
 
@@ -151,9 +167,17 @@ def collapse(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
         if is_group_child(t) and not child_hidden(t, today_iso, hp):
             groups.setdefault(str(t["parent_id"]), []).append(t)
     best: dict[str, str] = {}
+    more: dict[str, int] = {}
     for pid, kids in groups.items():
-        top = max(kids, key=lambda k: ppm(k.get("content") or ""))   # ties: first in order
+        # An input an agent is working never takes the row from one JM can do,
+        # and is not counted in +N. When every due input is an agent's, one
+        # of them still shows (dimmed by the renderer), so the group is never
+        # invisible and its parent never resurfaces as a closable row.
+        mine = [k for k in kids if AGENT_LABEL not in (k.get("labels") or [])]
+        pool = mine or kids
+        top = max(pool, key=lambda k: ppm(k.get("content") or ""))   # ties: first in order
         best[pid] = str(top.get("id"))
+        more[pid] = len(mine) - 1 if mine else 0
     out = []
     for t in rows:
         tid = str(t.get("id"))
@@ -164,7 +188,7 @@ def collapse(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
             if pid not in groups or best[pid] != tid:
                 continue                              # hidden, or outranked by a sibling
             t = dict(t)
-            t["group_more"] = len(groups[pid]) - 1
+            t["group_more"] = more[pid]
             t["group_name"] = t.get("parent_content") or ""
         out.append(t)
     return out
@@ -288,3 +312,27 @@ def restore_parent(child_id: str, day: str, *, journal: Path,
             return out
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def pay_child(child_id: str, parent_id: str, paid: int, day: str, **kw) -> dict:
+    """decrement_parent with the real journal and Todoist client: the one call
+    for payment paths outside did-fast (run.py, split-fast.py). `day` is an
+    ISO date, optionally suffixed (":split:<id>") when one child can be paid
+    more than once in a day."""
+    import state_paths
+    import todoist
+    kw.setdefault("journal", state_paths.STATE_DIR / "group-decrements.jsonl")
+    kw.setdefault("get_task", todoist.get_task)
+    kw.setdefault("update_task", lambda i, body: todoist._request("POST", f"/tasks/{i}", body))
+    return decrement_parent(child_id, parent_id, paid, day, **kw)
+
+
+def unpay_child(key: str, **kw) -> dict:
+    """restore_parent by journal key ("<child>:<day>[:suffix]")."""
+    import state_paths
+    import todoist
+    kw.setdefault("journal", state_paths.STATE_DIR / "group-decrements.jsonl")
+    kw.setdefault("get_task", todoist.get_task)
+    kw.setdefault("update_task", lambda i, body: todoist._request("POST", f"/tasks/{i}", body))
+    child, _, day = key.partition(":")
+    return restore_parent(child, day, **kw)

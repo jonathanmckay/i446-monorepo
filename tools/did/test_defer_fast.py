@@ -511,3 +511,50 @@ def test_api_and_fetch_tasks_go_through_open(df, monkeypatch):
     assert df._fetch_tasks("today") == [{"id": "t1"}]
     assert [m for m, _ in seen] == ["GET", "GET"]
     assert "tasks/filter?query=today" in seen[1][1]
+
+
+# ── task groups: a deferred input's copy stays under its parent ────────────
+
+def test_recurring_group_input_copy_keeps_parent_and_drops_agent_label(df, monkeypatch):
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 21)
+    monkeypatch.setattr(df, "date", _D)
+    created = []
+    monkeypatch.setattr(df, "create_task",
+                        lambda content, labels, *a, **k: (created.append((content, labels, k)),
+                                                          {"id": "c1"})[1])
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "chase lender (5) [10]", "labels": ["m5x2", "agent"],
+            "parent_id": "PAR",
+            "due": {"is_recurring": True, "date": "2026-07-21", "string": "every day"}}
+    df.handle_recurring(task, "2026-07-28", 2)
+    content, labels, kw = created[0]
+    assert content.startswith("chase lender") and kw.get("parent_id") == "PAR"
+    assert labels == ["m5x2"]
+    # the posthoc record stays top-level
+    assert all(not k.get("parent_id") for _c, _l, k in created[1:])
+
+
+def test_copy_falls_back_to_top_level_when_the_parent_is_gone(df, monkeypatch):
+    class _D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 7, 21)
+    monkeypatch.setattr(df, "date", _D)
+    calls = []
+
+    def create(content, labels, *a, **k):
+        calls.append(k.get("parent_id"))
+        if k.get("parent_id"):
+            raise RuntimeError("400 parent not found")
+        return {"id": "c1"}
+    monkeypatch.setattr(df, "create_task", create)
+    monkeypatch.setattr(df, "close_task", lambda *_: None)
+    monkeypatch.setattr(df, "_api", lambda *a, **k: None)
+    task = {"id": "t1", "content": "chase lender (5) [10]", "labels": ["m5x2"], "parent_id": "GONE",
+            "due": {"is_recurring": True, "date": "2026-07-21", "string": "every day"}}
+    out = df.handle_recurring(task, "2026-07-28", 2)
+    assert calls[:2] == ["GONE", None] and out["stubs"]["deferred_copy"]

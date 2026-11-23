@@ -28,6 +28,7 @@ completed Todoist tasks for that domain, plus keyword hits for free-text goals):
 |---|---|
 | `<N>分` | That domain's daily points (dashboard points cache = Neon 0分 per-day totals) summed Sun–Sat. ✅ ≥100%, 🟡 ≥80%, ❌ below |
 | `<N> days good media` | Days whose 0n `1+` (AU) cell is blank or ≤ 0, i.e. no junk `hcmc #1` media; `per_day` shows the bad days |
+| `<goal> on N of 7 days` / `<goal> every day` | A quota: days the neon ledger shows the goal's `😈 1g:` card paid (`per_day` lists them). Zero paid days sets `needs_question`: the card was probably never created under that name |
 | anything else | `❓` + evidence |
 
 `needs_question: true` marks goals the data can't fully settle: free-text goals,
@@ -188,6 +189,23 @@ goal's deadline:** dtd lists only tasks due today or overdue, so a goal dated
 Fri or Sat is invisible all week (2026-11-15: seven goal tasks created due
 11-20/11-21, none showed in dtd). The deadline stays in the name ("by Fri
 11-20"). Then `python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache`.
+
+**Quota goals are one recurring card, never one card per day and never
+subtasks (2026-11-23).** A goal done on several days of the week ("hiit
+before 09:00 on 5 of 7 days {75}", "wake up in 卯 every day {105}") becomes a
+single task:
+
+- name `😈 1g: <goal without the "on N of 7 days" / "every day" words> {b}`,
+  where `b` = the goal's bonus divided by N, rounded (75 over 5 days is `{15}`)
+- due string `every day starting <first day> ending <that week's Saturday>`
+- the goal's domain label and project
+
+Each completion pays `{b}` to 0g and journals in the neon ledger, which is
+what the review counts. Write the goal in the narrative doc with its
+`on N of 7 days` or `every day` wording and its full `{N}`; add no "paid as"
+sub-bullets and do not put the daily bonus on another card.
+
+Outcome goals with several parts are groups: see `/grp`.
 
 ### Step 5: Report
 

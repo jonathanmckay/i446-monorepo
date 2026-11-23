@@ -660,6 +660,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             survivors.append(t)
     grp_hidden |= {str(i) for i in completed_ids} | {str(i) for i in snoozed_ids}
     grp_hidden |= {str(i) for i in _deferred_ids} | {str(i) for i in form_hidden}
+    grp_parents = dtd_groups.parent_ids(d)
     try:
         survivors = dtd_groups.collapse(survivors, today, grp_hidden)
     except Exception as e:  # noqa: BLE001 — never lose the list over grouping
@@ -693,6 +694,13 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             # Group row: how many other due inputs of the same outcome are
             # folded under this one, and the outcome's name ("" / 0 otherwise).
             "groupMore": int(t.get("group_more") or 0),
+            # This row is itself an outcome (a group parent): drawn with a box.
+            "groupParent": dtd_groups.is_group_parent(t, grp_parents),
+            # Owner label (lib/dtd_groups.py): "agent" (an agent is working
+            # this input; dimmed), "waiting" (a follow-up on someone else),
+            # else "". Named owner, not agent: `agent` below is the claim flag.
+            "owner": next((l for l in (dtd_groups.AGENT_LABEL, dtd_groups.WAITING_LABEL)
+                           if l in t.get("labels", [])), ""),
             "groupName": strip_ann(t.get("group_name") or ""),
             "points": pts,
             "color": color,
@@ -2114,10 +2122,11 @@ function makeRow(t){
   line.style.color = t.color;
   const ttl = document.createElement('span');
   ttl.className = 'ttl';
-  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.recurring?'↻ ':'') + t.title;
+  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.groupParent?'📦 ':'') + (t.owner==='agent'?'🤖 ':'') + (t.owner==='waiting'?'🔔 ':'') + (t.recurring?'↻ ':'') + t.title;
+  if (t.owner==='agent') ttl.style.opacity = '0.5';
   const est = document.createElement('span');
   est.className = 'est';
-  est.textContent = (t.groupMore ? '+' + t.groupMore + ' ' : '') + (t.badge ? t.badge + ' ' : '') + (t.est || '');
+  est.textContent = (t.groupMore ? '📦+' + t.groupMore + ' ' : '') + (t.badge ? t.badge + ' ' : '') + (t.est || '');
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 

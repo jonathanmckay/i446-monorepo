@@ -99,3 +99,36 @@ def test_apply_writes_and_replaces_child_bullets(tmp_path):
     assert sum(r.MARK in l for l in lines) == 1
     # annotations don't get parsed back as goals
     assert len(r.parse_week_goals(lines, SUN, SAT)) == 3
+
+
+# --- quota goals (one recurring 1g card, counted from the neon ledger) --------
+
+def _ledger(tmp_path, rows):
+    (tmp_path / "2026-10.jsonl").write_text(
+        "".join(json.dumps({"sheet": "0分", "col": "Q", "date": d, "value": "+15", "src": s}) + "\n"
+                for d, s in rows))
+    return tmp_path
+
+
+def test_quota_counts_distinct_paid_days_inside_the_week(tmp_path):
+    led = _ledger(tmp_path, [("10/5", "did 😈 1g: hiit before 09:00"),
+                             ("10/5", "did 😈 1g: hiit before 09:00"),       # same day twice
+                             ("10/7", "did 😈 1g: hiit before 09:00"),
+                             ("10/12", "did 😈 1g: hiit before 09:00"),      # next week
+                             ("10/6", "did 😈 1g: wake up in 卯"),           # another goal
+                             ("10/8", "did hiit")])                          # the habit, not the 1g card
+    days = r.week_days(SUN)
+    assert r.quota_days("hiit before 09:00 on 5 of 7 days {75}", days, led) == ["2026-10-05", "2026-10-07"]
+    assert r.quota_days("Wake up in 卯 every day {105}", days, led) == ["2026-10-06"]
+
+
+def test_quota_goal_is_scored_and_an_empty_ledger_asks(tmp_path):
+    led = _ledger(tmp_path, [(f"10/{d}", "did 😈 1g: hiit before 09:00") for d in (4, 5, 6, 7, 8)])
+    goal = {"text": "hiit before 09:00 on 5 of 7 days {75}", "domain": "hcbp", "line_no": 1}
+    ctx = {"days": r.week_days(SUN), "points": {}, "tasks": []}
+    with patch.object(r, "LEDGER_DIR", led):
+        out = r.evaluate(goal, ctx)
+        assert (out["kind"], out["actual"], out["target"], out["status"]) == ("quota", 5, 5, "✅")
+        assert "needs_question" not in out
+        miss = r.evaluate({"text": "stretch every day {35}", "domain": "hcb", "line_no": 2}, ctx)
+    assert (miss["target"], miss["actual"], miss["status"]) == (7, 0, "❌") and miss["needs_question"]

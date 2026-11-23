@@ -921,6 +921,26 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         print(f"  ✗ Todoist close failed: {e}", file=sys.stderr)
         return 1
 
+    # Task group (lib/dtd_groups.py, 2026-11-23): a paid subtask comes off its
+    # parent's remaining [N], the same as did-fast's step 7. Points only (the
+    # {N} bonus is not part of the outcome's value). Idempotent per child and
+    # day. This path has no undo journal, so the decrement is not reversible
+    # from here; edit the parent's [N] by hand if the close was a mistake.
+    group_note = ""
+    _paid = split_pts + (points_sq or 0)
+    if best.get("parent_id") and _paid > 0:
+        try:
+            import daytime as _gdt
+            import dtd_groups
+            rec = dtd_groups.pay_child(str(best["id"]), str(best["parent_id"]), int(_paid),
+                                       _gdt.today_iso())
+            if rec.get("status") == "ok":
+                group_note = f" 📦 parent -{sum(n for n, _ in rec['taken'])}"
+            elif rec.get("status") == "error":
+                print(f"  ⚠ group parent not lowered: {rec.get('why')}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — the completion itself stands
+            print(f"  ⚠ group parent not lowered: {e}", file=sys.stderr)
+
     # Build-order checkbox flip
     flipped = False
     if "关键径路" in labels or "#0g" in labels or "#-1g" in labels:
@@ -935,7 +955,7 @@ def run_one_off(query: str, target_date: str, raw_input: str) -> int:
         msg += " " + ", ".join(fen_writes)
     if flipped:
         msg += " + build-order ✓"
-    print(msg)
+    print(msg + group_note)
     return 0
 
 

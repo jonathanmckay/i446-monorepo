@@ -226,3 +226,31 @@ def test_split_pairs_keep_their_codes_through_take_and_add_back(tmp_path):
     assert td.tasks["P"]["content"] == "o [0] @h335 [5] @i9"
     g.restore_parent("a", TODAY, **kw)
     assert td.tasks["P"]["content"] == "o [30] @h335 [10] @i9"
+
+
+# --- owners ----------------------------------------------------------------
+
+def test_agent_input_never_wins_the_row_or_counts():
+    rows = [row("a", "agent drafts (5) [90]", "P", labels=["agent"]),
+            row("b", "send it (5) [20]", "P"),
+            row("c", "call (10) [10]", "P")]
+    out = g.collapse(rows, TODAY)
+    assert ids(out) == ["b"] and out[0]["group_more"] == 1
+
+
+def test_group_with_only_agent_inputs_still_shows_one_and_keeps_parent_hidden():
+    rows = [row("P", "outcome [100]"),
+            row("a", "agent drafts (5) [90]", "P", labels=["agent"]),
+            row("b", "agent checks (5) [10]", "P", labels=["agent"])]
+    out = g.collapse(rows, TODAY)
+    assert ids(out) == ["a"] and out[0]["group_more"] == 0
+
+
+def test_group_parent_detection():
+    cache = {"today": [row("P", "outcome [100]"), row("a", "x [10]", "P"),
+                       row("L", "labelled [5]", labels=["grp"]),
+                       row("R", "weekly [5]", labels=["grp"], recurring=True),
+                       row("x", "plain [5]")]}
+    ps = g.parent_ids(cache)
+    assert ps == {"P"}
+    assert [r["id"] for r in cache["today"] if g.is_group_parent(r, ps)] == ["P", "L"]

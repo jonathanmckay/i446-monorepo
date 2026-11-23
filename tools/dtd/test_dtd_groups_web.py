@@ -70,3 +70,21 @@ def test_snoozed_parent_hides_its_children(cache, monkeypatch):
 def test_plain_tier_sorts_by_points_per_minute_within_priority(cache):
     cache([{"id": "S", "content": "slow (60) [5]"}, {"id": "F", "content": "fast (10) [20]"}])
     assert [r["id"] for r in dtd.build_tasks()] == ["F", "S"]
+
+
+def test_outcome_and_owner_flags(cache):
+    rows = cache([{"id": "L", "content": "purchase l912 (240) [1360]", "labels": ["m5x2", "grp"]},
+                  {"id": "W", "content": "follow up Jesus (10) [8]", "labels": ["m5x2", "waiting"]},
+                  {"id": "X", "content": "plain (5) [5]"}])
+    assert rows["L"]["groupParent"] and not rows["X"]["groupParent"]
+    assert (rows["W"]["owner"], rows["X"]["owner"]) == ("waiting", "")
+
+
+def test_agent_input_is_folded_under_the_one_jm_can_do(cache):
+    rows = cache([{"id": "P", "content": "outcome (60) [100]"},
+                  {"id": "A", "content": "agent drafts (5) [90]", "parent_id": "P", "labels": ["m5x2", "agent"]},
+                  {"id": "B", "content": "send it (5) [20]", "parent_id": "P"}])
+    assert set(rows) == {"B"} and rows["B"]["groupMore"] == 0
+    rows = cache([{"id": "P", "content": "outcome (60) [100]"},
+                  {"id": "A", "content": "agent drafts (5) [90]", "parent_id": "P", "labels": ["m5x2", "agent"]}])
+    assert set(rows) == {"A"} and rows["A"]["owner"] == "agent"

@@ -50,6 +50,13 @@ DOMAIN_LABEL = {
     "g245": "0₲", "0g": "0₲", "m828": "个",
 }
 OK_RATIO, PARTIAL_RATIO = 1.0, 0.8
+# A quota goal: the same thing on N days of the week ("hiit on 5 of 7 days",
+# "wake up in 卯 every day"). /1g files it as ONE recurring card named
+# "😈 1g: <goal>" that pays its {N} a day, so the week's count is the number
+# of days the neon ledger shows that card paid (2026-11-23, task groups:
+# a quota is a counter on one card, never seven subtasks).
+QUOTA_RX = re.compile(r"\b(?:on\s+)?(\d)\s+of\s+7\s+days\b|\b(every\s+day)\b", re.I)
+LEDGER_DIR = Path.home() / "vault" / "g245" / "neon-ledger"
 STOPWORDS = {"thing", "need", "needed", "with", "that", "this", "from", "have",
              "done", "make", "more", "less", "good", "week", "day"}
 
@@ -235,6 +242,41 @@ POINTS_RX = re.compile(r"(\d[\d,]*)\s*分")
 MEDIA_RX = re.compile(r"(\d+)\s*days?\s+good\s+media", re.I)
 
 
+def _norm(text: str) -> str:
+    """Lowercase, {N}/(N)/[N] dropped, punctuation to spaces: the form a task
+    name takes in a ledger `src` (did-fast strips annotations and commas)."""
+    text = re.sub(r"\{\d+\}|\(\d+\)|\[\d+\]", " ", text or "")
+    return " ".join(re.sub(r"[^\w一-鿿]+", " ", text.lower()).split())
+
+
+def quota_days(goal_text: str, days: list[date], ledger_dir: Path | None = None) -> list[str]:
+    """ISO dates in `days` on which the goal's "😈 1g: <goal>" card was paid,
+    read from the neon ledger. The first 24 normalized characters of the goal
+    identify the card (ledger src is cut at 60)."""
+    ledger_dir = ledger_dir or LEDGER_DIR
+    key = _norm(QUOTA_RX.sub(" ", goal_text))[:24].strip()
+    if len(key) < 4:
+        return []
+    want = {f"{d.month}/{d.day}": d.isoformat() for d in days}
+    hit: set[str] = set()
+    for ym in sorted({d.strftime("%Y-%m") for d in days}):
+        try:
+            lines = (ledger_dir / f"{ym}.jsonl").read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if "1g" not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            src = _norm(e.get("src") or "")
+            if e.get("date") in want and src.startswith("did") and " 1g " in f" {src} " and key in src:
+                hit.add(want[e["date"]])
+    return sorted(hit)
+
+
 def _status(actual: float, target: float) -> str:
     if target <= 0:
         return "❓"
@@ -265,6 +307,19 @@ def evaluate(goal: dict, ctx: dict) -> dict:
         out.update(kind="good_media", target=target, actual=good, per_day=per_day,
                    status=_status(good, target),
                    note=f"{good}/{target} days with no junk (#1) media")
+        return out
+
+    m = QUOTA_RX.search(clean)
+    if m:
+        target = 7 if m.group(2) else int(m.group(1))
+        paid = quota_days(clean, ctx["days"])
+        out.update(kind="quota", target=target, actual=len(paid), per_day=paid,
+                   status=_status(len(paid), target),
+                   note=f"{len(paid)} of {target} days paid on the 1g card")
+        if not paid:
+            # No ledger line at all usually means the card was never created
+            # under this name, not that every day was missed: ask.
+            out["needs_question"] = True
         return out
 
     m = POINTS_RX.search(clean)

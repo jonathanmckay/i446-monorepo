@@ -156,3 +156,38 @@ def test_dtd_sh_split_writer_credits_the_entry_part_too():
     assert "lib/entry_points.py', 'credit-part'" in body
     assert "'entry_part': entry_part," in body
     assert body.index("credit-part") < body.index("# 4. Journal for ctrl-z undo")
+
+
+# ── task groups: a split's points come off the parent (2026-11-23) ─────────
+
+def test_split_of_a_group_input_lowers_the_parent_by_points_only(tmp_path):
+    task = {"id": "C1", "content": "draft reply (20) [40] {10}", "labels": ["m5x2", "agent"],
+            "project_id": "P", "parent_id": "PAR"}
+    api, calls = _fake(task)
+    paid = []
+    res = sf.run("C1", cache_file=tmp_path / "none.json", pts=15, bonus=4, api=api,
+                 credit=lambda item: {"results": [{}]}, label_for=lambda l: "@m5x2",
+                 tie=lambda n, i: None, part=lambda *a: None,
+                 pay=lambda c, p, n, day: paid.append((c, p, n, day)) or
+                 {"status": "ok", "key": f"{c}:{day}", "parent": p, "taken": [[n, None]]})
+    assert res["ok"]
+    assert len(paid) == 1
+    child, parent, n, day = paid[0]
+    assert (child, parent, n) == ("C1", "PAR", 15)          # the {4} bonus is not taken
+    assert day.endswith(":split:PH1")                       # keyed by the done record
+    posthoc_body = next(b for m, p, b in calls if m == "POST" and p == "/tasks")
+    assert posthoc_body["labels"] == ["m5x2", "posthoc"]    # no agent/grp on the record
+
+
+def test_split_takes_nothing_when_the_credit_was_lost_or_task_is_top_level(tmp_path):
+    def boom(*a):
+        raise AssertionError("parent must not be touched")
+    child = {"id": "C1", "content": "x (10) [10]", "labels": [], "project_id": "P", "parent_id": "PAR"}
+    api, _ = _fake(child)
+    sf.run("C1", cache_file=tmp_path / "none.json", pts=5, api=api, credit=lambda item: None,
+           label_for=lambda l: "@g245", tie=lambda n, i: None, part=lambda *a: None, pay=boom)
+    top = {"id": "T1", "content": "x (10) [10]", "labels": [], "project_id": "P"}
+    api, _ = _fake(top)
+    sf.run("T1", cache_file=tmp_path / "none.json", pts=5, api=api,
+           credit=lambda item: {"results": [{}]}, label_for=lambda l: "@g245",
+           tie=lambda n, i: None, part=lambda *a: None, pay=boom)

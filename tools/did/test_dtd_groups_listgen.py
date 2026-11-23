@@ -96,3 +96,48 @@ def test_payload_stays_safe_inside_the_zsh_double_quoted_string():
     assert '"' not in body
     assert "`" not in body
     assert DTD_PATH.exists()
+
+
+BOX, ROBOT, BELL = "\U0001F4E6", "\U0001F916", "\U0001F514"
+
+
+def _row(out, task_id):
+    return next(l for l in out.splitlines() if l.endswith("\t" + task_id))
+
+
+def test_outcome_row_is_marked_with_a_box_and_keeps_its_estimates():
+    labelled = _task("L", "purchase l912 (240) [1360]")
+    labelled["labels"] = ["m5x2", "grp"]
+    out, order = _render([labelled, _task("X", "plain task (5) [5]")])
+    assert sorted(order) == ["L", "X"]
+    assert BOX in _row(out, "L") and BOX not in _row(out, "X")
+    assert _row(out, "L").index("(240)") < _row(out, "L").index("[1360]")
+
+
+def test_parent_whose_inputs_are_all_hidden_shows_as_a_marked_outcome():
+    tasks = [_task("P", "outcome (60) [100]"),
+             _child("A", "x (5) [10]", parent_closed=True)]
+    out, order = _render(tasks)
+    assert order == ["P"] and BOX in _row(out, "P")
+
+
+def test_group_row_count_carries_the_box():
+    tasks = [_task("P", "outcome (60) [100]"), _child("A", "a (10) [30]"), _child("B", "b (5) [40]")]
+    out, order = _render(tasks)
+    assert order == ["B"] and BOX + "+1" in _row(out, "B")
+
+
+def test_agent_input_is_folded_and_a_lone_one_shows_with_a_robot():
+    agent = _child("A", "agent drafts (5) [90]")
+    agent["labels"] = ["i9", "agent"]
+    out, order = _render([_task("P", "outcome (60) [100]"), agent, _child("B", "send it (5) [20]")])
+    assert order == ["B"] and "+" not in _row(out, "B").split("send it")[1].split("(5)")[0]
+    out, order = _render([_task("P", "outcome (60) [100]"), agent])
+    assert order == ["A"] and ROBOT in _row(out, "A")
+
+
+def test_waiting_follow_up_shows_a_bell():
+    w = _task("W", "follow up Jesus on calls (10) [8]")
+    w["labels"] = ["m5x2", "waiting"]
+    out, order = _render([w])
+    assert order == ["W"] and BELL in _row(out, "W")

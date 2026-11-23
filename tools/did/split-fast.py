@@ -235,7 +235,7 @@ def _cache_content(cache_file: Path, task_id: str) -> str:
 def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes=None,
         done_name="", rem_name="", rem_pts=None, rem_min=None, rem_bonus=None, rem_due="",
         keep=True, journal: str = "", dry_run=False, api=api, credit=credit,
-        label_for=domain_label, tie=tie_completed, part=None) -> dict:
+        label_for=domain_label, tie=tie_completed, part=None, pay=None) -> dict:
     if not (isinstance(pts, int) and pts >= 0) and not (isinstance(bonus, int) and bonus >= 0):
         return {"ok": False, "error": "split needs pts (or bonus) done"}
     try:
@@ -257,7 +257,10 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
     labels = task.get("labels", [])
     # 1. the done record, closed at once
     posthoc = api("POST", "/tasks", {"content": p["posthoc_content"],
-                                     "labels": labels + ["posthoc"],
+                                     # the done record is never a group
+                                     # parent, an agent's step or a follow-up
+                                     "labels": [l for l in labels
+                                                if l not in ("grp", "agent", "waiting")] + ["posthoc"],
                                      "due_date": p["today"],
                                      "project_id": task.get("project_id")})
     if posthoc:
@@ -291,9 +294,28 @@ def run(task_id: str, *, cache_file: Path = CACHE, pts=None, bonus=None, minutes
                 landed, posthoc["id"] if posthoc else f"{tid}@{int(time.time())}", tid)
         except Exception as e:  # noqa: BLE001
             print(f"split: entry part failed: {e}", file=sys.stderr)
+    # 6. task group (lib/dtd_groups.py): the points paid today come off the
+    #    parent's remaining [N]. Points only, and only when the credit landed.
+    #    Keyed by the done record, so two splits of one input in a day both
+    #    count; the later close pays (and takes) only what is left on it.
+    group = None
+    if task.get("parent_id") and p["pts_today"] > 0 and (didfast_out or {}).get("results"):
+        try:
+            if pay is None:
+                sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+                import dtd_groups
+                pay = dtd_groups.pay_child
+            rec = pay(str(tid), str(task["parent_id"]), int(p["pts_today"]),
+                      f"{p['today']}:split:{posthoc['id'] if posthoc else int(time.time())}")
+            if rec.get("status") == "ok":
+                group = {"key": rec["key"], "parent": rec["parent"], "taken": rec["taken"]}
+            elif rec.get("status") == "error":
+                print(f"split: group parent not lowered: {rec.get('why')}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — the split itself stands
+            print(f"split: group parent not lowered: {e}", file=sys.stderr)
     if journal:
         record = {"type": "split", "names": [p["clean"]], "task_id": tid,
-                  "entry_part": part_out,
+                  "entry_part": part_out, "group": group,
                   "prev_content": task.get("content", ""),
                   "prev_due": (task.get("due") or {}).get("date", ""),
                   "posthoc_id": posthoc["id"] if posthoc else None,

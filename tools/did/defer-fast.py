@@ -388,13 +388,17 @@ def find_task_by_id(task_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def create_task(content: str, labels: list[str], project_id: str | None,
-                due_date: str, priority: int | None = None) -> dict:
-    """Create a Todoist task and return the response."""
+                due_date: str, priority: int | None = None,
+                parent_id: str | None = None) -> dict:
+    """Create a Todoist task and return the response. `parent_id` keeps a
+    deferred copy inside its task group (lib/dtd_groups.py)."""
     body: dict = {
         "content": content,
         "labels": labels,
         "due_date": due_date,
     }
+    if parent_id:
+        body["parent_id"] = parent_id
     if project_id:
         body["project_id"] = project_id
     if priority is not None:
@@ -533,7 +537,19 @@ def handle_recurring(task: dict, target_date: str,
     else:
         if DATED_COPY_LABELS & set(labels):
             copy_content = _dated_copy_content(content, current_due)
-        copy = create_task(copy_content, labels, project_id, target_date, priority)
+        # A deferred input stays in its task group. An agent's label does not
+        # carry over: the copy is JM's until an agent takes it again. If the
+        # parent has since been closed or deleted the create fails, and the
+        # copy is made top-level instead of losing the occurrence.
+        _gpid = str(task.get("parent_id") or "") or None
+        _clabels = [l for l in labels if l != "agent"]
+        try:
+            copy = create_task(copy_content, _clabels, project_id, target_date, priority,
+                               parent_id=_gpid)
+        except Exception:
+            if not _gpid:
+                raise
+            copy = create_task(copy_content, _clabels, project_id, target_date, priority)
 
     # 2. Posthoc eval record (due today, immediately closed) — created and
     #    closed BEFORE the parent advances (moved here 2026-09-08; see bug

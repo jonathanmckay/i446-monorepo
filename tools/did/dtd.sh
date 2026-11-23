@@ -2690,11 +2690,15 @@ for t in unique:
         _grp_hidden.add(str(t.get('id')))
     else:
         _survivors.append(t)
+_dg_ok = False
+_grp_parents = set()
 try:
     import dtd_groups as _dg
+    _grp_parents = _dg.parent_ids(d)
     _grp_hidden |= {str(i) for i in completed_ids} | {str(i) for i in removed_ids}
     _grp_hidden |= {str(i) for i in _snoozed} | {str(i) for i in _deferred_ids}
     unique = _dg.collapse(_survivors, today, _grp_hidden)
+    _dg_ok = True
 except Exception:
     unique = _survivors
 
@@ -2737,7 +2741,7 @@ for t in unique:
     if t.get('group_more'):
         _emg = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
         _cutg = _emg.start() if _emg else len(display)
-        display = display[:_cutg].rstrip() + ' +' + str(t['group_more']) + display[_cutg:]
+        display = display[:_cutg].rstrip() + ' \U0001F4E6+' + str(t['group_more']) + display[_cutg:]
     # Inbox habit badge: the count goes AHEAD of the trailing estimates so
     # rjust_est still finds them and strip_ann/done routing never see it.
     # Plain U+2709 (no VS16) so _dwidth counts one cell.
@@ -2808,6 +2812,18 @@ for t in unique:
     sfx = '\t' + str(t.get('id', ''))
 
     repeat = '↻ ' if recurring else ''
+    # Task-group markers (lib/dtd_groups.py), in the same slot as the repeat
+    # glyph so the name, its estimates and every name match stay untouched:
+    # a box on an outcome (a group parent; never recurring, so the two never
+    # meet), a robot on an input an agent is working (dimmed below), a bell
+    # on a follow-up that is waiting on someone. Escapes, not literals.
+    if _dg_ok and _dg.is_group_parent(t, _grp_parents):
+        repeat = '\U0001F4E6 '
+    elif _dg_ok and _dg.AGENT_LABEL in t.get('labels', []):
+        repeat = '\U0001F916 '
+        color = DIM
+    elif _dg_ok and _dg.WAITING_LABEL in t.get('labels', []):
+        repeat = '\U0001F514 '
     # Project/time views group by color alone — no project-name prefix (the user
     # knows the domain from the color; the names just add clutter).
     dom_tag = ''
