@@ -216,14 +216,16 @@ def test_parts_follow_a_recreated_entry(store):
     assert ep.move_parts(DAY, ["9"], "9") == 0
 
 
-def test_a_part_only_entry_can_still_take_an_open_credit(store):
+def test_a_close_with_no_time_entry_does_not_land_on_the_splits_entry(store):
+    # JM 2026-11-23: split [1] in the entry, then closed the rest [2] with no
+    # timer: "1分 associated with the time entry, then 2分 credited without".
     import datetime as dt
     ep.record_part(DAY, "7", "PH1", 100)
     ep.record_credit("T@" + DAY, ["write memo"], 25, DAY, DAY)
     start = dt.datetime.fromisoformat(DAY + "T09:00:00")
     at = dt.datetime.fromtimestamp(__import__("time").time() + 5).isoformat()
     got = ep.link([{"id": "7", "desc": "write memo", "start": start, "at": at}], today=DAY)
-    assert got == {"7": 25} and ep.for_day(DAY) == {"7": 125}
+    assert got == {} and ep.for_day(DAY) == {"7": 100}
 
 
 RUN = {"id": 50, "description": "Allergies -> Checkin (82) [520]", "start": DAY + "T12:54:00-08:00",

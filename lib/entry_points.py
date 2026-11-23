@@ -303,7 +303,10 @@ def link(entries: list, today=None) -> dict:
             if normalize(e.get("desc", "")) not in c["keys"] or str(e.get("id")) in linked:
                 continue
             day = start.date().isoformat()
-            if c["day"] <= day <= c["until"] and str(e.get("id")) not in logged_for_day(day):
+            # Any record keeps a credit off, a split part included: the split
+            # was earned in this entry, the close was not (JM 2026-11-23: "1分
+            # associated with the time entry, then 2分 credited without one").
+            if c["day"] <= day <= c["until"] and str(e.get("id")) not in for_day(day):
                 pool.append((start, str(e.get("id")), day))
         if pool:
             start, eid, day = min(pool)
