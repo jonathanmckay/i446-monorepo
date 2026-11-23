@@ -1460,16 +1460,38 @@ def _kid_tags(tags) -> frozenset:
     return frozenset(t.lower() for t in (tags or []) if str(t).lower() in kids)
 
 
+# Habit tags (2026-11-22, JM: "I don't see the 业写 tag on the time entries
+# for writing in 酉"): a tag in did-fast's TAG_1N_HABITS earns a weekly habit
+# for the entry's minutes, so whether it is on the entry decides points. It
+# was on the Toggl entries but matched none of the chip families and stayed
+# hidden. Read once from did-fast so a new habit tag needs no change here.
+HABIT_TAG_COLOR = "#6d4c41"
+_HABIT_CHIP_TAGS = None
+
+
+def _habit_chip_tags() -> frozenset:
+    global _HABIT_CHIP_TAGS
+    if _HABIT_CHIP_TAGS is None:
+        try:
+            _HABIT_CHIP_TAGS = frozenset(_df_tags_mod().TAG_1N_HABITS)
+        except Exception:
+            _HABIT_CHIP_TAGS = frozenset()
+    return _HABIT_CHIP_TAGS
+
+
 def _visible_tags(tags) -> list[str]:
     """Entry tags worth showing as a chip on a block row: the -1/-2/-3
     media-value tiers (VALUE_TAG_COLORS), any tag that's itself a
     project/domain code (credit-sharing tags like xk87/家 on a swim that
     also counts toward family time) — colored via PROJECT_COLORS — and the
-    kid codes (KID_TAG_COLORS). Anything else (e.g. incidental Toggl tags
-    with no display color) stays hidden."""
+    kid codes (KID_TAG_COLORS), and the habit tags that earn a 1n+ habit
+    (_habit_chip_tags). Anything else (e.g. incidental Toggl tags with no
+    display color) stays hidden."""
     kids = _kid_codes()
+    habits = _habit_chip_tags()
     return [t for t in (tags or [])
-            if t in VALUE_TAG_COLORS or t in PROJECT_COLORS or str(t).lower() in kids]
+            if t in VALUE_TAG_COLORS or t in PROJECT_COLORS
+            or str(t).lower() in kids or t in habits]
 
 
 def _tag_chip_style(tag: str) -> str:
@@ -1478,6 +1500,8 @@ def _tag_chip_style(tag: str) -> str:
         return f"bold bg:{hexv} #ffffff"
     if str(tag).lower() in _kid_codes():
         return f"bold bg:{KID_TAG_COLORS.get(str(tag).lower(), _KID_TAG_FALLBACK)} #000000"
+    if tag in _habit_chip_tags():
+        return f"bold bg:{HABIT_TAG_COLOR} #ffffff"
     return ""
 
 
