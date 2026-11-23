@@ -149,6 +149,20 @@ Only continue when the user explicitly sends `PUBLISH` (or `publish`). Then:
 
 1. Re-read the saved review file from disk so any manual Obsidian edits are included.
 
+   **Mark the book finished** (default, JM 2026-11-22: publishing a review
+   marks the book finished). Do it now, before the sync, so the blog copy
+   carries the same frontmatter:
+
+```bash
+python3 ~/i446-monorepo/tools/hcmc/book-finish.py --reviewed --file ~/vault/hcmc/reviews/YYYY/title.md
+```
+
+   It sets `status: finished` and `finished: <the review's date:>`, and bumps
+   the Neon weekly books-read counter only when that date is in the current
+   week and the book was not already finished (`ALREADY_FINISHED` = nothing
+   to do, also on a re-publish). Surface any `WARN:` line. Publishing also
+   means `draft: false` in the frontmatter: Hugo does not build drafts.
+
 2. **Goodreads is handled by PUSH** (Step 6b below), not here. Do not open
    Goodreads or copy to the clipboard during PUBLISH.
 
@@ -176,6 +190,14 @@ git clone -q --depth 1 --recurse-submodules --shallow-submodules git@github.com:
 cp /Users/mckay/vault/hcmp/o315/blog/content/reviews/<slug>.md "$SCRATCH/blogclone/content/reviews/"
 cd "$SCRATCH/blogclone" && git add content/reviews/<slug>.md && git commit -m "Add review: <Title>" && git push origin HEAD:main
 ```
+
+**Images:** embed a chart or picture from the vault's root `z_asts/` by
+relative path (`![alt](../../../z_asts/hcmc--book--chart.png)`). The sync
+copies it to `static/reviews-assets/` and rewrites the link
+(`rewrite_asset_images`, `scripts/test_review_images.py`); on Ix copy
+`static/reviews-assets/<file>` into the scratch clone and `git add` it too.
+For Goodreads, PUSH turns the image into
+`<img src="https://jonathanmckay.com/reviews-assets/<file>" width="400"/>`.
 
 **Links between reviews:** in the vault, link another review by relative
 path (`[text](other-review.md)`, or `../2025/other-review.md` across years)
@@ -233,7 +255,10 @@ Live-verified 2026-10-01 (Horus Rising).
 1. **Prepare the text.** Re-read the review file from disk. Body = everything
    after the frontmatter. Convert to Goodreads markup: `**x**` → `<b>x</b>`,
    `*x*` → `<i>x</i>`, keep blank lines between paragraphs, strip trailing
-   whitespace, drop any markdown links to `[text](url)` → `text`. Score =
+   whitespace, drop any markdown links to `[text](url)` → `text`. An image
+   `![alt](../../../z_asts/NAME)` becomes
+   `<img src="https://jonathanmckay.com/reviews-assets/NAME" width="400" alt="alt"/>`
+   (the review must already be published so the URL resolves). Score =
    frontmatter `score` (1-5, same scale as Goodreads stars). `finished:` date
    if present.
 2. **Find the book.** `tabs_context_mcp` (`createIfEmpty: true`) →
@@ -254,8 +279,17 @@ Live-verified 2026-10-01 (Horus Rising).
 5. **Text.** `find` `"review text area Write your review"` → click it. If it
    already contains text, `computer` `key` `cmd+a` first. Then `computer`
    `type` the prepared text (newlines are fine in this textarea).
-6. **Date finished.** If `finished:` is today, `find` `"Set to today button next to Date finished (optional)"`
-   and click it. Otherwise leave the dates alone.
+6. **Shelf and date finished** (a published review means the book is read,
+   JM 2026-11-22). `find` `"shelf button showing Want to Read, Currently Reading, or Read"`.
+   If its name does not begin `Shelved as 'Read'`, click it, `find`
+   `"Read shelf button in the choose-a-shelf dialog"`, `scroll_to` and click
+   the one named exactly `Read`, then close the Step 2 tags dialog (`find`
+   `"Close button on the dialog"`). Marking it Read adds a reading session:
+   if `finished:` is today, `find` `"Set to today, Reading session 1 - date finished"`
+   and click it. For any other `finished:` date leave the dates alone and say
+   so in the report. The star widget takes quarter stars: after clicking,
+   read `Your rating: N.NN` and click further right on the star until it
+   shows the whole number.
 7. **Post.** `find` `"Post your review submit button"` → click. `wait` 3s.
    The tab must now be at `https://www.goodreads.com/review/show/<review_id>`
    with title `<name>'s review of <title> | Goodreads`. If it isn't, one
@@ -271,7 +305,7 @@ Live-verified 2026-10-01 (Horus Rising).
 
 After PUBLISH:
 ```
-Published: ~/vault/hcmc/reviews/YYYY/title.md (score: N)
+Published: ~/vault/hcmc/reviews/YYYY/title.md (score: N) · finished YYYY-MM-DD
 Live at: https://jonathanmckay.com/reviews/<slug>/
 Send PUSH to post it to Goodreads.
 ```

@@ -4,6 +4,13 @@ weekly books-read counter in Neon (1分+1s!AM).
 
 Usage:
   book-finish.py [title words...]
+  book-finish.py --reviewed --file <review path>
+
+`--reviewed --file` is the /bookreview PUBLISH path (JM 2026-11-22: publishing
+a review marks the book finished). It takes the exact review file, whatever
+its status, sets `status: finished` and `finished: <the review's date:>`, and
+bumps Neon only when that date falls in the current week and the book was not
+already finished under another file (a /book stub by the same author).
 
 With no title: if exactly one book in the library has `status: reading`,
 finish that one. With a title: match it (case-insensitive substring on the
@@ -158,7 +165,94 @@ end tell
     return run_ix_osa(script)
 
 
+def _parse_date(value):
+    try:
+        return datetime.date.fromisoformat(str(value or "").strip()[:10])
+    except ValueError:
+        return None
+
+
+def find_finished_twin(path, title, author):
+    """A different file for the same book that is already finished: same
+    author, and its title appears inside this review's title (a /book stub is
+    'Book Title'; a review is 'Punchy Line: Book Title'). Returns
+    (path, finished) or None."""
+    title_l, author_l = (title or "").lower(), (author or "").strip().lower()
+    if not author_l:
+        return None
+    for p, fm_lines, _body in find_book_files():
+        if os.path.abspath(p) == os.path.abspath(path):
+            continue
+        if fm_get(fm_lines, "status") != "finished":
+            continue
+        if (fm_get(fm_lines, "author") or "").strip().lower() != author_l:
+            continue
+        other = (fm_get(fm_lines, "title") or "").lower()
+        if other and other in title_l:
+            return p, fm_get(fm_lines, "finished")
+    return None
+
+
+def finish_reviewed(path, today):
+    """Mark the review at `path` finished. Returns (exit code, message)."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        return 1, f"ERROR: no such file: {path}"
+    fm_lines, body = parse_frontmatter(open(path, encoding="utf-8").read())
+    if fm_lines is None:
+        return 1, f"ERROR: {path} has no frontmatter."
+    if fm_get(fm_lines, "media") != "book" or fm_get(fm_lines, "type") != "review":
+        return 1, f"ERROR: {path} is not a book review (needs media: book and type: review)."
+    title = fm_get(fm_lines, "title") or os.path.basename(path)
+    if fm_get(fm_lines, "status") == "finished":
+        return 0, f"ALREADY_FINISHED: {title}"
+
+    twin = find_finished_twin(path, title, fm_get(fm_lines, "author"))
+    finished = (_parse_date(twin[1]) if twin else None) or _parse_date(fm_get(fm_lines, "date")) or today
+
+    new_fm, saw_status, saw_finished = [], False, False
+    for line in fm_lines:
+        if re.match(r"^status:", line):
+            new_fm.append("status: finished")
+            saw_status = True
+        elif re.match(r"^finished:", line):
+            new_fm.append(f"finished: {finished.isoformat()}")
+            saw_finished = True
+        else:
+            new_fm.append(line)
+    while new_fm and not new_fm[-1].strip():
+        new_fm.pop()
+    if not saw_status:
+        new_fm.append("status: finished")
+    if not saw_finished:
+        new_fm.append(f"finished: {finished.isoformat()}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("---" + "\n".join(new_fm) + "\n---" + body)
+
+    relpath = os.path.relpath(path, os.path.expanduser("~/vault"))
+    if twin:
+        return 0, (f"ALREADY_FINISHED: {title} was counted under "
+                   f"{os.path.relpath(twin[0], os.path.expanduser('~/vault'))}; "
+                   f"marked {relpath} finished {finished.isoformat()}, Neon not bumped")
+    if current_week_sunday(finished) != current_week_sunday(today):
+        return 0, (f"✓ {title} — finished {finished.isoformat()} → {relpath} "
+                   f"(Neon not bumped: not this week)")
+    ok, msg = bump_books_read(today)
+    if ok:
+        return 0, f"✓ {title} — finished {finished.isoformat()} → {relpath} (Neon {SHEET}!{COL} +1: {msg})"
+    print(f"  WARN: Neon {SHEET}!{COL} increment failed: {msg}", file=sys.stderr)
+    return 0, f"✓ {title} — finished {finished.isoformat()} → {relpath}"
+
+
 def main():
+    args = sys.argv[1:]
+    if "--reviewed" in args or "--file" in args:
+        if "--reviewed" not in args or "--file" not in args or args.index("--file") + 1 >= len(args):
+            sys.exit("ERROR: use --reviewed --file <review path> together.")
+        code, msg = finish_reviewed(args[args.index("--file") + 1], datetime.date.today())
+        print(msg, file=sys.stderr if code else sys.stdout)
+        return code
+
     query = " ".join(sys.argv[1:]).strip().lower()
     today = datetime.date.today()
 
