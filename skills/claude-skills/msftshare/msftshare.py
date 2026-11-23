@@ -317,6 +317,15 @@ def main():
 
     if not ONEDRIVE.is_dir():
         die("Work OneDrive not synced here — this skill only runs on Straylight")
+    # A directory is not enough (2026-11-22): Ix has a plain local
+    # ~/Library/CloudStorage/OneDrive-Microsoft, so the docx was written there,
+    # reported as shared, and never reached OneDrive. A synced File Provider
+    # root carries this xattr. MSFTSHARE_ONEDRIVE (tests) skips the check.
+    if "MSFTSHARE_ONEDRIVE" not in os.environ and subprocess.run(
+            ["xattr", "-p", "com.apple.file-provider-domain-id", str(ONEDRIVE)],
+            capture_output=True).returncode != 0:
+        die(f"{ONEDRIVE} is a plain folder, not a synced OneDrive — run this "
+            "on Straylight (set MSFTSHARE_ONEDRIVE to override)")
 
     doc = resolve_doc(doc_arg)
 
