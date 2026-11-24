@@ -2814,7 +2814,12 @@ for t in unique:
     # on a follow-up that is waiting on someone. Escapes, not literals.
     # An input sits under its outcome, indented with a corner (JM 2026-11-23:
     # collocated, and the rollup row carries the box).
-    if _dg_ok and t.get('group_child'):
+    # A live habit shown in its backlog's block (group_adopted) keeps its
+    # repeat glyph; its corner is added below, only if it stays in the list.
+    _adopted = bool(_dg_ok and t.get('group_adopted'))
+    if _adopted:
+        pass
+    elif _dg_ok and t.get('group_child'):
         repeat = '  \u2514 '
     elif _dg_ok and _dg.is_group_parent(t, _grp_parents):
         repeat = '\U0001F4E6 '
@@ -2865,6 +2870,8 @@ for t in unique:
         prefix = repeat + dom_tag
     else:
         prefix = repeat + dom_tag
+    if _adopted and not (is_running or is_started or is_claimed or is_skipped):
+        prefix = '  \u2514 ' + prefix
     _pane = _claim_pane.get(str(t.get('id', '')), '')
     if is_working:
         # Drop the tier-A/A2 lead glyph (spinner or abacus) so it isn't doubled.

@@ -167,12 +167,50 @@ def child_hidden(t: dict, today_iso: str, hidden_parents: frozenset = frozenset(
 
 # Rows in these tiers keep their own place in dtd (block rituals, block and
 # daily goals, daily and weekly habits): a subtask carrying one is shown where
-# its tier puts it, not pulled into its group's block.
+# its tier puts it, not pulled into its group's block. One exception, display
+# only: a live habit card is ADOPTED into the block of its own dated copies
+# (see adopted_rows), and the block then sits at the habit's place.
 PINNED_LABELS = frozenset({"-1neon", "#-1g", "#0g", "0neon", "夜neon", "1neon"})
 
 
 def _pinned(t: dict) -> bool:
     return bool(PINNED_LABELS & set(t.get("labels") or []))
+
+
+_ANN_RE = re.compile(r"\s*[\(\[\{][^\)\]\}]*[\)\]\}]")
+_DATED_COPY_RE = re.compile(r"^(.+?)\s+\d{1,2}\.\d{1,2}$")
+
+
+def _bare(content: str) -> str:
+    """A card's name without (N)/[N]/{N}, a leading 😈, case or extra spaces."""
+    s = _ANN_RE.sub("", content or "").replace("\U0001F608", "")
+    return " ".join(s.lower().split())
+
+
+def adopted_rows(rows: list, groups: dict) -> dict:
+    """{parent id: [row, ...]}: live habit cards shown inside a group's block
+    (JM 2026-11-24: the daily `ibx m5x2` under its backlog of `ibx m5x2 11.16`
+    day cards). A row is adopted when it is top-level, RECURRING, not itself a
+    group head, and its bare name is the habit that one of the block's inputs
+    is a dated copy of. Display only: the copy gets no parent_id, so its
+    completion, points and hide rules are those of the habit. Each row is
+    adopted once (first group in display order wins)."""
+    wanted: dict[str, str] = {}
+    for pid, kids in groups.items():
+        for k in kids:
+            m = _DATED_COPY_RE.match(_bare(k.get("content") or ""))
+            if m:
+                wanted.setdefault(m.group(1), pid)
+    out: dict[str, list] = {}
+    if not wanted:
+        return out
+    for t in rows:
+        if t.get("parent_id") or not t.get("recurring") or str(t.get("id")) in groups:
+            continue
+        pid = wanted.pop(_bare(t.get("content") or ""), None)
+        if pid is not None:
+            out.setdefault(pid, []).append(t)
+    return out
 
 
 def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
@@ -186,7 +224,10 @@ def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
     A child is dropped only on positive evidence that its parent is not due
     (see child_hidden). When the parent row itself is not among `rows` (its
     state is unknown, or it is undated) the inputs still form a block, with no
-    head. Pinned-tier rows stay where they are. `hidden_parents` = ids of
+    head. Pinned-tier rows stay where they are, except a live habit card
+    adopted by its dated copies (adopted_rows): it is listed first in their
+    block, flagged `group_child` and `group_adopted`, and the block sits at
+    the habit's place instead of its densest input's. `hidden_parents` = ids of
     parents the caller knows to be snoozed, deferred, removed or completed."""
     hp = frozenset(str(i) for i in hidden_parents)
     by_id = {str(t.get("id")): t for t in rows}
@@ -198,16 +239,19 @@ def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
     def rank(k):
         return (AGENT_LABEL in (k.get("labels") or []), -ppm(k.get("content") or ""))
 
+    adopted = adopted_rows(rows, groups)
+    adopted_pid = {str(a.get("id")): pid for pid, rs in adopted.items() for a in rs}
     anchor: dict[str, str] = {}
     for pid, kids in groups.items():
         kids.sort(key=rank)                       # stable: ties keep display order
-        anchor[str(kids[0].get("id"))] = pid
+        lead = adopted[pid][0] if adopted.get(pid) else kids[0]
+        anchor[str(lead.get("id"))] = pid
     out = []
     for t in rows:
         tid = str(t.get("id"))
         if tid in groups and not _pinned(t):
             continue                              # the head is emitted with its block
-        if is_group_child(t) and not _pinned(t):
+        if tid in adopted_pid or (is_group_child(t) and not _pinned(t)):
             pid = anchor.get(tid)
             if pid is None:
                 continue                          # hidden, or emitted with its block
@@ -217,6 +261,11 @@ def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
                 h["group_head"] = True
                 h["group_size"] = len(groups[pid])
                 out.append(h)
+            for a in adopted.get(pid, ()):
+                c = dict(a)
+                c["group_child"] = True
+                c["group_adopted"] = True
+                out.append(c)
             for k in groups[pid]:
                 c = dict(k)
                 c["group_child"] = True

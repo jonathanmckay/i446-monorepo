@@ -105,6 +105,43 @@ def test_pinned_tier_rows_keep_their_place():
     assert flags(g.layout(rows, TODAY)) == [("h", ""), ("x", ""), ("P", "head"), ("a", "child")]
 
 
+# --- a live habit adopted by its dated copies (display only) -----------------
+
+def _backlog():
+    return [row("h", "ibx m5x2 (4) [15]", labels=["0neon", "m5x2"], recurring=True),
+            row("x", "unrelated (5) [5]"),
+            row("P", "clear m5x2 email backlog (100) {60}", labels=["grp"]),
+            row("d16", "ibx m5x2 11.16 (30) [15]", "P"),
+            row("d03", "ibx m5x2 11.03 (2) [15]", "P")]
+
+
+def test_live_habit_leads_the_block_of_its_dated_copies_at_its_own_place():
+    rows = _backlog()
+    out = g.layout(rows, TODAY)
+    assert flags(out) == [("P", "head"), ("h", "child"), ("d03", "child"),
+                          ("d16", "child"), ("x", "")]
+    assert out[1]["group_adopted"] and not out[1].get("parent_id")   # still the habit
+    assert "group_adopted" not in out[2] and "group_child" not in rows[0]
+
+
+def test_no_adoption_without_a_visible_dated_copy_or_for_a_one_off_namesake():
+    rows = _backlog()[:3]                                   # day cards done or hidden
+    assert flags(g.layout(rows, TODAY)) == [("h", ""), ("x", ""), ("P", "")]
+    rows = _backlog()
+    rows[0]["recurring"] = False                            # a one-off that shares the name
+    assert ("h", "") in flags(g.layout(rows, TODAY))
+    rows = _backlog()
+    rows[0]["content"] = "ibx i9 (4) [20]"                  # another habit
+    assert flags(g.layout(rows, TODAY))[0] == ("h", "")
+
+
+def test_a_habit_is_adopted_by_one_group_only():
+    rows = _backlog() + [row("Q", "second outcome [50]"), row("q1", "ibx m5x2 11.20 (5) [15]", "Q")]
+    out = g.layout(rows, TODAY)
+    assert [i for i, f in flags(out) if i == "h"] == ["h"]
+    assert ids(out).index("h") == ids(out).index("P") + 1   # first group in display order
+
+
 # --- attach_parents --------------------------------------------------------
 
 def test_attach_reads_parent_from_cache_without_fetching():
