@@ -721,3 +721,42 @@ def test_weekly_offset_uses_daily_toggl_cache_not_live_api(monkeypatch):
     assert w["weeks"] == ['5/31', '6/7', '6/14', '6/21', '6/28', '7/5', '7/12', '7/19']
     assert w["window"]["label"] == "5/31 – 7/25"
     assert w["time_week"]["datasets"][0]["data"][0] == 1.0  # 6/1 → first week, 60m = 1.0h
+
+
+def test_cache_card_reads_the_neon_book_before_excel(monkeypatch):
+    """Bug (2026-11-24): "JM Dash cache is reading from the wrong data source
+    for hcb etc." The card asked Excel for the first open Neon分v*.xlsx, which
+    was a stale v13 open beside the live v12.2, and showed hcb -1553 while
+    janus (Neon book: seed + ledger) showed -1413. The card now reads the same
+    book janus does and only falls back to Excel when the book cannot answer."""
+    import types
+    dashboard = _load_dashboard()
+    asked = []
+
+    def _row(sheet, row, cols):
+        asked.append((sheet, row, tuple(cols)))
+        return {cols[0]: -1412.77 if sheet == "hcbi" else ""}, "15:04:24"
+    monkeypatch.setitem(sys.modules, "neon_book_reads", types.SimpleNamespace(row=_row))
+    monkeypatch.setitem(sys.modules, "xlwings", None)   # touching Excel would raise
+    out = dashboard.load_cache_data()
+    assert out["hcb"] == -1412.8
+    assert ("hcbi", 388, ("X",)) in asked, "the same cell janus reads (HCBI_HCB_TOTAL_CELL)"
+    assert out["xk88"] is None, "a blank cell is a blank card, not a zero"
+
+    # the book cannot answer -> Excel, asking for the LEDGER's workbook by name
+    monkeypatch.setitem(sys.modules, "neon_book_reads",
+                        types.SimpleNamespace(row=lambda *a: (None, None)))
+
+    class _Rng:
+        def __init__(self, v): self.value = v
+
+    class _Sheet:
+        def __init__(self, v): self.v = v
+        def range(self, _a): return _Rng(self.v)
+
+    class _Book:
+        def __init__(self, name, v): self.name, self.sheets = name, {"0n": _Sheet(v), "hcbi": _Sheet(v)}
+    monkeypatch.setitem(sys.modules, "xlwings", types.SimpleNamespace(
+        books=[_Book("Neon分v13.xlsx", 13.0), _Book("Neon分v12.2.xlsx", 12.0)]))
+    monkeypatch.setattr(dashboard, "_ledger_workbook_name", lambda: "Neon分v12.2.xlsx")
+    assert set(dashboard.load_cache_data().values()) == {12.0}

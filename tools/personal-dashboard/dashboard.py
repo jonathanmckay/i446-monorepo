@@ -423,20 +423,73 @@ CACHE_CARDS = [
 ]
 
 
-def load_cache_data():
-    """Read each configured cell from 0n.
+def _cache_from_book():
+    """The Cache card's cells from the Neon book: the seeded workbook plus
+    every write the ledger journaled since (tools/tg/neon_book_reads), the
+    SAME source janus reads, so the card and the janus chips cannot disagree
+    (2026-11-24 per JM: "I want the dash to read from the same ledger that I
+    see in Janus"; the card was reading a stale Neon分v13.xlsx that happened
+    to be open beside the live v12.2 and showed hcb -1553 against janus's
+    -1413). Returns {label: value or None}, or None when the book cannot
+    answer (no seed, seed behind the workbook, an unknown journaled write)."""
+    try:
+        tg = str(Path.home() / "i446-monorepo" / "tools" / "tg")
+        if tg not in sys.path:
+            sys.path.append(tg)
+        import neon_book_reads as nbr
+        result = {}
+        for card in CACHE_CARDS:
+            total = None
+            for cell in [card] + list(card.get("extra", [])):
+                sheet = cell.get("sheet", card.get("sheet", "0n"))
+                vals, _ts = nbr.row(sheet, cell["row"], [cell["col"]])
+                if vals is None:
+                    return None
+                v = vals.get(cell["col"])
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    total = v if total is None else total + v
+            result[card["label"]] = None if total is None else round(float(total), 1)
+        return result
+    except Exception as e:
+        print(f"_cache_from_book failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        return None
 
-    Uses xlwings (live Excel) so the values are current; openpyxl can't read
-    OneDrive paths from launchd-spawned processes (no Full Disk Access).
+
+def _ledger_workbook_name():
+    """The workbook the ledger is seeded from: the one to ask when the book
+    cannot answer and more than one Neon version is open in Excel."""
+    try:
+        lib = str(Path.home() / "i446-monorepo" / "lib")
+        if lib not in sys.path:
+            sys.path.append(lib)
+        from neon import book as nb
+        return nb.SRC.name
+    except Exception:
+        return NEON_PATH.name
+
+
+def load_cache_data():
+    """Read each configured cell: from the Neon book (see _cache_from_book),
+    else live from Excel.
+
+    The Excel fallback uses xlwings so the values are current; openpyxl can't
+    read OneDrive paths from launchd-spawned processes (no Full Disk Access).
     Returns {label: value or None}.
     """
+    from_book = _cache_from_book()
+    if from_book is not None:
+        return from_book
     result = {card["label"]: None for card in CACHE_CARDS}
     try:
         import xlwings as xw
         # Prefer matching an already-open workbook by name: this asks Excel
         # (which has file access) rather than the filesystem (which this
         # process can't list under launchd), and survives version renames.
-        wb = next((b for b in xw.books if re.match(_NEON_NAME_RE, b.name)), None)
+        # With two versions open, the ledger's own workbook wins: "first
+        # match" picked a stale copy for weeks.
+        books = [b for b in xw.books if re.match(_NEON_NAME_RE, b.name)]
+        want = _ledger_workbook_name()
+        wb = next((b for b in books if b.name == want), books[0] if books else None)
         if wb is None:
             wb = xw.Book(str(NEON_PATH))
         for card in CACHE_CARDS:
