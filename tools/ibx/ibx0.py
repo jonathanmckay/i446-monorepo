@@ -2181,12 +2181,22 @@ def headless_counts(timeout=60, if_older=0):
     if (prev is not None and prev_age is not None
             and prev.get("habits") == snap["habits"]
             and 0 <= prev_age < _ic.MAX_AGE_S - 360):
-        print(json.dumps({"skipped": "unchanged", "habits": snap["habits"]},
-                         ensure_ascii=False))
+        print(json.dumps({"skipped": "unchanged", "habits": snap["habits"],
+                          "-1ibx": _ritual_badge()}, ensure_ascii=False))
         return
     path = _ic.write_snapshot(snap)
     print(json.dumps({"path": str(path), "returned": sorted(returned),
-                      "habits": snap["habits"]}, ensure_ascii=False))
+                      "habits": snap["habits"], "-1ibx": _ritual_badge()},
+                     ensure_ascii=False))
+
+
+def _ritual_badge():
+    """What the -1ibx ritual card shows now: the sum dtd draws from the
+    snapshot files (same reader, this host preferred), '' when it is blank."""
+    try:
+        return _ic.card_badge("-1ibx", _ic.read_badges(prefer_host=_ic.host_slug()))
+    except Exception:
+        return ""
 
 
 def _flag_int(name, default=0):
