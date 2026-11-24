@@ -51,3 +51,29 @@ def test_pty_long_notes_and_comment_are_readable(tmp_path, monkeypatch):
     assert rc == 2
     assert TAIL_NOTE in screen        # end of a 220-char one-line note, pane is 100 wide
     assert "QUOKKAWORD" in screen     # end of the comment body, not just its header
+
+
+def test_comment_wrap_terminates_in_a_pane_narrower_than_its_indent():
+    """Regression 2026-11-24 ("dtd froze when trying to edit the 中文 tasks"):
+    a comment's continuation rows are indented by its date (11 cols). In a
+    pane of 13 cols or fewer the indent left no room for a wide char (or, at
+    11 and under, for any char), so wrap_words re-cut the same row forever
+    and the form never painted."""
+    import signal
+    ef = _load()
+
+    def _hung(*_):
+        raise AssertionError("wrap_words did not terminate")
+    old = signal.signal(signal.SIGALRM, _hung)
+    try:
+        for width in range(1, 16):
+            for text in ("2026-11-19 split the 210分 between 业写 and the deck 业写业写业写业写业写业写业写业写",
+                         "2026-11-19 " + "x" * 40):
+                signal.setitimer(signal.ITIMER_REAL, 1.0)
+                rows = ef.wrap_words(text, width, " " * 11)
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                assert "".join(rows).replace(" ", "") == text.replace(" ", "")
+                assert all(ef.dwidth(r) <= max(10, width) for r in rows)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)

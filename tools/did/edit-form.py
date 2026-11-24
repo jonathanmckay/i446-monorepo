@@ -365,6 +365,10 @@ def wrap_words(text: str, width: int, indent: str = "") -> list[str]:
     """Word-wrap by display width; continuation rows start with indent and a
     word wider than a row is cut."""
     width = max(10, width)
+    # The indent must leave room for a wide char, or the cut below takes
+    # nothing off the row and never ends (bug 2026-11-24, a 13-col pane).
+    if dwidth(indent) > width - 2:
+        indent = ""
     rows, cur = [], ""
     for word in text.split(" "):
         cand = f"{cur} {word}" if cur.strip() else cur + word
