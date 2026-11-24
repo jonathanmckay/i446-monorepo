@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
 import daytime  # noqa: E402  shared "now"/"today" resolution — see lib/daytime.py
 from neon_blocks import current_block_index  # noqa: E402  canonical 地支 block schedule
 import todoist  # noqa: E402
+import task_queue_filter  # noqa: E402
 
 import sys as _sys; _sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib")); import state_paths as _sp
 CACHE = _sp.TASK_QUEUE
@@ -222,6 +223,8 @@ def main() -> int:
     today_rest = [t for t in data.get("today", [])
                   if not any(l in t.get("labels", []) for l in DYNAMIC_TODAY_LABELS)]
     data["today"] = fresh_dynamic + today_rest
+    # Posthoc stubs are closed on creation and are never tasks (2026-11-24).
+    task_queue_filter.drop_posthoc(data)
     # Attach short display names (Haiku, cached once per task) so the pickers can
     # show long m5x2-style tasks without fzf eating the (N)/[N] estimates.
     # Shared with did-fast.py's --refresh-cache so every refresh path agrees.

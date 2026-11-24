@@ -1643,6 +1643,9 @@ def _refresh_task_queue_inner() -> dict:
     tmp_path = TASK_QUEUE_PATH.with_suffix(".tmp")
     cache = {"updated": _daytime.local_now().isoformat()}
     cache.update(results)
+    # Posthoc stubs are closed on creation and are never tasks (2026-11-24).
+    import task_queue_filter
+    task_queue_filter.drop_posthoc(cache)
     # Attach Haiku short names so a ctrl-r / startup refresh keeps the compact
     # display instead of reverting to the long names (which overflow the border).
     try:
