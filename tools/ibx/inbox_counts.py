@@ -206,8 +206,8 @@ RITUAL_HABITS: tuple[str, ...] = ("ibx s897", "ibx m5x2", "slack m5x2")
 def card_badge(name: str, badges: dict[str, dict]) -> str:
     """Badge for any dtd card name (annotations already stripped).
 
-    An inbox habit gets its own count. The -1ibx ritual card gets the sum over
-    RITUAL_HABITS: habits no host reports are left out, but one that reported
+    An inbox habit gets its own count. The -1ibx ritual card gets the sums over
+    RITUAL_HABITS, split by kind ("e13 s2": 13 email, 2 Slack): habits no host reports are left out, but one that reported
     a failed ping blanks the badge, because a partial sum would read as a
     full count.
     """
@@ -218,7 +218,17 @@ def card_badge(name: str, badges: dict[str, dict]) -> str:
         recs = [badges[h] for h in RITUAL_HABITS if h in badges]
         if not recs or not all(r.get("ok") for r in recs):
             return ""
-        return "\u2709" + str(sum(int(r["count"]) for r in recs))
+        # e = the ibx habits, s = the Slack ones (JM 2026-11-24: "show it as
+        # the number that is the sum, use s for slack e for email"). A kind no
+        # host reports is left out, so the parts always add up to what the
+        # habit cards show.
+        parts = []
+        for letter, kind in (("e", "ibx "), ("s", "slack ")):
+            got = [int(badges[h]["count"]) for h in RITUAL_HABITS
+                   if h.startswith(kind) and h in badges]
+            if got:
+                parts.append(letter + str(sum(got)))
+        return " ".join(parts)
     return badge_text(badges.get(key))
 
 

@@ -51,7 +51,7 @@ python3 ibx0.py --counts
    prints JSON; N is `habits["ibx m5x2"].count` (`"skipped": "unchanged"` means
    the badge was already right). The 😈 -1ibx ritual card is the sum of the
    `ibx s897`, `ibx m5x2` and `slack m5x2` badges from that same file, so it
-   moves with this write; the JSON's `-1ibx` field is what it shows now (`""`
+   moves with this write; the JSON's `-1ibx` field is what it shows now (`e13 s2` = 13 email, 2 Slack; `""`
    = blank, because one of the three failed its ping). It never closes the card. If `ok` is false the
    Gmail ping failed and dtd shows no badge: say so instead of quoting a count.
 
@@ -62,7 +62,7 @@ Three lines:
 ```
 f695 ← N weekly-update links (who, …); M filed out of the inbox
 inbox → K of T filed to ai-no-response-needed; T−K left for you
-dtd ← ibx m5x2 ✉N · -1ibx ✉S
+dtd ← ibx m5x2 ✉N · -1ibx eE sS
 ```
 
 Then list the subjects the triage filed (from its `skip:` lines) so a wrong

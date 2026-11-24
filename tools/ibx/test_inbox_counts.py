@@ -146,9 +146,9 @@ def test_card_badge_habit_shows_zero():
 def test_card_badge_ritual_sums_slack_and_ibx_for_s897_and_m5x2():
     badges = {"slack m5x2": _b(2), "ibx m5x2": _b(42), "ibx s897": _b(3),
               "slack i9": _b(7), "ibx i9": _b(11), "teams": _b(5)}
-    assert ic.card_badge("\U0001F608 -1ibx", badges) == "\u270947"
+    assert ic.card_badge("\U0001F608 -1ibx", badges) == "e45 s2"
     # a habit no host reports is left out
-    assert ic.card_badge("\U0001F608 -1ibx", {"slack m5x2": _b(0)}) == "\u27090"
+    assert ic.card_badge("\U0001F608 -1ibx", {"slack m5x2": _b(0)}) == "s0"
 
 
 def test_card_badge_ritual_matches_the_s897_number_shown_on_its_card(tmp_path):
@@ -158,13 +158,14 @@ def test_card_badge_ritual_matches_the_s897_number_shown_on_its_card(tmp_path):
     ic.write_snapshot(ic.build_snapshot(items, ok, host="h", now=1000.0), tmp_path)
     b = ic.read_badges(tmp_path, now=1001.0)
     shown = sum(int(ic.card_badge(h, b)[1:]) for h in ("ibx s897", "ibx m5x2", "slack m5x2"))
-    assert ic.card_badge("-1ibx", b) == "\u2709" + str(shown) == "\u27093"
+    assert shown == 3
+    assert ic.card_badge("-1ibx", b) == "e2 s1"   # e + s = what the three cards show
 
 
 def test_card_badge_ritual_blank_on_failed_ping_or_nothing_reported():
     assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "ibx m5x2": _b(0, ok=False)}) == ""
     # an i9 failure is not this card's business
-    assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "slack i9": _b(0, ok=False)}) == "\u27092"
+    assert ic.card_badge("-1ibx", {"slack m5x2": _b(2), "slack i9": _b(0, ok=False)}) == "s2"
     assert ic.card_badge("-1ibx", {"ibx i9": _b(50)}) == ""
     assert ic.card_badge("-1ibx", {}) == ""
 
