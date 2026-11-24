@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "m5x2 email queue caught up": {
-      "todoist_id": "6j4X6CQx9PqpFr3j",
-      "minutes": 40
-    },
-    "hiring for tutor + cos": {
-      "todoist_id": "6j4X6CWgjfm9fjxR",
-      "minutes": 80
-    }
-  },
-  "last_sync": "2026-11-24T03:55:01.039009-08:00"
+  "tasks": {},
+  "last_sync": "2026-11-24T04:00:09.905365-08:00"
 }
