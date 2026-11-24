@@ -11,6 +11,7 @@ sys.modules["group_stall"] = gs
 _S.loader.exec_module(gs)
 
 TODAY = date(2026, 11, 23)
+gs.run.__kwdefaults__["counts"] = {}        # tests never read the real defer log
 
 
 def parent(i, due, updated, labels=("m5x2", "grp"), **kw):
@@ -81,3 +82,62 @@ def test_dry_run_writes_nothing():
     state = {}
     assert gs.run(TODAY, find=f.find, request=f.request, state=state, dry_run=True)["action"] == "created"
     assert f.posts == [] and state == {}
+
+
+# ── repeat deferrals ────────────────────────────────────────────────────────
+
+def one_off(i, due="2026-11-23", labels=("m5x2",), **kw):
+    t = {"id": i, "content": f"task {i} (60) [200]", "labels": list(labels),
+         "due": {"date": due, "is_recurring": False}}
+    t.update(kw)
+    return t
+
+
+def test_three_deferrals_and_due_again_is_listed():
+    tasks = {"x": one_off("x"), "hidden": one_off("hidden", due="2026-11-30"),
+             "habit": one_off("habit", labels=("1neon",)), "done": one_off("done", checked=True),
+             "wait": one_off("wait", labels=("waiting",)), "two": one_off("two")}
+    counts = {"x": 4, "hidden": 5, "habit": 9, "done": 3, "wait": 3, "two": 2, "gone": 3}
+    got = gs.over_deferred(counts, {}, tasks.get, TODAY)
+    assert [(t["id"], n) for t, n in got] == [("x", 4)]
+
+
+def test_deferred_task_raises_the_card_and_closing_it_acknowledges():
+    tasks = {"x": one_off("x")}
+    f = Fake([])
+    state = {}
+    out = gs.run(TODAY, find=f.find, request=f.request, state=state,
+                 counts={"x": 3}, get_task=tasks.get)
+    assert out["action"] == "created" and out["deferred"] == ["x"]
+    assert "Deferred 3+ times" in f.posts[0][1]["description"]
+    assert "deferred 3 times, [200] left" in f.posts[0][1]["description"]
+    assert state[gs.DEFER_STATE]["on_card"] == {"x": 3}
+
+    # JM closed the card: answered. Same count, no new card.
+    f2 = Fake([])
+    out = gs.run(TODAY, find=f2.find, request=f2.request, state=state,
+                 counts={"x": 3}, get_task=tasks.get)
+    assert out["action"] == "none" and f2.posts == []
+    assert state[gs.DEFER_STATE] == {"acked": {"x": 3}, "on_card": {}}
+
+    # Two more deferrals: still quiet. A third: listed again.
+    out = gs.run(TODAY, find=f2.find, request=f2.request, state=state,
+                 counts={"x": 5}, get_task=tasks.get)
+    assert out["action"] == "none"
+    out = gs.run(TODAY, find=f2.find, request=f2.request, state=state,
+                 counts={"x": 6}, get_task=tasks.get)
+    assert out["action"] == "created" and out["deferred"] == ["x"]
+
+
+def test_open_card_lists_groups_and_deferrals_together_and_dry_run_writes_nothing():
+    tasks = {"x": one_off("x")}
+    card = {"id": "card", "content": gs.CARD_CONTENT}
+    f = Fake([parent("a", "2026-11-01", "2026-11-02")], card=card)
+    state = {}
+    out = gs.run(TODAY, find=f.find, request=f.request, state=state,
+                 counts={"x": 3}, get_task=tasks.get, dry_run=True)
+    assert out["action"] == "updated" and f.posts == [] and state == {}
+    gs.run(TODAY, find=f.find, request=f.request, state=state,
+           counts={"x": 3}, get_task=tasks.get)
+    desc = f.posts[0][1]["description"]
+    assert "outcome a" in desc and "task x" in desc

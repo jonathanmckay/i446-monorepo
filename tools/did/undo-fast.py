@@ -520,6 +520,12 @@ def reverse_record(record: dict, errors: list[str]) -> None:
             # mark_habit_deferred) — even if the API reschedule below fails,
             # the card should reappear in dtd rather than stay hidden all day.
             _unmark_habit_deferred(tid)
+            if record.get("counted"):
+                try:
+                    import defer_log
+                    defer_log.undo(tid)   # take the deferral back off the count
+                except Exception:  # noqa: BLE001
+                    pass
             body = {"due_date": record.get("prev_due") or today_iso}
             # Recurring parent: a bare due_date write silently strips the
             # recurrence, so restore the cadence too (anchor stripped — the
@@ -932,6 +938,7 @@ def main() -> int:
             "prev_due": out.get("prev_due", ""),
             "prev_due_string": out.get("prev_due_string", ""),
             "recurring": out.get("recurring", False),
+            "counted": out.get("counted", False),
             "target_date": out.get("target_date", ""),
             "stub_id": (out.get("stubs") or {}).get("today"),
         })

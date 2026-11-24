@@ -1252,8 +1252,12 @@ def _fetch_tasks_for_day(day, token):
             data = json.loads(resp.read())
     except Exception:
         return day.isoformat(), None
+    counts["deferred_task"] = counts["deferred_habit"] = 0
     for item in data.get("items", []):
         content = item.get("content", "")
+        kind = _deferral_kind(content, day)
+        if kind:
+            counts[kind] += 1
         if "@0neon" in content:
             cat = "neon"
         elif "@posthoc" in content:
@@ -1279,6 +1283,38 @@ def _fetch_tasks_for_day(day, token):
                         + counts["neg1n"] + counts["other"])
     counts["by_block"] = by_block
     return day.isoformat(), counts
+
+
+_DEFER_TARGET_RX = re.compile(r"\u2192 (next occurrence )?(\d{4}-\d{2}-\d{2})")
+_HABIT_TAGS = ("@0neon", "@1neon", "@-1neon", "@\u591cneon", "@5^2\u20a6")
+
+
+def _deferral_kind(content, day):
+    """Classify a completed item as a deferral stub written by defer-fast
+    ("deferred: <task> \u2192 <date> ..."): "deferred_task" for a one-off moved
+    to a later day, "deferred_habit" for a habit card or a skip to the next
+    occurrence, None otherwise. A move to the same day or earlier is JM's
+    "delay by 0" (clearing duplicates), not a deferral."""
+    if not content.startswith("deferred:"):
+        return None
+    m = _DEFER_TARGET_RX.search(content)
+    skip = bool(m and m.group(1))
+    if m and not skip:
+        try:
+            if date.fromisoformat(m.group(2)) <= day:
+                return None
+        except ValueError:
+            pass
+    if skip or any(tag in content for tag in _HABIT_TAGS):
+        return "deferred_habit"
+    return "deferred_task"
+
+
+def load_focus_data(n_days=DAYS):
+    """{date_str: {"longest", "deep", "work"}}: how long work on i9 and m5x2
+    runs before it is interrupted (focus.py), from the raw Toggl entries."""
+    import focus
+    return focus.daily_focus(_fetch_toggl_entries(n_days), _tz(), PROJECT_ID_TO_CODE)
 
 
 def load_tasks_data(n_days=DAYS, end=None):
@@ -1309,8 +1345,10 @@ def load_tasks_data(n_days=DAYS, end=None):
             cache = {}
 
     # Decide which days need a network fetch
+    # A day cached before deferral counts existed is refetched once.
     to_fetch = [d for d in all_days
-                if d >= refresh_cutoff or d.isoformat() not in cache]
+                if d >= refresh_cutoff or d.isoformat() not in cache
+                or "deferred_task" not in cache[d.isoformat()]]
 
     # Parallel fetch — Todoist has no published rate limit issue at this scale,
     # 10 workers gives ~4s for 31 cold days vs 41s serial.
@@ -2222,6 +2260,7 @@ def _build_api_data():
         "imsg": load_imessage_stats,
         "ga4": load_ga4_data,
         "neon_edits": load_neon_manual_edits,
+        "focus": load_focus_data,
     }
     raw = {}
     with ThreadPoolExecutor(max_workers=len(loaders)) as ex:
@@ -2243,6 +2282,7 @@ def _build_api_data():
     ga4_raw = raw["ga4"]
     # capture before `raw` is shadowed by the ratio loop below
     neon_edits_raw = raw.get("neon_edits") or {}
+    focus_raw = raw.get("focus") or {}
 
     # Build sorted label lists
     all_point_labels = [m["label"] for m in POINTS_COLS.values()]
@@ -2396,6 +2436,10 @@ def _build_api_data():
         "time_entries": time_entries_values,
         "entries": {"datasets": entries_datasets},
         "shots_per_task": shots_per_task,
+        "focus": {k: [focus_raw.get(d, {}).get(k, 0) for d in dates]
+                  for k in ("longest", "deep", "work")},
+        "deferrals": {"task": [tasks_raw.get(d, {}).get("deferred_task", 0) for d in dates],
+                      "habit": [tasks_raw.get(d, {}).get("deferred_habit", 0) for d in dates]},
         "ratio": {"datasets": ratio_datasets},
         "email": {"datasets": email_datasets, "summary": email_summary, "imessage": imsg_stats},
         "ga4": {"views": ga4_views, "top_pages": ga4_raw.get("top_pages", [])},
@@ -3149,6 +3193,14 @@ MORE_HTML = """<!DOCTYPE html>
     <div class="chart-wrap sm"><canvas id="ratioChart"></canvas></div>
   </div>
   <div class="card">
+    <h2>Work blocks (i9 + m5x2): longest run · minutes in runs of 25m+ · all work minutes</h2>
+    <div class="chart-wrap sm"><canvas id="focusChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Deferrals / Day: tasks · habits and skips</h2>
+    <div class="chart-wrap xs"><canvas id="deferChart"></canvas></div>
+  </div>
+  <div class="card">
     <h2>AI Turns / Day</h2>
     <div class="chart-wrap xs"><canvas id="turnsChart"></canvas></div>
   </div>
@@ -3188,6 +3240,43 @@ cachedJSON('/api/data').then(data => {
       scales: {
         x: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
         y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } }
+      }
+    }
+  });
+
+  // Work blocks: bars for all work and deep minutes, line for the longest run
+  const fo = data.focus || { longest: [], deep: [], work: [] };
+  new Chart(document.getElementById('focusChart'), {
+    data: { labels, datasets: [
+      { type: 'line', label: 'longest run (min)', data: fo.longest, borderColor: '#ffd600',
+        backgroundColor: 'transparent', borderWidth: 2, pointRadius: 2, tension: 0.3 },
+      { type: 'bar', label: 'in runs of 25m+', data: fo.deep, backgroundColor: '#2979ff' },
+      { type: 'bar', label: 'all work', data: fo.work, backgroundColor: '#2979ff33' },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
+      scales: {
+        x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID }, beginAtZero: true }
+      }
+    }
+  });
+
+  // Deferrals per day (stacked bar)
+  const de = data.deferrals || { task: [], habit: [] };
+  new Chart(document.getElementById('deferChart'), {
+    type: 'bar',
+    data: { labels, datasets: [
+      { label: 'tasks', data: de.task, backgroundColor: '#d50032' },
+      { label: 'habits and skips', data: de.habit, backgroundColor: '#7c4dff88' },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { color: TICK, font: { size: 11 } } } },
+      scales: {
+        x: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID } },
+        y: { stacked: true, ticks: { color: TICK, font: { size: 10 } }, grid: { color: GRID }, beginAtZero: true }
       }
     }
   });

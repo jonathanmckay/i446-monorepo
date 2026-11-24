@@ -113,9 +113,10 @@ and removed the label.
 
 ## When the stall card arrives
 
-`😈 stalled groups` (one card, from `tools/did/group_stall.py`) lists in its
-description every outcome whose parent has not moved for 7 days. It is a
-decision, not a reminder. For each outcome listed, ask JM for one of three,
+`😈 stalled groups and repeat deferrals` (one card, from `tools/did/group_stall.py`) lists in its
+description every outcome whose parent has not moved for 7 days, and every
+one-off task deferred three times that is due again. It is a decision, not a
+reminder. For each outcome listed, ask JM for one of three,
 then act on it:
 
 - **re-value**: he gives a new `[N]` for the parent or an input; edit it

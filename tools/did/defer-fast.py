@@ -667,6 +667,18 @@ def main():
         print(json.dumps({"error": str(e)}))
         sys.exit(1)
 
+    # Count the deferral (lib/defer_log.py): three of them put the task on the
+    # stalled card. One-off tasks moved to a later day only; never fails the defer.
+    if not is_recurring:
+        try:
+            sys.path.insert(0, str(Path.home() / "i446-monorepo" / "lib"))
+            import defer_log
+            result["counted"] = defer_log.record(
+                task.get("id"), task.get("content", ""),
+                task.get("labels", []), target_date, date.today())
+        except Exception:  # noqa: BLE001
+            pass
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
