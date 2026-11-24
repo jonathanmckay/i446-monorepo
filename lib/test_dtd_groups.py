@@ -41,10 +41,10 @@ def test_group_is_one_block_outcome_then_inputs_densest_first():
             row("b", "ticor (5) [40]", "P"),
             row("c", "broker (15) [30]", "P")]
     out = g.layout(rows, TODAY)
-    # the block sits where its densest input (b) ranked, not where P or a were
-    assert flags(out) == [("x", ""), ("y", ""), ("P", "head"), ("b", "child"),
-                          ("a", "child"), ("c", "child")]
-    assert out[2]["group_size"] == 3
+    # the block sits where the outcome (P) ranked; inputs follow it, densest first
+    assert flags(out) == [("x", ""), ("P", "head"), ("b", "child"),
+                          ("a", "child"), ("c", "child"), ("y", "")]
+    assert out[1]["group_size"] == 3
     assert "group_head" not in rows[2] and "group_child" not in rows[1]   # copies
 
 
@@ -115,13 +115,30 @@ def _backlog():
             row("d03", "ibx m5x2 11.03 (2) [15]", "P")]
 
 
-def test_live_habit_leads_the_block_of_its_dated_copies_at_its_own_place():
+def test_live_habit_leads_the_block_of_its_dated_copies_at_the_outcomes_place():
     rows = _backlog()
     out = g.layout(rows, TODAY)
-    assert flags(out) == [("P", "head"), ("h", "child"), ("d03", "child"),
-                          ("d16", "child"), ("x", "")]
-    assert out[1]["group_adopted"] and not out[1].get("parent_id")   # still the habit
-    assert "group_adopted" not in out[2] and "group_child" not in rows[0]
+    assert flags(out) == [("x", ""), ("P", "head"), ("h", "child"),
+                          ("d03", "child"), ("d16", "child")]
+    assert out[2]["group_adopted"] and not out[2].get("parent_id")   # still the habit
+    assert "group_adopted" not in out[3] and "group_child" not in rows[0]
+
+
+def test_moving_the_outcome_moves_its_whole_block():
+    rows = _backlog()
+    rows.insert(0, rows.pop(2))                              # P bumped to slot 1
+    assert ids(g.layout(rows, TODAY)) == ["P", "h", "d03", "d16", "x"]
+    rows = _backlog()
+    rows.append(rows.pop(2))                                 # P sunk to the bottom
+    assert ids(g.layout(rows, TODAY)) == ["x", "P", "h", "d03", "d16"]
+
+
+def test_a_headless_block_sits_at_its_adopted_habit_else_its_densest_input():
+    rows = [r for r in _backlog() if r["id"] != "P"]         # parent not in the list
+    assert ids(g.layout(rows, TODAY)) == ["h", "d03", "d16", "x"]
+    rows = [r for r in rows if r["id"] != "h"] + [row("z", "last [1]")]
+    rows.insert(0, rows.pop(2))                              # d03 (densest) first
+    assert ids(g.layout(rows, TODAY)) == ["d03", "d16", "x", "z"]
 
 
 def test_no_adoption_without_a_visible_dated_copy_or_for_a_one_off_namesake():

@@ -9,7 +9,7 @@ Rules, as settled with JM:
               because the parent happens to be missing from the cache.
   one block   A group is shown together: the outcome, then its due inputs
               beneath it, densest (分 per minute) first. The block sits where
-              its densest input ranks.
+              the OUTCOME ranks: move the parent and its inputs follow.
   value       The parent's [N] is the REMAINING value. Completing a child pays
               the child and takes the same amount off the parent (floor 0).
               Closing the parent pays what is left; Todoist closes the children
@@ -169,7 +169,7 @@ def child_hidden(t: dict, today_iso: str, hidden_parents: frozenset = frozenset(
 # daily goals, daily and weekly habits): a subtask carrying one is shown where
 # its tier puts it, not pulled into its group's block. One exception, display
 # only: a live habit card is ADOPTED into the block of its own dated copies
-# (see adopted_rows), and the block then sits at the habit's place.
+# (see adopted_rows).
 PINNED_LABELS = frozenset({"-1neon", "#-1g", "#0g", "0neon", "夜neon", "1neon"})
 
 
@@ -218,7 +218,7 @@ def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
     Returns the rows to show with each group as ONE contiguous block (JM
     2026-11-23: collocated): the outcome first, flagged `group_head`, then its
     due inputs beneath it, flagged `group_child`, densest first, an agent's
-    inputs last. The block sits where its densest input ranked. Flagged rows
+    inputs last. The block sits where the outcome itself ranked. Flagged rows
     are copies; the input list is not mutated.
 
     A child is dropped only on positive evidence that its parent is not due
@@ -226,8 +226,8 @@ def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
     state is unknown, or it is undated) the inputs still form a block, with no
     head. Pinned-tier rows stay where they are, except a live habit card
     adopted by its dated copies (adopted_rows): it is listed first in their
-    block, flagged `group_child` and `group_adopted`, and the block sits at
-    the habit's place instead of its densest input's. `hidden_parents` = ids of
+    block, flagged `group_child` and `group_adopted`. A block with no head
+    to follow sits at its adopted habit, else at its densest input. `hidden_parents` = ids of
     parents the caller knows to be snoozed, deferred, removed or completed."""
     hp = frozenset(str(i) for i in hidden_parents)
     by_id = {str(t.get("id")): t for t in rows}
@@ -244,14 +244,21 @@ def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
     anchor: dict[str, str] = {}
     for pid, kids in groups.items():
         kids.sort(key=rank)                       # stable: ties keep display order
-        lead = adopted[pid][0] if adopted.get(pid) else kids[0]
+        # The block sits where its OUTCOME ranks (JM 2026-11-24: "sorting is
+        # based on the parent task"; move the parent and its inputs move with
+        # it). With no head to follow (parent not in the list, or pinned to a
+        # tier of its own) it sits at its adopted habit, else its densest input.
+        head = by_id.get(pid)
+        if head is not None and not _pinned(head):
+            lead = head
+        else:
+            lead = adopted[pid][0] if adopted.get(pid) else kids[0]
         anchor[str(lead.get("id"))] = pid
     out = []
     for t in rows:
         tid = str(t.get("id"))
-        if tid in groups and not _pinned(t):
-            continue                              # the head is emitted with its block
-        if tid in adopted_pid or (is_group_child(t) and not _pinned(t)):
+        if tid in adopted_pid or (is_group_child(t) and not _pinned(t)) \
+                or (tid in groups and not _pinned(t)):
             pid = anchor.get(tid)
             if pid is None:
                 continue                          # hidden, or emitted with its block
