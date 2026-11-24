@@ -134,3 +134,33 @@ def test_payload_stays_safe_inside_the_zsh_double_quoted_string():
     assert '"' not in body
     assert "`" not in body
     assert DTD_PATH.exists()
+
+
+def test_inputs_follow_an_outcome_that_leaves_the_list_for_the_running_tier():
+    """JM 2026-11-24: 'cl is on top but m1 is still in place like 50'. The
+    running timer's row prints first; when that row is an outcome, its inputs
+    print right under it instead of staying where the block ranked."""
+    import test_dtd_running_highlight_by_id as rh
+    day = "2026-07-19"
+
+    def task(i, content, **kw):
+        t = {"id": i, "content": content, "labels": ["i9"], "priority": 1,
+             "due": day, "recurring": False}
+        t.update(kw)
+        return t
+
+    kid = dict(parent_id="P", parent_due=day, parent_content="outcome (100) {60}",
+               parent_recurring=False, parent_closed=False)
+    cache = {"updated": "t", "today": [
+        task("X", "dense unrelated (1) [90]"),
+        task("Y", "another unrelated (1) [80]"),
+        task("P", "outcome (100) {60}"),
+        task("A", "day card 11.16 (30) [15]", **kid),
+        task("B", "day card 11.03 (2) [15]", **kid)]}
+    with tempfile.TemporaryDirectory() as d:
+        idle = _ids_in_order(rh._run_listgen(Path(d), cache, ""))
+    assert idle == ["X", "Y", "P", "B", "A"]                 # the block where P ranks
+    with tempfile.TemporaryDirectory() as d:
+        out = rh._run_listgen(Path(d), cache, f"outcome\t{9999999999}\tP")
+    assert _ids_in_order(out) == ["P", "B", "A", "X", "Y"]   # the block moved as one
+    assert CORNER in _row(out, "A") and CORNER in _row(out, "B")

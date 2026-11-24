@@ -2604,6 +2604,12 @@ running_lines = []   # A: JM's own timer
 started_lines = []   # A2: JM started it today, timer moved on, not done
 normal_lines = []
 skipped_lines = []
+# A group moves as one block (JM 2026-11-24): when an outcome's row leaves the
+# list for a tier of its own (running, started, claimed, skipped), its inputs
+# follow it there. _follow = outcome id -> the input rows printed right after
+# it; _cur_head = the outcome whose block is being read, if it left the list.
+_follow = {}
+_cur_head = None
 
 # One running row per timer (2026-10-23: 'when recurring task in dtd gets
 # marked with an abacus, the recurrance should not also have an abacus').
@@ -2921,10 +2927,16 @@ for t in unique:
         claimed_lines.append(f'{color}{body}{RESET}{sfx}')
     elif is_skipped:
         skipped_lines.append(f'{color}{body}{RESET}{sfx}')
+    elif _cur_head and t.get('group_child'):
+        _follow.setdefault(_cur_head, []).append(f'{color}{body}{RESET}{sfx}' if color else f'{body}{sfx}')
     elif color:
         normal_lines.append(f'{color}{body}{RESET}{sfx}')
     else:
         normal_lines.append(f'{body}{sfx}')
+    if t.get('group_head'):
+        _cur_head = str(t.get('id', '')) if (is_running or is_started or is_working or is_claimed or is_skipped) else None
+    elif not t.get('group_child'):
+        _cur_head = None
 
 # JM's own work prints FIRST (2026-10-13: 'when I hit enter on a task that
 # means I am working on it ... it should be at the top'): the running timer,
@@ -2952,7 +2964,11 @@ try:
 except Exception:
     _codes = {}
     _pad = lambda c: c
+_final = []
 for l in _active + _claims + normal_lines + skipped_lines:
+    _final.append(l)
+    _final.extend(_follow.get(l.rsplit(chr(9), 1)[-1], []))
+for l in _final:
     _cd = _codes.get(l.rsplit(chr(9), 1)[-1], '')
     print('\x1b[2m' + (_pad(_cd) if _cd else '  ') + '\x1b[0m ' + l)
 # Usage event (2026-10-10, see DTD_EVENTS in dtd.sh): the top 15 ids in screen
@@ -2961,7 +2977,7 @@ for l in _active + _claims + normal_lines + skipped_lines:
 try:
     _evp = _os.environ.get('DTD_EVENTS', ''); _sid = _os.environ.get('DTD_ID', '')
     if _evp and _sid:
-        _order = [l.rsplit(chr(9), 1)[-1] for l in _active + _claims + normal_lines + skipped_lines]
+        _order = [l.rsplit(chr(9), 1)[-1] for l in _final]
         _op = _os.environ.get('DTD_ORDER', '')
         if _op:
             open(_op + '.tmp', 'w').write(chr(10).join(_order) + chr(10)); _os.replace(_op + '.tmp', _op)
