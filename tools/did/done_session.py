@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""done_session — /fin: finish this Claude session's claimed task.
+"""done_session — /fin: finish this Claude or Agency Copilot session's claimed task.
 
     done_session.py            close it (JM's ⌥↵): points, Todoist, claim, timer
     done_session.py <N>        delay it N days (defer-fast --id, as dtd's ctrl-d)
     done_session.py <time>     hide it in dtd until that time TODAY (ctrl-v snooze
                                file, epoch float) — 1500 · 15:00 · 3pm · 3:30pm
 
-The task: every claim of $CLAUDE_CODE_SESSION_ID that is held or marked ✅
+The task: every claim of $CLAUDE_CODE_SESSION_ID (or $AGENCY_SESSION_ID in
+Agency Copilot) that is held or marked ✅
 (`agent_claims.py done` drops the id from the session index, so held() alone is
 usually empty by the time JM types /fin; a 'released' claim is a task this
 session let go of, never touched here).
@@ -337,9 +338,10 @@ def no_claim_result(session: str, when, mark=None) -> dict:
 
 
 def main() -> int:
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("AGENCY_SESSION_ID", "")
     if not session:
-        print(json.dumps({"status": "failed", "error": "no CLAUDE_CODE_SESSION_ID; run inside Claude"}))
+        print(json.dumps({"status": "failed", "error":
+                          "no CLAUDE_CODE_SESSION_ID or AGENCY_SESSION_ID; run inside Claude or Agency Copilot"}))
         return 1
     flags, args = split_flags(sys.argv[1:])
     if "--void-close" in flags:      # more work arrived after the close: keep the tab

@@ -17,6 +17,45 @@ ds = _mod("done_session")
 outcome = _mod("dtd_outcome")
 
 
+def test_main_uses_agency_session_for_claim_lookup(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.setenv("AGENCY_SESSION_ID", "agency-session")
+    monkeypatch.setattr(ds.sys, "argv", ["done_session.py"])
+    looked_up = []
+    ac = SimpleNamespace(load=lambda: {}, held=lambda sid: looked_up.append(sid) or [])
+    monkeypatch.setattr(ds, "_load", lambda name: ac if name == "agent_claims" else outcome)
+    monkeypatch.setattr(ds, "mark_tab_close", lambda sid: False)
+
+    assert ds.main() == 0
+    assert looked_up == ["agency-session"]
+    assert json.loads(capsys.readouterr().out)["status"] == "no-claim"
+
+
+def test_main_preserves_claude_identity_when_both_are_set(monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
+    monkeypatch.setenv("AGENCY_SESSION_ID", "agency-session")
+    monkeypatch.setattr(ds.sys, "argv", ["done_session.py", "--void-close"])
+    voided = []
+    monkeypatch.setattr(ds, "void_tab_close", lambda sid: voided.append(sid) or False)
+
+    assert ds.main() == 0
+    assert voided == ["claude-session"]
+    assert json.loads(capsys.readouterr().out)["status"] == "kept"
+
+
+def test_main_without_either_session_id_fails_before_loading_claims(monkeypatch, capsys):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("AGENCY_SESSION_ID", raising=False)
+    monkeypatch.setattr(ds, "_load", lambda name: (_ for _ in ()).throw(AssertionError(name)))
+
+    assert ds.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "failed"
+    assert "CLAUDE_CODE_SESSION_ID or AGENCY_SESSION_ID" in result["error"]
+
+
 def test_done_claims_count_released_do_not():
     # agent_claims.py done empties held(), so the ✅ claim must still be found;
     # a released claim is a task this session handed back, never closed by /done.
