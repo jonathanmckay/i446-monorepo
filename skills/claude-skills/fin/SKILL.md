@@ -83,6 +83,13 @@ The reverse also holds (2026-11-14): closing a claimed task anywhere else
 session is idle (agent_claims.fin_holders + the Stop hook). Only this
 session's own /fin is exempt, which is why step 2 exists.
 
+**Retrospective (2026-11-23).** Every close writes a row to the estimate ledger
+(`tools/did/estimate_ledger.py`, `~/vault/g245/v_logs/estimate-ledger.<host>.jsonl`):
+`(N)` against JM's Toggl minutes and `[N]` against the 分 credited. did-fast writes it for
+any close; /fin adds wall clock, model minutes and turns. Nothing to do here. When the
+report's `jm.minutes` is far from the task's `(N)` (more than double or under half), say
+so in one line under the block and name the cause if the thread shows it.
+
 ## 1b. Final report (2026-11-14, layout 2026-11-22)
 
 Each task carries a `report` object (tools/did/fin_report.py). Render one block

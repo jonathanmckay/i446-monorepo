@@ -60,8 +60,13 @@ def _mod(path: Path, name: str):
     return m
 
 
+TOKEN_RE = re.compile(r"(?<!\S)[@#]\S+")
+
+
 def timer_key(s: str) -> str:
-    return " ".join(ANNOT_RE.sub("", s.replace("😈", "")).split()).lower()
+    """tg strips `@code` and `#tag` from a Toggl description, so they come off
+    here too: a task named `x @i447` must match its own timer (2026-11-23)."""
+    return " ".join(TOKEN_RE.sub("", ANNOT_RE.sub("", s.replace("😈", ""))).split()).lower()
 
 
 def prices_for(model: str) -> dict | None:

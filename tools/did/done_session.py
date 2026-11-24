@@ -314,6 +314,15 @@ def void_tab_close(session: str) -> bool:
     return True
 
 
+def ledger_safe(tid: str, content: str, report, load=None) -> bool:
+    """Append the session's facts (wall clock, model minutes, turns) to the
+    estimate ledger. A retrospective must never fail or block a close."""
+    try:
+        return bool((load or _load)("estimate_ledger").record_fin(tid, content, report))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def split_flags(argv: list[str]) -> tuple[set[str], list[str]]:
     flags = {a for a in argv if a in ("--keep-tab", "--void-close")}
     return flags, [a for a in argv if a not in flags]
@@ -381,6 +390,8 @@ def main() -> int:
             all_ok &= ok
             report.append({"id": tid, "task": content, "ok": ok, "result": display,
                            "timer": timer_line(p.stdout), "report": finals.get(tid)})
+            if ok:   # the /fin half of the retrospective row (estimate_ledger.py)
+                ledger_safe(tid, content, finals.get(tid))
         tab_close = False
         if all_ok:
             ac.set_free(session)   # tab reads ~~ until something new starts

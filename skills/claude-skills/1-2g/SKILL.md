@@ -54,6 +54,19 @@ If the task is in a Todoist project that maps to a domain, use that as a strong 
 ## Estimation Heuristics
 
 ### Time `(N)` in minutes
+
+**Calibrate first (2026-11-23).** `(N)` is JM's attention minutes, not wall clock: the time he will have a
+timer on it, excluding waits on an agent, a download or a reply. Before writing one, read what similar
+tasks actually took:
+
+```bash
+python3 ~/i446-monorepo/tools/did/estimate_ledger.py suggest "<task text>" --domain <code>
+```
+
+Use the `similar` rows' `jm_min` when any match well; otherwise scale the heuristic below by the domain's
+`median_actual_over_estimate` (above 1 means estimates there run short). `n_zero` rows had no timer, so
+they say nothing either way. With no ledger data, fall back to the heuristic.
+
 | Task type | Estimate |
 |-----------|----------|
 | Quick action (send, check, review short doc, call) | 5–15 |

@@ -24,7 +24,7 @@ Do NOT explain what you're doing. Do NOT ask for confirmation. Just execute.
 ```
 
 - `<task>` — the task description (required)
-- `(N)` — estimated time in minutes (optional)
+- `(N)` — estimated minutes of JM's attention, not wall clock (optional)
 - `[N]` — estimated value/points (optional)
 - `@tag` — one or more tags/labels (optional)
 
@@ -48,6 +48,18 @@ All three modifiers are optional and can appear in any order within the input.
 If the user omits any of the three modifiers, infer them:
 
 ### Time `(N)`
+**Calibrate first (2026-11-23).** `(N)` is JM's attention minutes, not wall clock: the time he will have a
+timer on it, excluding waits on an agent, a download or a reply. Before writing one, read what similar
+tasks actually took:
+
+```bash
+python3 ~/i446-monorepo/tools/did/estimate_ledger.py suggest "<task text>" --domain <code>
+```
+
+Use the `similar` rows' `jm_min` when any match well; otherwise scale the heuristic below by the domain's
+`median_actual_over_estimate` (above 1 means estimates there run short). `n_zero` rows had no timer, so
+they say nothing either way. With no ledger data, fall back to the heuristic.
+
 Estimate based on the task description:
 - Quick actions (send a message, check something, review a doc): 5-15 min
 - Medium tasks (write something, prep for a meeting, fill out a form): 20-40 min

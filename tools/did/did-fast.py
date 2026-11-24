@@ -4419,6 +4419,37 @@ def _emit(obj) -> None:
     _JSON_OUT.flush()
 
 
+def _ledger_closes(fast, close_results, completed_points) -> list[dict]:
+    """Payload for estimate_ledger.py: every Todoist task this run closed."""
+    out, seen = [], set()
+    for r in fast:
+        t = getattr(r, "todoist_task", None)
+        if not t:
+            continue
+        tid = str(t.get("id") or "")
+        ok = (close_results.get(t.get("id")) or close_results.get(tid) or (False, None))[0]
+        if not tid or not ok or tid in seen:
+            continue
+        seen.add(tid)
+        out.append({"id": tid, "content": t.get("content") or r.item.name,
+                    "labels": list(t.get("labels") or []),
+                    "points": completed_points.get(r.item.name, 0)})
+    return out
+
+
+def _spawn_estimate_ledger(closes: list[dict], popen=subprocess.Popen) -> bool:
+    if not closes:
+        return False
+    try:
+        popen([sys.executable, str(Path(__file__).resolve().parent / "estimate_ledger.py"),
+               "record", json.dumps(closes, ensure_ascii=False)],
+              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+              stdin=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except Exception:
+        return False
+
+
 def main():
     _install_watchdog()
     if len(sys.argv) < 2:
@@ -5356,6 +5387,10 @@ def main():
     # Task groups: a paid subtask comes off its parent's remaining [N].
     group_recs = _group_decrements(fast, close_results, defer_results, uncredited,
                                    _daytime.today_iso())
+    # Estimate ledger (2026-11-23): one retrospective row per closed task,
+    # (N) vs JM's Toggl minutes and [N] vs 分 credited. Background, because
+    # the Toggl lookup takes about a second; never fails or slows the close.
+    _spawn_estimate_ledger(_ledger_closes(fast, close_results, completed_points))
     # A closed task's agent claim goes with it (2026-10-24): a repeating card
     # keeps its id, so a leftover released/done claim showed on the next day's
     # card as if an agent were still on it.

@@ -37,7 +37,7 @@ List the concrete steps that are known now, 3 to 7 of them. For each:
 | Field | Rule |
 |---|---|
 | name | verb phrase naming the residual human action, `(N) [N]` |
-| `(N)` | JM's minutes only, after the agent has done its part |
+| `(N)` | JM's minutes only, after the agent has done its part. Check `estimate_ledger.py suggest "<step>" --domain <code>` (tools/did) for what similar steps took |
 | `[N]` | priced by what the step unlocks, at least `(N)`. A step that gates the whole outcome is worth more than its five minutes suggest |
 | due | the day it can start. Today for anything ready. A step that needs another to finish first gets a later day, or is not created until that one closes |
 | parent | the outcome (`parentId`) |
