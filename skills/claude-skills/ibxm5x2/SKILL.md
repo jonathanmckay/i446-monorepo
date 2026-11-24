@@ -37,7 +37,12 @@ python3 ibx0.py --counts
    file first (`RULE_SKIP`: all Property Meld notifications, JM 2026-11-15);
    the rest is classified 20 at a time with `claude -p` against the ibx
    criteria, and the confident "no response needed" ones are filed. It logs
-   a `keep:` line with the reason for everything it leaves. Each filed message is logged to
+   a `keep:` line with the reason for everything it leaves. A kept message is
+   remembered (`~/.config/ibx/agent_kept.json`) and not sent to the agent
+   again, so a run only pays for new mail; `--recheck` ignores that cache, and
+   editing the criteria text drops it. Each agent call is logged with its cost
+   to `~/.config/ibx/agent_cost.jsonl` (`agent_triage.py cost` prints the
+   per-day totals). Each filed message is logged to
    `~/.config/ibx/agent_filtered.jsonl` (undo = re-add INBOX). A run that's
    already in progress (the ibx m5x2 timer hook) makes this a no-op.
 3. `ibx0.py --counts` recounts what is still pending and rewrites

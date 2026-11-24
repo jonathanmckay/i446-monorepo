@@ -13,6 +13,18 @@ _spec = importlib.util.spec_from_file_location(
 toggl_cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(toggl_cli)
 
+import json
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state(tmp_path, monkeypatch):
+    """No test may touch the real keep cache or cost ledger."""
+    monkeypatch.setattr(at, "KEEP_FILE", tmp_path / "kept.json")
+    monkeypatch.setattr(at, "COST_FILE", tmp_path / "cost.jsonl")
+    at._usage.clear()
+
 
 def test_parse_skips_only():
     out = 'noise\n[{"i":1,"v":"keep","why":"ask"},{"i":2,"v":"skip","why":"digest"}]\n'
@@ -130,3 +142,120 @@ def test_a_restored_message_is_never_filed_again(tmp_path, monkeypatch):
     assert at.run("m5x2") == (3, 2)
     assert filed == ["m1", "m3"]                 # m2 restored; m3's audit row is another source
     assert "Subject: s2" not in seen[0]
+
+
+# ── Keep cache (2026-11-24): a kept email is not sent to the agent again ────
+
+def _keep_all(calls):
+    def ask(prompt):
+        calls.append(prompt)
+        n = prompt.count("--- [")
+        return json.dumps([{"i": i, "v": "keep", "why": "tenant"} for i in range(1, n + 1)])
+    return ask
+
+
+def test_kept_mail_is_not_reclassified_on_the_next_run(tmp_path, monkeypatch):
+    """2026-11-24: a run sent 69 emails to claude to file 9; the 60 kept ones
+    were paid for again on every run until JM cleared them."""
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    calls = []
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(3), _keep_all(calls), lambda e: None))
+    assert at.run("m5x2") == (3, 0)
+    assert len(calls) == 1
+    assert at.run("m5x2") == (3, 0)
+    assert len(calls) == 1                      # second run: nothing new, no agent call
+
+
+def test_only_new_mail_goes_to_the_agent(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    calls, n = [], [3]
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(n[0]), _keep_all(calls), lambda e: None))
+    at.run("m5x2")
+    n[0] = 5
+    at.run("m5x2")
+    assert calls[1].count("--- [") == 2 and "Subject: s4" in calls[1] and "Subject: s1" not in calls[1]
+
+
+def test_changed_criteria_invalidate_the_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    calls = []
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(3), _keep_all(calls), lambda e: None))
+    at.run("m5x2")
+    monkeypatch.setitem(at.EXTRA, "m5x2", at.EXTRA["m5x2"] + " Newsletters from lenders are keep.")
+    at.run("m5x2")
+    assert len(calls) == 2
+
+
+def test_recheck_ignores_the_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    calls = []
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(3), _keep_all(calls), lambda e: None))
+    at.run("m5x2")
+    at.run("m5x2", recheck=True)
+    assert len(calls) == 2
+
+
+def test_failed_batch_and_missing_verdicts_are_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    answers = ["garbage", '[{"i": 1, "v": "keep", "why": "tenant"}]']
+    calls = []
+
+    def ask(prompt):
+        calls.append(prompt)
+        return answers[len(calls) - 1] if len(calls) <= 2 else "[]"
+
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(3), ask, lambda e: None))
+    at.run("m5x2")                               # garbage: nothing cached
+    at.run("m5x2")                               # verdict for m1 only
+    at.run("m5x2")
+    assert calls[1].count("--- [") == 3
+    assert calls[2].count("--- [") == 2 and "Subject: s1" not in calls[2]
+
+
+def test_dry_run_does_not_write_the_cache(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(3), _keep_all(calls), lambda e: None))
+    at.run("m5x2", dry_run=True)
+    assert not at.KEEP_FILE.exists()
+
+
+def test_old_cache_entries_are_pruned(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    at.KEEP_FILE.write_text(json.dumps({"m5x2": {"key": at.criteria_key("m5x2"), "ids": {
+        "old": {"why": "x", "ts": "2020-01-01T00:00:00"}}}}))
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(1), _keep_all([]), lambda e: None))
+    at.run("m5x2")
+    ids = json.loads(at.KEEP_FILE.read_text())["m5x2"]["ids"]
+    assert "old" not in ids and "m1" in ids
+
+
+# ── Cost ledger ─────────────────────────────────────────────────────────────
+
+def test_ask_claude_returns_the_text_and_notes_the_cost(monkeypatch):
+    payload = {"result": '[{"i": 1, "v": "keep", "why": "t"}]', "total_cost_usd": 0.0604,
+               "usage": {"input_tokens": 2, "cache_creation_input_tokens": 100,
+                         "cache_read_input_tokens": 50, "output_tokens": 23}}
+    monkeypatch.setattr(at.subprocess, "run",
+                        lambda *a, **k: mock.Mock(stdout=json.dumps(payload)))
+    assert at.ask_claude("p") == payload["result"]
+    assert at._usage == [{"cost_usd": 0.0604, "in": 152, "out": 23}]
+
+
+def test_ask_claude_falls_back_to_raw_text(monkeypatch):
+    monkeypatch.setattr(at.subprocess, "run", lambda *a, **k: mock.Mock(stdout="not json"))
+    assert at.ask_claude("p") == "not json" and at._usage == []
+
+
+def test_run_writes_one_cost_row_per_agent_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "AUDIT_FILE", tmp_path / "audit.jsonl")
+
+    def ask(prompt):
+        at._usage.append({"cost_usd": 0.05, "in": 1000, "out": 40})
+        return _keep_all([])(prompt)
+
+    monkeypatch.setitem(at.SOURCES, "m5x2", (lambda: _emails(25), ask, lambda e: None))
+    at.run("m5x2")
+    rows = [json.loads(l) for l in at.COST_FILE.read_text().splitlines()]
+    assert [(r["source"], r["emails"], r["cost_usd"]) for r in rows] == [("m5x2", 20, 0.05), ("m5x2", 5, 0.05)]
+    at.run("m5x2")                               # all cached: no call, no row
+    assert len(at.COST_FILE.read_text().splitlines()) == 2

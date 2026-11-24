@@ -4029,6 +4029,11 @@ def _credit_ritual_p(new_text: str, pts: int, block: str, nb) -> dict:
 
 # ---------------------------------------------------------------------------
 # Dated 0l catch-up cards ("0l 11.16"), JM 2026-11-19
+# Dated inbox-backlog cards ("ibx m5x2 11.16"), JM 2026-11-24: one card per
+# day of unanswered m5x2 mail; completing it marks THAT day's ibx m5x2 cell
+# and credits its weight today. Make these cards WITHOUT the 0neon label: a
+# 0neon copy can be closed unmarked by a plain "ibx m5x2" completion (fuzzy
+# match) or by ibx0's auto-close.
 # ---------------------------------------------------------------------------
 
 ON_BACKFILL = Path(__file__).with_name("0n-backfill.py")
@@ -4036,49 +4041,63 @@ ON_BACKFILL = Path(__file__).with_name("0n-backfill.py")
 # refresh; the 120s default watchdog would kill it between the mark and the
 # move, leaving the past day marked with its points still on that day.
 DATED_0L_BUDGET_SECS = 330
-_DATED_0L_RE = re.compile(r"^\s*(?:😈\s*)?0l\s+(\d{1,2})\.(\d{1,2})(?=\s|$)", re.I)
+# Fixed 0n habits (cell = 1, points = row-2 weight) whose dated copies backfill.
+DATED_HABITS = ("0l", "ibx m5x2")
+_DATED_0L_RE = re.compile(
+    r"^\s*(?:😈\s*)?(" + "|".join(re.escape(h).replace(r"\ ", r"\s+") for h in DATED_HABITS)
+    + r")\s+(\d{1,2})\.(\d{1,2})(?=\s|$)", re.I)
 
 
-def dated_0l_day(name: str, today: Optional[date] = None) -> Optional[date]:
-    """The 0n row a dated 0l card stands for: "0l 11.16 (8) [20]" → the most
-    recent Nov 16 in the last 90 days (so a January card can name December).
-    None for the live card ("0l"), any other habit, an impossible date, today
-    (the recurring card's job) or a date not in that window."""
+def dated_habit_day(name: str, today: Optional[date] = None) -> Optional[tuple]:
+    """(habit, day) a dated card stands for: "0l 11.16 (8) [20]" → ("0l", the
+    most recent Nov 16 in the last 90 days) (so a January card can name
+    December); "ibx m5x2 11.16 (10) [15]" → ("ibx m5x2", that day). None for
+    the live card ("0l"), a habit not in DATED_HABITS, an impossible date,
+    today (the recurring card's job) or a date not in that window."""
     m = _DATED_0L_RE.match(name or "")
     if not m:
         return None
+    habit = " ".join(m.group(1).lower().split())
     today = today or _daytime.today()
     for year in (today.year, today.year - 1):
         try:
-            d = date(year, int(m.group(1)), int(m.group(2)))
+            d = date(year, int(m.group(2)), int(m.group(3)))
         except ValueError:
             return None
         if 0 < (today - d).days <= 90:   # a stale card must not mark last year's row
-            return d
+            return habit, d
     return None
 
 
-def _dated_0l_task(day: date, tq: dict, task_id: Optional[str]) -> Optional[dict]:
-    """The open Todoist card for this exact day. Never a fuzzy match:
+def dated_0l_day(name: str, today: Optional[date] = None) -> Optional[date]:
+    """The day of a dated 0l card only (None for every other habit)."""
+    hd = dated_habit_day(name, today)
+    return hd[1] if hd and hd[0] == "0l" else None
+
+
+def _dated_0l_task(day: date, tq: dict, task_id: Optional[str],
+                   habit: str = "0l") -> Optional[dict]:
+    """The open Todoist card for this exact habit and day. Never a fuzzy match:
     match_todoist_task scores "0l 11.16" against a sibling "0l 11.18" at 2/3
     and would close the wrong day's card. By id when dtd gave one (and its
     content names the same day), else an exact name in the cache."""
     if task_id:
         t = _fetch_task_by_id(task_id)
-        if t and dated_0l_day(t.get("content", "")) == day:
+        if t and dated_habit_day(t.get("content", "")) == (habit, day):
             return t
     for bucket in (tq or {}).values():
         if not isinstance(bucket, list):
             continue
         for t in bucket:
-            if isinstance(t, dict) and dated_0l_day(t.get("content", "")) == day:
+            if isinstance(t, dict) and dated_habit_day(t.get("content", "")) == (habit, day):
                 if not task_id or str(t.get("id")) != str(task_id):
                     return t
     return None
 
 
-def run_dated_0l(name: str, day: date, tq: dict, task_id: Optional[str] = None) -> dict:
-    """Complete a dated 0l card: mark 0l on ITS day's 0n row and credit the
+def run_dated_0l(name: str, day: date, tq: dict, task_id: Optional[str] = None,
+                 habit: str = "0l") -> dict:
+    """Complete a dated habit card: mark the habit on ITS day's 0n row and credit the
     points today (0n-backfill, the /0n primitive), then close that card.
     Replaces the generic "[N] to 0分 today" credit a dated copy used to get,
     which never marked the past row. The card closes only when the mark
@@ -4092,7 +4111,7 @@ def run_dated_0l(name: str, day: date, tq: dict, task_id: Optional[str] = None) 
         pass
     try:
         proc = subprocess.run(
-            [sys.executable, str(ON_BACKFILL), "0l", day.isoformat()],
+            [sys.executable, str(ON_BACKFILL), habit, day.isoformat()],
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             timeout=DATED_0L_BUDGET_SECS)
     except Exception as e:  # noqa: BLE001 — timeout or spawn failure
@@ -4109,13 +4128,13 @@ def run_dated_0l(name: str, day: date, tq: dict, task_id: Optional[str] = None) 
         why = (bf.get("recovery") or bf.get("error") or proc.stderr or proc.stdout
                or f"exit {proc.returncode}")
         out["0n_write"]["error"] = out["error"] = (
-            f"0n-backfill 0l {day.month}/{day.day} failed (rc {proc.returncode}): "
+            f"0n-backfill {habit} {day.month}/{day.day} failed (rc {proc.returncode}): "
             + str(why).strip()[:300])
         return out
     out["0n_write"] = {"ok": True, "already": bool(bf.get("already_credited"))}
     out["points"] = bf.get("points_awarded", sum(
         (m.get("pts") or 0) for m in (bf.get("moves") or []) if isinstance(m, dict)))
-    task = _dated_0l_task(day, tq, task_id)
+    task = _dated_0l_task(day, tq, task_id, habit)
     if task:
         tid = str(task["id"])
         _tid, ok, err = close_todoist_task(tid, expected_due=task.get("due") or None)
@@ -4702,14 +4721,15 @@ def main():
     # below, which closes the card without ever marking the row.
     dated_entries: list[dict] = []
     if not points_only and not past_ok:
-        _dated = [(it, dated_0l_day(it.name)) for it in items]
+        _dated = [(it, dated_habit_day(it.name)) for it in items]
         if any(d for _it, d in _dated):
             _tq0 = load_task_queue()
             _only = len(_dated) == 1
             for it, d in _dated:
                 if d:
                     dated_entries.append(run_dated_0l(
-                        it.name, d, _tq0, task_id_override if _only else None))
+                        it.name, d[1], _tq0, task_id_override if _only else None,
+                        habit=d[0]))
             items = [it for it, d in _dated if not d]
             if not _defer_refresh():
                 try:
@@ -5780,6 +5800,9 @@ def main():
 
     _emit(output)
     failed = _write_failures(output)
+    # A dated card whose backfill failed in a MIXED batch must fail the run too
+    # (the dated-only return above already exits 1); else dtd logs it as done.
+    failed += [str(e.get("error")) for e in dated_entries if e.get("error")]
     if not failed:
         _record_entry_points(output)
     if failed:

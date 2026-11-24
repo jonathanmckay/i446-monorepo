@@ -154,3 +154,51 @@ def test_main_intercepts_before_routing_and_reports_0n_write(df):
     assert '"0n_write": dated_entries[0]["0n_write"]' in seg   # what 0s.py's _mark_0l reads
     assert "sys.exit(1)" in seg                                 # a failed mark is not a clean exit
     assert "ritual_entries + dated_entries" in src[j:]          # mixed batches keep the entry
+
+
+# ── dated inbox-backlog cards ("ibx m5x2 11.16"), JM 2026-11-24 ─────────────
+
+TQ_IBX = {"updated": "x", "today": [
+    {"id": "LIVE", "content": "ibx m5x2 (4) [15]", "due": "2026-11-19"},
+    {"id": "I16", "content": "ibx m5x2 11.16 (30) [15]", "due": "2026-11-19"},
+    {"id": "I17", "content": "ibx m5x2 11.17 (10) [15]", "due": "2026-11-19"},
+    {"id": "A16", "content": "0l 11.16 (8) [20]", "due": "2026-11-19"},
+]}
+
+
+def test_an_ibx_m5x2_day_card_resolves_to_habit_and_day(df, env):
+    name = df.parse_input("ibx m5x2 11.16 (30) [15]")[0].name
+    assert df.dated_habit_day(name) == ("ibx m5x2", dt.date(2026, 11, 16))
+    assert df.dated_habit_day("0l 11.16") == ("0l", dt.date(2026, 11, 16))
+    assert df.dated_0l_day(name) is None                 # the 0l-only helper stays 0l-only
+
+
+def test_the_live_ibx_card_and_other_inboxes_are_left_alone(df, env):
+    for name in ("ibx m5x2", "ibx m5x2 (4) [15]", "ibx i9 11.16", "ibx s897 11.16",
+                 "slack m5x2 11.16", "ibx m5x2 11.19"):       # 11.19 = today
+        assert df.dated_habit_day(name) is None, name
+
+
+def test_an_ibx_day_card_backfills_its_own_habit_and_closes_only_itself(env):
+    out = env.df.run_dated_0l("ibx m5x2 11.16", dt.date(2026, 11, 16), TQ_IBX,
+                              habit="ibx m5x2")
+    assert env.ran == [[str(env.df.ON_BACKFILL), "ibx m5x2", "2026-11-16"]]
+    assert env.closed == ["I16"]          # not LIVE, not 11.17, not the 0l card of that day
+    assert out["0n_write"]["ok"] and out["todoist"]["closed"]
+
+
+def test_a_0l_card_never_closes_the_ibx_card_of_the_same_day(env):
+    env.df.run_dated_0l("0l 11.16", dt.date(2026, 11, 16), TQ_IBX)
+    assert env.closed == ["A16"]
+
+
+def test_a_failed_ibx_backfill_names_the_habit(env):
+    env.proc = types.SimpleNamespace(returncode=1, stdout="", stderr="boom")
+    out = env.df.run_dated_0l("ibx m5x2 11.16", dt.date(2026, 11, 16), TQ_IBX,
+                              habit="ibx m5x2")
+    assert env.closed == [] and "0n-backfill ibx m5x2 11/16 failed" in out["error"]
+
+
+def test_a_dated_error_fails_a_mixed_batch_too(df):
+    src = (HERE / "did-fast.py").read_text()
+    assert 'failed += [str(e.get("error")) for e in dated_entries if e.get("error")]' in src
