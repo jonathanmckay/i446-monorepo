@@ -2741,7 +2741,7 @@ for t in unique:
     if t.get('group_more'):
         _emg = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
         _cutg = _emg.start() if _emg else len(display)
-        display = display[:_cutg].rstrip() + ' \U0001F4E6+' + str(t['group_more']) + display[_cutg:]
+        display = display[:_cutg].rstrip() + ' +' + str(t['group_more']) + display[_cutg:]
     # Inbox habit badge: the count goes AHEAD of the trailing estimates so
     # rjust_est still finds them and strip_ann/done routing never see it.
     # Plain U+2709 (no VS16) so _dwidth counts one cell.
@@ -2817,13 +2817,16 @@ for t in unique:
     # a box on an outcome (a group parent; never recurring, so the two never
     # meet), a robot on an input an agent is working (dimmed below), a bell
     # on a follow-up that is waiting on someone. Escapes, not literals.
-    if _dg_ok and _dg.is_group_parent(t, _grp_parents):
+    # The box also leads the row that stands in for a whole group (the input
+    # collapse() picked), even when it is the only one due: without it nothing
+    # on screen said the row was a rollup (JM 2026-11-23).
+    if _dg_ok and (_dg.is_group_parent(t, _grp_parents) or 'group_more' in t):
         repeat = '\U0001F4E6 '
-    elif _dg_ok and _dg.AGENT_LABEL in t.get('labels', []):
-        repeat = '\U0001F916 '
+    if _dg_ok and _dg.AGENT_LABEL in t.get('labels', []):
+        repeat = repeat + '\U0001F916 '
         color = DIM
     elif _dg_ok and _dg.WAITING_LABEL in t.get('labels', []):
-        repeat = '\U0001F514 '
+        repeat = repeat + '\U0001F514 '
     # Project/time views group by color alone — no project-name prefix (the user
     # knows the domain from the color; the names just add clutter).
     dom_tag = ''

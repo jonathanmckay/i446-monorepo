@@ -124,7 +124,16 @@ def test_parent_whose_inputs_are_all_hidden_shows_as_a_marked_outcome():
 def test_group_row_count_carries_the_box():
     tasks = [_task("P", "outcome (60) [100]"), _child("A", "a (10) [30]"), _child("B", "b (5) [40]")]
     out, order = _render(tasks)
-    assert order == ["B"] and BOX + "+1" in _row(out, "B")
+    row = _row(out, "B")
+    assert order == ["B"] and "+1" in row
+    assert row.index(BOX) < row.index("+1") < row.index("(5)")   # the box leads the rollup row
+
+
+def test_lone_input_still_carries_the_box():
+    """JM 2026-11-23: a group with one due input showed no marker at all."""
+    out, order = _render([_task("P", "outcome (60) [100]"), _child("A", "only input (30) [30]")])
+    row = _row(out, "A")
+    assert order == ["A"] and BOX in row and "+" not in row.split("only input")[1].split("(30)")[0]
 
 
 def test_agent_input_is_folded_and_a_lone_one_shows_with_a_robot():

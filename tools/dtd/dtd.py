@@ -693,6 +693,9 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "badge": badge,
             # Group row: how many other due inputs of the same outcome are
             # folded under this one, and the outcome's name ("" / 0 otherwise).
+            # This row stands in for a whole group (the input collapse() picked),
+            # even when it is the only one due: drawn with a leading box.
+            "groupRow": "group_more" in t,
             "groupMore": int(t.get("group_more") or 0),
             # This row is itself an outcome (a group parent): drawn with a box.
             "groupParent": dtd_groups.is_group_parent(t, grp_parents),
@@ -2122,11 +2125,11 @@ function makeRow(t){
   line.style.color = t.color;
   const ttl = document.createElement('span');
   ttl.className = 'ttl';
-  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.groupParent?'📦 ':'') + (t.owner==='agent'?'🤖 ':'') + (t.owner==='waiting'?'🔔 ':'') + (t.recurring?'↻ ':'') + t.title;
+  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + ((t.groupParent||t.groupRow)?'📦 ':'') + (t.owner==='agent'?'🤖 ':'') + (t.owner==='waiting'?'🔔 ':'') + (t.recurring?'↻ ':'') + t.title;
   if (t.owner==='agent') ttl.style.opacity = '0.5';
   const est = document.createElement('span');
   est.className = 'est';
-  est.textContent = (t.groupMore ? '📦+' + t.groupMore + ' ' : '') + (t.badge ? t.badge + ' ' : '') + (t.est || '');
+  est.textContent = (t.groupMore ? '+' + t.groupMore + ' ' : '') + (t.badge ? t.badge + ' ' : '') + (t.est || '');
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 

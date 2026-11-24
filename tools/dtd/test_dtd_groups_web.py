@@ -88,3 +88,11 @@ def test_agent_input_is_folded_under_the_one_jm_can_do(cache):
     rows = cache([{"id": "P", "content": "outcome (60) [100]"},
                   {"id": "A", "content": "agent drafts (5) [90]", "parent_id": "P", "labels": ["m5x2", "agent"]}])
     assert set(rows) == {"A"} and rows["A"]["owner"] == "agent"
+
+
+def test_rollup_row_is_flagged_even_with_one_input(cache):
+    rows = cache([{"id": "P", "content": "outcome (60) [100]"},
+                  {"id": "A", "content": "only input (30) [30]", "parent_id": "P"},
+                  {"id": "X", "content": "plain (5) [5]"}])
+    assert set(rows) == {"A", "X"}
+    assert rows["A"]["groupRow"] and rows["A"]["groupMore"] == 0 and not rows["X"]["groupRow"]
