@@ -7,9 +7,9 @@ Rules, as settled with JM:
               snoozed or closed parent hides every child. Unknown parent state
               means SHOW: a child is hidden only on positive evidence, never
               because the parent happens to be missing from the cache.
-  one row     A group collapses to its densest due child (分 per minute) with
-              a "+N" count of the other due children. The parent row is hidden
-              while it has a visible child.
+  one block   A group is shown together: the outcome, then its due inputs
+              beneath it, densest (分 per minute) first. The block sits where
+              its densest input ranks.
   value       The parent's [N] is the REMAINING value. Completing a child pays
               the child and takes the same amount off the parent (floor 0).
               Closing the parent pays what is left; Todoist closes the children
@@ -34,7 +34,7 @@ from typing import Callable, Iterable, Optional
 import fen_split
 
 GROUP_LABEL = "grp"          # marks a group parent in Todoist (set on first decrement)
-AGENT_LABEL = "agent"        # an agent is doing this input; dimmed, never the group's row
+AGENT_LABEL = "agent"        # an agent is doing this input; dimmed, last in its block
 WAITING_LABEL = "waiting"    # the next move is someone else's; shown on its follow-up day
 MAX_PARENT_FETCH = 25        # live GETs per cache refresh for parents not in the cache
 _MIN_RE = re.compile(r"\((\d+)\)")
@@ -154,42 +154,63 @@ def child_hidden(t: dict, today_iso: str, hidden_parents: frozenset = frozenset(
     return bool(pdue) and pdue > today_iso
 
 
-def collapse(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
+# Rows in these tiers keep their own place in dtd (block rituals, block and
+# daily goals, daily and weekly habits): a subtask carrying one is shown where
+# its tier puts it, not pulled into its group's block.
+PINNED_LABELS = frozenset({"-1neon", "#-1g", "#0g", "0neon", "夜neon", "1neon"})
+
+
+def _pinned(t: dict) -> bool:
+    return bool(PINNED_LABELS & set(t.get("labels") or []))
+
+
+def layout(rows: list, today_iso: str, hidden_parents: Iterable = ()) -> list:
     """`rows` = the tasks that survived every other hide, in display order.
-    Returns the rows to show, in the same order, with each group reduced to
-    its densest child. That child is returned as a COPY carrying
-    `group_more` (count of its other visible siblings) and `group_name` (the
-    parent's content). `hidden_parents` = ids of parents the caller knows to
-    be snoozed, deferred, removed or completed."""
+    Returns the rows to show with each group as ONE contiguous block (JM
+    2026-11-23: collocated): the outcome first, flagged `group_head`, then its
+    due inputs beneath it, flagged `group_child`, densest first, an agent's
+    inputs last. The block sits where its densest input ranked. Flagged rows
+    are copies; the input list is not mutated.
+
+    A child is dropped only on positive evidence that its parent is not due
+    (see child_hidden). When the parent row itself is not among `rows` (its
+    state is unknown, or it is undated) the inputs still form a block, with no
+    head. Pinned-tier rows stay where they are. `hidden_parents` = ids of
+    parents the caller knows to be snoozed, deferred, removed or completed."""
     hp = frozenset(str(i) for i in hidden_parents)
+    by_id = {str(t.get("id")): t for t in rows}
     groups: dict[str, list] = {}
     for t in rows:
-        if is_group_child(t) and not child_hidden(t, today_iso, hp):
+        if is_group_child(t) and not _pinned(t) and not child_hidden(t, today_iso, hp):
             groups.setdefault(str(t["parent_id"]), []).append(t)
-    best: dict[str, str] = {}
-    more: dict[str, int] = {}
+
+    def rank(k):
+        return (AGENT_LABEL in (k.get("labels") or []), -ppm(k.get("content") or ""))
+
+    anchor: dict[str, str] = {}
     for pid, kids in groups.items():
-        # An input an agent is working never takes the row from one JM can do,
-        # and is not counted in +N. When every due input is an agent's, one
-        # of them still shows (dimmed by the renderer), so the group is never
-        # invisible and its parent never resurfaces as a closable row.
-        mine = [k for k in kids if AGENT_LABEL not in (k.get("labels") or [])]
-        pool = mine or kids
-        top = max(pool, key=lambda k: ppm(k.get("content") or ""))   # ties: first in order
-        best[pid] = str(top.get("id"))
-        more[pid] = len(mine) - 1 if mine else 0
+        kids.sort(key=rank)                       # stable: ties keep display order
+        anchor[str(kids[0].get("id"))] = pid
     out = []
     for t in rows:
         tid = str(t.get("id"))
-        if tid in groups and not t.get("recurring"):
-            continue                                  # parent with a visible child
-        if is_group_child(t):
-            pid = str(t["parent_id"])
-            if pid not in groups or best[pid] != tid:
-                continue                              # hidden, or outranked by a sibling
-            t = dict(t)
-            t["group_more"] = more[pid]
-            t["group_name"] = t.get("parent_content") or ""
+        if tid in groups and not _pinned(t):
+            continue                              # the head is emitted with its block
+        if is_group_child(t) and not _pinned(t):
+            pid = anchor.get(tid)
+            if pid is None:
+                continue                          # hidden, or emitted with its block
+            head = by_id.get(pid)
+            if head is not None and not _pinned(head):
+                h = dict(head)
+                h["group_head"] = True
+                h["group_size"] = len(groups[pid])
+                out.append(h)
+            for k in groups[pid]:
+                c = dict(k)
+                c["group_child"] = True
+                out.append(c)
+            continue
         out.append(t)
     return out
 

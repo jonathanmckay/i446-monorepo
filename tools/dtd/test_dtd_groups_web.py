@@ -1,5 +1,5 @@
-"""Task groups on dtd web (2026-11-23, lib/dtd_groups.py): one row per group,
-the densest due child, with groupMore; children hide with their parent."""
+"""Task groups on dtd web (2026-11-23, lib/dtd_groups.py): one block per group:
+the outcome, then its due inputs beneath it; inputs hide with their parent."""
 import importlib.util
 import json
 from pathlib import Path
@@ -40,14 +40,22 @@ def cache(tmp_path, monkeypatch):
     return write
 
 
-def test_group_is_one_row_with_a_count(cache):
-    rows = cache([{"id": "P", "content": "purchase l912 (240) [1360]"},
-                  {"id": "A", "content": "agree funding (10) [30]", "parent_id": "P"},
-                  {"id": "B", "content": "send Ticor reply (5) [40]", "parent_id": "P"},
-                  {"id": "X", "content": "unrelated (5) [5]"}])
-    assert set(rows) == {"B", "X"}
-    assert rows["B"]["groupMore"] == 1 and rows["B"]["groupName"] == "purchase l912"
-    assert rows["X"]["groupMore"] == 0 and rows["X"]["groupName"] == ""
+def _ordered(cache, tasks):
+    cache(tasks)
+    return dtd.build_tasks()
+
+
+def test_group_is_one_block_outcome_then_inputs(cache):
+    rows = _ordered(cache, [{"id": "P", "content": "purchase l912 (240) [1360]"},
+                            {"id": "A", "content": "agree funding (10) [30]", "parent_id": "P"},
+                            {"id": "B", "content": "send Ticor reply (5) [40]", "parent_id": "P"},
+                            {"id": "X", "content": "unrelated (5) [5]"}])
+    order = [r["id"] for r in rows]
+    i = order.index("P")
+    assert order[i:i + 3] == ["P", "B", "A"] and "X" in order
+    by = {r["id"]: r for r in rows}
+    assert by["P"]["groupParent"] and not by["P"]["groupChild"]
+    assert by["A"]["groupChild"] and by["B"]["groupChild"] and not by["X"]["groupChild"]
 
 
 def test_children_hide_with_a_later_parent_but_not_an_unknown_one(cache):
@@ -80,19 +88,10 @@ def test_outcome_and_owner_flags(cache):
     assert (rows["W"]["owner"], rows["X"]["owner"]) == ("waiting", "")
 
 
-def test_agent_input_is_folded_under_the_one_jm_can_do(cache):
-    rows = cache([{"id": "P", "content": "outcome (60) [100]"},
-                  {"id": "A", "content": "agent drafts (5) [90]", "parent_id": "P", "labels": ["m5x2", "agent"]},
-                  {"id": "B", "content": "send it (5) [20]", "parent_id": "P"}])
-    assert set(rows) == {"B"} and rows["B"]["groupMore"] == 0
-    rows = cache([{"id": "P", "content": "outcome (60) [100]"},
-                  {"id": "A", "content": "agent drafts (5) [90]", "parent_id": "P", "labels": ["m5x2", "agent"]}])
-    assert set(rows) == {"A"} and rows["A"]["owner"] == "agent"
-
-
-def test_rollup_row_is_flagged_even_with_one_input(cache):
-    rows = cache([{"id": "P", "content": "outcome (60) [100]"},
-                  {"id": "A", "content": "only input (30) [30]", "parent_id": "P"},
-                  {"id": "X", "content": "plain (5) [5]"}])
-    assert set(rows) == {"A", "X"}
-    assert rows["A"]["groupRow"] and rows["A"]["groupMore"] == 0 and not rows["X"]["groupRow"]
+def test_agent_input_goes_last_in_its_block(cache):
+    rows = _ordered(cache, [{"id": "P", "content": "outcome (60) [100]"},
+                            {"id": "A", "content": "agent drafts (5) [90]", "parent_id": "P",
+                             "labels": ["m5x2", "agent"]},
+                            {"id": "B", "content": "send it (5) [20]", "parent_id": "P"}])
+    assert [r["id"] for r in rows] == ["P", "B", "A"]
+    assert rows[2]["owner"] == "agent" and rows[2]["groupChild"]

@@ -2678,11 +2678,12 @@ def _row_hidden(t):
     return False
 
 # Task groups (2026-11-23, lib/dtd_groups.py): a Todoist parent with one
-# level of subtasks shows as ONE row, its densest due child plus a +N count
-# of the other due children, and a child is hidden while its parent is not
-# due (deferred, snoozed, block-held, closed). Runs over the rows that
-# survived every hide above, so a just-completed child can never win the
-# row and take its siblings down with it. Any failure shows every row.
+# level of subtasks shows as ONE block, the outcome row then its due inputs
+# indented beneath it, placed where its densest input ranks. An input is
+# hidden while its parent is not due (deferred, snoozed, block-held,
+# closed). Runs over the rows that survived every hide above, so a
+# just-completed input never takes its siblings down with it. Any failure
+# shows every row.
 _grp_hidden = set()
 _survivors = []
 for t in unique:
@@ -2697,7 +2698,7 @@ try:
     _grp_parents = _dg.parent_ids(d)
     _grp_hidden |= {str(i) for i in completed_ids} | {str(i) for i in removed_ids}
     _grp_hidden |= {str(i) for i in _snoozed} | {str(i) for i in _deferred_ids}
-    unique = _dg.collapse(_survivors, today, _grp_hidden)
+    unique = _dg.layout(_survivors, today, _grp_hidden)
     _dg_ok = True
 except Exception:
     unique = _survivors
@@ -2736,12 +2737,6 @@ for t in unique:
     # append keeps the row layout.
     if is_ritual and _PREFILL and clean.replace('\U0001F608', '').strip() == '-1g':
         display = raw + ' \U0001F608 ' + _PREFILL
-    # Group row (lib/dtd_groups.py): +N other due inputs of the same outcome,
-    # ahead of the trailing estimates like the inbox badge.
-    if t.get('group_more'):
-        _emg = re.search(r'(\s*(?:\(\d*\)|\[[\d.+]*(?:/m)?\]|\{\d*\}))+\s*$', display)
-        _cutg = _emg.start() if _emg else len(display)
-        display = display[:_cutg].rstrip() + ' +' + str(t['group_more']) + display[_cutg:]
     # Inbox habit badge: the count goes AHEAD of the trailing estimates so
     # rjust_est still finds them and strip_ann/done routing never see it.
     # Plain U+2709 (no VS16) so _dwidth counts one cell.
@@ -2817,10 +2812,11 @@ for t in unique:
     # a box on an outcome (a group parent; never recurring, so the two never
     # meet), a robot on an input an agent is working (dimmed below), a bell
     # on a follow-up that is waiting on someone. Escapes, not literals.
-    # The box also leads the row that stands in for a whole group (the input
-    # collapse() picked), even when it is the only one due: without it nothing
-    # on screen said the row was a rollup (JM 2026-11-23).
-    if _dg_ok and (_dg.is_group_parent(t, _grp_parents) or 'group_more' in t):
+    # An input sits under its outcome, indented with a corner (JM 2026-11-23:
+    # collocated, and the rollup row carries the box).
+    if _dg_ok and t.get('group_child'):
+        repeat = '  \u2514 '
+    elif _dg_ok and _dg.is_group_parent(t, _grp_parents):
         repeat = '\U0001F4E6 '
     if _dg_ok and _dg.AGENT_LABEL in t.get('labels', []):
         repeat = repeat + '\U0001F916 '

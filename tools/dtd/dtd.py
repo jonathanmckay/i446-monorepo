@@ -644,10 +644,10 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
         return False
 
     # Task groups (2026-11-23, lib/dtd_groups.py): a Todoist parent with one
-    # level of subtasks is ONE row, its densest due child, with groupMore =
-    # the count of its other due children. Collapsed over the rows that
-    # survived every hide above, so a just-completed child cannot win the row;
-    # a parent hidden by any of those hides takes its children with it.
+    # level of subtasks is ONE block, the outcome row then its due inputs
+    # beneath it (groupChild), placed where its densest input ranks. Laid out
+    # over the rows that survived every hide above; a parent hidden by any of
+    # those hides takes its inputs with it.
     survivors, grp_hidden = [], set()
     for t in ordered:
         tid = t.get("id")
@@ -662,7 +662,7 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
     grp_hidden |= {str(i) for i in _deferred_ids} | {str(i) for i in form_hidden}
     grp_parents = dtd_groups.parent_ids(d)
     try:
-        survivors = dtd_groups.collapse(survivors, today, grp_hidden)
+        survivors = dtd_groups.layout(survivors, today, grp_hidden)
     except Exception as e:  # noqa: BLE001 — never lose the list over grouping
         print("WARN groups:", e, file=sys.stderr)
 
@@ -691,12 +691,9 @@ def build_tasks(force_refresh: bool = False) -> list[dict]:
             "title": title,
             "est": est,
             "badge": badge,
-            # Group row: how many other due inputs of the same outcome are
-            # folded under this one, and the outcome's name ("" / 0 otherwise).
-            # This row stands in for a whole group (the input collapse() picked),
-            # even when it is the only one due: drawn with a leading box.
-            "groupRow": "group_more" in t,
-            "groupMore": int(t.get("group_more") or 0),
+            # Task group block (lib/dtd_groups.py): an input listed under its
+            # outcome, drawn indented with a corner.
+            "groupChild": bool(t.get("group_child")),
             # This row is itself an outcome (a group parent): drawn with a box.
             "groupParent": dtd_groups.is_group_parent(t, grp_parents),
             # Owner label (lib/dtd_groups.py): "agent" (an agent is working
@@ -2125,11 +2122,12 @@ function makeRow(t){
   line.style.color = t.color;
   const ttl = document.createElement('span');
   ttl.className = 'ttl';
-  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + ((t.groupParent||t.groupRow)?'📦 ':'') + (t.owner==='agent'?'🤖 ':'') + (t.owner==='waiting'?'🔔 ':'') + (t.recurring?'↻ ':'') + t.title;
+  ttl.textContent = (t.agentDone?'✅ ':'') + (t.agent?(t.agentPane||'')+'😈 ':'') + (t.groupChild?'└ ':(t.groupParent?'📦 ':'')) + (t.owner==='agent'?'🤖 ':'') + (t.owner==='waiting'?'🔔 ':'') + (t.recurring?'↻ ':'') + t.title;
   if (t.owner==='agent') ttl.style.opacity = '0.5';
+  if (t.groupChild) ttl.style.paddingLeft = '1.2em';
   const est = document.createElement('span');
   est.className = 'est';
-  est.textContent = (t.groupMore ? '+' + t.groupMore + ' ' : '') + (t.badge ? t.badge + ' ' : '') + (t.est || '');
+  est.textContent = (t.badge ? t.badge + ' ' : '') + (t.est || '');
   line.appendChild(ttl); line.appendChild(est);
   row.appendChild(line);
 

@@ -26,7 +26,7 @@ def main() -> int:
     plain = re.sub(r"\033\[[0-9;]*m", "", arg)
     plain = re.sub(r"^↻ ", "", plain)
     # Task-group markers (2026-11-23): outcome box, agent robot, waiting bell.
-    plain = re.sub("^(?:[\U0001F4E6\U0001F916\U0001F514] )+", "", plain)
+    plain = re.sub("^(?:[\U0001F4E6\U0001F916\U0001F514\u2514] )+", "", plain.lstrip())
     plain = re.sub(r"^▶ [^·]* · ", "", plain)
     # In-progress tiers (2026-10-11): lead glyph is 🧮 or a spinner frame (JM's
     # running timer moves since 2026-10-16; agent rows add 😈), then optional

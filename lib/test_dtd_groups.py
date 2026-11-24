@@ -26,64 +26,83 @@ def test_ppm_sums_split_pairs_and_defaults_to_30_minutes():
     assert g.ppm("no points (10)") == 0
 
 
-# --- collapse --------------------------------------------------------------
+# --- layout ----------------------------------------------------------------
 
-def test_group_collapses_to_densest_child_and_hides_parent():
-    rows = [row("P", "outcome (240) [1360]"),
+def flags(rows):
+    return [(r["id"], "head" if r.get("group_head") else "child" if r.get("group_child") else "")
+            for r in rows]
+
+
+def test_group_is_one_block_outcome_then_inputs_densest_first():
+    rows = [row("x", "unrelated (5) [5]"),
             row("a", "funding (10) [30]", "P"),
+            row("P", "outcome (240) [1360]"),
+            row("y", "another (5) [5]"),
             row("b", "ticor (5) [40]", "P"),
-            row("c", "broker (15) [30]", "P"),
-            row("x", "unrelated (5) [5]")]
-    out = g.collapse(rows, TODAY)
-    assert ids(out) == ["b", "x"]
-    assert out[0]["group_more"] == 2
-    assert out[0]["group_name"] == "outcome [1360]"
-    assert "group_more" not in rows[2]            # input rows are not mutated
+            row("c", "broker (15) [30]", "P")]
+    out = g.layout(rows, TODAY)
+    # the block sits where its densest input (b) ranked, not where P or a were
+    assert flags(out) == [("x", ""), ("y", ""), ("P", "head"), ("b", "child"),
+                          ("a", "child"), ("c", "child")]
+    assert out[2]["group_size"] == 3
+    assert "group_head" not in rows[2] and "group_child" not in rows[1]   # copies
 
 
-def test_single_child_shows_with_zero_more():
-    out = g.collapse([row("a", "only (5) [10]", "P")], TODAY)
-    assert ids(out) == ["a"] and out[0]["group_more"] == 0
+def test_single_input_block():
+    out = g.layout([row("P", "outcome [100]"), row("a", "only (5) [10]", "P")], TODAY)
+    assert flags(out) == [("P", "head"), ("a", "child")]
 
 
-def test_child_hidden_when_parent_due_later_closed_or_caller_hid_it():
+def test_children_dropped_when_parent_due_later_closed_or_caller_hid_it():
     later = row("a", "x (5) [10]", "P", parent_due="2026-11-30")
     closed = row("b", "y (5) [10]", "Q", parent_closed=True)
     snoozed = row("c", "z (5) [10]", "R")
-    out = g.collapse([later, closed, snoozed], TODAY, hidden_parents={"R"})
-    assert out == []
+    assert g.layout([later, closed, snoozed], TODAY, hidden_parents={"R"}) == []
 
 
-def test_unknown_parent_state_shows_the_child():
+def test_unknown_or_undated_parent_shows_the_inputs_as_a_headless_block():
     """No stamps at all (parent missing from cache, GET failed): fail open."""
     orphan = {"id": "a", "content": "x (5) [10]", "due": TODAY, "parent_id": "P"}
-    assert ids(g.collapse([orphan], TODAY)) == ["a"]
+    assert flags(g.layout([orphan], TODAY)) == [("a", "child")]
+    undated = [row("a", "x (5) [10]", "P", parent_due=""), row("z", "plain [1]"),
+               row("b", "y (5) [20]", "P", parent_due="")]
+    assert flags(g.layout(undated, TODAY)) == [("z", ""), ("b", "child"), ("a", "child")]
 
 
-def test_undated_parent_does_not_hide_children():
-    assert ids(g.collapse([row("a", "x (5) [10]", "P", parent_due="")], TODAY)) == ["a"]
-
-
-def test_parent_without_visible_children_stays_a_normal_row():
+def test_parent_without_visible_inputs_stays_a_normal_row():
     rows = [row("P", "outcome [100]"), row("a", "x (5) [10]", "P", parent_closed=True)]
-    assert ids(g.collapse(rows, TODAY)) == ["P"]
+    out = g.layout(rows, TODAY)
+    assert flags(out) == [("P", "")]
 
 
 def test_recurring_parent_is_not_a_group():
     rows = [row("P", "weekly thing [50]", recurring=True),
             row("a", "x (5) [10]", "P", parent_recurring=True),
             row("b", "y (5) [20]", "P", parent_recurring=True)]
-    out = g.collapse(rows, TODAY)
-    assert ids(out) == ["P", "a", "b"]
-    assert all("group_more" not in r for r in out)
+    assert flags(g.layout(rows, TODAY)) == [("P", ""), ("a", ""), ("b", "")]
 
 
-def test_already_hidden_sibling_cannot_win_the_row():
-    """collapse() only sees survivors, so a just-completed dense child that
-    the caller filtered out leaves the next sibling showing."""
-    survivors = [row("a", "funding (10) [30]", "P"), row("c", "broker (15) [30]", "P")]
-    out = g.collapse(survivors, TODAY)
-    assert ids(out) == ["a"] and out[0]["group_more"] == 1
+def test_completed_input_is_simply_absent_and_the_rest_keep_their_block():
+    """layout() only sees survivors: a just-completed input the caller
+    filtered out cannot take its siblings or the outcome with it."""
+    survivors = [row("P", "outcome [100]"), row("a", "funding (10) [30]", "P"),
+                 row("c", "broker (15) [30]", "P")]
+    assert flags(g.layout(survivors, TODAY)) == [("P", "head"), ("a", "child"), ("c", "child")]
+
+
+def test_agent_inputs_go_last_and_a_block_of_only_agent_inputs_still_shows():
+    rows = [row("P", "outcome [100]"),
+            row("a", "agent drafts (5) [90]", "P", labels=["agent"]),
+            row("b", "send it (5) [20]", "P")]
+    assert flags(g.layout(rows, TODAY)) == [("P", "head"), ("b", "child"), ("a", "child")]
+    only = [row("P", "outcome [100]"), row("a", "agent drafts (5) [90]", "P", labels=["agent"])]
+    assert flags(g.layout(only, TODAY)) == [("P", "head"), ("a", "child")]
+
+
+def test_pinned_tier_rows_keep_their_place():
+    habit = row("h", "0g thing {10}", "P", labels=["#0g"])
+    rows = [habit, row("x", "plain [1]"), row("P", "outcome [100]"), row("a", "x (5) [10]", "P")]
+    assert flags(g.layout(rows, TODAY)) == [("h", ""), ("x", ""), ("P", "head"), ("a", "child")]
 
 
 # --- attach_parents --------------------------------------------------------
@@ -228,23 +247,7 @@ def test_split_pairs_keep_their_codes_through_take_and_add_back(tmp_path):
     assert td.tasks["P"]["content"] == "o [30] @h335 [10] @i9"
 
 
-# --- owners ----------------------------------------------------------------
-
-def test_agent_input_never_wins_the_row_or_counts():
-    rows = [row("a", "agent drafts (5) [90]", "P", labels=["agent"]),
-            row("b", "send it (5) [20]", "P"),
-            row("c", "call (10) [10]", "P")]
-    out = g.collapse(rows, TODAY)
-    assert ids(out) == ["b"] and out[0]["group_more"] == 1
-
-
-def test_group_with_only_agent_inputs_still_shows_one_and_keeps_parent_hidden():
-    rows = [row("P", "outcome [100]"),
-            row("a", "agent drafts (5) [90]", "P", labels=["agent"]),
-            row("b", "agent checks (5) [10]", "P", labels=["agent"])]
-    out = g.collapse(rows, TODAY)
-    assert ids(out) == ["a"] and out[0]["group_more"] == 0
-
+# --- parents ----------------------------------------------------------------
 
 def test_group_parent_detection():
     cache = {"today": [row("P", "outcome [100]"), row("a", "x [10]", "P"),

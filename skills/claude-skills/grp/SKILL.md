@@ -7,7 +7,8 @@ user-invocable: true
 # /grp: an outcome and its inputs
 
 A group is a Todoist parent task (the outcome) with ONE level of subtasks
-(its inputs). dtd shows it as one row: the densest due input plus `+N`. The
+(its inputs). dtd shows it as one block: the 📦 outcome row, then its due
+inputs indented beneath it, densest first. The
 rules are in `~/i446-monorepo/lib/dtd_groups.py` and
 `~/vault/g245/task-style-guide.md` (Groups); this skill is how a group gets
 made and how the agent takes its share of the work.
@@ -58,12 +59,12 @@ to price the input higher.
 | Label | Meaning | In dtd |
 |---|---|---|
 | none | JM does it | shown |
-| `agent` | an agent can finish it without JM: read, check, compare, draft, file | dimmed with 🤖, never the group's row or in its `+N` while JM has an input due |
+| `agent` | an agent can finish it without JM: read, check, compare, draft, file | dimmed with 🤖, last in the block |
 | `waiting` | the next move is someone else's; name them in the task, due = follow-up day | shown with 🔔 on that day |
 
 Give `agent` only to a step you are about to do in this session or hand to a
 background agent now. A step left on `agent` with nobody working it sits
-dimmed and uncounted until someone notices.
+dimmed at the bottom of its block until someone notices.
 
 ## 4. Do the agent inputs
 
@@ -91,7 +92,7 @@ Report in this shape and stop:
 📦 <outcome> [<N>]  (inputs <sum>, reserve <N - sum>)
   <input> (N) [N]  <owner, or the date it starts>
   ...
-dtd shows: <the densest input due today> +<others due today>
+dtd shows: the outcome with <count> inputs due today beneath it
 ```
 
 ## Example
@@ -103,7 +104,7 @@ dtd shows: <the densest input due today> +<others due today>
   pick 2 of the 5 shortlisted tutors, list in description (5) [30]   JM, today
   book trial lessons with the 2 picked (5) [20]                     waiting, created when the pick closes
   confirm schedule with Louisa (5) [20]                             JM, today
-dtd shows: pick 2 of the 5 shortlisted tutors +1
+dtd shows: the outcome with 2 inputs due today beneath it
 ```
 
 The shortlist was an `agent` input: the agent searched, wrote five
