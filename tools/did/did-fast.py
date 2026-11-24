@@ -3230,6 +3230,31 @@ def _fetch_task_by_id(task_id: str) -> Optional[dict]:
         return None
 
 
+def _reclose_owed(task: dict, done_ids: set, today_str: str, fetch=None) -> Optional[dict]:
+    """A recurring card whose NAME is already in completed-today: is its
+    Todoist close still owed? Returns the live task (due sliced to a date)
+    when it is, else None (= skip the re-close, the old behaviour).
+
+    completed-today records the name whether or not the close landed (Step 7),
+    and only an ok close records the id. Bug 2026-11-23: "1 vm+li+msgr" got
+    its 1n+ mark and 分 at 13:55, the close did not land, and the name alone
+    made every later run that day skip the close; the card came back the next
+    morning still due 11-23. So the name is not proof. Proof the close landed
+    is the id in completed-today, or a live due date past today. A task that
+    cannot be read is left alone: a second close on a recurrence that did
+    advance skips an occurrence (the 2026-06-27 drift)."""
+    tid = str(task.get("id") or "")
+    if not tid or tid in done_ids:
+        return None
+    live = (fetch or _fetch_task_by_id)(tid)
+    if not live:
+        return None
+    due = (live.get("due") or "")[:10]
+    if not due or due > today_str:
+        return None
+    return {**live, "due": due}
+
+
 def _verify_closed(task_id: str) -> tuple[bool, str | None]:
     """Read back the task; return (closed_ok, error). 404 = closed (archived).
 
@@ -5129,22 +5154,31 @@ def main():
     _ct = mc._load(mc.COMPLETED)
     done_today = ({mc._normalize(n) for n in _ct.get("names", [])}
                   if _ct.get("date") == today_str else set())
+    done_ids_today = ({str(v) for v in (_ct.get("ids") or {}).values()}
+                      if _ct.get("date") == today_str else set())
     for r in fast:
         if r.todoist_task:
             tid = r.todoist_task["id"]
             id_to_name[tid] = r.item.name
             # Already completed today + recurring → skip the re-close so the
-            # recurrence doesn't advance a second time.
+            # recurrence doesn't advance a second time. Unless the earlier
+            # close never landed (name recorded, id not, Todoist still due):
+            # then the close is owed (_reclose_owed, bug 2026-11-23).
             if (r.todoist_task.get("recurring")
                     and mc._normalize(r.item.name) in done_today):
-                future_skipped.append({
-                    "id": tid,
-                    "name": r.item.name,
-                    "content": r.todoist_task.get("content", ""),
-                    "due": r.todoist_task.get("due", ""),
-                    "warning": "already done today (skipped re-close to avoid recurrence drift)",
-                })
-                continue
+                _live = _reclose_owed(r.todoist_task, done_ids_today, today_str)
+                if _live is None:
+                    future_skipped.append({
+                        "id": tid,
+                        "name": r.item.name,
+                        "content": r.todoist_task.get("content", ""),
+                        "due": r.todoist_task.get("due", ""),
+                        "warning": "already done today (skipped re-close to avoid recurrence drift)",
+                    })
+                    continue
+                print(f"did-fast: {r.item.name} is recorded done today but Todoist "
+                      f"still has it due {_live['due']}; closing it now", file=sys.stderr)
+                r.todoist_task = {**r.todoist_task, **_live}
             # Guard: don't close tasks due in the future (prevents double-tap on recurring)
             task_due = r.todoist_task.get("due", "")
             if task_due and task_due > today_str:
@@ -5187,6 +5221,13 @@ def main():
                 due_by_id[tid] = r.todoist_task.get("due") or None
 
     close_results = close_todoist_tasks(task_ids, due_by_id)
+    # A close that did not land used to leave no trace (2026-11-23: the reason
+    # "1 vm+li+msgr" stayed open was gone by the next morning). dtd appends
+    # stderr to its .err log.
+    for _tid, (_ok, _err) in close_results.items():
+        if not _ok:
+            print(f"did-fast: Todoist close FAILED for {id_to_name.get(_tid, _tid)} "
+                  f"({_tid}): {_err}", file=sys.stderr)
 
     # Fast-forward OVERDUE recurring habits to their next occurrence, leaving
     # a closed dated child behind for the stale occurrence (see
