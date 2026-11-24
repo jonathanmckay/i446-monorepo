@@ -46,7 +46,7 @@ Sunday's month, `W` = which Sunday of that month it is — e.g. Sun 7/19 →
 |-------|-----|
 | He/She is | B |
 | New / Curriculum | C |
-| Concerned / Opportunity | D |
+| Concerned/Opp | D |
 | Well | E |
 | Better | F |
 | Notes | G |
@@ -122,7 +122,13 @@ Then confirm: fill the form, ^S to save.
   due today or earlier), via the same `run.py` path dtd's done action uses,
   queued behind the Neon writes (user request 2026-09-29). `1 xk87 wknd`
   and cards already advanced to next week are untouched. `--no-mark`
-  skips this for reruns. A cancelled survey closes nothing.
+  skips this for reruns.
+- Saving the **xk88 page** closes `1 xk88` by itself, without waiting for
+  the kid pages (user request 2026-11-24), once the page's Excel write has
+  landed. So Esc or a cancel after page 1 leaves `1 xk88` closed and
+  `1 xk87` open. A blank xk88 page closes nothing, a failed write closes
+  nothing, and `--no-mark` still closes nothing. `1 xk87` keeps the
+  every-page rule above.
 - From dtd the form runs with `--detach` (2026-11-17): nothing is written by
   the form itself. One detached saver starts at the first submitted page,
   writes each page as it is submitted, closes the cards when the form

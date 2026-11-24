@@ -288,8 +288,9 @@ def test_paginated_entrypoint_exists_and_form_is_paged():
     src = inspect.getsource(m.run_paginated)
     assert "queue_write" in src, \
         "run_paginated must queue the write, not call write_answers directly (would block)"
-    qw_src = inspect.getsource(m.queue_write)
-    assert "write_answers" in qw_src and "sheets=[cfg]" in qw_src
+    assert "_write_page" in inspect.getsource(m.queue_write)
+    wp_src = inspect.getsource(m._write_page)
+    assert "write_answers" in wp_src and "sheets=[cfg]" in wp_src
     assert isinstance(m._writer, m.BackgroundWriter)
     page_src = inspect.getsource(m.run_page)
     assert "Dimension(min=1" in page_src  # compact rows: no reserved blank height
@@ -445,9 +446,9 @@ def test_run_paginated_marks_on_finish_unless_no_mark():
     tree = ast.parse(src)
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run_paginated")
     body = ast.get_source_segment(src, fn)
-    assert "queue_finish_marks()" in body and "no_mark" in body
+    assert "queue_finish_marks(" in body and "no_mark" in body
     # the marks are queued BEFORE the final drain, so they are waited on
-    assert body.index("queue_finish_marks()") < body.rindex("drain_writes()")
+    assert body.rindex("queue_finish_marks(") < body.rindex("drain_writes()")
     # the cancel path never marks
     cancel = body[body.index("if action is None:"):body.index("if action == \"back\":")]
     assert "queue_finish_marks" not in cancel
@@ -532,7 +533,9 @@ def test_detach_finish_returns_at_once_without_writing(monkeypatch, tmp_path):
     spool = m.read_spool(Path(spawned[0][-1]))
     assert spool["state"] == "finished"
     assert list(spool["pages"]) == ["xk88", "xk20", "xk22", "xk26"]
-    assert spool["close"] == [["1 xk88", "A1"], ["1 xk87", "B2"]]
+    # 1 xk88 was handed over with its own page (PAGE_CARDS), 1 xk87 at the end
+    assert spool["page_close"] == {"xk88": [["1 xk88", "A1"]]}
+    assert spool["close"] == [["1 xk87", "B2"]]
     # every card the saver will close is hidden before this process exits;
     # the wknd row we were launched from is never closed, so never hidden
     assert hide.read_text().split() == ["A1", "B2"]
@@ -554,7 +557,7 @@ def test_detach_spawns_at_the_first_page_so_saving_starts_while_typing(monkeypat
     assert m.read_spool(s.path)["pages"] == {"xk88": 3, "xk20": 2}
 
 
-def test_detach_cancel_after_pages_saves_them_and_closes_nothing(monkeypatch, tmp_path):
+def test_detach_cancel_after_pages_saves_them_and_closes_only_the_saved_pages_card(monkeypatch, tmp_path):
     m = _load()
     hide, _hdr, spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
     _pages(m, monkeypatch, ["submit", "submit", None])
@@ -563,7 +566,9 @@ def test_detach_cancel_after_pages_saves_them_and_closes_nothing(monkeypatch, tm
     spool = m.read_spool(Path(spawned[0][-1]))
     assert spool["state"] == "cancelled" and spool["close"] == []
     assert list(spool["pages"]) == ["xk88", "xk20"]
-    assert not hide.exists() and wrote == []
+    # the xk88 page was saved, so its card closes; 1 xk87 needs every page
+    assert spool["page_close"] == {"xk88": [["1 xk88", "A1"]]}
+    assert hide.read_text().split() == ["A1"] and wrote == []
 
 
 def test_detach_cancel_on_page_one_is_still_a_plain_cancel(monkeypatch, tmp_path):
@@ -580,7 +585,8 @@ def test_detach_no_mark_hides_and_closes_nothing(monkeypatch, tmp_path):
     hide, _hdr, spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
     _pages(m, monkeypatch)
     assert m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), no_mark=True, detach=True) == 0
-    assert m.read_spool(Path(spawned[0][-1]))["close"] == []
+    spool = m.read_spool(Path(spawned[0][-1]))
+    assert spool["close"] == [] and spool["page_close"] == {}
     assert not hide.exists()
 
 
@@ -588,16 +594,21 @@ def test_detach_falls_back_to_the_inline_writer_when_the_saver_cannot_start(monk
     """No child, no hand-off: the answers must still be written, by the old
     path, and waited on."""
     m = _load()
-    _hide, _hdr, _spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
+    hide, _hdr, _spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
 
     def _no(argv, log, env=None):
         raise OSError("fork failed")
     monkeypatch.setattr(m.form_detach, "spawn_detached", _no)
-    monkeypatch.setattr(m, "queue_finish_marks", lambda: [])
+    calls = []
+    monkeypatch.setattr(m, "queue_finish_marks", lambda **k: calls.append(k) or [])
     _pages(m, monkeypatch)
     rc = m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), detach=True)
     assert rc == 0
     assert wrote == ["xk88", "xk20", "xk22", "xk26"]
+    # the xk88 page's card is queued behind its write, then the finish marks
+    assert calls[0]["only"] == ("1 xk88",) and calls[0]["needs"] == "xk88"
+    assert len(calls) == 2 and "only" not in calls[1]
+    assert hide.read_text().split() == [], "a saver that never started leaves nothing hidden"
     assert not list((tmp_path / "rec").glob("pending-*")), "no orphan spool left behind"
 
 
@@ -731,3 +742,157 @@ def test_from_json_replays_a_spool_only_for_the_submitted_pages(tmp_path):
     flat = tmp_path / "flat.json"
     flat.write_text('{"xk88_good": "a"}')
     assert m.answers_from_file(flat) == ({"xk88_good": "a"}, None, None)
+
+
+# ── saving the xk88 page closes `1 xk88` at once (2026-11-24) ───────────────
+# "When I save the xk88 survey, mark that task as done": the page's own card
+# no longer waits for the three kid pages. 1 xk87 still needs all four.
+
+def _inline_env(m, monkeypatch, tmp_path, write=None):
+    """In-process writer run synchronously; closes recorded, not run."""
+    cache = tmp_path / "task-queue.json"
+    cache.write_text(_json.dumps({"1neon": [
+        {"id": "A1", "content": "1 xk88 (30) [60]", "due": "2026-11-15"},
+        {"id": "B2", "content": "1 xk87 (30) [60]", "due": "2026-11-15"}]}))
+    monkeypatch.setattr(m, "TASK_QUEUE", cache)
+    monkeypatch.setattr(m, "RECOVERY_DIR", tmp_path / "rec")
+    monkeypatch.setattr(m, "write_answers", write or (lambda a, s, sheets=None: "OK"))
+    log = []
+
+    def _q(fn, *a, tag="", recovery_payload=None, **k):
+        try:
+            log.append((tag, fn(*a, **k)))
+        except Exception as e:  # noqa: BLE001  the real worker carries on too
+            log.append((tag, "ERR %s" % e))
+    monkeypatch.setattr(m._writer, "queue", _q)
+    monkeypatch.setattr(m, "drain_writes", lambda: True)
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: None)
+    closes = []
+    monkeypatch.setattr(m, "close_card", lambda c: closes.append(c) or (True, c + ": todoist closed"))
+    return log, closes
+
+
+def test_inline_saving_the_xk88_page_closes_1_xk88_without_the_kid_pages(monkeypatch, tmp_path):
+    m = _load()
+    log, closes = _inline_env(m, monkeypatch, tmp_path)
+    _pages(m, monkeypatch, ["finish"])          # Esc on page 1 = save it and leave
+    m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14))
+    assert closes == ["1 xk88"], "1 xk87 needs every page"
+    assert [t for t, _r in log][:2] == ["xk88", "did-1 xk88"], "close runs behind the page's write"
+
+
+def test_inline_finish_closes_each_card_once(monkeypatch, tmp_path):
+    m = _load()
+    _log, closes = _inline_env(m, monkeypatch, tmp_path)
+    _pages(m, monkeypatch)
+    m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14))
+    # the cache still lists 1 xk88 at finish (stale): it must not run twice
+    assert closes == ["1 xk88", "1 xk87"]
+
+
+def test_inline_blank_xk88_page_or_no_mark_closes_nothing_early(monkeypatch, tmp_path):
+    m = _load()
+    _log, closes = _inline_env(m, monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "run_page", lambda *a: ("finish", {}))   # Esc on a blank page
+    m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14))
+    assert closes == []
+    _pages(m, monkeypatch, ["finish"])
+    m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14), no_mark=True)
+    assert closes == []
+
+
+def test_inline_failed_xk88_write_does_not_close_its_card(monkeypatch, tmp_path):
+    m = _load()
+
+    def _boom(a, s, sheets=None):
+        raise RuntimeError("excel down")
+    log, closes = _inline_env(m, monkeypatch, tmp_path, write=_boom)
+    _pages(m, monkeypatch, ["finish"])
+    m.run_paginated(dt.date(2026, 11, 8), dt.date(2026, 11, 14))
+    assert closes == []
+    assert "NOT closed" in dict(log)["did-1 xk88"]
+
+
+def test_detach_blank_xk88_page_hands_over_no_card(monkeypatch, tmp_path):
+    m = _load()
+    hide, _hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    s = m.DetachedSaver(dt.date(2026, 11, 8))
+    assert s.page({}, m.SHEETS[0]) is True
+    assert m.read_spool(s.path)["page_close"] == {} and not hide.exists()
+    # filled in on a second pass: handed over then, and only once
+    assert s.page({"xk88_good": "a"}, m.SHEETS[0]) is True
+    assert s.page({"xk88_good": "b"}, m.SHEETS[0]) is True
+    assert m.read_spool(s.path)["page_close"] == {"xk88": [["1 xk88", "A1"]]}
+    assert hide.read_text().split() == ["A1"]
+
+
+def test_detach_unhides_the_page_card_when_the_saver_cannot_start(monkeypatch, tmp_path):
+    m = _load()
+    hide, _hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+
+    def _no(argv, log, env=None):
+        raise OSError("fork failed")
+    monkeypatch.setattr(m.form_detach, "spawn_detached", _no)
+    s = m.DetachedSaver(dt.date(2026, 11, 8))
+    assert s.page({"xk88_good": "a"}, m.SHEETS[0]) is False
+    assert s.page_close == {} and hide.read_text().split() == []
+
+
+def _spool_pc(m, tmp_path, state, page_close, close=()):
+    path = _spool(m, tmp_path, {"xk88": 1}, state=state, close=close)
+    data = _json.loads(path.read_text())
+    data["page_close"] = page_close
+    m.write_spool(path, data)
+    return path
+
+
+def test_saver_closes_the_page_card_even_when_the_form_was_cancelled(monkeypatch, tmp_path):
+    m = _load()
+    _hide, hdr, _spawned, wrote = _detach_env(m, monkeypatch, tmp_path)
+    closes = []
+    monkeypatch.setattr(m, "close_card", lambda c: closes.append(c) or (True, c + ": ok"))
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: None)
+    path = _spool_pc(m, tmp_path, "cancelled", {"xk88": [["1 xk88", "A1"]]})
+    assert m.run_saver(path, poll=0.01, settle=0) == 0
+    assert wrote == ["xk88"] and closes == ["1 xk88"]
+    assert hdr.read_text().strip().endswith("✓ xk887 week 11.2 saved (xk88) · closed 1 xk88")
+
+
+def test_saver_never_closes_the_page_card_after_a_failed_write(monkeypatch, tmp_path):
+    m = _load()
+    hide, hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    hide.write_text("A1\n")
+
+    def _boom(a, s, sheets=None):
+        raise RuntimeError("excel down")
+    monkeypatch.setattr(m, "write_answers", _boom)
+    closes = []
+    monkeypatch.setattr(m, "close_card", lambda c: closes.append(c) or (True, ""))
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: None)
+    path = _spool_pc(m, tmp_path, "finished", {"xk88": [["1 xk88", "A1"]]})
+    assert m.run_saver(path, poll=0.01, settle=0) == 1
+    assert closes == [] and hide.read_text().split() == []
+    assert "NOT closed: 1 xk88" in hdr.read_text()
+
+
+def test_saver_retries_a_failed_page_card_close_once_at_finish(monkeypatch, tmp_path):
+    m = _load()
+    _hide, hdr, _spawned, _wrote = _detach_env(m, monkeypatch, tmp_path)
+    tries = []
+    monkeypatch.setattr(m, "close_card", lambda c: tries.append(c) or (len(tries) > 1, c))
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: None)
+    path = _spool_pc(m, tmp_path, "finished", {"xk88": [["1 xk88", "A1"]]})
+    assert m.run_saver(path, poll=0.01, settle=0) == 0
+    assert tries == ["1 xk88", "1 xk88"]
+    text = hdr.read_text()
+    assert "closed 1 xk88" in text and "NOT closed" not in text
+
+
+def test_close_card_accepts_a_weekly_card_already_done_this_week(monkeypatch):
+    m = _load()
+
+    class R:
+        returncode, stderr = 0, ""
+        stdout = "  = 1 xk88 already done this week: due 2026-12-01; no credit, card left alone\n"
+    monkeypatch.setattr(m, "run_bounded", lambda *a, **k: R())
+    assert m.close_card("1 xk88")[0] is True

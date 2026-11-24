@@ -83,7 +83,7 @@ SHEETS = [
         "fields": [
             ("is",           "He is",                                 "B", "textml"),
             ("new",          "New / Curriculum",                      "C", "textml"),
-            ("concerned",    "Concerned / Opportunity",                "D", "textml"),
+            ("concerned",    "Concerned/Opp",                         "D", "textml"),
             ("well",         "Well",                                  "E", "textml"),
             ("better",       "Better",                                "F", "textml"),
             ("notes",        "Notes",                                 "G", "textml"),
@@ -332,8 +332,26 @@ def queue_write(answers: dict, sunday: _dt.date, cfg: dict) -> None:
     call (rather than trusting whatever _writer was constructed with) so
     tests that monkeypatch it after module load still take effect."""
     _writer.recovery_dir = RECOVERY_DIR
-    _writer.queue(write_answers, answers, sunday, sheets=[cfg],
+    _writer.queue(_write_page, answers, sunday, cfg,
                   tag=cfg["sheet"], recovery_payload=answers)
+
+
+# Sheets whose most recent in-process write landed. A page card (PAGE_CARDS)
+# is closed only behind a CONFIRMED write of its page: the writer thread runs
+# the next job even after a failed one, so queue order alone proves nothing.
+_written_ok: set[str] = set()
+
+
+def _write_page(answers: dict, sunday: _dt.date, cfg: dict) -> str:
+    _written_ok.discard(cfg["sheet"])
+    result = write_answers(answers, sunday, sheets=[cfg])
+    _written_ok.add(cfg["sheet"])
+    return result
+
+
+def filled_count(answers: dict, cfg: dict) -> int:
+    return sum(1 for key, _l, _c, _k in cfg["fields"]
+               if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +368,16 @@ TASK_QUEUE = Path.home() / ".local/state/jm/task-queue.json"
 RUN_PY = Path.home() / "i446-monorepo/tools/did/run.py"
 DID_FAST = Path.home() / "i446-monorepo/tools/did/did-fast.py"
 FINISH_CARDS = ("1 xk88", "1 xk87")
+# Saving a PAGE closes its own card at once (user request 2026-11-24: "when I
+# save the xk88 survey, mark that task as done"): the xk88 page is the whole
+# of `1 xk88`, so it need not wait for the three kid pages. `1 xk87` still
+# closes only when every page was submitted. Guards: the page must have at
+# least one answer (Esc / ^→ past a blank page closes nothing) and its Excel
+# write must have landed. --no-mark still closes nothing.
+PAGE_CARDS = {"xk88": ("1 xk88",)}
+# card -> confirmed closed by THIS process (inline path). A card queued twice
+# (page save, then survey finish, or a re-submitted page) runs run.py once.
+_closed: dict[str, bool] = {}
 _ANNOT_RE = re.compile(r"\s*[\[\(\{][^\]\)\}]*[\]\)\}]")
 
 
@@ -387,20 +415,29 @@ def open_finish_cards(queue: dict, today: _dt.date) -> list[str]:
     return [c for c in FINISH_CARDS if c in found]
 
 
-def queue_finish_marks(today: _dt.date | None = None) -> list[str]:
+def queue_finish_marks(today: _dt.date | None = None, only=None, skip=(),
+                       needs: str | None = None) -> list[str]:
     """Queue one run.py close per open card (see open_finish_cards) plus a
     dtd cache refresh, on the shared writer. Returns the cards queued. A
-    missing/unreadable cache means nothing to close, never an error."""
+    missing/unreadable cache means nothing to close, never an error.
+    `only` / `skip` narrow the cards (a page's own card; cards the detached
+    saver already owns). `needs` names a sheet whose write must have landed
+    by the time the close runs."""
     try:
         queue = json.loads(TASK_QUEUE.read_text())
     except (OSError, ValueError):
         return []
-    cards = open_finish_cards(queue, today or _dt.date.today())
+    cards = [c for c in open_finish_cards(queue, today or _dt.date.today())
+             if (only is None or c in only) and c not in skip]
     for card in cards:
         def _mark(card=card):
-            r = run_bounded(["/usr/bin/python3", str(RUN_PY), card], timeout=120)
-            tail = (r.stdout or r.stderr or "").strip().splitlines()
-            return "%s: %s" % (card, tail[-1] if tail else "exit %d" % r.returncode)
+            if _closed.get(card):
+                return "%s: already closed by this survey" % card
+            if needs and needs not in _written_ok:
+                return "%s: NOT closed, the %s write failed" % (card, needs)
+            ok, line = close_card(card)
+            _closed[card] = ok
+            return line
         _writer.queue(_mark, tag="did-" + card)
     if cards:
         def _refresh():
@@ -483,10 +520,14 @@ class DetachedSaver:
     (child could not start, spool unwritable) and the caller must fall back
     to the in-process writer for whatever page() refused."""
 
-    def __init__(self, sunday: _dt.date):
+    def __init__(self, sunday: _dt.date, mark: bool = True):
         self.sunday = sunday
+        self.mark = mark
         self.path = spool_path(sunday)
         self.pages: dict[str, int] = {}
+        # sheet -> [[card, Todoist id]] the saver closes once that page is
+        # written (PAGE_CARDS); their dtd rows are hidden when handed over.
+        self.page_close: dict[str, list[list[str]]] = {}
         self.answers: dict = {}
         self.seq = 0
         self.proc = None
@@ -495,13 +536,39 @@ class DetachedSaver:
     def _write(self, state: str, close: list | None = None) -> None:
         write_spool(self.path, {
             "week": self.sunday.isoformat(), "parent": os.getpid(), "state": state,
-            "pages": self.pages, "close": close or [], "answers": self.answers})
+            "pages": self.pages, "close": close or [],
+            "page_close": self.page_close, "answers": self.answers})
+
+    def early_cards(self) -> list[str]:
+        return [name for cards in self.page_close.values() for name, _tid in cards]
+
+    def _page_cards(self, answers: dict, cfg: dict) -> list[list[str]]:
+        """The open cards this page closes by itself, if it is being handed
+        over for the first time with at least one answer."""
+        sheet = cfg["sheet"]
+        if not self.mark or sheet not in PAGE_CARDS or sheet in self.page_close \
+                or not filled_count(answers, cfg):
+            return []
+        try:
+            queue = json.loads(TASK_QUEUE.read_text())
+        except (OSError, ValueError):
+            return []
+        return [[name, tid] for name, tid in finish_card_tasks(queue, _dt.date.today())
+                if name in PAGE_CARDS[sheet]]
 
     def page(self, answers: dict, cfg: dict) -> bool:
         if not self.ok:
             return False
         prev = (dict(self.pages), self.answers, self.seq)
+        early = self._page_cards(answers, cfg)
         try:
+            if early:
+                # Hidden BEFORE the spool write / spawn (dtd_hide's rule), so
+                # the saver's unhide can never run ahead of this hide.
+                self.page_close[cfg["sheet"]] = early
+                for _name, tid in early:
+                    if tid:
+                        dtd_hide.hide_card(tid)
             self.seq += 1
             self.pages[cfg["sheet"]] = self.seq   # a re-submitted page gets a newer seq
             self.answers = dict(answers)
@@ -513,6 +580,11 @@ class DetachedSaver:
         except OSError:
             self.pages, self.answers, self.seq = prev
             self.ok = False
+            if early:   # never handed over: the saver will not close these
+                self.page_close.pop(cfg["sheet"], None)
+                for _name, tid in early:
+                    if tid:
+                        dtd_hide.unhide_card(tid)
             if self.proc is None:
                 try:
                     self.path.unlink()
@@ -539,7 +611,9 @@ class DetachedSaver:
                 queue = json.loads(TASK_QUEUE.read_text())
             except (OSError, ValueError):
                 queue = {}
-            close = finish_card_tasks(queue, today or _dt.date.today())
+            early = set(self.early_cards())   # the saver already owns these
+            close = [c for c in finish_card_tasks(queue, today or _dt.date.today())
+                     if c[0] not in early]
             for _name, tid in close:
                 if tid:
                     dtd_hide.hide_card(tid)
@@ -568,7 +642,10 @@ def close_card(card: str) -> tuple[bool, str]:
         return False, "%s: %s" % (card, type(e).__name__)
     out = (r.stdout or "") + (r.stderr or "")
     tail = out.strip().splitlines()
-    ok = r.returncode == 0 and ("todoist closed" in out or "already closed" in out)
+    # run_0n says "already closed"; run_1n (these weekly cards) says "already
+    # done this week" when the card has rolled past the week: closed either way.
+    ok = r.returncode == 0 and any(
+        s in out for s in ("todoist closed", "already closed", "already done this week"))
     return ok, "%s: %s" % (card, tail[-1].strip() if tail else "exit %d" % r.returncode)
 
 
@@ -578,8 +655,18 @@ def run_saver(path: Path, poll: float = 0.3, settle: float = 0.5) -> int:
     written: dict[str, int] = {}
     fails: dict[str, Path] = {}
     saved: list[str] = []
+    results: dict[str, bool] = {}   # card -> closed; the one record of every close tried
     spool = None
     misses = 0
+
+    def _close(name: str, tid: str, label: str, parent: int) -> None:
+        form_detach.hdr("⏳ xk887 week %s: saved, closing %s …" % (label, name),
+                        poke=not form_detach.pid_alive(parent))
+        ok, line = close_card(name)
+        print("xk887 saver → %s" % line, flush=True)
+        results[name] = ok
+        if not ok and tid:
+            dtd_hide.unhide_card(tid)   # still open in Todoist: show the row again
     while True:
         cur = read_spool(path)
         if cur is None:
@@ -618,28 +705,37 @@ def run_saver(path: Path, poll: float = 0.3, settle: float = 0.5) -> int:
             fails[sheet] = dump_recovery(spool["answers"], sunday, sheet)
             print("xk887 saver ✗ %s FAILED: %s (answers in %s)" % (sheet, e, fails[sheet]), flush=True)
         written[sheet] = seq
+        # This page's own card (PAGE_CARDS): closed as soon as the page is in
+        # Excel, whatever happens to the later pages. Never on a failed write.
+        for name, tid in (spool.get("page_close") or {}).get(sheet) or []:
+            if results.get(name):
+                continue
+            if sheet in fails:
+                results[name] = False
+                if tid:
+                    dtd_hide.unhide_card(tid)
+            else:
+                _close(name, tid, label, spool.get("parent") or 0)
     if spool is None:
         print("xk887 saver ✗ spool %s unreadable, nothing saved" % path, flush=True)
         form_detach.hdr("✗ xk887: save FAILED, spool unreadable (%s)" % path)
         return 1
-    closed, not_closed = [], []
     if spool.get("state") == "finished":
+        # one more try for a page card whose close failed after a good write
+        for sheet, cards in (spool.get("page_close") or {}).items():
+            for name, tid in cards:
+                if sheet not in fails and results.get(name) is False:
+                    _close(name, tid, label, spool.get("parent") or 0)
         for name, tid in spool.get("close") or []:
-            form_detach.hdr("⏳ xk887 week %s: saved, closing %s …" % (label, name),
-                            poke=not form_detach.pid_alive(spool.get("parent") or 0))
-            ok, line = close_card(name)
-            print("xk887 saver → %s" % line, flush=True)
-            if ok:
-                closed.append(name)
-            else:
-                not_closed.append(name)
-                if tid:
-                    dtd_hide.unhide_card(tid)   # still open in Todoist: show the row again
-        if spool.get("close"):
-            try:
-                run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
-            except Exception:  # noqa: BLE001
-                pass
+            if not results.get(name):
+                _close(name, tid, label, spool.get("parent") or 0)
+    if results:
+        try:
+            run_bounded(["/usr/bin/python3", str(DID_FAST), "--refresh-cache"], timeout=60)
+        except Exception:  # noqa: BLE001
+            pass
+    closed = [n for n, ok in results.items() if ok]
+    not_closed = [n for n, ok in results.items() if not ok]
     if fails:
         msg = "✗ xk887 week %s: FAILED %s, answers in %s" % (
             label, ", ".join(fails), ", ".join(str(p) for p in fails.values()))
@@ -824,8 +920,9 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False,
     answers: dict = {}
     total = len(SHEETS)
     queued = []
-    saver = DetachedSaver(sunday) if detach else None
+    saver = DetachedSaver(sunday, mark=not no_mark) if detach else None
     inline = False   # True once any page went to the in-process writer
+    early: list[str] = []   # page cards queued for an in-process close
     i = 0
     while i < total:
         cfg = SHEETS[i]
@@ -847,12 +944,17 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False,
         if action == "back":
             i -= 1
             continue
-        filled = sum(1 for key, _l, _c, _k in cfg["fields"]
-                     if (answers.get(field_key(cfg["sheet"], key)) or "").strip())
+        filled = filled_count(answers, cfg)
         print("xk887 → %s: queued %d fields …" % (cfg["sheet"], filled), flush=True)
         if not (saver and saver.page(answers, cfg)):
             queue_write(answers, sunday, cfg)
             inline = True
+            # The page's own card closes behind its write (PAGE_CARDS), unless
+            # the saver was already handed that card on an earlier submit.
+            if filled and not no_mark and cfg["sheet"] in PAGE_CARDS:
+                early += [c for c in queue_finish_marks(
+                    only=PAGE_CARDS[cfg["sheet"]], needs=cfg["sheet"],
+                    skip=saver.early_cards() if saver else ()) if c not in early]
         if cfg["sheet"] not in queued:
             queued.append(cfg["sheet"])
         i += 1
@@ -860,16 +962,21 @@ def run_paginated(sunday: _dt.date, saturday: _dt.date, no_mark: bool = False,
             break
     # Every page submitted = survey finished → close the week's family cards
     # (queued behind the Neon writes; see queue_finish_marks). An Esc before
-    # the last page saves what was filled but leaves the cards open.
+    # the last page saves what was filled and leaves the cards open, except a
+    # saved page's own card (PAGE_CARDS: `1 xk88` once the xk88 page is in).
     if saver and saver.ok and saver.proc is not None and not inline:
-        marked = saver.end("finished", mark=not (no_mark or i < total))
+        marked = saver.early_cards() + saver.end("finished", mark=not (no_mark or i < total))
         print("xk887 → week %s: saving in the background (%s)%s · log %s" % (
             week_row_label(sunday), ", ".join(queued),
             "; closing " + ", ".join(marked) if marked else "", LOG))
         return 0
     if saver:
         saver.end("cancelled")   # it keeps the pages it has; marks run below
-    marked = [] if (no_mark or i < total) else queue_finish_marks()
+    # A card the saver owns is never also closed here (two run.py at once
+    # would advance and credit it twice); one queued above no-ops if it closed.
+    marked = [] if (no_mark or i < total) else queue_finish_marks(
+        skip=saver.early_cards() if saver else ())
+    marked = early + [c for c in marked if c not in early]
     all_ok = drain_writes()
     print("xk887 → week %s done (%s)%s" % (
         week_row_label(sunday), ", ".join(queued),
@@ -885,7 +992,7 @@ def main() -> int:
     ap.add_argument("--from-json", help="write answers from a JSON file instead of the form")
     ap.add_argument("--print-script", action="store_true", help="print AppleScript, do not write")
     ap.add_argument("--no-mark", action="store_true",
-                    help="do not close the open '1 xk88' / '1 xk87' cards on finish (reruns)")
+                    help="do not close the open '1 xk88' / '1 xk87' cards (reruns)")
     ap.add_argument("--detach", action="store_true",
                     help="save in a detached child and exit the moment the form ends (dtd)")
     ap.add_argument("--save-spool", help=argparse.SUPPRESS)   # the --detach child
