@@ -2652,7 +2652,7 @@ HTML = """<!DOCTYPE html>
 </div>
 <div class="grid">
   <div class="card">
-    <h2>Cache · Q2</h2>
+    <h2>Cache</h2>
     <div id="cacheBars" class="cache-bars"></div>
   </div>
   <a class="card reads-card" id="readsCard" href="/jmreads">
@@ -2915,7 +2915,7 @@ cachedJSON('/api/data').then(data => {
   dailyPayload = data;
   const labels = data.dates;
 
-  // Cache bars (Q2 cumulative + or - 分 by area)
+  // Cache bars (2026 cumulative + or - 分 by area; each row carries its period)
   // Bar width is normalized to ±200; values beyond that pin to full width
   // while the numeric label still shows the true value.
   const cache = data.cache || [];

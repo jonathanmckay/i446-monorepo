@@ -49,7 +49,7 @@ def test_index_has_the_reads_card_in_hcmc_colour(d):
     assert d.POINTS_COLS[21] == {"label": "媒", "domain": "hcmc", "color": "#0d3b66"}
     assert ".reads-card { display: block; background: #0d3b66;" in html
     assert '<a class="card reads-card" id="readsCard" href="/jmreads">' in html
-    # Sits right after the Cache · Q2 card, before the comms chart.
+    # Sits right after the Cache card, before the comms chart.
     assert html.index('id="cacheBars"') < html.index('id="readsCard"') < html.index('id="emailChart"')
     for el in ("readsChallenge", "readsBarFill", "readsNow", "readsLast", "offlineBadge"):
         assert f'id="{el}"' in html, el
