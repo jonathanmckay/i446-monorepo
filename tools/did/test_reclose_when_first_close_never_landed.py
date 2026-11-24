@@ -86,6 +86,63 @@ def test_guard_consults_reclose_owed_before_skipping():
     assert "_reclose_owed(" in src[skip_pos:close_pos]
 
 
+# ── A failed close must fail the run, where a retry is safe ─────────────────
+# JM 2026-11-24: "yes" to dtd noticing a missed close and retrying by itself,
+# but only for done/not-done cards: a retry of a minutes habit (xk20, 问学,
+# per-minute weekly cards) would count the minutes twice.
+
+def _result(step, tid=TID, **kw):
+    item = df.ParsedItem(raw="x", name=kw.pop("name", "1 vm+li+msgr"),
+                         time_value=kw.pop("time_value", None))
+    item.time_range = kw.pop("time_range", None)
+    r = df.RouteResult(item=item, step=step, **kw)
+    r.todoist_task = {"id": tid} if tid else None
+    return r
+
+
+def test_failed_close_of_binary_1n_card_is_reported():
+    r = _result("1n")
+    got = df._retryable_close_failures([r], {TID: (False, "HTTP 429: slow down")})
+    assert got == [("1 vm+li+msgr", TID, "HTTP 429: slow down")]
+
+
+def test_failed_close_of_plain_task_is_reported():
+    r = _result("todoist", name="call dentist")
+    assert df._retryable_close_failures([r], {TID: (False, "timeout")})
+
+
+def test_ok_close_and_unattempted_close_are_not_failures():
+    r = _result("1n")
+    assert df._retryable_close_failures([r], {TID: (True, None)}) == []
+    assert df._retryable_close_failures([r], {}) == []   # guard skip, not a failure
+
+
+def test_minutes_habits_are_never_retried():
+    fail = {TID: (False, "timeout")}
+    assert df._retryable_close_failures([_result("0n", name="xk20")], fail) == []
+    assert df._retryable_close_failures([_result("1n", is_variable_1n=True)], fail) == []
+    assert df._retryable_close_failures([_result("1n", is_cumulative_1n=True)], fail) == []
+    assert df._retryable_close_failures([_result("1n", time_value=30)], fail) == []
+    assert df._retryable_close_failures(
+        [_result("todoist", time_range=("0900", "0930"))], fail) == []
+
+
+def test_close_failure_block_makes_the_run_exit_nonzero():
+    out = {"results": [], "todoist_close_write": {"ok": False, "error": "x"}}
+    assert df._write_failures(out) == ["todoist_close_write: x"]
+    src = DID_FAST.read_text()
+    assert 'output["todoist_close_write"]' in src
+
+
+def test_rate_limit_is_transient():
+    import io
+    import urllib.error
+    e = urllib.error.HTTPError("u", 429, "Too Many Requests", {}, io.BytesIO(b""))
+    assert df._classify_error(e)[1] is True
+    e = urllib.error.HTTPError("u", 404, "nf", {}, io.BytesIO(b""))
+    assert df._classify_error(e)[1] is False
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

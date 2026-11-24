@@ -3199,7 +3199,9 @@ def _classify_error(e: Exception) -> tuple[str, bool]:
             body = e.read().decode("utf-8", errors="replace")[:200]
         except Exception:
             body = ""
-        is_transient = e.code >= 500
+        # 429 = rate limit: Todoist did nothing, so a retry is the right answer
+        # (2026-11-24; it used to fail the close outright with no second try).
+        is_transient = e.code >= 500 or e.code == 429
         return f"HTTP {e.code}: {body}".strip(), is_transient
     if isinstance(e, urllib.error.URLError):
         return f"URLError: {e.reason!r}", True
@@ -3253,6 +3255,38 @@ def _reclose_owed(task: dict, done_ids: set, today_str: str, fetch=None) -> Opti
     if not due or due > today_str:
         return None
     return {**live, "due": due}
+
+
+def _retryable_close_failures(fast: list, close_results: dict) -> list[tuple[str, str, str]]:
+    """(name, task id, error) for every Todoist close that was attempted,
+    failed, and is safe to re-drive by running the whole completion again.
+
+    A failed close used to exit 0: dtd showed a tick and the card came back
+    the next morning (2026-11-23, "1 vm+li+msgr"). These now fail the run, so
+    dtd's retry queue re-runs it and _reclose_owed lets the close through.
+    Only done/not-done completions qualify (JM 2026-11-24): a plain Todoist
+    task or a binary 1n+ card re-runs harmlessly (the cell is set, the 0分
+    append carries an idem key). Anything that records minutes (0₦ habits,
+    variable and cumulative 1n+, a time range or minutes on the item) would
+    count them twice, so those keep the old quiet behaviour; the failure is
+    still printed to stderr. A close that was never attempted (a guard skip)
+    is not a failure."""
+    out = []
+    for r in fast:
+        tid = (r.todoist_task or {}).get("id")
+        if not tid or tid not in close_results:
+            continue
+        ok, err = close_results[tid]
+        if ok:
+            continue
+        it = r.item
+        if (it.time_range or it.time_value is not None
+                or getattr(it, "tag_companion_of", None) or getattr(r, "kid_time_for", None)):
+            continue
+        if r.step == "todoist" or (r.step == "1n" and not r.is_variable_1n
+                                   and not r.is_cumulative_1n):
+            out.append((it.name, tid, err or "close failed"))
+    return out
 
 
 def _verify_closed(task_id: str) -> tuple[bool, str | None]:
@@ -5635,6 +5669,16 @@ def main():
             output["1n_0fen_write"]["queued"] = _queued_rid(one_n_fen_result)
         if one_n_fen_result.returncode != 0:
             output["1n_0fen_write"]["error"] = one_n_fen_result.stderr.strip() or f"ix-osa exit {one_n_fen_result.returncode}"
+
+    _close_fails = _retryable_close_failures(fast, close_results)
+    if _close_fails:
+        # A *_write block with ok False makes the run exit 2 (_write_failures),
+        # which is what puts the item on dtd's retry queue.
+        output["todoist_close_write"] = {
+            "ok": False,
+            "error": "; ".join(f"{n} ({t}): {e}" for n, t, e in _close_fails),
+            "ids": [t for _n, t, _e in _close_fails],
+        }
 
     if on_result:
         on_verr = (verify_0n_output(on_result.stdout, on_writes)
