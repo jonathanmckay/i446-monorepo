@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -73,14 +75,23 @@ def _list_rows(cache: dict) -> Iterable[dict]:
 
 
 def attach_parents(cache: dict, get_task: Optional[Callable[[str], Optional[dict]]] = None,
-                   max_fetch: int = MAX_PARENT_FETCH) -> int:
+                   max_fetch: int = MAX_PARENT_FETCH, journal: Optional[Path] = None) -> int:
     """Stamp `parent_due`, `parent_content`, `parent_recurring` and
     `parent_closed` on every cached row that has a `parent_id`.
 
     The parent is read from the cache when it is there, else from `get_task`
     (a live GET, at most `max_fetch` per call). When neither answers, the row
     keeps whatever stamps it already had, or none: collapse() then shows it.
-    Returns the number of rows stamped."""
+    Returns the number of rows stamped.
+
+    Every cache writer ends here, so this is also where a parent's recent
+    decrement is laid over rows fetched before it landed (overlay_recent)."""
+    journal = journal or _default_journal()
+    if journal is not None:
+        try:
+            overlay_recent(cache, journal)
+        except Exception:                        # noqa: BLE001 — never fail a refresh
+            pass
     by_id: dict[str, dict] = {}
     for t in _list_rows(cache):
         by_id.setdefault(str(t.get("id")), t)
@@ -241,6 +252,157 @@ def _journal_rows(journal: Path) -> list:
         return []
 
 
+# ---------------------------------------------------------------------------
+# Cache overlay: the parent's rewritten [N] reaches dtd without a refresh
+# ---------------------------------------------------------------------------
+# JM 2026-11-23: closing an input rewrote the parent in Todoist ([120] to
+# [110]) but dtd kept showing [120] until a manual refresh. The cache row is
+# only rewritten by a full refresh, and several writers copy rows forward
+# without re-reading Todoist. So the journal is the source: every cache
+# writer lays its recent records over the rows (attach_parents), and the
+# payment itself patches the cache file at once (patch_cache_file).
+
+OVERLAY_MAX_AGE = 300        # seconds a journal record keeps correcting cached rows
+CACHE_NAME = "task-queue.json"   # beside the journal in STATE_DIR
+
+
+def _default_journal() -> Optional[Path]:
+    """The real journal, except under pytest (tests pass their own)."""
+    if "pytest" in sys.modules:
+        return None
+    try:
+        import state_paths
+        return state_paths.STATE_DIR / "group-decrements.jsonl"
+    except Exception:                            # noqa: BLE001
+        return None
+
+
+def _carry_points(short: str, old: str, new: str) -> Optional[str]:
+    """The display name `short` ends in the task's own estimates, and both dtd
+    surfaces show it instead of `content`. Give it `new`'s [N] pairs; None
+    when it does not carry `old`'s pairs (the caller then drops it)."""
+    sm = list(fen_split.PAIR_RE.finditer(short or ""))
+    nm = [m.group(0) for m in fen_split.PAIR_RE.finditer(new or "")]
+    if fen_split.parse_points(short or "") != fen_split.parse_points(old or "") or len(sm) != len(nm):
+        return None
+    out, last = [], 0
+    for m, txt in zip(sm, nm):
+        out += [short[last:m.start()], txt]
+        last = m.end()
+    out.append(short[last:])
+    return "".join(out)
+
+
+def _advance(val: str, seq: list) -> str:
+    """Walk `val` along one parent's rewrites [(from, to), ...] in time order.
+    Already at the newest text: leave it. Otherwise start at the LAST step
+    that begins where `val` is, so a value the chain passes through twice
+    (decrement, sibling decrement, undo) is not sent round again. A value the
+    chain never held (JM edited it) is left alone."""
+    if not seq or val == seq[-1][1]:
+        return val
+    idx = next((i for i in range(len(seq) - 1, -1, -1) if seq[i][0] == val), None)
+    if idx is None:
+        return val
+    for frm, to in seq[idx:]:
+        if val == frm:
+            val = to
+    return val
+
+
+def overlay_recent(cache: dict, journal: Path, now: Optional[float] = None,
+                   max_age: float = OVERLAY_MAX_AGE) -> int:
+    """Bring cached group rows up to the journal's recent decrements and
+    restores: the parent row's `content` and `short`, and each input's
+    `parent_content` stamp. Returns the number of fields changed."""
+    now = time.time() if now is None else now
+    steps: list = []
+    for r in _journal_rows(journal):
+        if r.get("status") != "ok":
+            continue
+        pid = str(r.get("parent") or "")
+        events = [(r.get("ts"), r.get("before"), r.get("after"))]
+        if r.get("reversed"):
+            events.append((r.get("restored_ts"), r.get("restored_from"), r.get("restored")))
+        for ts, frm, to in events:
+            if pid and ts and frm is not None and to is not None and frm != to:
+                steps.append((ts, pid, frm, to))
+    if not steps or now - max(s[0] for s in steps) > max_age:
+        return 0
+    newest: dict[str, float] = {}
+    chains: dict[str, list] = {}
+    for ts, pid, frm, to in sorted(steps, key=lambda s: s[0]):
+        chains.setdefault(pid, []).append((frm, to))
+        newest[pid] = ts
+    changed = 0
+    for t in _list_rows(cache):
+        tid, pid = str(t.get("id")), str(t.get("parent_id") or "")
+        if tid in chains and now - newest[tid] <= max_age:
+            old = t.get("content") or ""
+            new = _advance(old, chains[tid])
+            if new != old:
+                t["content"] = new
+                if t.get("short"):
+                    s = _carry_points(t["short"], old, new)
+                    if s:
+                        t["short"] = s
+                    else:
+                        t.pop("short", None)
+                changed += 1
+        if pid in chains and now - newest[pid] <= max_age:
+            old = t.get("parent_content") or ""
+            new = _advance(old, chains[pid])
+            if new != old:
+                t["parent_content"] = new
+                changed += 1
+    return changed
+
+
+def patch_cache_file(journal: Path, cache_path: Optional[Path] = None,
+                     wait: float = 2.0) -> int:
+    """overlay_recent on the cache file itself, under the refresh lock, so
+    dtd shows the parent's new [N] as soon as its input is paid. When the
+    lock is busy a refresh is in flight and will overlay on its own way out
+    (attach_parents), so give up quietly. Returns the fields changed."""
+    cache_path = cache_path or (journal.parent / CACHE_NAME)
+    if not cache_path.exists():
+        return 0
+    with open(cache_path.with_suffix(".lock"), "w") as lk:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    return 0
+                time.sleep(0.1)
+        try:
+            before_m = cache_path.stat().st_mtime
+            cache = json.loads(cache_path.read_text())
+            n = overlay_recent(cache, journal)
+            if not n:
+                return 0
+            # Own tmp name: ".tmp" is shared by the refreshers.
+            tmp = cache_path.with_name(f"{cache_path.name}.grp{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n")
+            os.replace(tmp, cache_path)
+            # dtd.sh reloads on a whole-second mtime change; a patch landing in
+            # the same second as the last write would never be seen.
+            if int(cache_path.stat().st_mtime) <= int(before_m):
+                os.utime(cache_path, (int(before_m) + 1, int(before_m) + 1))
+            return n
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+def _patch_quiet(journal: Path) -> None:
+    try:
+        patch_cache_file(journal)
+    except Exception as e:                       # noqa: BLE001 — never fail a payment
+        print(f"WARN group cache patch: {e}", file=sys.stderr)
+
+
 def decrement_parent(child_id: str, parent_id: str, paid: int, day: str, *,
                      journal: Path, get_task: Callable[[str], Optional[dict]],
                      update_task: Callable[[str, dict], object]) -> dict:
@@ -249,7 +411,31 @@ def decrement_parent(child_id: str, parent_id: str, paid: int, day: str, *,
     Idempotent per (child, day): a retry finds the journal line and does
     nothing. Serialised by a flock on the journal so two children closed
     seconds apart cannot overwrite each other's rewrite. Returns a record:
-    {"status": "ok"|"dup"|"skip"|"error", "taken": [[n, code]], ...}."""
+    {"status": "ok"|"dup"|"skip"|"error", "taken": [[n, code]], ...}.
+    On "ok" the dtd cache beside the journal is patched to match."""
+    rec = _decrement_parent(child_id, parent_id, paid, day, journal=journal,
+                            get_task=get_task, update_task=update_task)
+    if rec.get("status") == "ok":
+        _patch_quiet(journal)
+    return rec
+
+
+def restore_parent(child_id: str, day: str, *, journal: Path,
+                   get_task: Callable[[str], Optional[dict]],
+                   update_task: Callable[[str, dict], object]) -> dict:
+    """Undo decrement_parent for (child, day): add back exactly what was
+    taken (never a pre-image, so a sibling's later decrement survives).
+    On "ok" the dtd cache beside the journal is patched to match."""
+    out = _restore_parent(child_id, day, journal=journal,
+                          get_task=get_task, update_task=update_task)
+    if out.get("status") == "ok":
+        _patch_quiet(journal)
+    return out
+
+
+def _decrement_parent(child_id: str, parent_id: str, paid: int, day: str, *,
+                      journal: Path, get_task: Callable[[str], Optional[dict]],
+                      update_task: Callable[[str, dict], object]) -> dict:
     key = f"{child_id}:{day}"
     rec: dict = {"key": key, "child": str(child_id), "parent": str(parent_id),
                  "paid": int(paid or 0), "taken": [], "status": "skip"}
@@ -298,11 +484,9 @@ def decrement_parent(child_id: str, parent_id: str, paid: int, day: str, *,
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def restore_parent(child_id: str, day: str, *, journal: Path,
-                   get_task: Callable[[str], Optional[dict]],
-                   update_task: Callable[[str, dict], object]) -> dict:
-    """Undo decrement_parent for (child, day): add back exactly what was
-    taken (never a pre-image, so a sibling's later decrement survives)."""
+def _restore_parent(child_id: str, day: str, *, journal: Path,
+                    get_task: Callable[[str], Optional[dict]],
+                    update_task: Callable[[str, dict], object]) -> dict:
     key = f"{child_id}:{day}"
     out: dict = {"key": key, "status": "none"}
     if not journal.exists():
@@ -318,8 +502,11 @@ def restore_parent(child_id: str, day: str, *, journal: Path,
             try:
                 p = get_task(str(hit["parent"]))
                 if p and not p.get("checked") and hit.get("taken"):
-                    update_task(str(hit["parent"]),
-                                {"content": add_points(p.get("content") or "", hit["taken"])})
+                    was = p.get("content") or ""
+                    now_text = add_points(was, hit["taken"])
+                    update_task(str(hit["parent"]), {"content": now_text})
+                    # For overlay_recent: what the cache should move from and to.
+                    hit.update(restored_from=was, restored=now_text, restored_ts=time.time())
             except Exception as e:                    # noqa: BLE001
                 out.update(status="error", why=str(e))
                 return out

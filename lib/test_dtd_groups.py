@@ -257,3 +257,114 @@ def test_group_parent_detection():
     ps = g.parent_ids(cache)
     assert ps == {"P"}
     assert [r["id"] for r in cache["today"] if g.is_group_parent(r, ps)] == ["P", "L"]
+
+
+# --- cache overlay: the parent's new [N] shows without a refresh ------------
+
+import json
+import os
+
+
+def _cache(tmp_path, *rows):
+    p = tmp_path / g.CACHE_NAME
+    p.write_text(json.dumps({"updated": "2026-11-23T20:32:41", "today": list(rows)}))
+    return p
+
+
+def _today(p):
+    return {r["id"]: r for r in json.loads(p.read_text())["today"]}
+
+
+def test_paying_an_input_patches_the_cached_parent_and_its_short_name(tmp_path):
+    """JM 2026-11-23: closed "improve password manager situation [10]" and dtd
+    kept showing the parent at [120] until a manual refresh. Both surfaces
+    render `short`, which carries its own copy of the estimates."""
+    p = _cache(tmp_path,
+               row("P", "migrate to 1password and enable agentic password management (70) [120]",
+                   short="Migrate to 1Password and enable (70) [120]", labels=[g.GROUP_LABEL]),
+               row("c", "improve password manager situation [10] (30)", "P",
+                   parent_content="migrate to 1password and enable agentic password management (70) [120]"),
+               row("x", "unrelated (5) [120]", short="unrelated (5) [120]"))
+    td = FakeTodoist(P={"content": "migrate to 1password and enable agentic password management (70) [120]",
+                        "labels": [g.GROUP_LABEL]})
+    rec = g.decrement_parent("c", "P", 10, TODAY, journal=tmp_path / "group-decrements.jsonl",
+                             get_task=td.get, update_task=td.update)
+    assert rec["status"] == "ok"
+    rows = _today(p)
+    assert rows["P"]["content"].endswith("(70) [110]")
+    assert rows["P"]["short"] == "Migrate to 1Password and enable (70) [110]"
+    assert rows["c"]["parent_content"].endswith("(70) [110]")
+    assert rows["x"]["content"] == "unrelated (5) [120]"            # same number, other task
+    assert json.loads(p.read_text())["updated"] == "2026-11-23T20:32:41"
+
+
+def test_patch_moves_the_mtime_to_a_new_second_so_dtd_sh_reloads(tmp_path):
+    p = _cache(tmp_path, row("P", "o [100]"))
+    before = int(p.stat().st_mtime)
+    td = FakeTodoist(P={"content": "o [100]", "labels": []})
+    g.decrement_parent("c", "P", 10, TODAY, journal=tmp_path / "j", get_task=td.get, update_task=td.update)
+    assert int(p.stat().st_mtime) > before
+    assert not [f for f in os.listdir(tmp_path) if f.endswith(".tmp")]
+
+
+def test_undo_patches_the_cache_back_and_a_sibling_decrement_survives(tmp_path):
+    p = _cache(tmp_path, row("P", "o [100]", short="o [100]"))
+    td = FakeTodoist(P={"content": "o [100]", "labels": []})
+    kw = dict(journal=tmp_path / "j", get_task=td.get, update_task=td.update)
+    g.decrement_parent("a", "P", 30, TODAY, **kw)
+    g.decrement_parent("b", "P", 20, TODAY, **kw)
+    assert _today(p)["P"]["content"] == "o [50]"
+    g.restore_parent("a", TODAY, **kw)
+    assert _today(p)["P"]["content"] == "o [80]" == td.tasks["P"]["content"]
+    assert _today(p)["P"]["short"] == "o [80]"
+
+
+def test_a_refresh_that_fetched_before_the_decrement_is_corrected_on_its_way_out(tmp_path):
+    """The refreshers and the launchd writer copy rows forward or fetch lagged
+    filter results; attach_parents lays the journal over whatever they hold."""
+    j = tmp_path / "j"
+    td = FakeTodoist(P={"content": "o (5) [100]", "labels": []})
+    g.decrement_parent("a", "P", 30, TODAY, journal=j, get_task=td.get, update_task=td.update)
+    stale = {"today": [row("P", "o (5) [100]", short="o (5) [100]"), row("a", "in [30]", "P")]}
+    g.attach_parents(stale, journal=j)
+    assert stale["today"][0]["content"] == "o (5) [70]"
+    assert stale["today"][0]["short"] == "o (5) [70]"
+    assert stale["today"][1]["parent_content"] == "o (5) [70]"
+
+
+def test_overlay_leaves_fresh_edited_and_old_rows_alone(tmp_path):
+    j = tmp_path / "j"
+    td = FakeTodoist(P={"content": "o [100]", "labels": []})
+    kw = dict(journal=j, get_task=td.get, update_task=td.update)
+    g.decrement_parent("a", "P", 30, TODAY, **kw)                    # 100 -> 70
+    g.decrement_parent("b", "P", 20, TODAY, **kw)                    # 70 -> 50
+    g.restore_parent("a", TODAY, **kw)                               # 50 -> 80
+    g.decrement_parent("d", "P", 10, TODAY, **kw)                    # 80 -> 70 (70 seen twice)
+
+    def after(content, **kw2):
+        c = {"today": [row("P", content)]}
+        g.overlay_recent(c, j, **kw2)
+        return c["today"][0]["content"]
+
+    assert after("o [70]") == "o [70]"          # already newest: not sent round again
+    assert after("o [100]") == "o [70]"         # oldest: walked the whole chain
+    assert after("o [50]") == "o [70]"
+    assert after("o [999]") == "o [999]"        # JM edited it: not ours to touch
+    assert after("o [100]", now=__import__("time").time() + g.OVERLAY_MAX_AGE + 5) == "o [100]"
+
+
+def test_short_that_does_not_carry_the_estimates_is_dropped_not_guessed(tmp_path):
+    j = tmp_path / "j"
+    td = FakeTodoist(P={"content": "o (5) [100]", "labels": []})
+    g.decrement_parent("a", "P", 30, TODAY, journal=j, get_task=td.get, update_task=td.update)
+    c = {"today": [row("P", "o (5) [100]", short="o")]}
+    g.overlay_recent(c, j)
+    assert c["today"][0]["content"] == "o (5) [70]" and "short" not in c["today"][0]
+
+
+def test_no_cache_beside_the_journal_is_a_quiet_no_op(tmp_path):
+    td = FakeTodoist(P={"content": "o [100]", "labels": []})
+    rec = g.decrement_parent("a", "P", 30, TODAY, journal=tmp_path / "j",
+                             get_task=td.get, update_task=td.update)
+    assert rec["status"] == "ok" and not (tmp_path / g.CACHE_NAME).exists()
+    assert not (tmp_path / "task-queue.lock").exists()
