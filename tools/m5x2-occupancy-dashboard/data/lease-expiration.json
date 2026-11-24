@@ -96,18 +96,6 @@
     "rent": "1695.00"
   },
   {
-    "unit_id": 684,
-    "property_name": "j312",
-    "unit": "3112",
-    "tenant_name": "Ramak, Raezhelle  R.",
-    "status": "Notice Given",
-    "lease_sign_date": "2025-10-16",
-    "move_in": "2025-10-18",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-08-19",
-    "rent": "1290.00"
-  },
-  {
     "unit_id": 358,
     "property_name": "k104- LeFevre",
     "unit": "Storage 3",
@@ -616,7 +604,7 @@
     "property_name": "b101",
     "unit": "7",
     "tenant_name": "Garcia Gonzalas, Juan",
-    "status": "Pending",
+    "status": "Eligible",
     "lease_sign_date": "2025-11-29",
     "move_in": "2025-12-01",
     "renewal_start_date": null,
@@ -2868,18 +2856,6 @@
     "rent": "1132.00"
   },
   {
-    "unit_id": 898,
-    "property_name": "kn47 K1",
-    "unit": "F104",
-    "tenant_name": "Mora, Tammy",
-    "status": "Eligible",
-    "lease_sign_date": null,
-    "move_in": "2020-10-09",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-05-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 920,
     "property_name": "kn47 K1",
     "unit": "H102",
@@ -2971,6 +2947,18 @@
     "status": "Eligible",
     "lease_sign_date": "2025-04-17",
     "move_in": "2025-04-17",
+    "renewal_start_date": null,
+    "last_lease_renewal": "2026-05-01",
+    "rent": "1089.00"
+  },
+  {
+    "unit_id": 898,
+    "property_name": "kn47 K1",
+    "unit": "F104",
+    "tenant_name": "Mora, Tammy",
+    "status": "Eligible",
+    "lease_sign_date": null,
+    "move_in": "2020-10-09",
     "renewal_start_date": null,
     "last_lease_renewal": "2026-05-01",
     "rent": "1089.00"

@@ -9448,5 +9448,45 @@
     "unit": "C202",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-24",
+    "effective": "2026-12-31",
+    "kind": "ntv",
+    "unit_id": "684",
+    "prop": "j312",
+    "unit": "3112",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-24",
+    "effective": "2026-11-24",
+    "kind": "movein",
+    "unit_id": "521",
+    "prop": "rl16",
+    "unit": "A08",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-24",
+    "effective": "2026-11-28",
+    "kind": "ntv",
+    "unit_id": "1428",
+    "prop": "c702",
+    "unit": "J206",
+    "tenant": null,
+    "baseline": false
+  },
+  {
+    "known": "2026-11-24",
+    "effective": "2026-11-23",
+    "kind": "moveout",
+    "unit_id": "766",
+    "prop": "rl21",
+    "unit": "12",
+    "tenant": null,
+    "baseline": false
   }
 ]
