@@ -14,7 +14,11 @@ user-invocable: true
   row, e.g. `/d ii` for `ibx i9`. dtd keeps a task's code stable and publishes
   its map to `~/vault/z_ibx/dtd-codes-<host>.json`, so the code means the row
   JM is looking at whichever host his dtd runs on (`lib/dtd_codes.py`). A
-  request needs the colon (`/d ii: clear it`). If two dtds drew the code on
+  request follows the code with or without a colon (`/d ii: clear it`,
+  `/d ii clear it`; 2026-11-23). Without the colon the first word counts as a
+  code only when a running dtd published it, the line has no `[N]` or `@label`
+  (that is a new task's name) and the whole line is not itself a task's name;
+  the hook line then says `Matched by the leading dtd code`. If two dtds drew the code on
   different rows the hook answers `ambiguous`; if no row has it, nothing is
   claimed and no task is created. `/claim <code>` and `done <code>` take it too.
 - `/d <N>` (2026-10-24) still resolves an old row number against this host's
@@ -71,7 +75,9 @@ context starting with `[claim hook]`:
 - No `[claim hook]` line at all (hook didn't run) → do it yourself: split the
   FIRST LINE of the argument on its first `:` that isn't a URL's `://` (later
   lines are request); a leading row number followed by words (`21 can you...`)
-  is row 21 unless the whole line names a task (`1 hpm`); then
+  is row 21 unless the whole line names a task (`1 hpm`), and a leading dtd
+  code followed by words (`mt ok I want...`) is that code alone, the rest
+  request; then
   `python3 ~/i446-monorepo/tools/did/agent_claims.py claim "<query>"`,
   `... new "<task>"`, or `... release`.
 
@@ -81,7 +87,8 @@ points or run /did for it: points are opportunity until JM completes the task in
 dtd (⌥↵). If no hook line appears, do the same by hand (edit the task content),
 still without logging.
 
-Then: with a `<request>` after the colon, confirm in one line
+Then: with a `<request>` after the colon (or after a leading code or row
+number), confirm in one line
 (`😈 claimed: <task>`) and do the request as if the user had typed it alone.
 Without one, just the confirmation line.
 

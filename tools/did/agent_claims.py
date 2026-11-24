@@ -1128,6 +1128,39 @@ def _unwrap_command(prompt: str) -> str:
     return f"{m.group(1)} {args}".rstrip()
 
 
+_NEW_TASK_MARK_RE = __import__("re").compile(r"\[\d+\]|(?:^|\s)@\S")
+
+
+def _runon_code(query: str, tasks: list[dict], df) -> str:
+    """The dtd code leading `query` when the rest of the line is a request
+    ('' otherwise). All of these must hold:
+      - the first word is a code some running dtd published on a task in the
+        queue (no recomputed fallback: with no dtd running a prose first word
+        like "on" would land on a code JM never saw);
+      - the line carries no `[N]` or `@label`, JM's new-task form
+        (`/d on call rota [3] @i9` stays a task name);
+      - the whole line is not itself a task's name (exact or substring, with
+        candidates()' hyphen/space folding), so `/d on call` still reaches the
+        "on-call handoff" card."""
+    first, _, rest = query.strip().partition(" ")
+    first = first.lower()
+    if not rest.strip() or _NEW_TASK_MARK_RE.search(query):
+        return ""
+    dc = _dtd_codes()
+    if not dc.is_code(first):
+        return ""
+    pub = getattr(dc, "published", None)
+    if pub is not None and not pub():
+        return ""
+    if not dc.lookup(first, tasks):
+        return ""
+    sep = lambda x: __import__("re").sub(r"[\s\-]+", " ", x)
+    q = sep(query.strip().lower())
+    if any(q in sep(df.ANNOT_RE.sub("", t.get("content", "")).strip().lower()) for t in tasks):
+        return ""
+    return first
+
+
 def hook(payload: str) -> str:
     """UserPromptSubmit fast path for `/d <task>[: request]` (and /claim):
     claim before the model even starts, so dtd shows it in ~1s instead of
@@ -1195,6 +1228,15 @@ def hook(payload: str) -> str:
         # A leading number is the dtd row unless the whole line names a
         # task ("1 hpm"); the rest is the request, never a new task's name.
         query = row.group(1)
+    by_code = ""
+    if not explicit_new and not row:
+        # `/d mt ok I want to migrate ...` (2026-11-23): a leading dtd code
+        # followed by words is that row plus a request, the colon optional,
+        # as for a row number. Before this the whole line became the query,
+        # matched nothing and was created as a task.
+        code = _runon_code(query, tasks, df)
+        if code:
+            by_code, query = code, code
     cands = [] if explicit_new else candidates(query, tasks, df)
     if not explicit_new and not cands and query.isdigit() and len(query) <= 3:
         # "/d 5" with no row 5 in a fresh render: never create a task named "5".
@@ -1222,7 +1264,11 @@ def hook(payload: str) -> str:
         tail = (" After selection, run `python3 ~/code/i446/tools/did/agent_claims.py dt <id>`."
                 if timer else "")
         return f"[claim hook] ambiguous, nothing claimed. Candidates: {opts}" + tail
-    return _hook_claim(cands[0], session, timer=timer)
+    line = _hook_claim(cands[0], session, timer=timer)
+    if by_code:
+        line += (f" Matched by the leading dtd code {by_code!r}; the rest of the line is the request"
+                 " (a new task that starts with those letters needs `/d new ...`).")
+    return line
 
 
 # --- auto-claim (2026-11-14) -------------------------------------------------

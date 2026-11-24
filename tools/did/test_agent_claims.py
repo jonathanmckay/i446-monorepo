@@ -1312,3 +1312,67 @@ def test_hook_never_creates_a_task_named_after_an_unknown_code():
     block = src[i:i + 2600]
     assert block.index("_dtd_codes().is_code(query.strip().lower())") < block.index("task = new_task(name)")
 
+
+
+# ── /d <code> request, no colon (2026-11-23): `/d mt ok I want to migrate
+#    keeper ...` took the whole line as a task name and created it. ──
+
+def _codes(live):
+    import types
+    return lambda: types.SimpleNamespace(
+        lookup=lambda q, tasks: [live[q]] if q in live else [],
+        is_code=lambda q: len(q) == 2 and q.isalnum() and not q.isdigit())
+
+
+def test_hook_code_with_runon_request_claims_row_without_colon(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "_dtd_codes", _codes({"sr": "T2"}))
+    monkeypatch.setattr(ac, "new_task", lambda c: (_ for _ in ()).throw(AssertionError("created")))
+    out = _fast("/d sr ok I want to migrate keeper to 1password. Which email?")
+    assert "😈 claimed: source review" in out
+    assert (hooked / "by-session" / "S9").read_text().strip() == "T2"
+
+
+def test_hook_code_shaped_first_word_with_no_live_row_still_creates_task(hooked, monkeypatch):
+    """`/d go through the mail`: "go" is code-shaped but on no row, so the
+    line is still a new task's name."""
+    made = []
+    monkeypatch.setattr(ac, "_dtd_codes", _codes({"sr": "T2"}))
+    monkeypatch.setattr(ac, "new_task", lambda c: made.append(c) or {"id": "N7", "content": c})
+    _fast("/d go through the mail")
+    assert made == ["go through the mail"]
+
+
+def test_hook_live_code_led_line_with_value_is_a_new_task(hooked, monkeypatch):
+    """`/d sr cleanup [3] @i447` carries a value: JM's new-task form, not a
+    request to the sr row."""
+    made = []
+    monkeypatch.setattr(ac, "_dtd_codes", _codes({"sr": "T2"}))
+    monkeypatch.setattr(ac, "new_task", lambda c: made.append(c) or {"id": "N8", "content": c})
+    _fast("/d sr cleanup [3] @i447")
+    assert made == ["sr cleanup [3] @i447"]
+
+
+def test_hook_live_code_led_line_naming_a_task_matches_by_name(hooked, monkeypatch):
+    """A line that is itself a task's name wins over its first word as a code."""
+    monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "T2", "content": "source review"},
+                                                      {"id": "G1", "content": "so what memo (20) [10]"}]))
+    monkeypatch.setattr(ac, "_dtd_codes", _codes({"so": "T2"}))
+    assert "😈 claimed: so what memo" in _fast("/d so what memo")
+
+
+def test_hook_runon_code_needs_a_published_map(hooked, monkeypatch):
+    """With no dtd running, codes are recomputed and are not ones JM saw: a
+    prose first word must not land on one."""
+    made = []
+    ns = _codes({"sr": "T2"})()
+    ns.published = lambda: []
+    monkeypatch.setattr(ac, "_dtd_codes", lambda: ns)
+    monkeypatch.setattr(ac, "new_task", lambda c: made.append(c) or {"id": "N9", "content": c})
+    _fast("/d sr ok do the thing")
+    assert made == ["sr ok do the thing"]
+
+
+def test_hook_code_colon_form_and_bare_code_unchanged(hooked, monkeypatch):
+    monkeypatch.setattr(ac, "_dtd_codes", _codes({"sr": "T2"}))
+    assert "Matched by the leading dtd code" not in _fast("/d sr: do the thing")
+    assert "😈 claimed: source review" in _fast("/d sr")
