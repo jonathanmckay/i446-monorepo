@@ -89,3 +89,12 @@ def test_shadow_counts_dedupes_and_never_raises(tmp_path):
     sh2 = rb.Shadow(str(log), str(tmp_path / "c2.json"), load=boom)
     assert sh2.judge("/read", req, bad)["cause"] == "error"
     assert rb.Shadow(str(log), str(tmp_path / "c3.json"), load=lambda: None).judge("/read", req, bad) == {"cause": "nobook"}
+
+
+def test_unknown_sheet_and_last_digit_noise():
+    b = book()
+    assert rb.answer("/read_range", {"sheet": "nosuch", "range": "A1:A2"}, b) == {"ok": False, "error": "unknown_sheet"}
+    assert rb.compare("/read_range", {"ok": True, "rows": [["x"]]}, {"ok": False, "error": "unknown_sheet"}) == {"cause": "nosheet"}
+    rng = rb.answer("/read_range", {"sheet": "0分", "range": "P327:Q327"}, b)
+    d = rb.compare("/read_range", {"ok": True, "rows": [["14.000000000001", "3.5"]]}, rng)
+    assert d["cause"] == "format" and d["cells"] == 1

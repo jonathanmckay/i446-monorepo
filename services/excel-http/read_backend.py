@@ -21,7 +21,9 @@ A difference is one of:
            the journal (typed in, a raw AppleScript write) since the last seed.
   value    same content, another value: a formula the book computes
            differently, or a cell it depends on has drifted.
-  format   the same number in another text form.
+  format   the same number in another text form (in practice the 12th
+           decimal of a sum added in another order); not a blocker.
+  nosheet  the request names a sheet the book does not have.
   lookup   the date or week label resolved to another row.
   range    /read_range: one or more cells differ (examples carried).
   nobook   there is no book seed on this host.
@@ -59,6 +61,10 @@ def answer(path: str, req: dict, b: Optional[calc.Book] = None) -> dict:
     if b is None:
         return {"ok": False, "error": "no_book"}
     sheet = req.get("sheet")
+    if sheet and sheet not in b._extent:
+        # Excel answers a sheet name it does not have from some other sheet
+        # (seen 2026-11-25: sheet "nosuch" A1:A2 came back "周", "1.1").
+        return {"ok": False, "error": "unknown_sheet"}
     if path == "/lookup":
         date_str = req.get("date")
         if not sheet or not date_str:
@@ -114,6 +120,8 @@ def compare(path: str, excel: dict, mine: dict) -> Optional[dict]:
     if not mine.get("ok"):
         if mine.get("error") == "no_book":
             return {"cause": "nobook"}
+        if mine.get("error") == "unknown_sheet":
+            return {"cause": "nosheet"}
         return {"cause": "lookup", "book": mine.get("error"), "excel": "row %s" % excel.get("row")}
     if path == "/lookup":
         return None if mine["row"] == excel.get("row") else {
@@ -142,7 +150,12 @@ def compare(path: str, excel: dict, mine: dict) -> Optional[dict]:
                 if len(ex) < EXAMPLES:
                     ex.append({"cell": "%s%d" % (calc.col_letter(c1 + j), r1 + i), "book": a[:40], "excel": b[:40],
                                "kind": "format" if _same_text(a, b) else "differ"})
-    return {"cause": "range", "cells": bad, "examples": ex} if bad else None
+    if not bad:
+        return None
+    # Only last-digit noise (1699.528571428571 vs …572: the same sum added in
+    # another order) is `format`, like a single cell's; anything else `range`.
+    worst = "range" if any(_same_text(a, b) == "" for ra, rb in zip(rows, theirs) for a, b in zip(ra, rb)) else "format"
+    return {"cause": worst, "cells": bad, "examples": ex}
 
 
 class Shadow:

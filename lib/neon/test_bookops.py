@@ -95,7 +95,7 @@ def test_range_text_forms():
     assert bookops.range_text(60.0) == "60.0"
     assert bookops.range_text(1.7142857142857142) == "1.714285714286"
     assert bookops.range_text("Th") == "Th"
-    assert bookops.range_text(46351.0) == "46351.0"               # a number that is not date-formatted
+    assert bookops.range_text(46351.0) == "4.6351E+4"             # a number that is not date-formatted
     assert bookops.range_text(46351.0, True).startswith("Wednesday, November 25, 2026")
 
 
@@ -109,5 +109,19 @@ def test_read_range_rows_and_dates():
         ["Thursday, November 26, 2026 at 12:00:00\u202fAM", "", ""],
     ]
     b.dates = None                                                # an older seed: serials, not text
-    assert bookops.read_range(b, "hcbi", "B3:B3") == [["%s.0" % int(d)]]
+    assert bookops.read_range(b, "hcbi", "B3:B3") == [[bookops.value_text(d)]]
     assert bookops.read_range(b, "hcbi", "B3") is None
+
+
+def test_value_text_matches_applescript_real_to_text():
+    """Every pair below is `osascript -e '(<number>) as string'` on Ix, 2026-11-25."""
+    for number, text in [
+        (9999.5, "9999.5"), (10000.0, "1.0E+4"), (12091.0, "1.2091E+4"),
+        (10795.428571428572, "1.079542857143E+4"), (20000.0, "2.0E+4"), (123456789.0, "1.23456789E+8"),
+        (1234567.891, "1.234567891E+6"), (-15000.25, "-1.500025E+4"), (-9999.0, "-9999.0"),
+        (0.001, "1.0E-3"), (0.0010001, "0.0010001"), (0.002, "0.002"), (0.0005, "5.0E-4"),
+        (0.00012345, "1.2345E-4"), (0.000999999, "9.99999E-4"), (0.01, "0.01"), (2.5e-7, "2.5E-7"),
+        (0.1234567890123456, "0.123456789012"), (123.4567890123456789, "123.456789012346"),
+        (60.0, "60.0"), (0.0, "0.0"), (1.5e20, "1.5E+20"),
+    ]:
+        assert bookops.value_text(number) == text, number

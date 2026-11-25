@@ -61,11 +61,17 @@ def value_text(value) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         f = float(value)
-        if f == int(f) and abs(f) < 1e15:
-            return "%d.0" % int(f)
-        if f != 0 and abs(f) < 1e-4:
+        a = abs(f)
+        # AppleScript's real → text (checked against osascript, 2026-11-25):
+        # scientific from 10000 up and from 0.001 down, 12 decimals either
+        # way, and always at least one ("1.0E+4", "2.0E-4", "60.0"). A week's
+        # Σ on 1分+1s reads back as "1.2091E+4"; the old fixed form "12091.0"
+        # was never seen there because no journaled write echoes a value that
+        # large.
+        if f != 0 and (a >= 1e4 or a <= 1e-3):
             m, e = ("%.12E" % f).split("E")
-            m = m.rstrip("0").rstrip(".")
+            m = m.rstrip("0")
+            m = m + "0" if m.endswith(".") else m
             return "%sE%s%d" % (m, "-" if e.startswith("-") else "+", abs(int(e)))
         s = ("%.12f" % f).rstrip("0")
         return s + "0" if s.endswith(".") else s
