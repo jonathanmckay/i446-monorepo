@@ -53,6 +53,10 @@ TODAY_FROM_BOTTOM = 3       # a sheet opens with today's row this far above the 
 WRAP_LINES = 3              # lines one row may wrap onto; columns past that are the next page (←/→)
 TODAY_STYLE = "bg:#c3fc0d #000000 bold"     # today's date cell (janus's NEON_ACCENT)
 ZEBRA_BG = "#262626"        # every other wrapped row, so a 3-line day reads as one block
+# Sheets whose continuation lines hang under the frozen columns, leaving the
+# date column a clear gutter to scan down (JM 2026-11-25, 0n: "everything is
+# indented after the first line so I can navigate"). Costs that width per line.
+HANGING = {"0n"}
 STRIP_STYLE = "bg:#303030 #9a9a9a"
 STATUS_STYLE = "#8a8a8a"
 
@@ -423,14 +427,15 @@ class Tabs:
             mark = (today, sh["frozen_cols"] - 1) if today is not None and sh["frozen_cols"] else None
             for line in panel:
                 out += line
-            for seg in segs:                                # each wrapped line's labels sit above its values
+            hang = _hang(sh, cols)
+            for i, seg in enumerate(segs):                  # each wrapped line's labels sit above its values
                 for r in range(hdr):
-                    out += _row(sh, r, seg, cols, r)
+                    out += _row(sh, r, seg, cols, r, indent=hang if i else 0)
             last = min(len(sh["rows"]), hdr + top + body_h)
             for r in range(hdr + top, last):
                 zebra = per > 1 and r % 2 == 1
-                for seg in segs:
-                    out += _row(sh, r, seg, cols, hdr + top, zebra, mark)
+                for i, seg in enumerate(segs):
+                    out += _row(sh, r, seg, cols, hdr + top, zebra, mark, hang if i else 0)
             body_lines = lines - 2 - len(panel) - hdr * per
             out += [("", "\n")] * max(0, body_lines - per * (last - hdr - top))
             out.append((STATUS_STYLE, self._status(sh, top, body_h, [c for seg in segs for c in seg], cols,
@@ -547,6 +552,7 @@ def _pages(sh: dict, cols: int, max_lines: int = WRAP_LINES) -> list:
             break
         head.append(c)
         head_w += widths[c]
+    hang = head_w if sh["name"] in HANGING and head_w < cols // 2 else 0
     pages, c = [], frozen
     while c < n or not pages:
         page, line, used, placed = [], list(head), head_w, 0
@@ -563,7 +569,7 @@ def _pages(sh: dict, cols: int, max_lines: int = WRAP_LINES) -> list:
                     c += 1
                 break
             page.append(line)
-            line, used = [], 0
+            line, used = [], hang
         page.append(line)
         pages.append(page)
     return pages
@@ -638,6 +644,18 @@ def hcbi_panel(sh: dict, cols: int) -> list:
     return out
 
 
+def _hang(sh: dict, cols: int) -> int:
+    """Blank cells in front of a HANGING sheet's continuation lines."""
+    if sh["name"] not in HANGING:
+        return 0
+    w = 0
+    for c in range(min(sh["frozen_cols"], len(sh["widths"]))):
+        if w + sh["widths"][c] > cols:
+            break
+        w += sh["widths"][c]
+    return w if w < cols // 2 else 0
+
+
 def _cell_text(sh: dict, r: int, c: int, first_visible: int) -> str:
     cell = sh["rows"][r][c]
     if not cell[0] and len(cell) > 2 and r == first_visible and r - cell[2] >= 0:
@@ -646,11 +664,11 @@ def _cell_text(sh: dict, r: int, c: int, first_visible: int) -> str:
 
 
 def _row(sh: dict, r: int, shown: list, cols: int, first_visible: int,
-         zebra: bool = False, mark: tuple | None = None) -> list:
+         zebra: bool = False, mark: tuple | None = None, indent: int = 0) -> list:
     """One line of row `r`: the columns in `shown`. `zebra` tints the unfilled
     cells (and the rest of the line); `mark` = (row, column) of today's date
-    cell, drawn in TODAY_STYLE."""
-    out, used = [], 0
+    cell, drawn in TODAY_STYLE. `indent` blank cells lead a continuation line."""
+    out, used = ([("", " " * indent)], indent) if indent else ([], 0)
     styles, widths = sh["styles"], sh["widths"]
     for c in shown:
         cell = sh["rows"][r][c]

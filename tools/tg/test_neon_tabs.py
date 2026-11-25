@@ -539,3 +539,21 @@ def test_janus_header_marks_a_local_run(monkeypatch):
     monkeypatch.setattr(mod, "_LOCAL_TAG", None)
     monkeypatch.setattr(mod.neon_tabs, "on_ix", lambda: True)
     assert mod._local_tag() == "" and "LOCAL" not in "".join(f[1] for f in mod.render_header())
+
+
+def test_0n_continuation_lines_hang_under_the_date_columns(tmp_path):
+    """JM 2026-11-25: "For 0n let's do 3 lines / day, but everything is
+    indented after the first line so I can navigate"."""
+    t = _tabs(tmp_path, [_sheet("0n", ncols=14)])
+    t.select(1)
+    frags = t.render(31, 24)
+    lines = _text(frags).split("\n")
+    assert len(lines) == 24
+    assert lines[1].split() == ["H0", "H1", "H2", "H3", "H4", "H5"]
+    assert lines[2].startswith(" " * 11) and lines[2].split() == ["H6", "H7", "H8", "H9"]   # 31 - 11 = four columns
+    assert lines[3].startswith(" " * 11) and lines[3].split() == ["H10", "H11", "H12", "H13"]
+    body = lines[4:-1]
+    days = [ln for ln in body if ln.strip() and not ln.startswith(" " * 11)]
+    assert days and all(ln.lstrip().startswith("w") for ln in days)      # only a day's first line reaches the left edge
+    assert len(days) == t.body_height(24, 31) == (24 - 2 - 3) // 3
+    assert all(ng.cwidth(ln) <= 31 for ln in lines)
