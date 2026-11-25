@@ -6,14 +6,20 @@
 # read ~/.cache/0r/*.log) — every claude/cron wrapper should call this on a
 # non-zero exit.
 #
-# Usage: cron-alert.sh <tool> <reason> <detail>
+# Usage: cron-alert.sh <tool> <reason> <detail> [evidence]
+#   evidence (optional): the log path a repair agent should read first
+#   (tools/autofix reads it; a tool with a lane in config/autofix.json gets
+#   an agent before the alert reaches JM).
 set -u
 TOOL="${1:?tool required}"; REASON="${2:?reason required}"; DETAIL="${3:?detail required}"
+EVIDENCE="${4:-}"
 ALERTS="$HOME/vault/z_ibx/alerts.jsonl"
 mkdir -p "$(dirname "$ALERTS")"
 python3 -c '
 import json, sys
-print(json.dumps({"ts": sys.argv[1], "host": sys.argv[2], "tool": sys.argv[3],
-                  "severity": "critical", "reason": sys.argv[4],
-                  "detail": sys.argv[5]}, ensure_ascii=False))
-' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname -s)" "$TOOL" "$REASON" "$DETAIL" >> "$ALERTS"
+a = {"ts": sys.argv[1], "host": sys.argv[2], "tool": sys.argv[3],
+     "severity": "critical", "reason": sys.argv[4], "detail": sys.argv[5]}
+if sys.argv[6]:
+    a["evidence"] = sys.argv[6]
+print(json.dumps(a, ensure_ascii=False))
+' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname -s)" "$TOOL" "$REASON" "$DETAIL" "$EVIDENCE" >> "$ALERTS"

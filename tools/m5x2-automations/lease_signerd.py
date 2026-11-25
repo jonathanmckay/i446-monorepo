@@ -72,7 +72,10 @@ _AUTH_ALERT_INTERVAL = datetime.timedelta(hours=24)
 # task is actually done (2026-09-25 user request): Screen Share into Ix, run
 # `python3 lease_signer.py --login` there, complete AppFolio's 2FA in the
 # Chromium it opens, press Enter. The [10] is the task's 分 value.
-AUTH_ALERT_TASK = "do 2fa with Ix to refresh appfolio cookie [10]"
+# Names the symptom, not a chore (2026-11-25): by the time this card exists the
+# daemon has already tried to re-login itself, so "do 2fa" was the wrong ask.
+AUTH_ALERT_TASK = "lease signer paused: AppFolio re-login failed [10]"
+AUTOFIX_SINK = Path.home() / "vault" / "z_ibx" / "alerts.jsonl"
 
 # Self-healing relogin (2026-11-12). The throttle stamp is written before the
 # SMS is requested so a crash mid-relogin + KeepAlive restart can't text JM a
@@ -332,7 +335,26 @@ def try_auto_relogin(service, reason: str = "") -> bool:
         return True
     log.warning(f"Auto-relogin FAILED: {res.get('detail', '')[:300]}")
     maybe_send_auth_alert(service, auto_detail=f"FAILED — {res.get('detail', '')[:200]}")
+    _file_autofix_alert(str(res.get("detail", "")))
     return False
+
+
+def _file_autofix_alert(detail: str):
+    """One line in the alerts sink per FAILED re-login (never per throttled
+    poll), so tools/autofix can hand it to a repair agent before JM sees it.
+    Written after maybe_send_auth_alert so it can carry that card's id: the
+    dispatcher adopts the card instead of opening a second one. Never throws."""
+    try:
+        card = (_read_auth_alert_state() or {}).get("todoist_task_id")
+        line = {"ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "host": "ix",
+                "tool": "lease-signer", "severity": "critical", "reason": "relogin_failed",
+                "detail": detail[:800], "evidence": "~/Library/Logs/lease-signerd.log"}
+        if card:
+            line["card"] = str(card)
+        with open(AUTOFIX_SINK, "a") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"Failed to file autofix alert: {e}")
 
 
 def maybe_probe_session(service):

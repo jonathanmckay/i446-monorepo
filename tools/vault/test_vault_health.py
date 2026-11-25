@@ -586,3 +586,16 @@ def test_skill_prune_finding_caps_the_list_and_reads_keep_answers(tmp_path, monk
     assert any("1 more unused" in d for d in f.detail) and not any("/keepme" in d for d in f.detail)
     # No usable transcript read: say so instead of calling every skill unused.
     assert "could not read" in vh.check_skill_prune(now, grep_out="ERROR: timeout").summary
+
+
+def test_autofix_finding_states():
+    now = dt.datetime(2026, 11, 25, 16, 0, tzinfo=vh.TZ)
+    run = json.dumps({"run": "1125-152841", "ts": "2026-11-25T15:28:54", "tool": "neon_db_backup",
+                      "outcome": "fixed", "cost_usd": 0.38, "summary": "s"})
+    old = json.dumps({"run": "1101-000000", "ts": "2026-11-01T00:00:00", "tool": "x", "outcome": "needs_jm"})
+    fresh = json.dumps({"ts": "2026-11-25T15:55:00"}) + "\nRUNS\n" + old + "\n<<<<<<< junk\n" + run
+    f = vh.autofix_finding(fresh, now)
+    assert f.status == "ok" and "1 run(s) this week, 1 fixed" in f.summary
+    stale = vh.autofix_finding(json.dumps({"ts": "2026-11-25T14:00:00"}) + "\nRUNS\n", now)
+    assert stale.status == "fail" and stale.review and "stale" in stale.summary
+    assert vh.autofix_finding("\nRUNS\n", now).status == "fail"

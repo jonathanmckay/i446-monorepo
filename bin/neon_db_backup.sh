@@ -16,7 +16,7 @@ DEST="$HOME/.local/share/neon/backups"
 LOGDIR="$HOME/.cache/neon-rules"; mkdir -p "$LOGDIR" "$DEST"
 LOG="$LOGDIR/db-backup.log"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
-fail() { log "FAILED: $2"; "$HOME/bin/cron-alert.sh" neon_db_backup "$1" "$2 (see $LOG)"; exit 1; }
+fail() { log "FAILED: $2"; "$HOME/bin/cron-alert.sh" neon_db_backup "$1" "$2 (see $LOG)" "$LOG"; exit 1; }
 
 [ -f "$DB" ] || fail "no_db" "$DB missing"
 STAMP="$(date +%Y-%m-%d)"

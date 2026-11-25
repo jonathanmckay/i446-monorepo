@@ -18,10 +18,20 @@ def _const(name: str) -> str:
 
 
 def test_auth_alert_task_name():
-    assert _const("AUTH_ALERT_TASK") == "do 2fa with Ix to refresh appfolio cookie [10]"
+    assert _const("AUTH_ALERT_TASK") == "lease signer paused: AppFolio re-login failed [10]"
 
 
 def test_create_task_uses_the_constant():
     # The literal must not creep back into the create_task call.
     assert "_todoist.create_task(\n            AUTH_ALERT_TASK," in SRC
     assert "Lease auto-signer needs 2FA re-login" not in SRC.split("def maybe_send_auth_alert")[1].split("def _clear_auth_alert")[0]
+
+
+def test_failed_relogin_files_one_autofix_alert_after_the_card():
+    # The sink line carries the card id, so it must follow maybe_send_auth_alert,
+    # and it belongs to the FAILED branch only, never the throttled one.
+    body = SRC.split("def try_auto_relogin")[1].split("def _file_autofix_alert")[0]
+    assert body.count("_file_autofix_alert(") == 1
+    assert body.index("maybe_send_auth_alert(service, auto_detail=f\"FAILED") < body.index("_file_autofix_alert(")
+    throttled = body.split("if _relogin_throttled():")[1].split("return False")[0]
+    assert "_file_autofix_alert" not in throttled

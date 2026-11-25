@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Auto-fix dispatcher (2026-11-25), Ix only: every 5 min, hand new critical
+     alerts in ~/vault/z_ibx/alerts.jsonl to a headless repair agent, per the
+     lanes in config/autofix.json. See tools/autofix/autofix.py.
+     Install: cp to ~/Library/LaunchAgents, launchctl bootstrap gui/$(id -u) <plist> -->
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/mckay</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>Label</key>
+	<string>com.jm.autofix</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/mckay/i446-monorepo/tools/autofix/autofix.py</string>
+		<string>tick</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/mckay/Library/Logs/autofix.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/mckay/Library/Logs/autofix.log</string>
+</dict>
+</plist>

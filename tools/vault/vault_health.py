@@ -1075,6 +1075,49 @@ def check_lease_signer(now: dt.datetime) -> Finding:
     return lease_signer_finding(ix(LEASE_PROBE_CMD), now)
 
 
+AUTOFIX_STALE = dt.timedelta(minutes=30)
+AUTOFIX_PROBE_CMD = ("cat ~/.local/state/jm/autofix/heartbeat.json 2>/dev/null; echo; echo RUNS; "
+                     "tail -200 ~/.local/state/jm/autofix/runs.jsonl 2>/dev/null")
+
+
+def autofix_finding(out: str, now: dt.datetime) -> Finding:
+    """Pure half of check_autofix: heartbeat freshness plus the week's runs."""
+    head, _, tail = out.partition("RUNS")
+    try:
+        beat = dt.datetime.fromisoformat(json.loads(head.strip())["ts"])
+    except (ValueError, KeyError, TypeError):
+        return Finding("autofix", "fail", "dispatcher has never run (no heartbeat)",
+                       ["install scripts/launchd/com.jm.autofix.plist on Ix"], review=True)
+    if now.tzinfo and not beat.tzinfo:
+        beat = beat.replace(tzinfo=TZ)
+    runs = []
+    for line in tail.splitlines():
+        try:
+            r = json.loads(line)
+            ts = dt.datetime.fromisoformat(r["ts"])
+            ts = ts.replace(tzinfo=TZ) if now.tzinfo and not ts.tzinfo else ts
+            if now - ts <= dt.timedelta(days=7):
+                runs.append(r)
+        except (ValueError, KeyError, TypeError):
+            continue
+    detail = [f"{r['run']} {r['tool']}: {r['outcome']} (${r.get('cost_usd', 0):.2f}) {r.get('summary') or r.get('ask') or r.get('error') or ''}"[:160]
+              for r in runs]
+    fixed = sum(1 for r in runs if r["outcome"] == "fixed")
+    cost = sum(r.get("cost_usd", 0) for r in runs)
+    summary = f"{len(runs)} run(s) this week, {fixed} fixed, {len(runs) - fixed} handed to JM, ${cost:.2f}"
+    if now - beat > AUTOFIX_STALE:
+        return Finding("autofix", "fail", f"dispatcher stale: last tick {beat:%m-%d %H:%M}; {summary}",
+                       detail + ["launchctl kickstart -k gui/$(id -u)/com.jm.autofix"], review=True)
+    return Finding("autofix", "ok", summary, detail)
+
+
+def check_autofix(now: dt.datetime) -> Finding:
+    """tools/autofix/autofix.py ticks every 5 min on Ix and hands failed-job
+    alerts to a repair agent. If it stops, failures go back to being silent
+    cards nobody routes, so its own heartbeat is checked here (2026-11-25)."""
+    return autofix_finding(ix(AUTOFIX_PROBE_CMD), now)
+
+
 IX_MEM = "$HOME/i446-monorepo/tools/vault/ix_mem_sample.py"   # expanded by the shell on Ix
 CHROME_PEAK_MB = 6000
 SWAP_PEAK_PCT = 90
@@ -1510,7 +1553,7 @@ def run_all(now: dt.datetime) -> list[Finding]:
     out = []
     for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_meta_work(now), lambda: check_syncthing(now), lambda: check_git_autopush(now), lambda: check_github_contrib(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, check_launchd, lambda: check_ix_memory(now), lambda: check_lease_signer(now), check_skill_claims, lambda: check_skill_prune(now), lambda: check_alerts(now), lambda: check_neon_rules(now),
+               check_ix_cron, check_launchd, lambda: check_ix_memory(now), lambda: check_lease_signer(now), lambda: check_autofix(now), check_skill_claims, lambda: check_skill_prune(now), lambda: check_alerts(now), lambda: check_neon_rules(now),
                check_duplicates):
         try:
             out.append(fn())
