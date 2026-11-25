@@ -1,0 +1,41 @@
+#!/bin/bash
+# ca: agency copilot with every tool pre-approved, so a query is not a
+# hundred permission prompts.
+#
+#   ca [question | copilot args]     plain agency copilot, in the current dir
+#   ca x [question | copilot args]   Xbox data agent, run from a scratch dir
+#
+# A first argument that is not a flag is the opening question (copilot -i).
+# Paths and URLs stay gated: only tools are pre-approved (--allow-all-tools,
+# not --yolo). CA_ASK=1 puts the prompts back for one run.
+
+set -u
+
+XBOX_AGENT="xbox-data-agent:xbox-data-agent"
+# The data agent writes query scratch files; keep them out of the vault and
+# the monorepo, which autopush whatever lands in them.
+SCRATCH="$HOME/.local/state/jm/ca"
+
+AGENCY="$(command -v agency || true)"
+[ -z "$AGENCY" ] && [ -x "$HOME/.config/agency/CurrentVersion/agency" ] \
+  && AGENCY="$HOME/.config/agency/CurrentVersion/agency"
+if [ -z "$AGENCY" ]; then
+  echo "ca: agency is not installed on $(hostname -s)" >&2
+  exit 127
+fi
+
+args=()
+if [ "${1:-}" = "x" ]; then
+  shift
+  args+=(--agent "$XBOX_AGENT")
+  mkdir -p "$SCRATCH" && cd "$SCRATCH" || exit 1
+fi
+
+[ "${CA_ASK:-}" = "1" ] || args+=(--allow-all-tools)
+
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  args+=(-i "$1")
+  shift
+fi
+
+exec "$AGENCY" copilot ${args[@]+"${args[@]}"} "$@"
