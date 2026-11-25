@@ -74,6 +74,10 @@ the approval, and an entry is one `toggl_delete` from gone.
 - **Every entry gets a project**, from the task's Todoist label first, then the
   toggl_server domain mapping. A mixed stretch takes the project of the
   activity it is named for.
+- **Every fill is tagged `😈`.** `toggl_create_entry` and `toggl_batch` add the
+  tag themselves, so reviews can tell inferred time from logged time (JM
+  2026-11-24). Never pass `dictated=true` here: that flag is for ranges JM
+  stated himself.
 - **Only JM's own actions count.** A request he typed into a session is one.
   Agent writes and automated sessions are not: `evidence.py` drops the ones it
   can recognize, so skip any others you spot.

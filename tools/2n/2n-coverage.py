@@ -383,7 +383,7 @@ def fill_gaps(spec: str) -> int:
     by_id = {g["id"]: g for g in state["gaps"]}
     _ensure_toggl_key()
     from mcp.toggl_server import toggl_api  # noqa: E402
-    from mcp.toggl_server.config import PROJECT_MAP  # noqa: E402
+    from mcp.toggl_server.config import AGENT_TAG, PROJECT_MAP  # noqa: E402
     wanted = parse_fill_spec(spec)
     created, skipped = [], []
     deleted: set = set()
@@ -408,7 +408,8 @@ def fill_gaps(spec: str) -> int:
         end = _dt.datetime.fromisoformat(g["end"])
         dur = int((end - start).total_seconds())
         try:
-            toggl_api.create_entry(desc, start.isoformat(), end.isoformat(), dur, project_id=pid)
+            # Suggested fills are inferred, so they carry the agent tag (2026-11-24).
+            toggl_api.create_entry(desc, start.isoformat(), end.isoformat(), dur, project_id=pid, tags=[AGENT_TAG])
         except Exception as e:  # noqa: BLE001
             skipped.append(f"#{n}: Toggl error {e}")
             continue

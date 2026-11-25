@@ -1336,11 +1336,13 @@ def check_duplicates() -> Finding:
 META_PROJECTS = ("i447", "infra")
 META_SLEEP = "睡觉"
 META_WEEKS = 8
+META_AGENT_TAG = "😈"            # mcp/toggl_server/config.py AGENT_TAG: entries an agent inferred
 META_CAP: float | None = None    # e.g. 0.06 once JM sets a cap; until then the row never warns
 
 
 def scan_meta_work(now: dt.datetime, store: Path | None = None) -> list[dict]:
-    """META_WEEKS trailing 7-day windows, newest first: {start, end, meta_h, wake_h, share}.
+    """META_WEEKS trailing 7-day windows, newest first: {start, end, meta_h, wake_h, share, agent_h}.
+    agent_h = waking hours on entries tagged META_AGENT_TAG (written by an agent from inference).
     Windows end the day BEFORE yesterday: the Saturday 04:40 run precedes the
     05:10 Toggl sync, so yesterday's rows are not in the store yet."""
     import sqlite3
@@ -1349,22 +1351,27 @@ def scan_meta_work(now: dt.datetime, store: Path | None = None) -> list[dict]:
     lo = end0 - dt.timedelta(days=7 * META_WEEKS - 1)
     conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
     try:
-        rows = conn.execute("SELECT day, project, SUM(seconds) FROM entries WHERE day BETWEEN ? AND ? "
-                            "AND seconds > 0 GROUP BY day, project", (lo.isoformat(), end0.isoformat())).fetchall()
+        rows = conn.execute("SELECT day, project, tags, SUM(seconds) FROM entries WHERE day BETWEEN ? AND ? "
+                            "AND seconds > 0 GROUP BY day, project, tags", (lo.isoformat(), end0.isoformat())).fetchall()
     finally:
         conn.close()
     out = []
     for k in range(META_WEEKS):
         end = end0 - dt.timedelta(days=7 * k)
         start = end - dt.timedelta(days=6)
-        meta = wake = 0.0
-        for day, project, sec in rows:
+        meta = wake = agent = 0.0
+        for day, project, tags, sec in rows:
             if start.isoformat() <= day <= end.isoformat() and project != META_SLEEP:
                 wake += sec / 3600
                 if project in META_PROJECTS:
                     meta += sec / 3600
+                try:
+                    if META_AGENT_TAG in json.loads(tags or "[]"):
+                        agent += sec / 3600
+                except ValueError:
+                    pass
         out.append({"start": start, "end": end, "meta_h": meta, "wake_h": wake,
-                    "share": (meta / wake) if wake else None})
+                    "share": (meta / wake) if wake else None, "agent_h": agent})
     return out
 
 
@@ -1381,11 +1388,14 @@ def meta_work_finding(weeks: list[dict]) -> Finding:
         word = "up from" if w0["share"] > mean + 0.01 else "down from" if w0["share"] < mean - 0.01 else "level with"
         summary += f"; {word} the prior 4-week mean {mean * 100:.1f}%"
     summary += f"; {len(weeks)} weeks oldest first: {trend}%"
+    if w0.get("agent_h"):
+        summary += f"; agent-written entries {w0['agent_h']:.1f} h ({w0['agent_h'] / w0['wake_h'] * 100:.1f}% of waking hours)"
     over = META_CAP is not None and w0["share"] > META_CAP
     if META_CAP is not None:
         summary += f"; cap {META_CAP * 100:.0f}%" + (" EXCEEDED" if over else "")
     detail = [f"{w['start']:%m-%d}..{w['end']:%m-%d}: "
-              + (f"{w['share'] * 100:.1f}% ({w['meta_h']:.1f} h of {w['wake_h']:.0f} h)" if w["share"] is not None else "no hours")
+              + (f"{w['share'] * 100:.1f}% ({w['meta_h']:.1f} h of {w['wake_h']:.0f} h)"
+                 + (f", agent-written {w['agent_h']:.1f} h" if w.get("agent_h") else "") if w["share"] is not None else "no hours")
               for w in weeks]
     return Finding("meta-work", "warn" if over else "ok", summary, detail)
 
@@ -1520,7 +1530,7 @@ CHECK_WHAT = {
     "vault-root": "Loose files at the vault root (only folders, CLAUDE.md and dotfiles belong there) and items at the top of ~ outside the home-folder layout.",
     "style": "Live note filenames and titles: ASCII kebab-case, YYYY-MM-DD dates, no Arabic or CJK+English titles, titles ≤40 chars.",
     "toggl-store": "i156/toggl.sqlite: last completed sync under 36h old, entries on each of the last 7 days, no short sync windows, and the dashboard export caught up.",
-    "meta-work": "Reporting only: i447 + infra hours as a share of waking (non-睡觉) Toggl hours, for 8 trailing 7-day windows ending two days ago. Never a review item; warns only once META_CAP is set and exceeded.",
+    "meta-work": "Reporting only: i447 + infra hours as a share of waking (non-睡觉) Toggl hours, for 8 trailing 7-day windows ending two days ago, plus the hours on entries tagged `😈` (written by an agent from inference). Never a review item; warns only once META_CAP is set and exceeded.",
     "syncthing": "Syncthing on this host: every device connected, every folder idle and fully synced with no errors. Rescans out-of-sync folders.",
     "git-autopush": "~/vault and ~/i446-monorepo on Ix: no stuck rebase, a commit within 24h, nothing unpushed, no warnings in the autopush logs.",
     "github-contrib": "What GitHub holds and credits for ~/i446-monorepo and ~/vault: the pushed branch under 24h old, commits attributed to the account, nothing stranded off the default branch for over a week, at least half of the week's default-branch commits credited, a contribution on each of the last 7 days, and a week total at least half the prior 4-week average.",

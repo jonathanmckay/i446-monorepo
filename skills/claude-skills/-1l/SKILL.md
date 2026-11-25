@@ -19,6 +19,7 @@ them in, without affecting other time entries"):
   seam gets its own short entry, which overrides `/auton156`'s "one entry per
   5-10 minutes" for these; a blank with no evidence is absorbed by the task
   next to it, as in `/auton156` (a new entry with the neighbour's name).
+  Each fill carries the `😈` tag, added by the Toggl tool itself.
 
 ```
 /-1l              # today, 00:00 to now

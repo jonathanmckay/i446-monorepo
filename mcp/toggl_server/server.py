@@ -1,4 +1,5 @@
 import datetime
+import os
 import re
 import sys
 from pathlib import Path
@@ -7,7 +8,11 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from . import toggl_api
-from .config import PROJECT_MAP, PROJECT_NAMES, split_subproject, with_subproject_tag
+from .config import PROJECT_MAP, PROJECT_NAMES, split_subproject, with_agent_tag, with_subproject_tag
+
+# Source-log rows written by this server say so (lib/jmsource): without this
+# they read "inline", the same as any `python3 -c` (2026-11-24).
+os.environ.setdefault("JMSOURCE_VIA", "mcp-toggl")
 
 # Self-locating: guarantees `daytime` resolves regardless of the caller's own
 # sys.path — see lib/daytime.py, the shared "now"/"today" resolution every
@@ -213,8 +218,13 @@ def toggl_create_entry(
     project: str = "",
     tags: list[str] = None,
     date: str = "",
+    dictated: bool = False,
 ) -> str:
     """Create a completed time entry with specific start and end times.
+
+    The entry is tagged `😈` (agent-written) unless dictated=True. Pass dictated=True only
+    when the user gave these exact times and this description themselves;
+    anything inferred or reconstructed (gap fills, log sweeps) keeps the tag.
 
     Args:
         description: What you were doing
@@ -223,6 +233,7 @@ def toggl_create_entry(
         project: Project code (i9, hcb, g245, hcmc, etc.) or numeric ID
         tags: Optional list of tag strings
         date: Optional date as "YYYY-MM-DD" if start_time/end_time are HH:MM and you mean a different day
+        dictated: True when the user stated the times and description; skips the `😈` tag
     """
     try:
         ref_date = datetime.date.fromisoformat(date) if date else None
@@ -237,7 +248,7 @@ def toggl_create_entry(
             return f"Error: unknown project code '{project}'. Valid codes: {', '.join(sorted(PROJECT_MAP.keys()))}"
 
         results = _create_single_entry(description, start_dt, end_dt, project_id,
-                                       with_subproject_tag(project, tags))
+                                       with_agent_tag(with_subproject_tag(project, tags), dictated))
         return "\n".join(results)
 
     except Exception as e:
@@ -261,8 +272,11 @@ _BATCH_ENTRY_RE = re.compile(
 
 
 @mcp.tool()
-def toggl_batch(entries: str, date: str = "") -> str:
+def toggl_batch(entries: str, date: str = "", dictated: bool = False) -> str:
     """Create multiple time entries in one call using shorthand notation.
+
+    Every entry is tagged `😈` (agent-written) unless dictated=True (the user gave these
+    exact times and descriptions themselves).
 
     Each entry is comma-separated: "HHMM-HHMM description @project, ..."
     Times can be HH:MM or HHMM format.
@@ -270,6 +284,7 @@ def toggl_batch(entries: str, date: str = "") -> str:
     Args:
         entries: Comma-separated entries, e.g. "1600-1700 work @i9, 1700-1750 math @xk87"
         date: "yesterday", "today", or "YYYY-MM-DD" (default: today)
+        dictated: True when the user stated the entries; skips the `😈` tag
     """
     try:
         ref_date = _resolve_date(date)
@@ -312,7 +327,7 @@ def toggl_batch(entries: str, date: str = "") -> str:
                 continue
 
             results = _create_single_entry(desc, start_dt, end_dt, project_id,
-                                           with_subproject_tag(proj_code, None))
+                                           with_agent_tag(with_subproject_tag(proj_code, None), dictated))
             all_results.extend(results)
             success += 1
         except Exception as e:

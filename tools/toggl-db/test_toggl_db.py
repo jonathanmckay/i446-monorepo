@@ -174,3 +174,23 @@ def test_main_backfill_honours_until_and_window(tmp_path, monkeypatch):
     monkeypatch.setattr(t, "DB_PATH", tmp_path / "t.sqlite")
     assert t.main(["backfill", "--since", "2017-01-01", "--until", "2018-12-31", "--window", "30"]) == 0
     assert seen == {"start": date(2017, 1, 1), "end": date(2018, 12, 31), "window": 30}
+
+
+def test_tag_cache_is_refreshed_when_stale_and_kept_when_the_fetch_fails(tmp_path, monkeypatch):
+    """2026-11-24: nothing rewrote ~/.cache/toggl-tags.json after 10-20, so a new
+    tag (😈, agent-written entries) would have reached the store as a bare id."""
+    t = _load()
+    cache = tmp_path / "toggl-tags.json"
+    cache.write_text(json.dumps({"fetched_at": 0, "tags": {"1": "xk26"}}))
+    monkeypatch.setattr(t, "TAGS_CACHE", cache)
+    monkeypatch.setattr(t, "_get", lambda url, auth, timeout=30: [{"id": 1, "name": "xk26"}, {"id": 2, "name": "😈"}])
+    assert t.tag_names("auth") == {"1": "xk26", "2": "😈"}
+    calls = []
+    monkeypatch.setattr(t, "_get", lambda url, auth, timeout=30: calls.append(1) or [])
+    assert t.tag_names("auth") == {"1": "xk26", "2": "😈"} and not calls      # fresh: no fetch
+    cache.write_text(json.dumps({"fetched_at": 0, "tags": {"1": "xk26"}}))
+    def boom(url, auth, timeout=30):
+        raise OSError("offline")
+    monkeypatch.setattr(t, "_get", boom)
+    assert t.tag_names("auth") == {"1": "xk26"}                              # failure keeps the old cache
+    assert t.tag_names() == {"1": "xk26"}                                    # no auth: read only

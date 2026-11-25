@@ -161,7 +161,7 @@ def test_fill_gaps_uses_saved_state_and_skips_unusable_rows(monkeypatch, tmp_pat
     created = []
     import types, sys as _sys
     fake_api = types.SimpleNamespace(create_entry=lambda *a, **k: created.append((a, k)))
-    fake_cfg = types.SimpleNamespace(PROJECT_MAP={"i9": 209635316, "xk87": 163129781})
+    fake_cfg = types.SimpleNamespace(PROJECT_MAP={"i9": 209635316, "xk87": 163129781}, AGENT_TAG="😈")
     monkeypatch.setitem(_sys.modules, "mcp.toggl_server.toggl_api", fake_api)
     monkeypatch.setitem(_sys.modules, "mcp.toggl_server.config", fake_cfg)
     rc = cov.fill_gaps("1,2,3")
@@ -169,6 +169,7 @@ def test_fill_gaps_uses_saved_state_and_skips_unusable_rows(monkeypatch, tmp_pat
     assert len(created) == 1
     (desc, start, end, dur), kw = created[0]
     assert desc == "hiring checkin" and dur == 300 and kw["project_id"] == 209635316
+    assert kw["tags"] == ["😈"]   # suggested fills are agent-written (JM 2026-11-24)
     created.clear()
     assert cov.fill_gaps("2=lunch out @xk87") == 0
     assert created[0][0][0] == "lunch out" and created[0][1]["project_id"] == 163129781
@@ -206,7 +207,7 @@ def test_fill_replaces_placeholders_once_after_creating(monkeypatch, tmp_path):
                                      delete_entry=lambda i: calls.append(("delete", i)) or True)
     monkeypatch.setitem(_sys.modules, "mcp.toggl_server.toggl_api", fake_api)
     monkeypatch.setitem(_sys.modules, "mcp.toggl_server.config",
-                        types.SimpleNamespace(PROJECT_MAP={"xk87": 163129781}))
+                        types.SimpleNamespace(PROJECT_MAP={"xk87": 163129781}, AGENT_TAG="😈"))
     assert cov.fill_gaps("1,2") == 0
     assert calls == [("create", "walk"), ("delete", 9), ("create", "walk")]
 

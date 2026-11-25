@@ -107,7 +107,37 @@ def creds() -> str:
     return base64.b64encode(f"{key}:api_token".encode()).decode()
 
 
-def tag_names() -> dict[str, str]:
+TAGS_URL = f"https://api.track.toggl.com/api/v9/workspaces/{WORKSPACE_ID}/tags"
+TAGS_MAX_AGE_S = 24 * 3600
+
+
+def refresh_tag_names(auth: str, get=None) -> bool:
+    """Rewrite TAGS_CACHE from Toggl. Nothing refreshed it between 2026-10-20
+    and 2026-11-24, so a tag created after that (`😈`) reached the store
+    as a bare id. Best effort: a failure keeps the old cache."""
+    try:
+        rows = (get or _get)(TAGS_URL, auth) or []
+        tags = {str(t["id"]): t["name"] for t in rows if isinstance(t, dict) and t.get("id") and t.get("name")}
+        if not tags:
+            return False
+        TAGS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = TAGS_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"fetched_at": time.time(), "tags": tags}, ensure_ascii=False))
+        tmp.replace(TAGS_CACHE)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def tag_names(auth: str | None = None) -> dict[str, str]:
+    """Tag id -> name. With `auth`, a cache older than a day is refreshed first."""
+    if auth:
+        try:
+            stale = time.time() - float(json.loads(TAGS_CACHE.read_text()).get("fetched_at", 0)) > TAGS_MAX_AGE_S
+        except (OSError, ValueError, AttributeError, TypeError):
+            stale = True
+        if stale:
+            refresh_tag_names(auth)
     try:
         return {str(k): v for k, v in json.loads(TAGS_CACHE.read_text()).get("tags", {}).items()}
     except (OSError, ValueError, AttributeError):
@@ -311,7 +341,7 @@ def apply_window(conn: sqlite3.Connection, w_start: date, w_end: date, rows: lis
 def sync_range(start: date, end: date, window: int = 7, path: Path = DB_PATH, fetch=None, log=print) -> int:
     """Fetch [start, end] window by window into the db. Each window is a
     separate atomic write, so a crash mid-run keeps every completed window."""
-    fetch = fetch or (lambda s, e, _a=creds(), _c=project_codes(), _t=tag_names(): fetch_window(_a, s, e, _c, _t, log=log))
+    fetch = fetch or (lambda s, e, _a=creds(), _c=project_codes(), _t=tag_names(creds()): fetch_window(_a, s, e, _c, _t, log=log))
     total = 0
     path.parent.mkdir(parents=True, exist_ok=True)
     # One writer at a time: the daily and Sunday crons are 5 minutes apart and

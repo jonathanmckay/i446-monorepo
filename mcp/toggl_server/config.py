@@ -62,6 +62,22 @@ def split_subproject(code):
     return code, None
 
 
+# Completed entries an agent writes through the MCP tools carry this tag, so
+# reviews can tell inferred time from time JM logged (JM 2026-11-24: "tag all
+# agent written time entries"; jm-ai-risks risk 3). Live timers are measured
+# by the clock and stay untagged; so do ranges JM dictated (dictated=True).
+# 😈 is the mark agent items already carry in Todoist (JM 2026-11-24: "use the demon icon").
+AGENT_TAG = "😈"
+
+
+def with_agent_tag(tags, dictated=False):
+    """Tags list with AGENT_TAG added (once) unless JM dictated the entry."""
+    tags = list(tags or [])
+    if not dictated and AGENT_TAG not in tags:
+        tags.append(AGENT_TAG)
+    return tags or None
+
+
 def with_subproject_tag(code, tags):
     """Tags list with the sub-project's tag added (once) when `code` is one."""
     _, tag = split_subproject(code)

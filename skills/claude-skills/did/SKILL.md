@@ -210,7 +210,7 @@ Append via "Append to 0分" template. Close the Todoist task.
 
 Match the line whose bullet content equals the Todoist task content (preserve `(N)`, `[N]`, `{N}` annotations — they're written identically by `/0g` and `/-1g`). If no exact match, fall back to substring match on the bare goal text (strip `(N)`/`[N]`/`{N}` from both sides for the comparison). If still no match, skip silently — don't fail the /did flow.
 
-**5.5.** If `hasTimeRange`, create Toggl entry via `toggl_create_entry`.
+**5.5.** If `hasTimeRange`, create Toggl entry via `toggl_create_entry` with `dictated=true`: JM stated the range himself, so it must not get the `😈` agent tag (2026-11-24).
 
 ## Step C (cross-cutting): d359 last_contact bump
 

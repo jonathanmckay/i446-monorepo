@@ -500,8 +500,9 @@ def _meta_store(tmp_path, rows):
     import sqlite3
     p = tmp_path / "toggl.sqlite"
     c = sqlite3.connect(p)
-    c.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY, day TEXT, seconds INTEGER, project TEXT)")
-    c.executemany("INSERT INTO entries (day, seconds, project) VALUES (?, ?, ?)", rows)
+    c.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY, day TEXT, seconds INTEGER, project TEXT, tags TEXT NOT NULL DEFAULT '[]')")
+    c.executemany("INSERT INTO entries (day, seconds, project, tags) VALUES (?, ?, ?, ?)",
+                  [r if len(r) == 4 else (*r, "[]") for r in rows])
     c.commit(); c.close()
     return p
 
@@ -512,7 +513,8 @@ def test_meta_work_share_excludes_sleep_and_ends_two_days_back(tmp_path):
     vh = _load()
     now = dt.datetime(2026, 11, 24, 18, tzinfo=vh.TZ)
     store = _meta_store(tmp_path, [
-        ("2026-11-22", 3600, "i447"), ("2026-11-22", 3600, "infra"), ("2026-11-22", 8 * 3600, "i9"),
+        ("2026-11-22", 3600, "i447"), ("2026-11-22", 3600, "infra"), ("2026-11-22", 6 * 3600, "i9"),
+        ("2026-11-22", 2 * 3600, "xk87", '["xk20", "😈"]'),             # agent-written: counted apart
         ("2026-11-22", 7 * 3600, "睡觉"), ("2026-11-22", -5, "i447"),      # running timer: ignored
         ("2026-11-23", 9 * 3600, "i447"),                                   # yesterday: outside every window
         ("2026-11-15", 3600, "i447"), ("2026-11-15", 9 * 3600, "xk87"),
@@ -525,6 +527,8 @@ def test_meta_work_share_excludes_sleep_and_ends_two_days_back(tmp_path):
     f = vh.meta_work_finding(weeks)
     assert f.check == "meta-work" and f.status == "ok" and not f.review
     assert "20.0%" in f.summary and "up from the prior 4-week mean 10.0%" in f.summary
+    assert weeks[0]["agent_h"] == 2 and weeks[1]["agent_h"] == 0
+    assert "agent-written entries 2.0 h (20.0% of waking hours)" in f.summary
 
 
 def test_meta_work_warns_only_past_a_set_cap_and_never_asks_for_review(tmp_path, monkeypatch):
