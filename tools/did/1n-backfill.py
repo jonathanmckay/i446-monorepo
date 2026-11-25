@@ -21,8 +21,9 @@ Usage:
 Why simpler than /0n: 1n+ week cells feed no 0分 formula. /did credits a
 weekly habit by an explicit 0分 append on the completion day (row-5 expected
 points for standard habits, base+rate×minutes for variable ones), so a past
-week has nothing to back out. This marks that week's cell (same AppleScript
-as did-fast's step 4b, pointed at the past week's row) and appends the points
+week has nothing to back out. This marks that week's cell (same writer as
+did-fast's step 4b, pointed at the past week's row: the excel-http daemon,
+or did-fast's raw script when the daemon is unreachable) and appends the points
 to TODAY's 0分 row through the excel-http daemon (ledger src "1n backfill
 <habit> <week>"). 2026-10-05.
 """
@@ -49,7 +50,6 @@ from neon import weeks as neon_weeks  # noqa: E402
 import daytime  # noqa: E402
 
 _DID_PATH = Path(__file__).resolve().parent / "did-fast.py"
-WORKBOOK = "Neon分v12.2.xlsx"
 WEEK_LABEL_RE = re.compile(r"^(\d{1,2})\.([1-5])$")
 
 
@@ -116,31 +116,73 @@ def is_marked(formula: str) -> bool:
     return True
 
 
-def read_script(col: str, week_mw: str) -> str:
-    return f'''tell application "Microsoft Excel"
-    set ws to sheet "1n+" of workbook "{WORKBOOK}"
-    set weekRow to 0
-    repeat with r from 4 to 100
-        if (string value of range ("B" & r) of ws) = "{week_mw}" then
-            set weekRow to r
-            exit repeat
-        end if
-    end repeat
-    if weekRow = 0 then return "ERROR: week {week_mw} not found in 1n+"
-    set f to (formula of range ("{col}" & weekRow) of ws) as text
-    set e to (string value of range ("{col}5") of ws) as text
-    set t to (character id 9)
-    return "ROW" & t & weekRow & linefeed & "CELL" & t & f & linefeed & "E" & t & e
-end tell'''
+class ExcelReadError(Exception):
+    """A read through excel-http that did not come back usable. main() turns
+    it into the same "ERROR: excel read failed: ..." exit a failed osascript
+    read produced."""
 
 
-def parse_read(stdout: str) -> dict:
-    out = {}
-    for line in stdout.splitlines():
-        parts = line.split("\t", 1)
-        if len(parts) == 2:
-            out[parts[0]] = parts[1]
-    return out
+# 1n+ rows the old AppleScript scan looked for a week label on (col B; the
+# 2026 ladder is rows 6-57).
+WEEK_ROW_FIRST, WEEK_ROW_LAST = 4, 100
+
+
+def _cell_text(v) -> str:
+    v = "" if v is None else str(v)
+    return "" if v == "missing value" else v
+
+
+def display_num(text: str) -> str:
+    """Row-5 points as the sheet shows them. The old script read the cell's
+    display text ("45"); the daemon returns its value ("45.0"). Whole numbers
+    lose the ".0"; rate strings ("1/m", "15+1/m") and anything else pass
+    through unchanged."""
+    s = (text or "").strip()
+    try:
+        f = float(s)
+    except ValueError:
+        return text
+    if f != f or f in (float("inf"), float("-inf")):
+        return text
+    return str(int(f)) if f == int(f) else s
+
+
+def _read_ok(what: str, resp) -> dict:
+    if not isinstance(resp, dict) or resp.get("ok") is not True:
+        err = resp.get("error") if isinstance(resp, dict) else None
+        raise ExcelReadError(f"1n+!{what}: {err or 'read failed'}")
+    return resp
+
+
+def read_week_cell(col: str, week_mw: str) -> dict:
+    """The read half of /1n through excel-http (2026-11-25, was one raw
+    AppleScript): the week's row, the habit cell's formula and the column's
+    row-5 expected points. Returns {"ROW": "51", "CELL": "=30+12", "E": "45"},
+    the dict parse_read gave for that script. Reads only. Raises
+    ExcelReadError when the week is not on the sheet or a read fails."""
+    try:
+        resp = neon_excel.lookup("1n+", week_mw)
+        row = 0
+        if isinstance(resp, dict) and resp.get("ok") is True:
+            try:
+                row = int(resp.get("row"))
+            except (TypeError, ValueError):
+                row = 0
+        elif str((resp or {}).get("error") or "") != "date_not_found":
+            err = str((resp or {}).get("error") or "excel-http unreachable")
+            detail = (resp or {}).get("detail")
+            raise ExcelReadError(f"1n+ week lookup for {week_mw}: {err}"
+                                 + (f" ({detail})" if detail else ""))
+        if not WEEK_ROW_FIRST <= row <= WEEK_ROW_LAST:
+            raise ExcelReadError(f"ERROR: week {week_mw} not found in 1n+")
+        cell = _read_ok(f"{col}{row}", neon_excel.read("1n+", col, row=row))
+        pts = _read_ok(f"{col}5", neon_excel.read("1n+", col, row=5))
+    except ExcelReadError:
+        raise
+    except Exception as e:  # noqa: BLE001 — transport errors are read failures
+        raise ExcelReadError(str(e) or type(e).__name__) from e
+    return {"ROW": str(row), "CELL": _cell_text(cell.get("formula")),
+            "E": display_num(_cell_text(pts.get("value")))}
 
 
 def main() -> int:
@@ -182,10 +224,10 @@ def main() -> int:
     threshold = df.THRESHOLD_1N.get(key)
     minutes = a.minutes
 
-    r = ix_run(read_script(col, week_mw), timeout=30.0)
-    if r.returncode != 0 or r.stdout.startswith("ERROR"):
-        raise SystemExit(f"ERROR: excel read failed: {r.stderr or r.stdout}")
-    rd = parse_read(r.stdout)
+    try:
+        rd = read_week_cell(col, week_mw)
+    except ExcelReadError as e:
+        raise SystemExit(f"ERROR: excel read failed: {e}")
     pre = rd.get("CELL", "")
     row5 = rd.get("E", "").strip()
 

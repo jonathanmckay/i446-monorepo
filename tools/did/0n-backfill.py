@@ -29,15 +29,15 @@ xk/思). Marking a past row therefore credits the PAST day. The user's manual
 fix was "mark the row, then subtract from that day and add to today". This
 script does exactly that, atomically enough:
 
-  1. ONE AppleScript (Excel serializes Apple Events per script, so nothing can
-     interleave): read 0n row-2 weight + the target cell, read 0分 P..Z values
-     on the past row (pre-image), set the 0n cell, `calculate`, re-read P..Z
-     (post-image). Deltas = post - pre, per column. That captures every
-     routing Excel actually applies (个 for most habits, 媒 for hcmc columns,
-     m5 for m5x2 columns, and 0g's extra +9 on 0分!Q) without hard-coding
-     the formulas.
+  1. Read through the excel-http daemon (read_pre_image): 0n row-2 weight +
+     the target cell, and the 0分 P..Z values on the past row (pre-image).
+     Set the 0n cell through the daemon (daemon_set, journaled), then one
+     AppleScript does `calculate full` and re-reads P..Z (post-image).
+     Deltas = post - pre, per column. That captures every routing Excel
+     actually applies (个 for most habits, 媒 for hcmc columns, m5 for m5x2
+     columns, and 0g's extra +9 on 0分!Q) without hard-coding the formulas.
   2. Sanity: Σdeltas must equal weight × value (0g may add exactly +9 on Q).
-     Anything else → the 0n write is reverted in a second AppleScript and
+     Anything else → the 0n write is reverted through the daemon and
      nothing moves. No half-states.
   3. Through the excel-http daemon (ledger `src: "0n backfill <habit> <date>"`):
      batch_append "-N" per changed column on the past date, "+N" on today.
@@ -258,7 +258,7 @@ def week_start(d: date) -> date:
     return d - timedelta(days=(d.weekday() + 1) % 7)
 
 
-# --- AppleScript -------------------------------------------------------------
+# --- AppleScript (only the post-write re-measure still uses it) ----------------
 def _row_lookup(var: str, sheet_var: str, date_col: int, month: int, day: int) -> str:
     return f'''    set {var} to 0
     repeat with r from 3 to 500
@@ -283,62 +283,84 @@ def _fen_read_block(tag: str) -> str:
     return "\n".join(lines)
 
 
-def build_script(habit_col: int, month: int, day: int, value, do_write: bool,
-                 variable_mode: str | None = None) -> str:
-    """One script: weight, pre cell, 0分 pre-image, [write + calculate], post-image.
-    variable_mode ('add'/'set') = variable/cumulative habit: no blank-only
-    guard, and `calculate full` because its points route through another
-    sheet (hiit: 0n!AE → hcbi!Y → 0分!W)."""
-    write_block = ""
-    if do_write and variable_mode:
-        if variable_mode == "add":
-            assign = f'''    if (pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0" then
-        set nv to {value}
-    else
-        set nv to (pv as number) + {value}
-    end if'''
-        else:
-            assign = f"    set nv to {value}"
-        write_block = f'''{assign}
-    set value of cell {habit_col} of row nRow of ws to nv
-    calculate full
-    set pv2 to value of cell {habit_col} of row nRow of ws
-    if pv2 is missing value then set pv2 to ""
-    set out to out & "POST0N" & (character id 9) & (pv2 as text) & linefeed
-{_fen_read_block("POST")}'''
-    elif do_write:
-        # Guard inside the script: a non-empty cell is never overwritten, so
-        # "already marked" needs no revert round-trip.
-        write_block = f'''    if (pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0" then
-        set value of cell {habit_col} of row nRow of ws to {value}
-        calculate
-        set pv2 to value of cell {habit_col} of row nRow of ws
-        if pv2 is missing value then set pv2 to ""
-        set out to out & "POST0N" & (character id 9) & (pv2 as text) & linefeed
-{_fen_read_block("POST").replace(chr(10) + "    ", chr(10) + "        ")}
-    else
-        set out to out & "SKIPPED" & linefeed
-    end if'''
-    return f'''tell application "Microsoft Excel"
-    set wb to workbook "{WORKBOOK}"
-    set ws to sheet "0n" of wb
-    set wf to sheet "0分" of wb
-    set out to ""
-{_row_lookup("nRow", "ws", 3, month, day)}
-{_row_lookup("fRow", "wf", 2, month, day)}
-    if nRow = 0 then return "ERROR: date {month}/{day} not found in 0n"
-    if fRow = 0 then return "ERROR: date {month}/{day} not found in 0分"
-    set out to out & "ROWS" & (character id 9) & nRow & (character id 9) & fRow & linefeed
-    set wv to value of cell {habit_col} of row 2 of ws
-    if wv is missing value then set wv to ""
-    set out to out & "WEIGHT" & (character id 9) & (wv as text) & linefeed
-    set pv to value of cell {habit_col} of row nRow of ws
-    if pv is missing value then set pv to ""
-    set out to out & "PRE0N" & (character id 9) & (pv as text) & linefeed
-{_fen_read_block("PRE")}
-{write_block}
-    return out
-end tell'''
+class ExcelReadError(Exception):
+    """A read through excel-http that did not come back usable. main() turns
+    it into the same "ERROR: excel read failed: ..." exit a failed osascript
+    read produced."""
+
+
+# Date rows the old AppleScript lookup scanned on both sheets. Kept so the
+# daemon lookup accepts exactly the rows it did: 0分's first date (1/4, row 2)
+# stays "not found", as before. Widen here if that date should ever work.
+DATE_ROW_FIRST, DATE_ROW_LAST = 3, 500
+
+
+def _cell_text(v) -> str:
+    """A daemon cell value as the old script printed it: blank for an empty
+    cell, else the text Excel's AppleScript value coerces to ("1.0")."""
+    v = "" if v is None else str(v)
+    return "" if v == "missing value" else v
+
+
+def _date_row(sheet: str, md: str) -> int:
+    """Row of `md` ('M/D') on `sheet` via excel-http /lookup: the same lookup
+    daemon_set and batch_append resolve their rows with, so the row read here
+    is the row written later."""
+    resp = neon_excel.lookup(sheet, md)
+    if isinstance(resp, dict) and resp.get("ok") is True:
+        try:
+            row = int(resp.get("row"))
+        except (TypeError, ValueError):
+            row = 0
+        if DATE_ROW_FIRST <= row <= DATE_ROW_LAST:
+            return row
+        raise ExcelReadError(f"ERROR: date {md} not found in {sheet}")
+    err = str((resp or {}).get("error") or "excel-http unreachable")
+    if err == "date_not_found":
+        raise ExcelReadError(f"ERROR: date {md} not found in {sheet}")
+    detail = (resp or {}).get("detail")
+    raise ExcelReadError(f"{sheet} row lookup for {md}: {err}" + (f" ({detail})" if detail else ""))
+
+
+def _cell_value(sheet: str, col: str, row: int) -> str:
+    resp = neon_excel.read(sheet, col, row=row)
+    if not isinstance(resp, dict) or resp.get("ok") is not True:
+        err = resp.get("error") if isinstance(resp, dict) else None
+        raise ExcelReadError(f"{sheet}!{col}{row}: {err or 'read failed'}")
+    return _cell_text(resp.get("value"))
+
+
+def read_pre_image(habit_col: int, month: int, day: int) -> dict:
+    """The read half of /0n through excel-http (2026-11-25, was one raw
+    AppleScript): both date rows, the habit's row-2 weight, the 0n cell before
+    the write and the 0分 P..Z pre-image. Same dict parse_script_output gave
+    for that script: {"n_row", "f_row", "WEIGHT", "PRE0N", "PRE": {16..26:
+    float}, "POST": {}}. Reads only. Raises ExcelReadError when any of it is
+    missing or refused; a non-numeric 0分 cell raises ValueError, as it did."""
+    md = f"{month}/{day}"
+    col = col_letter(habit_col)
+    try:
+        n_row = _date_row("0n", md)
+        f_row = _date_row("0分", md)
+        weight = _cell_value("0n", col, 2)
+        pre0n = _cell_value("0n", col, n_row)
+        rng = f"{col_letter(FEN_COLS[0])}{f_row}:{col_letter(FEN_COLS[-1])}{f_row}"
+        fen = neon_excel.read_range("0分", rng)
+    except ExcelReadError:
+        raise
+    except Exception as e:  # noqa: BLE001 — transport errors are read failures
+        raise ExcelReadError(str(e) or type(e).__name__) from e
+    if not isinstance(fen, dict) or fen.get("ok") is not True:
+        err = fen.get("error") if isinstance(fen, dict) else None
+        raise ExcelReadError(f"0分!{rng}: {err or 'read failed'}")
+    rows = fen.get("rows") or []
+    if len(rows) != 1 or len(rows[0]) != len(FEN_COLS):
+        # A short row would shift every column's pre-image.
+        raise ExcelReadError(f"0分!{rng}: expected 1 row of {len(FEN_COLS)} cells, got "
+                             f"{len(rows)} row(s) of {len(rows[0]) if rows else 0}")
+    return {"n_row": n_row, "f_row": f_row, "WEIGHT": weight, "PRE0N": pre0n,
+            "PRE": {c: parse_num(_cell_text(v)) for c, v in zip(FEN_COLS, rows[0])},
+            "POST": {}}
 
 
 def build_remeasure_script(month: int, day: int) -> str:
@@ -355,24 +377,6 @@ def build_remeasure_script(month: int, day: int) -> str:
     calculate full
 {_fen_read_block("POST")}
     return out
-end tell'''
-
-
-def build_revert_script(habit_col: int, n_row: int, pre_raw: str) -> str:
-    """Restore the 0n cell and REPORT what it holds afterwards, so a revert
-    that did not land is caught instead of claimed (2026-10-22: the message
-    said 'reverted' while the cell stayed 1)."""
-    if pre_raw == "":
-        restore = f"clear contents cell {habit_col} of row {n_row} of ws"
-    else:
-        restore = f"set value of cell {habit_col} of row {n_row} of ws to {pre_raw}"
-    return f'''tell application "Microsoft Excel"
-    set ws to sheet "0n" of workbook "{WORKBOOK}"
-    {restore}
-    calculate
-    set rv to value of cell {habit_col} of row {n_row} of ws
-    if rv is missing value then set rv to ""
-    return "REVERTED" & (character id 9) & (rv as text)
 end tell'''
 
 
@@ -529,12 +533,12 @@ def main() -> int:
         out["note"] = (f"cross-week move: {past_md} is in the week of "
                        f"{week_start(target).isoformat()}; that week's 1s totals change")
 
-    # 1. read the weight, the cell and the 0分 pre-image (read-only script)
+    # 1. read the weight, the cell and the 0分 pre-image (excel-http, reads only)
     do_write = not (a.move_only or a.dry_run)
-    res = ix_run(build_script(col, target.month, target.day, value, False), timeout=60.0)
-    if res.returncode != 0 or res.stdout.startswith("ERROR"):
-        raise SystemExit(f"ERROR: excel read failed: {res.stderr or res.stdout}")
-    r = parse_script_output(res.stdout)
+    try:
+        r = read_pre_image(col, target.month, target.day)
+    except ExcelReadError as e:
+        raise SystemExit(f"ERROR: excel read failed: {e}")
     weight = parse_num(r.get("WEIGHT", ""))
     pre0n = r.get("PRE0N", "")
     out.update({"weight": weight, "pre_0n": pre0n, "rows": [r["n_row"], r["f_row"]]})

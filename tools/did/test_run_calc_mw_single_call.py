@@ -14,10 +14,9 @@ survey questions -- the confirmation message (`✓ 1s saved to Neon...`)
 already existed in 1s-survey.py but was never reached because execution was
 still stuck inside this scan.
 
-Fix: do the row scan SERVER-SIDE in one AppleScript call via ix-osa.sh (the
-same pattern 0t-fast.py's fallback template already uses for its own
-date-row scan), so finding the row costs exactly one round trip regardless
-of how many rows are scanned.
+Fix (2026-08-09): do the row scan in one call. First one AppleScript through
+ix-osa.sh; since 2026-11-25 one excel-http /lookup (excel.lookup_row), with no
+raw AppleScript and no subprocess of its own.
 """
 from __future__ import annotations
 
@@ -57,42 +56,62 @@ def test_calc_mw_no_longer_loops_over_excel_read():
         "_calc_mw still has a client-side row-scanning loop")
 
 
-def test_calc_mw_makes_exactly_one_subprocess_call():
-    """Behavioral: whatever _calc_mw does to find the row, it must cost
-    exactly one subprocess/network round trip, not one per candidate row."""
+def _no_subprocess(*a, **k):
+    raise AssertionError("_calc_mw spawned a subprocess (raw osascript is gone)")
+
+
+def test_calc_mw_makes_exactly_one_daemon_lookup_and_no_subprocess():
+    """Behavioral: finding the row costs exactly one excel-http round trip
+    (lookup_row), not one per candidate row, and no osascript."""
     calls = []
 
-    class FakeCompleted:
-        returncode = 0
-        stdout = "27\n"
-        stderr = ""
+    def fake_lookup(sheet, label):
+        calls.append((sheet, label))
+        return 27
 
-    def fake_run(*args, **kwargs):
-        calls.append((args, kwargs))
-        return FakeCompleted()
-
-    with patch.object(run.subprocess, "run", side_effect=fake_run):
+    with patch.object(run.excel, "lookup_row", side_effect=fake_lookup), \
+         patch.object(run.subprocess, "run", side_effect=_no_subprocess):
         mw, row = run._calc_mw("8/3")
 
-    assert len(calls) == 1, f"_calc_mw made {len(calls)} subprocess calls, expected 1"
-    assert row == 27
-    assert isinstance(mw, float)
+    assert len(calls) == 1, f"_calc_mw made {len(calls)} lookups, expected 1"
+    sheet, label = calls[0]
+    assert sheet == "1n+"
+    # the label goes as the text col B holds ("8.1"), never a float
+    assert isinstance(label, str) and re.fullmatch(r"\d{1,2}\.[1-5]", label), label
+    assert row == 27 and type(row) is int
+    assert isinstance(mw, float) and f"{mw}" == label
+
+
+def _raises_not_found(**patches):
+    with patch.object(run.excel, "lookup_row", **patches), \
+         patch.object(run.subprocess, "run", side_effect=_no_subprocess):
+        try:
+            run._calc_mw("8/3")
+        except RuntimeError as e:
+            return str(e)
+    raise AssertionError("expected RuntimeError")
 
 
 def test_calc_mw_raises_when_week_not_found():
-    class FakeCompleted:
-        returncode = 0
-        stdout = "0\n"
-        stderr = ""
-
-    with patch.object(run.subprocess, "run", return_value=FakeCompleted()):
-        try:
-            run._calc_mw("8/3")
-            assert False, "expected RuntimeError when the week row isn't found"
-        except RuntimeError as e:
-            assert "not found" in str(e)
+    msg = _raises_not_found(return_value=None)      # label absent, or daemon unreachable
+    assert "not found in 1n+ col B" in msg and msg.startswith("M.W=")
 
 
-if __name__ == "__main__":
-    import pytest
-    sys.exit(pytest.main([__file__, "-v"]))
+def test_calc_mw_daemon_exception_takes_the_not_found_path():
+    assert "not found" in _raises_not_found(side_effect=OSError("ssh died"))
+
+
+def test_calc_mw_rejects_rows_outside_the_week_ladder():
+    """The old scan only looked at rows 4-59; a hit on a header row or far
+    below the ladder must not become a write target."""
+    for bad in (0, 2, 3, 60, 400, "x", True):
+        assert "not found" in _raises_not_found(return_value=bad), bad
+    with patch.object(run.excel, "lookup_row", return_value=59):
+        assert run._calc_mw("8/3")[1] == 59
+    with patch.object(run.excel, "lookup_row", return_value=4):
+        assert run._calc_mw("8/3")[1] == 4
+
+
+def test_calc_mw_has_no_raw_applescript():
+    body = _calc_mw_source()
+    assert "tell application" not in body and "IX_OSA" not in body and "subprocess" not in body

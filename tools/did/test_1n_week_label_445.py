@@ -88,26 +88,19 @@ def test_run_calc_mw_scans_for_9_5_on_oct_1_2026():
         def now(cls, tz=None):
             return cls(2026, 10, 1, 8, 46)
 
-    scripts = []
+    labels = []
 
-    class FakeCompleted:
-        returncode = 0
-        stdout = "44\n"
-        stderr = ""
-
-    def fake_run(*args, **kwargs):
-        scripts.append(kwargs.get("input", ""))
-        return FakeCompleted()
+    def fake_lookup(sheet, label):
+        labels.append((sheet, label))
+        return 44
 
     with patch.object(run, "datetime", FrozenDatetime), \
-         patch.object(run.subprocess, "run", side_effect=fake_run):
+         patch.object(run.excel, "lookup_row", side_effect=fake_lookup):
         mw, row = run._calc_mw("10/1")
 
     assert mw == 9.5
     assert row == 44
-    assert len(scripts) == 1
-    assert 'cellVal = "9.5"' in scripts[0], scripts[0]
-    assert '"9.4"' not in scripts[0]
+    assert labels == [("1n+", "9.5")]        # one lookup, for 9.5 and not 9.4
 
 
 def test_run_calc_mw_agrees_with_did_fast_and_1s_survey():
@@ -121,13 +114,8 @@ def test_run_calc_mw_agrees_with_did_fast_and_1s_survey():
         def now(cls, tz=None):
             return cls(2026, 10, 1, 8, 46)
 
-    class FakeCompleted:
-        returncode = 0
-        stdout = "7\n"
-        stderr = ""
-
     with patch.object(run, "datetime", FrozenDatetime), \
-         patch.object(run.subprocess, "run", return_value=FakeCompleted()):
+         patch.object(run.excel, "lookup_row", return_value=7):
         for md in ("8/30", "9/6", "9/27", "10/1", "5/31", "6/1", "4/24"):
             m, d = (int(x) for x in md.split("/"))
             day = date(2026, m, d)

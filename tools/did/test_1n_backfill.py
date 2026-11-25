@@ -76,9 +76,141 @@ def test_is_marked(ob, formula, marked):
     assert ob.is_marked(formula) is marked
 
 
-def test_parse_read(ob):
-    assert ob.parse_read("ROW\t44\nCELL\t=0+1\nE\t15\n") == {
-        "ROW": "44", "CELL": "=0+1", "E": "15"}
+# --- the read goes through excel-http (2026-11-25, Neon off Excel) -----------
+# read_script (raw AppleScript: scan col B for the week, the cell's formula,
+# row 5's display text) is gone; read_week_cell asks the daemon and returns
+# the dict parse_read gave for that script.
+
+class FakeExcel:
+    def __init__(self, weeks=None, cells=None, refuse=None):
+        self.weeks = weeks if weeks is not None else {"11.3": 51}
+        self.cells = cells if cells is not None else {
+            ("C", 51): ("1.0", "1"), ("C", 5): ("45.0", "45"),
+            ("V", 51): ("42.0", "=30+12"), ("V", 5): (".5/m", ".5/m"),
+            ("AF", 51): ("", ""), ("AF", 5): ("1/m", "1/m")}
+        self.refuse = refuse or {}
+        self.calls = []
+
+    def lookup(self, sheet, label):
+        self.calls.append(("lookup", sheet, label))
+        if "lookup" in self.refuse:
+            return self.refuse["lookup"]
+        row = self.weeks.get(label)
+        return {"ok": True, "row": row} if row else {"ok": False, "error": "date_not_found"}
+
+    def read(self, sheet, col, *, date=None, row=None):
+        self.calls.append(("read", sheet, col, row))
+        if row in self.refuse:
+            return self.refuse[row]
+        value, formula = self.cells.get((col, row), ("", ""))
+        return {"ok": True, "row": row, "col": col, "value": value, "formula": formula}
+
+    def _write(self, *a, **k):
+        raise AssertionError("the read half called a write endpoint")
+    append = write = batch_append = batch_write = _write
+
+
+@pytest.fixture
+def fake(ob, monkeypatch):
+    def install(**kw):
+        fx = FakeExcel(**kw)
+        monkeypatch.setattr(ob, "neon_excel", fx)
+        monkeypatch.setattr(ob, "ix_run", lambda *a, **k: pytest.fail("raw AppleScript run"))
+        return fx
+    return install
+
+
+def test_read_week_cell_gives_the_old_script_shape(ob, fake):
+    fx = fake()
+    # ROW stays text, CELL is the formula, E is row 5 as the sheet shows it
+    assert ob.read_week_cell("C", "11.3") == {"ROW": "51", "CELL": "1", "E": "45"}
+    assert fx.calls == [("lookup", "1n+", "11.3"), ("read", "1n+", "C", 51), ("read", "1n+", "C", 5)]
+    assert ob.read_week_cell("V", "11.3") == {"ROW": "51", "CELL": "=30+12", "E": ".5/m"}
+    assert ob.read_week_cell("AF", "11.3") == {"ROW": "51", "CELL": "", "E": "1/m"}
+    assert not ob.is_marked(ob.read_week_cell("AF", "11.3")["CELL"])
+
+
+@pytest.mark.parametrize("value,shown", [
+    ("45.0", "45"), ("3.0", "3"), ("120.0", "120"), ("0.0", "0"), ("-5.0", "-5"),
+    ("22.5", "22.5"), ("1.714285714286", "1.714285714286"),
+    ("1/m", "1/m"), (".5/m", ".5/m"), ("15+1/m", "15+1/m"), ("", ""), ("nan", "nan"),
+])
+def test_display_num_matches_the_sheets_display_text(ob, value, shown):
+    """The daemon returns values ("45.0"); the old script read display text
+    ("45"). float(row5) and the JSON "points" field saw the display form."""
+    assert ob.display_num(value) == shown
+
+
+@pytest.mark.parametrize("weeks", [
+    {},                      # label not on the sheet
+    {"11.3": 3},             # the old scan covered rows 4..100 only
+    {"11.3": 101},
+])
+def test_read_week_cell_week_not_found_keeps_the_old_message(ob, fake, weeks):
+    fake(weeks=weeks)
+    with pytest.raises(ob.ExcelReadError) as e:
+        ob.read_week_cell("C", "11.3")
+    assert str(e.value) == "ERROR: week 11.3 not found in 1n+"
+
+
+@pytest.mark.parametrize("refuse,needle", [
+    ({"lookup": None}, "1n+ week lookup for 11.3: excel-http unreachable"),
+    ({"lookup": {"ok": False, "error": "excel_error", "detail": "busy"}}, "excel_error (busy)"),
+    ({51: {"ok": False, "error": "queue_pending"}}, "1n+!C51: queue_pending"),
+    ({5: {"ok": False, "error": "queue_pending"}}, "1n+!C5: queue_pending"),
+    ({5: None}, "1n+!C5: read failed"),
+])
+def test_read_week_cell_failed_read_is_an_error_never_a_blank(ob, fake, refuse, needle):
+    """A refused cell read must not read as '' (unmarked): the week would be
+    marked and credited a second time."""
+    fake(refuse=refuse)
+    with pytest.raises(ob.ExcelReadError) as e:
+        ob.read_week_cell("C", "11.3")
+    assert needle in str(e.value) and "not found" not in str(e.value)
+
+
+def _main(ob, df, monkeypatch, argv):
+    monkeypatch.setattr(df, "load_headers", lambda: {"0n": {}, "1n": {"1s": "C", "family": "AF"}})
+    monkeypatch.setattr(ob, "_did", lambda: df)
+    monkeypatch.setattr(ob.daytime, "today", lambda: date(2026, 11, 25))
+    monkeypatch.setattr(sys, "argv", ["1n-backfill.py"] + argv)
+    return ob.main()
+
+
+def test_main_dry_run_reads_through_the_daemon_and_writes_nothing(ob, df, fake, monkeypatch, capsys):
+    import json
+    fx = fake(cells={("C", 51): ("", ""), ("C", 5): ("45.0", "45")})
+    assert _main(ob, df, monkeypatch, ["1s", "11.3", "--domain", "g245", "--dry-run"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["row"] == "51" and out["pre_cell"] == "" and out["points"] == "45"
+    assert out["dry_run"] is True and out["would_write_cell"] == 1
+    assert {c[0] for c in fx.calls} == {"lookup", "read"}
+
+
+def test_main_already_marked_week_awards_nothing(ob, df, fake, monkeypatch, capsys):
+    import json
+    fake()                                             # C51 formula "1": marked
+    assert _main(ob, df, monkeypatch, ["1s", "11.3", "--domain", "g245"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["already_credited"] is True and out["points_awarded"] == 0
+
+
+@pytest.mark.parametrize("kw,needle", [
+    ({"weeks": {}}, "ERROR: excel read failed: ERROR: week 11.3 not found in 1n+"),
+    ({"refuse": {51: {"ok": False, "error": "queue_pending"}}},
+     "ERROR: excel read failed: 1n+!C51: queue_pending"),
+])
+def test_main_failed_read_exits_like_a_failed_script_before_any_write(ob, df, fake, monkeypatch, kw, needle):
+    fake(**kw)
+    with pytest.raises(SystemExit) as e:
+        _main(ob, df, monkeypatch, ["1s", "11.3", "--domain", "g245"])
+    assert str(e.value) == needle
+
+
+def test_no_raw_read_script_is_left(ob):
+    src = (_HERE / "1n-backfill.py").read_text()
+    assert not hasattr(ob, "read_script") and not hasattr(ob, "parse_read")
+    assert "tell application" not in src
 
 
 def test_did_fast_hyphenated_header_reaches_0fen(df):

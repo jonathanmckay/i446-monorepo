@@ -415,8 +415,8 @@ def _find_and_close_todoist(label: str, query: str, aliases: list,
     return None, None
 
 
-IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
-WORKBOOK = "Neon分v12.2.xlsx"
+# 1n+ rows a week label may sit on (col B; the 2026 ladder is rows 6-57).
+WEEK_ROW_FIRST, WEEK_ROW_LAST = 4, 59
 
 
 def _target_date_obj(target_date: str) -> date:
@@ -438,35 +438,21 @@ def _calc_mw(target_date: str, name: str = "") -> tuple[float, int]:
     # put every write from 2026-08-30 on one row above its real week.
     week_str = weeks.fiscal_week_label(target)
     mw = float(week_str)
-    # Single server-side scan (2026-08-09 fix): this used to call
-    # excel.read("1n+", "B", row=r) once PER row in a client-side loop over
-    # rows 4-59 -- up to 56 sequential network round trips, each individually
-    # timeout-bounded (20s daemon + 45s ssh fallback) but additive, so a
-    # daemon outage turned "find one row" into a many-minute wait. This runs
-    # right after the 1s survey's own Neon write, in the /did mark-done
-    # chain, which is what made /1s look hung after finishing the form (bug
-    # report: "when I save or finish all the questions... it just hangs").
-    # Doing the row scan IN the AppleScript (like 0t-fast.py's fallback
-    # template already does for its date scan) makes this exactly one call.
-    script = f'''
-tell application "Microsoft Excel"
-    set theSheet to sheet "1n+" of workbook "{WORKBOOK}"
-    set foundRow to 0
-    repeat with r from 4 to 59
-        set cellVal to string value of range ("B" & r) of theSheet
-        if cellVal = "{week_str}" then
-            set foundRow to r
-            exit repeat
-        end if
-    end repeat
-    return foundRow as string
-end tell
-'''
-    proc = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
-                          text=True, timeout=60)
-    out = proc.stdout.strip()
-    if proc.returncode == 0 and out.isdigit() and int(out) > 0:
-        return mw, int(out)
+    # One daemon round trip (2026-11-25): excel-http's /lookup scans col B for
+    # the label. History: a client-side excel.read() per row over rows 4-59
+    # (2026-08-09, up to 56 sequential round trips, which made /1s look hung
+    # when the daemon was down), then one raw AppleScript scan through
+    # ix-osa.sh; raw AppleScript against Excel is gone with Neon off Excel.
+    # The label goes as the text fiscal_week_label gives ("11.4"): col B holds
+    # the labels as text and /lookup compares text.
+    try:
+        found = excel.lookup_row("1n+", week_str)
+        row = 0 if found is None or isinstance(found, bool) else int(found)
+    except Exception:  # noqa: BLE001 — same outcome as a failed osascript
+        row = 0
+    # Rows 4-59 are what the old scan covered; anything else is not a week row.
+    if WEEK_ROW_FIRST <= row <= WEEK_ROW_LAST:
+        return mw, row
     raise RuntimeError(f"M.W={week_str} not found in 1n+ col B")
 
 

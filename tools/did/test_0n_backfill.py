@@ -4,9 +4,11 @@ Pure-helper tests: date parsing, formula-append number hygiene, delta
 measurement and the Σdelta == weight×value guard (with the 0g +9 exception),
 and the AppleScript output parser."""
 import importlib.util
+import json
 import sys
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -138,16 +140,6 @@ def test_week_start_sunday_anchored(zb):
     assert zb.week_start(date(2026, 9, 18)) == date(2026, 9, 13)
 
 
-def test_script_never_touches_n_color_or_sigma(zb):
-    s = zb.build_script(19, 9, 18, 1, do_write=True)
-    assert "cell 32 of row nRow" not in s          # 0l time stamp (AF) never written
-    assert "cell 19 of row nRow of ws to 1" in s   # the habit mark
-    assert "calculate" in s
-    assert "cell 4 of row fRow" not in s           # 0分!D (Σ) not read/written
-    assert s.count("\"PRE\" &") == 11 and s.count("\"POST\" &") == 11
-    assert "set value of cell" not in zb.build_script(19, 9, 18, 1, do_write=False)
-
-
 # ── already-credited guard (2026-09-28) ─────────────────────────────────────
 
 @pytest.mark.parametrize("cell,expect", [
@@ -156,12 +148,6 @@ def test_script_never_touches_n_color_or_sigma(zb):
 ])
 def test_already_credited(zb, cell, expect):
     assert zb.already_credited(cell) is expect
-
-
-def test_script_writes_over_blank_or_zero_only(zb):
-    s = zb.build_script(7, 9, 25, 1, do_write=True)
-    assert '(pv as text) = "" or (pv as text) = "0" or (pv as text) = "0.0"' in s
-    assert "SKIPPED" in s
 
 
 # --- 2026-10-22: stalled recalc measured {}, "reverted" while the cell stayed 1 ---
@@ -248,14 +234,6 @@ def test_deltas_follow_change(zb):
     assert not zb.deltas_follow_change({23: 30.0}, 0)
 
 
-def test_variable_script_adds_without_blank_guard_and_recalcs_full(zb):
-    s = zb.build_script(31, 11, 2, 15, True, variable_mode="add")
-    assert "(pv as number) + 15" in s and "calculate full" in s
-    assert "SKIPPED" not in s
-    s = zb.build_script(31, 11, 2, 15, True, variable_mode="set")
-    assert "set nv to 15" in s and "pv as number" not in s
-
-
 # --- the mark goes through the daemon (2026-11-04, Neon off Excel) ----------
 # The AppleScript used to set the 0n cell itself, invisible to the ledger, so
 # the strict check read every /0n mark as typed into 0n. Now the script only
@@ -301,7 +279,160 @@ def test_revert_goes_through_the_daemon_and_checks_it_landed(zb, monkeypatch):
         zb.revert_or_die(41, 0, "", "mismatch", "10/29", "src")
 
 
-def test_main_reads_with_a_script_that_never_writes(zb):
-    """The measurement script must stay read-only: the daemon owns the write."""
-    src = zb.build_script(41, 10, 29, 1, False)
+# --- the read half goes through the daemon too (2026-11-25, Neon off Excel) ---
+# build_script (one raw AppleScript: both date rows, row-2 weight, the cell,
+# 0分 P..Z) is gone; read_pre_image asks excel-http and returns the dict
+# parse_script_output gave for that script.
+
+class FakeExcel:
+    """neon.excel stand-in over a tiny sheet model. Records every call; any
+    write endpoint fails the test."""
+
+    def __init__(self, rows=None, cells=None, fen=None, refuse=None):
+        self.rows = rows if rows is not None else {("0n", "10/29"): 302, ("0分", "10/29"): 299}
+        self.cells = cells if cells is not None else {("0n", "AO", 2): "25.0", ("0n", "AO", 302): ""}
+        self.fen = fen if fen is not None else ["81.0", "218.0", "107.0", "163.0", "172.0", "42.0",
+                                                "10.0", "83.785714285714", "839.0", "0.0", ""]
+        self.refuse = refuse or {}       # {"lookup"|"read"|"read_range": reply}
+        self.calls = []
+
+    def lookup(self, sheet, md):
+        self.calls.append(("lookup", sheet, md))
+        if "lookup" in self.refuse:
+            return self.refuse["lookup"]
+        row = self.rows.get((sheet, md))
+        return {"ok": True, "row": row} if row else {"ok": False, "error": "date_not_found"}
+
+    def read(self, sheet, col, *, date=None, row=None):
+        self.calls.append(("read", sheet, col, row))
+        if "read" in self.refuse:
+            return self.refuse["read"]
+        v = self.cells.get((sheet, col, row), "")
+        return {"ok": True, "row": row, "col": col, "value": v, "formula": v}
+
+    def read_range(self, sheet, rng):
+        self.calls.append(("read_range", sheet, rng))
+        if "read_range" in self.refuse:
+            return self.refuse["read_range"]
+        return {"ok": True, "range": rng, "rows": [list(self.fen)]}
+
+    def _write(self, *a, **k):
+        raise AssertionError("the read half called a write endpoint")
+    append = write = batch_append = batch_write = _write
+
+
+@pytest.fixture
+def fake(zb, monkeypatch):
+    def install(**kw):
+        fx = FakeExcel(**kw)
+        monkeypatch.setattr(zb, "neon_excel", fx)
+        monkeypatch.setattr(zb, "ix_run", lambda *a, **k: pytest.fail("raw AppleScript read"))
+        return fx
+    return install
+
+
+def test_read_pre_image_gives_the_old_script_shape(zb, fake):
+    fx = fake()
+    r = zb.read_pre_image(41, 10, 29)
+    assert r == {"n_row": 302, "f_row": 299, "WEIGHT": "25.0", "PRE0N": "",
+                 "PRE": {16: 81.0, 17: 218.0, 18: 107.0, 19: 163.0, 20: 172.0, 21: 42.0,
+                         22: 10.0, 23: 83.785714285714, 24: 839.0, 25: 0.0, 26: 0.0},
+                 "POST": {}}
+    assert fx.calls == [("lookup", "0n", "10/29"), ("lookup", "0分", "10/29"),
+                        ("read", "0n", "AO", 2), ("read", "0n", "AO", 302),
+                        ("read_range", "0分", "P299:Z299")]   # P..Z only: 0分!D (Σ) never read
+
+
+def test_read_pre_image_keeps_the_cell_text_the_guards_compare(zb, fake):
+    """PRE0N is compared as text ('' = unmarked) and reused as the revert
+    value, so it must stay what Excel's value coerces to."""
+    fake(cells={("0n", "AO", 2): "25.0", ("0n", "AO", 302): "1.0"})
+    r = zb.read_pre_image(41, 10, 29)
+    assert r["PRE0N"] == "1.0" and zb.already_credited(r["PRE0N"])
+    assert zb.planned_value(r["PRE0N"], 1, None) is None           # never overwrites a mark
+    fake(cells={("0n", "AO", 2): "25.0", ("0n", "AO", 302): "missing value"})
+    assert zb.read_pre_image(41, 10, 29)["PRE0N"] == ""
+
+
+@pytest.mark.parametrize("rows,msg", [
+    ({("0分", "10/29"): 299}, "ERROR: date 10/29 not found in 0n"),
+    ({("0n", "10/29"): 302}, "ERROR: date 10/29 not found in 0分"),
+    # the old scan covered rows 3..500 on both sheets: 0分's first date row (2) stays out
+    ({("0n", "10/29"): 5, ("0分", "10/29"): 2}, "ERROR: date 10/29 not found in 0分"),
+    ({("0n", "10/29"): 501, ("0分", "10/29"): 299}, "ERROR: date 10/29 not found in 0n"),
+])
+def test_read_pre_image_date_not_found_keeps_the_old_message(zb, fake, rows, msg):
+    fake(rows=rows)
+    with pytest.raises(zb.ExcelReadError) as e:
+        zb.read_pre_image(41, 10, 29)
+    assert str(e.value) == msg
+
+
+@pytest.mark.parametrize("refuse,needle", [
+    ({"lookup": None}, "excel-http unreachable"),                          # daemon down
+    ({"lookup": {"ok": False, "error": "excel_error", "detail": "busy"}}, "excel_error (busy)"),
+    ({"read": {"ok": False, "error": "queue_pending", "pending": 2}}, "queue_pending"),
+    ({"read": {"ok": False, "error": "date_not_found_fallback", "fallback": True}}, "0n!AO2"),
+    ({"read_range": {"ok": False, "error": "excel-http unreachable"}}, "0分!P299:Z299"),
+    ({"read_range": {"ok": True, "rows": [["1.0", "2.0"]]}}, "expected 1 row of 11 cells"),
+    ({"read_range": {"ok": True, "rows": []}}, "expected 1 row of 11 cells"),
+])
+def test_read_pre_image_failed_read_is_an_error_never_a_blank(zb, fake, refuse, needle):
+    """A refused read must not come back as '' / 0: PRE0N '' would let the
+    mark be set over an existing one, and a zero pre-image would be moved."""
+    fake(refuse=refuse)
+    with pytest.raises(zb.ExcelReadError) as e:
+        zb.read_pre_image(41, 10, 29)
+    assert needle in str(e.value)
+    assert "not found" not in str(e.value)        # Excel busy is not "date not found"
+
+
+def test_read_pre_image_transport_exception_is_a_read_error(zb, fake):
+    fx = fake()
+    fx.lookup = lambda *a, **k: (_ for _ in ()).throw(OSError("ssh died"))
+    with pytest.raises(zb.ExcelReadError, match="ssh died"):
+        zb.read_pre_image(41, 10, 29)
+
+
+def _main(zb, monkeypatch, argv, today=date(2026, 11, 25)):
+    stub = SimpleNamespace(header_normalize=lambda h: h.lower(),
+                           load_headers=lambda: {"0n": {"nvc": 41, "hiit": 31}},
+                           refresh_headers=lambda: pytest.fail("headers refreshed"),
+                           CUMULATIVE_0N=set(), VARIABLE_0N={"hiit"})
+    monkeypatch.setattr(zb, "_did", lambda: stub)
+    monkeypatch.setattr(zb.daytime, "today", lambda: today)
+    monkeypatch.setattr(sys, "argv", ["0n-backfill.py"] + argv)
+    return zb.main()
+
+
+def test_main_dry_run_reads_through_the_daemon_and_writes_nothing(zb, fake, monkeypatch, capsys):
+    fx = fake()
+    assert _main(zb, monkeypatch, ["nvc", "10/29", "--dry-run"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["rows"] == [302, 299] and out["weight"] == 25.0 and out["pre_0n"] == ""
+    assert out["moves"] == [{"col": "X", "name": "xk", "pts": 25.0}] and out["dry_run"] is True
+    assert {c[0] for c in fx.calls} == {"lookup", "read", "read_range"}
+
+
+@pytest.mark.parametrize("kw,needle", [
+    ({"rows": {("0分", "10/29"): 299}}, "ERROR: excel read failed: ERROR: date 10/29 not found in 0n"),
+    ({"refuse": {"read": {"ok": False, "error": "queue_pending"}}}, "ERROR: excel read failed: 0n!AO2: queue_pending"),
+    ({"refuse": {"lookup": None}}, "ERROR: excel read failed: 0n row lookup for 10/29: excel-http unreachable"),
+])
+def test_main_failed_read_exits_like_a_failed_script_before_any_write(zb, fake, monkeypatch, kw, needle):
+    """Real run (no --dry-run): the FakeExcel write endpoints assert, so
+    reaching one after a failed read fails the test."""
+    fake(**kw)
+    with pytest.raises(SystemExit) as e:
+        _main(zb, monkeypatch, ["nvc", "10/29"])
+    assert str(e.value) == needle
+
+
+def test_no_raw_read_or_write_script_is_left(zb):
+    """Only the post-write re-measure (`calculate full`) and the workbook
+    save still talk AppleScript; neither sets a cell."""
+    src = (_HERE / "0n-backfill.py").read_text()
+    assert not hasattr(zb, "build_script") and not hasattr(zb, "build_revert_script")
+    assert src.count('tell application "Microsoft Excel"') == 2
     assert "set value of cell" not in src and "clear contents" not in src
+    assert "set value" not in zb.build_remeasure_script(6, 3)
