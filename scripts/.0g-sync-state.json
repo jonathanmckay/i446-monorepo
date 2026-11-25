@@ -1,14 +1,5 @@
 {
   "version": 1,
-  "tasks": {
-    "progress on org chart as if i'm gone": {
-      "todoist_id": "6j4mg5p22GMV3X42",
-      "minutes": 50
-    },
-    "2x hiit": {
-      "todoist_id": "6j4mg5j22HccjPgP",
-      "minutes": 30
-    }
-  },
-  "last_sync": "2026-11-25T03:55:02.285157-08:00"
+  "tasks": {},
+  "last_sync": "2026-11-25T04:00:08.333553-08:00"
 }
