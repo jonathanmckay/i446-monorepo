@@ -1,0 +1,39 @@
+{
+  "_doc": "Lanes for tools/autofix/autofix.py, keyed by the alert's `tool`. paths = globs (repo-relative) a repair agent's patch may touch. resume: auto = the dispatcher applies the patch and runs `health`; hold = the patch waits for JM (autofix.py apply <run>). Only critical alerts from Ix are dispatched. run_0t / run_0r_archive have no lane on purpose: their alerts mean headless claude itself is failing.",
+  "lanes": {
+    "lease-signer": {
+      "enabled": true,
+      "paths": ["tools/m5x2-automations/*"],
+      "runbook": "tools/m5x2-automations/relogin.py (module docstring), then lease_signerd.py try_auto_relogin",
+      "evidence": "~/Library/Logs/lease-signerd.log",
+      "resume": "hold",
+      "restart": "launchctl kickstart -k gui/$(id -u)/com.jm.lease-signerd",
+      "budget_usd": 3,
+      "timeout_min": 25
+    },
+    "neon_db_backup": {
+      "enabled": true,
+      "paths": ["bin/neon_db_backup.sh"],
+      "runbook": "bin/neon_db_backup.sh",
+      "evidence": "~/.cache/neon-rules/db-backup.log",
+      "health": "bash bin/neon_db_backup.sh",
+      "health_timeout_s": 300,
+      "resume": "auto"
+    },
+    "onedrive-backup": {
+      "enabled": true,
+      "paths": ["bin/onedrive-backup.sh"],
+      "runbook": "bin/onedrive-backup.sh",
+      "resume": "hold"
+    },
+    "autofix-selftest": {
+      "enabled": true,
+      "paths": ["tools/autofix/selftest/*"],
+      "runbook": "tools/autofix/selftest/check.py",
+      "health": "python3 tools/autofix/selftest/check.py",
+      "resume": "auto",
+      "budget_usd": 1,
+      "timeout_min": 10
+    }
+  }
+}
