@@ -3,14 +3,13 @@ longer run AppleScript. The daemon returns cell VALUES ("481.0", long-form
 dates, 11.299999999999999), where the old reads returned display text."""
 import datetime as dt
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
 HERE = Path(__file__).parent
-
-import re
 
 
 def long_date(d):
