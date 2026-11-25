@@ -73,3 +73,14 @@ sets that in the installed plist and reloads. With it on:
 
 Callers must never rerun or fall back on a `queued` reply. Design and limits:
 `vault/i447/i446/neon-off-excel-plan.md`, Step 4b.
+
+## Reads from the book (1.15.0, shadow only)
+
+`NEON_READ_BACKEND=shadow` in the installed plist's environment (set by hand with PlistBuddy, as
+`queue_switch.sh` sets `NEON_WRITE_QUEUE`; copying the repo plist over the installed one drops
+both). Excel still answers every read. Each successful `/read`, `/read_range` and `/lookup` is
+also answered from the book (`read_backend.answer`: `lib/neon/book.load()` + `bookops`) inside
+`EXCEL_LOCK` and compared; `/health` carries `reads: {mode, today: {judged, clean, drift, value,
+format, lookup, range, ms_max}}`. Differences, once each: `~/.cache/neon-rules/read-shadow.jsonl`.
+`tools/neon-ledger/range_probe.py` checks the callers' fixed `/read_range` ranges every block
+from outside the daemon. Answering from the book (`book` mode) is not wired yet.

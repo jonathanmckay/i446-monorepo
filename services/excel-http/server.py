@@ -49,7 +49,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.14.0"
+VERSION = "1.15.0"
 ADDR = ("127.0.0.1", 9876)
 EXCEL_LOCK = threading.Lock()  # serialize actual Excel/osascript calls across threads
 TIMEOUT = 15  # osascript hard timeout
@@ -96,6 +96,19 @@ except Exception as _e:  # pragma: no cover - import environment
     sys.stderr.write(f"replay model import failed: {_e}\n")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import intents as intents_store  # noqa: E402
+
+# ── Reads from the book (Neon off Excel, 2026-11-25) ─────────────────────────
+# NEON_READ_BACKEND=shadow: Excel answers every read as before, and each
+# successful /read, /read_range and /lookup is also answered from the book
+# (read_backend.py) and compared. Measurement only; unset = nothing changes.
+READ_BACKEND = (os.environ.get("NEON_READ_BACKEND") or "").strip().lower()
+READ_SHADOW = None
+if READ_BACKEND == "shadow":
+    try:
+        import read_backend  # noqa: E402
+        READ_SHADOW = read_backend.Shadow()
+    except Exception as _e:  # pragma: no cover - import environment
+        sys.stderr.write(f"read shadow unavailable: {_e}\n")
 
 # ── Write queue (Neon off Excel step 4b, 2026-11-19) ─────────────────────────
 # With NEON_WRITE_QUEUE=1 every write request is recorded durably BEFORE Excel
@@ -1557,7 +1570,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
             return self._send(200, {"ok": True, "version": VERSION, "macro": MACRO_STATE,
-                                    "ledger": LEDGER_DB_STATE, "queue": queue_state()})
+                                    "ledger": LEDGER_DB_STATE, "queue": queue_state(),
+                                    **({"reads": READ_SHADOW.state()} if READ_SHADOW is not None else {})})
         return self._send(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self):  # noqa: N802
@@ -1589,6 +1603,10 @@ class Handler(BaseHTTPRequestHandler):
                             return self._send(503, {"ok": False, "error": "queue_pending", "pending": n,
                                                     "detail": "Excel is behind %d queued write(s)" % n})
                     result = handler(body)
+                    if READ_SHADOW is not None and self.path in read_backend.PATHS:
+                        # Still inside EXCEL_LOCK: every write Excel holds is
+                        # journaled, so the book is at the same point.
+                        READ_SHADOW.judge(self.path, body, result)
         except subprocess.TimeoutExpired:
             return self._send(504, {"ok": False, "error": "osascript_timeout"})
         except ExcelError as e:
