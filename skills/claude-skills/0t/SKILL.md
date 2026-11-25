@@ -94,6 +94,16 @@ The script handles everything:
    streak first reaches 5, say the cutover gate is met (plan step 4 in
    `i447/i446/neon-off-excel-plan.md`).
 7. Marks 0t done via did-fast.py (0₦ + Todoist + Toggl stop)
+7b. **Kid-time columns** (`kid_time`, JM 2026-11-24, `tools/0t/kid_time.py`): fills 0n
+   `xk20` / `xk22` / `xk26` / `xk88` from Toggl for yesterday and the two days before,
+   so a session backfilled after the fact still reaches its column. An entry counts by
+   kid tag on any project (0.5x when the entry is not an xk87 entry: independent time),
+   xk88 by project. It only pays for entries no client has logged, never lowers a cell,
+   and marks what it counted in `lib/entry_points.py` so janus refuses a second log.
+   If `untagged` is non-empty (a math / english / 中文 session with no kid tag), ask JM
+   which kid, add that tag to the Toggl entry, then run
+   `python3 ~/i446-monorepo/tools/0t/0t-fast.py --kid-time <YYYY-MM-DD>`.
+   `--kid-time [date] [--days N] [--dry-run]` runs this step alone.
 8. **Time checksum** (`time_checksum`, JM 2026-11-06, `tools/0t/time_checksum.py`):
    a hole over 5m is an error (exit 3). A non-sleep task over 150m is a warning
    (exit 4) that repeats until JM overrides it (back-to-back entries of the same
@@ -104,7 +114,7 @@ The script handles everything:
    misses: exit 0, say so. Overrides live in `g245/0t-overrides-<host>.json`.
 9. Saves Excel on Ix, refreshes dashboard points cache
 
-Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `ledger_streak`, `did`, `time_checksum`, `dashboard`.
+Report the JSON output to the user. Key fields: `sleep_display`, `sleep_write`, `sleep_dock`, `media_audit` (incl. `junk_sites`), `ledger_streak`, `kid_time` (credits written, `untagged` sessions to ask about), `did`, `time_checksum`, `dashboard`.
 
 Note: the dashboard points cache only keeps positive day-values, so on the rare
 night where the dock pushes hcb net-negative the dashboard shows a blank for

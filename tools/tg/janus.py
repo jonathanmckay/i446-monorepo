@@ -8191,7 +8191,7 @@ def _(event):
         code = kid
     suffix = date_sfx
     for _t in _habit_tags(sec_tags):
-        suffix += f", {_t} {item['dur_min']}{date_sfx}"
+        suffix += f", {_t} {janus_done.secondary_minutes(_t, item['dur_min'], code)}{date_sfx}"
     cmd += suffix
     # Idempotency is keyed on the exact command (desc + time range), not the
     # bare desc — a repeatable shortcode (hiit, xk22, …) legitimately recurs

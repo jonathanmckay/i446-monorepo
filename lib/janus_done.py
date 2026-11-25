@@ -26,6 +26,28 @@ TASK, TIME, CREDITED, ASK = "task", "time", "credited", "ask"
 # 0n kid-time columns (Theo / Ren / Rori), 1分 a minute via 0n!AZ.
 KID_TIME_0N = {"xk20", "xk22", "xk26"}
 
+# Independent study (JM 2026-11-24): a kid tag on an entry that is not an xk87
+# entry ("hiit @hcbp #xk26") means the kid worked alone while JM did something
+# else. It counts toward the kid's column at the facilitation rate, since the
+# presence half of teaching is missing. Shared by both janus clients (the
+# secondary-tag log) and tools/0t/kid_time.py (the day-close reconcile).
+INDEPENDENT_RATE = 0.5
+
+
+def kid_weight(code: str | None) -> float:
+    """1.0 for an xk87 / kid-coded / project-less entry, else INDEPENDENT_RATE."""
+    c = (code or "").lower()
+    return 1.0 if c in ("", "xk87") or c in KID_TIME_0N else INDEPENDENT_RATE
+
+
+def secondary_minutes(tag, minutes, code: str | None):
+    """Minutes a secondary habit tag logs: a kid tag on a non-xk87 entry gets
+    the independent rate, everything else its full minutes."""
+    if str(tag).lower() in KID_TIME_0N and kid_weight(code) != 1.0:
+        return max(1, round(minutes * kid_weight(code)))
+    return minutes
+
+
 # Block attribution (JM 2026-11-01): a finished entry that crosses a 地支
 # block boundary credits the block it ENDED in. A per-minute entry worth more
 # than SPLIT_MIN_POINTS is split at each boundary instead: one Toggl entry

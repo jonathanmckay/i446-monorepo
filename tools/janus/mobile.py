@@ -1876,7 +1876,7 @@ def log_entry(entry_id: str, desc: str, minutes: int, project: str,
     # matched task's points), regardless of the main item's resolution.
     extra = habit_tags(janus_done.kid_route(project, tags)[1])
     for t in extra:
-        text += f", {t} {minutes}"
+        text += f", {t} {janus_done.secondary_minutes(t, minutes, project)}"
     flags: tuple[str, ...] = ()
     if day is not None:
         text += f" {day.month}/{day.day}"

@@ -60,6 +60,13 @@ media_audit_mod = importlib.util.module_from_spec(_MA_SPEC)
 sys.modules["media_audit"] = media_audit_mod
 _MA_SPEC.loader.exec_module(media_audit_mod)
 
+# Kid-time columns (0n xk20/xk22/xk26/xk88) filled from Toggl at day close
+_KT_PATH = Path(__file__).parent / "kid_time.py"
+_KT_SPEC = importlib.util.spec_from_file_location("kid_time", _KT_PATH)
+kid_time_mod = importlib.util.module_from_spec(_KT_SPEC)
+sys.modules["kid_time"] = kid_time_mod
+_KT_SPEC.loader.exec_module(kid_time_mod)
+
 
 def _load_toggl_key() -> str:
     """Load Toggl API key from env or ~/.claude.json MCP config."""
@@ -607,6 +614,58 @@ def parse_args(argv: list[str], local_today: date) -> tuple[date | None, bool, b
     return day, check_only, session, day < local_today - timedelta(days=1)
 
 
+def day_entries(day: date) -> list[dict]:
+    """Finished Toggl entries that started on local `day`."""
+    out = []
+    for e in gather_entries_local(day):
+        ldt = entry_local_dt(e)
+        if ldt and ldt.date() == day and (e.get("duration") or 0) > 0:
+            out.append(e)
+    return out
+
+
+def kid_time_sweep(last: date, days: int, dry: bool = False) -> dict:
+    """kid_time.run for `last` and the days before it, oldest first. A late
+    backfill (/-1l, /2n fill) lands on the next morning's run."""
+    out = {}
+    for back in range(days - 1, -1, -1):
+        d = last - timedelta(days=back)
+        try:
+            out[d.isoformat()] = kid_time_mod.run(d, day_entries(d), dry=dry)
+        except Exception as e:   # noqa: BLE001
+            out[d.isoformat()] = {"error": str(e)}
+    return out
+
+
+def run_kid_time(argv: list[str], local_today: date) -> None:
+    """--kid-time [YYYY-MM-DD] [--days N] [--dry-run]: the reconcile alone, for
+    a rerun after tagging an entry or a backfill of older days."""
+    dry = "--dry-run" in argv
+    days, rest, it = 1, [], iter(a for a in argv if a not in ("--kid-time", "--dry-run"))
+    for a in it:
+        if a == "--days":
+            try:
+                days = int(next(it))
+            except (StopIteration, ValueError):
+                usage_exit("--days needs a number")
+        else:
+            rest.append(a)
+    last = local_today - timedelta(days=1)
+    if rest:
+        try:
+            last = date.fromisoformat(rest[0])
+        except ValueError:
+            usage_exit(f"{rest[0]!r} isn't a date; use YYYY-MM-DD")
+        if last >= local_today:
+            usage_exit(f"{last} isn't over yet")
+    if not 1 <= days <= 60:
+        usage_exit("--days must be 1..60")
+    out = kid_time_sweep(last, days, dry=dry)
+    print(json.dumps({"kid_time": out}, ensure_ascii=False, indent=2))
+    if any("error" in v for v in out.values()):
+        sys.exit(1)
+
+
 def release_claim() -> str | None:
     """Stop the dtd claim the /0t prompt took. No session (Ix cron) = no claim."""
     if not os.environ.get("CLAUDE_CODE_SESSION_ID"):
@@ -643,6 +702,10 @@ def run_check_only(day: date, past: bool, ok_long: bool = False) -> None:
 
 def main():
     today = date.today()
+
+    if "--kid-time" in sys.argv[1:]:
+        run_kid_time(sys.argv[1:], daytime.today())
+        return
 
     # Optional date arg; --check = checksum only; --session = the /0t skill
     day, check_only, session, past = parse_args(sys.argv[1:], daytime.today())
@@ -713,6 +776,13 @@ def main():
         output["media_audit"] = audit
     except Exception as e:
         output["media_audit"] = f"FAILED: {e}"
+
+    # 4e. Kid-time columns from Toggl (xk20/xk22/xk26/xk88): entries no client
+    # logged, e.g. backfilled ones. Before step 6 so the points cache sees it.
+    kt = kid_time_sweep(yesterday, kid_time_mod.SWEEP_DAYS)
+    output["kid_time"] = kt
+    if any("error" in v for v in kt.values()):
+        failed = True
 
     # 4d. Neon ledger cutover gate (2026-10-30): yesterday's strict check —
     # does the ledger ALONE reproduce Excel's 0分 row — plus the pass streak.
