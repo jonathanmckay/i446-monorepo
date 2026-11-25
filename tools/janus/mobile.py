@@ -1272,7 +1272,10 @@ def build_timeline(day: _dt.date | None = None, lite: bool = False) -> dict:
                 ledger_blocks = {k: int(round(v)) for k, v in (lv.get("blocks") or {}).items()}
                 nview.log_reader_diff("janus", today.isoformat(), points, ledger_points)
                 points = nview.pick(points, ledger_points)
-                block_pts = nview.pick(block_pts, ledger_blocks)
+                # Blocks stay on Excel's G:O even under NEON_READ_SOURCE=ledger
+                # (2026-11-25): the ledger has no lock snapshot for 戌/亥 on a
+                # finished day (11-24: Excel 88.5 / 3, ledger absent), and only
+                # Σ is covered by the reader-diff log. lpts still carries them.
         except Exception as e:
             print("WARN ledger view:", e, file=sys.stderr)
     # The -1₲ ritual stamps in the build order are today's only — a past-day
