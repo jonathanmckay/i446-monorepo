@@ -589,6 +589,7 @@ def test_skill_prune_finding_caps_the_list_and_reads_keep_answers(tmp_path, monk
 
 
 def test_autofix_finding_states():
+    vh = _load()
     now = dt.datetime(2026, 11, 25, 16, 0, tzinfo=vh.TZ)
     run = json.dumps({"run": "1125-152841", "ts": "2026-11-25T15:28:54", "tool": "neon_db_backup",
                       "outcome": "fixed", "cost_usd": 0.38, "summary": "s"})
