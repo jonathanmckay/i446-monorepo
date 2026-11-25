@@ -170,3 +170,51 @@ def test_relax_self_tag_is_one_credit(df):
     routes, comps = _run_relax(df, "relax 60 #relax")
     assert [r.step for r in routes] == ["1n"]
     assert comps == []
+
+
+# ── 一起饭 under an outside project (2026-11-24, JM) ─────────────────────────────
+# "一起饭 if it's in the s897 or 家 projects but has the xk87 tag gets the points
+# it would for a family dinner together and also the 家 or family points."
+
+MEAL_HEADERS = {"0n": {}, "1n": {"一起饭": "AC", "family": "AF", "s897": "AG"}}
+MEAL_TQ = {"0neon": [], "夜neon": [], "1neon": [], "today": []}
+
+
+def _meal(df, text):
+    items = df.parse_input(text)
+    df.infer_range_blocks(items)
+    routes = df.route_items(items, MEAL_HEADERS, MEAL_TQ, skip_todoist=True)
+    return routes, df.tag_habit_companions(routes, MEAL_HEADERS, MEAL_TQ, skip_todoist=True)
+
+
+@pytest.mark.parametrize("text,habit,col,fen", [
+    ("一起饭 1800-1900 @家 #xk87", "family", "AF", "X"),     # janus's shape for a Toggl entry
+    ("一起饭 60 @s897 #xk87", "s897", "AG", "Y"),
+    ("一起吃 60 @家 #xk87", "family", "AF", "X"),            # the alias earns it too
+])
+def test_family_meal_in_an_outside_project_earns_both(df, text, habit, col, fen):
+    routes, comps = _meal(df, text)
+    (meal,) = routes
+    assert meal.step == "1n" and meal.fen_col == "X"
+    assert meal.write_value == 15 and meal.variable_value == 75   # 一起饭 itself is unchanged
+    (c,) = comps
+    assert c.item.name == habit and c.step == "1n" and c.col_letter == col
+    assert c.write_value == 60 and c.variable_value == 60        # the project habit: 1/m
+    assert c.fen_col == fen
+    assert c.item.tag_companion_of                                # never its own Toggl entry
+
+
+@pytest.mark.parametrize("text", [
+    "一起饭 60 @家",              # no xk87 tag: not a family dinner
+    "一起饭 60 @xk87 #xk87",      # the home project: 一起饭 alone
+    "一起饭 60 #xk87",
+    "family 60 @家 #xk87",        # only 一起饭 carries the rule
+])
+def test_meal_without_the_tag_or_the_outside_project_earns_only_itself(df, text):
+    routes, comps = _meal(df, text)
+    assert len(routes) == 1 and comps == []
+
+
+def test_meal_companion_is_not_doubled_when_the_habit_is_typed_too(df):
+    routes, comps = _meal(df, "一起饭 60 @家 #xk87, family 60")
+    assert len(routes) == 2 and comps == []

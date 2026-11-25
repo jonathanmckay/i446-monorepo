@@ -166,6 +166,16 @@ VARIABLE_1N = {"s897", "family", "relax {60}", "s+hcbp", "一起饭", "业写",
 # value is the ALIAS, never the header "relax {60}": the name is echoed in a
 # "log it with ..." hint and a typed {60} would fire the 0g bonus.
 TAG_1N_HABITS: dict[str, str] = {"业写": "业写", "relax": "relax"}
+# A shared meal filed under an outside project (JM 2026-11-24: "一起饭 if it's
+# in the s897 or 家 projects but has the xk87 tag gets the points it would for
+# a family dinner together and also the 家 or family points"). 一起饭 already
+# pays its own 15+1/m whatever the @project; with #xk87 the project's weekly
+# habit is credited for the same minutes as well, as a companion (see
+# tag_habit_companions). habit (alias-resolved) → {@project → companion habit}.
+PROJECT_1N_COMPANIONS: dict[str, dict[str, str]] = {
+    "一起饭": {"s897": "s897", "家": "family"},
+}
+PROJECT_COMPANION_TAG = "xk87"
 # Points formulas from 1n+ row 5 ("expected points"): value = base + rate×min.
 # Default rate is 1/min ("1/m"); entries here override (".5/m", "15+1/m").
 # Keys are header_normalize()d (lowercase).
@@ -4366,8 +4376,13 @@ def tag_habit_companions(routes: list, headers: dict, tq: dict, *,
         it = r.item
         if r.step not in ("0n", "todoist", "1n", "variable") or it.tag_companion_of:
             continue
-        for tag in it.toggl_tags or []:
-            habit = TAG_1N_HABITS.get(tag)
+        earners = [(tag, TAG_1N_HABITS.get(tag)) for tag in it.toggl_tags or []]
+        # @project companion (PROJECT_1N_COMPANIONS): 一起饭 @家 #xk87 → family.
+        _own = header_normalize(ONENEON_ALIASES.get(it.name.lower(), it.name.lower()))
+        _proj_habit = PROJECT_1N_COMPANIONS.get(_own, {}).get(it.project_override or "")
+        if _proj_habit and PROJECT_COMPANION_TAG in (it.toggl_tags or []):
+            earners.append((f"{PROJECT_COMPANION_TAG} @{it.project_override}", _proj_habit))
+        for tag, habit in earners:
             # `have` holds alias-RESOLVED headers ("relax {60}"), so resolve
             # the habit the same way or "x #relax, relax 90" (janus's shape)
             # and "relax 60 #relax" would each credit twice.
