@@ -113,35 +113,53 @@ def resolve_target(arg: str | None, today: _dt.date) -> _dt.date:
     return thursday_of_week(_dt.date.fromisoformat(arg))
 
 
-def build_label_script(label: str) -> str:
-    """Thursday row of the week whose col-A label is `label`. 0s897's own
-    labels (week containing Jan 1 = 1.1) run one week ahead of the fiscal
-    labels in /1s and /1s897 (week 1 = first Sunday on/after Jan 1), so the
-    label is resolved against this sheet, never computed."""
-    return f'''tell application "Microsoft Excel"
-  set ws to worksheet "{SHEET}" of workbook "{WORKBOOK}"
-  set tmpA to string value of range "A2:A600" of ws
-  set tmpB to value of range "B2:B600" of ws
-  set tmpC to string value of range "C2:C600" of ws
-  repeat with r from 2 to 600
-    try
-      if ((item 1 of (item (r - 1) of tmpA)) as text) = "{label}" and ((item 1 of (item (r - 1) of tmpC)) as text) = "Th" then
-        set cv to item 1 of (item (r - 1) of tmpB)
-        if ((class of cv) as text) is "date" then return "OK|" & ((year of cv) as text) & "-" & (((month of cv) as integer) as text) & "-" & ((day of cv) as text)
-      end if
-    end try
-  end repeat
-  return "ERROR: no Thursday row labeled {label} in {SHEET}"
-end tell'''
+# read_range returns cell VALUES as text: a real date cell in AppleScript's
+# long form ("Thursday, November 19, 2026 at 12:00:00\u202fAM"), a number as
+# "11.4" / "11.299999999999999" where `string value` gave the shown "11.3".
+_LONG_DATE_RE = re.compile(r"^[A-Za-z]+, ([A-Za-z]+) (\d{1,2}), (\d{4}) at ")
+_MONTH_NUM = {n: i for i, n in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], 1)}
+_NUM_TEXT_RE = re.compile(r"^-?\d+\.\d+(?:[eE][-+]?\d+)?$")
+LABEL_RANGE = "A2:C600"     # A = M.W label (Thursday rows), B = date, C = weekday
+
+
+def _cell_date(text: str) -> _dt.date | None:
+    """A real date cell as read_range returns it, else None."""
+    m = _LONG_DATE_RE.match(text or "")
+    if not m or m.group(1) not in _MONTH_NUM:
+        return None
+    try:
+        return _dt.date(int(m.group(3)), _MONTH_NUM[m.group(1)], int(m.group(2)))
+    except ValueError:
+        return None
+
+
+def _general(text: str) -> str:
+    """A number value the way a General-format cell shows it. Text passes."""
+    t = (text or "").strip()
+    return "%.10g" % float(t) if _NUM_TEXT_RE.match(t) else (text or "")
 
 
 def thursday_for_label(label: str) -> _dt.date:
-    proc = run_bounded([str(IX_OSA)], input=build_label_script(label), timeout=60)
-    out = (proc.stdout or "").strip()
-    if proc.returncode != 0 or not out.startswith("OK|"):
-        raise SystemExit(out or proc.stderr.strip() or "ix-osa failed")
-    y, m, d = out[3:].split("-")   # _ymd form: col B's date value, not its display
-    return _dt.date(int(y), int(m), int(d))
+    """Date (col B) of the Thursday row whose col-A label is `label`. 0s897's
+    own labels (week containing Jan 1 = 1.1) run one week ahead of the fiscal
+    labels in /1s and /1s897 (week 1 = first Sunday on/after Jan 1), so the
+    label is resolved against this sheet, never computed. Read through the
+    excel-http daemon (no raw AppleScript, 2026-11-25); col B is matched as a
+    date VALUE, never its display."""
+    r = neon_excel.read_range(SHEET, LABEL_RANGE)
+    rows = r.get("rows") if r.get("ok") else None
+    if not isinstance(rows, list):
+        raise SystemExit(str(r.get("error") or "excel-http read failed"))
+    for cells in rows:
+        if len(cells) < 3:
+            continue
+        if _general(str(cells[0])) == label and str(cells[2]) == "Th":
+            d = _cell_date(str(cells[1]))
+            if d is not None:
+                return d
+    raise SystemExit(f"ERROR: no Thursday row labeled {label} in {SHEET}")
 
 
 def window(target: _dt.date, today: _dt.date) -> list[_dt.date]:

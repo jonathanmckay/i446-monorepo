@@ -32,9 +32,9 @@ checks BOTH cadences and, with --fix, recreates what's missing:
                  human decision ("2 "-prefixed headers are monthly by the
                  time-order notation and exempt from the weekday check).
 
-Runs on IX (Excel lives there; hostname Jonathans-Mac-mini*) via local
-osascript; anywhere else it transparently wraps the read through `ssh ix` so
-the same script is testable from Straylight. Launchd: com.jm.neon-task-checksum
+Sheet reads go through the excel-http daemon on Ix (lib/neon/excel.py, which
+reaches Ix over ssh from another Mac), so the same script is testable from
+Straylight. Launchd: com.jm.neon-task-checksum
 (daily 04:15 on Ix). Anything missing/recreated/drifted appends to
 ~/vault/z_ibx/alerts.jsonl (Syncthing carries it back to Straylight) and the
 full report lands in ~/.cache/jm/neon-task-checksum.json.
@@ -67,7 +67,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 API = "https://api.todoist.com/api/v1"
 WORKBOOK = "Neon分v12.2.xlsx"
-IX_HOSTNAME_PREFIX = "Jonathans-Mac-mini"
 ALERTS = Path.home() / "vault/z_ibx/alerts.jsonl"
 REPORT = Path.home() / ".cache/jm/neon-task-checksum.json"
 PROJECT_1NEON = "6Crfmq5PmPjqrx4x"  # same Habits project the daily cards use
@@ -372,52 +371,26 @@ def daily_points_mismatches(pts_0n: dict, manifest: dict, tasks: list[dict]) -> 
 # I/O
 # ---------------------------------------------------------------------------
 
-def _on_ix() -> bool:
-    return platform.node().startswith(IX_HOSTNAME_PREFIX)
+# 0n rows 1-2 (headers, ⊖分 credit) and 1n+ rows 1-5 (of which 1/2/3/5 are
+# used: header, time, weekday, points), both through the excel-http daemon.
+RANGE_0N = "D1:BL2"
+RANGE_1N = "C1:AL5"
+ROWS_1N = (1, 2, 3, 5)
 
 
-def run_osascript(script: str) -> str:
-    if _on_ix():
-        r = subprocess.run(["osascript", "-e", script],
-                           capture_output=True, text=True, timeout=60)
-    else:
-        r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", "ix", "osascript", "-"],
-                           input=script, capture_output=True, text=True, timeout=90)
-    if r.returncode != 0:
-        raise RuntimeError(f"osascript failed: {r.stderr.strip()[:300]}")
-    return r.stdout
-
-
-READ_SHEETS = f'''tell application "Microsoft Excel"
-    set wb to workbook "{WORKBOOK}"
-    set ws0 to sheet "0n" of wb
-    set ws1 to sheet "1n+" of wb
-    set out to ""
-    set tmp0 to value of range "D1:BL1" of ws0
-    set h0 to item 1 of tmp0
-    repeat with v in h0
-        if v is not missing value then set out to out & (v as text)
-        set out to out & "\\t"
-    end repeat
-    set out to out & "\\n"
-    set tmpP to value of range "D2:BL2" of ws0
-    set p0 to item 1 of tmpP
-    repeat with v in p0
-        if v is not missing value then set out to out & (v as text)
-        set out to out & "\\t"
-    end repeat
-    set out to out & "\\n"
-    repeat with rn in {{1, 2, 3, 5}}
-        set tmpR to value of range ("C" & rn & ":AL" & rn) of ws1
-        set rowVals to item 1 of tmpR
-        repeat with v in rowVals
-            if v is not missing value then set out to out & (v as text)
-            set out to out & "\\t"
-        end repeat
-        set out to out & "\\n"
-    end repeat
-    return out
-end tell'''
+def _read_range(sheet: str, rng: str, n_rows: int) -> list:
+    """Rows of `rng` as lists of text (numbers "45.0", blanks ""). Raises
+    RuntimeError when the daemon cannot answer, as the old osascript read did:
+    a checksum run on missing data must stop, not report every card missing."""
+    sys.path.insert(0, str(REPO / "lib"))
+    from neon import excel as neon_excel
+    res = neon_excel.read_range(sheet, rng)
+    if not res.get("ok"):
+        raise RuntimeError(f"read_range {sheet}!{rng} failed: {str(res.get('error') or '')[:300]}")
+    rows = res.get("rows") or []
+    if len(rows) != n_rows:
+        raise RuntimeError(f"read_range {sheet}!{rng}: expected {n_rows} rows, got {len(rows)}")
+    return [[str(c) for c in r] for r in rows]
 
 
 def parse_0n_points(header_line: str, points_line: str) -> dict:
@@ -431,11 +404,11 @@ def parse_0n_points(header_line: str, points_line: str) -> dict:
 def read_sheets():
     """→ (headers_0n: list[str], rows_1n: [row1, row2, row3, row5],
           pts_0n: {norm header: row-2 credit or None})."""
-    raw = run_osascript(READ_SHEETS)
-    lines = raw.rstrip("\n").split("\n")
-    headers_0n = [c for c in lines[0].split("\t") if c.strip()]
-    pts_0n = parse_0n_points(lines[0], lines[1])
-    rows = [ln.split("\t") for ln in lines[2:6]]
+    hdr_0n, pts_row = _read_range("0n", RANGE_0N, 2)
+    headers_0n = [c for c in hdr_0n if c.strip()]
+    pts_0n = parse_0n_points("\t".join(hdr_0n), "\t".join(pts_row))
+    grid = _read_range("1n+", RANGE_1N, 5)
+    rows = [grid[n - 1] for n in ROWS_1N]
     return headers_0n, rows, pts_0n
 
 

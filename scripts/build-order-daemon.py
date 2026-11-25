@@ -1002,25 +1002,23 @@ def compute_p_formula(target_date: dt.date, upto_hour: int,
 
 
 def neon_read_y(target_date: dt.date) -> str:
-    """Read computed value of -1₦ (col Y) for target_date. Returns string or 'ERROR'."""
-    body = (
-        f'set theCell to cell ("{NEON_NEG1_COL}" & targetRow) of theSheet\n'
-        '    return (value of theCell) as text\n'
-    )
-    script = NEON_FIND_ROW_TEMPLATE.format(
-        sheet=NEON_SHEET, date_str=_date_str(target_date),
-        date_col=NEON_DATE_COL, body=body,
-    )
+    """Read computed value of -1₦ (col P) for target_date through the
+    excel-http client. Returns the value as the daemon's text ("14.0", "" for
+    a blank cell) or 'ERROR' (date row not found, daemon refused or failed)."""
     try:
-        r = _osascript(script)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0 or out.startswith("ERROR"):
-            log(f"read Y: FAILED {out or r.stderr.strip()}")
-            return "ERROR"
-        return out
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        r = neon_excel.read(NEON_SHEET, NEON_NEG1_COL, date=_date_str(target_date))
+    except Exception as e:  # noqa: BLE001  a failed read-back must never raise
         log(f"read Y: ERROR {e}")
         return "ERROR"
+    if not isinstance(r, dict) or not r.get("ok"):
+        err = r.get("error", "") if isinstance(r, dict) else r
+        log(f"read Y: FAILED {err}")
+        return "ERROR"
+    out = str(r.get("value") or "").strip()
+    if out.startswith("ERROR"):
+        log(f"read Y: FAILED {out}")
+        return "ERROR"
+    return out
 
 
 # --- Block scoring: emoji-based detection and marking ---

@@ -27,6 +27,7 @@ import asyncio
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -153,45 +154,46 @@ def _as_applescript(s: str) -> str:
 # Context fetch: the week's daily 0s897 answers
 # ---------------------------------------------------------------------------
 
-def build_context_script(dates: list[_dt.date]) -> str:
-    """One ix-osa round trip: find each date's 0s897 row (bulk col-B read),
-    then bulk-read E:T per found row. Field/row markers keep multiline
-    answers parseable."""
-    conds = "\n".join(
-        '    if bv = "%s" then set end of hits to {%d, r}' % (_ymd(d), i)
-        for i, d in enumerate(dates))
-    return f'''tell application "Microsoft Excel"
-  set ws to worksheet "{DAILY_SHEET}" of workbook "{WORKBOOK}"
-  -- col B holds real date cells: compare year-month-day of the VALUE, never
-  -- the displayed text (format changed m/d/yy -> yyyy.mm.dd 2026-11-03) nor
-  -- a date's `as text` (the long locale form).
-  set tmpB to value of range "B3:B600" of ws
-  set hits to {{}}
-  repeat with r from 3 to 600
-    set bv to ""
-    try
-      set cv to item 1 of (item (r - 2) of tmpB)
-      if ((class of cv) as text) is "date" then set bv to ((year of cv) as text) & "-" & (((month of cv) as integer) as text) & "-" & ((day of cv) as text)
-    end try
-{conds}
-  end repeat
-  set out to ""
-  repeat with h in hits
-    set di to item 1 of h
-    set rr to item 2 of h
-    set tmpR to value of range ("E" & rr & ":T" & rr) of ws
-    set rowVals to item 1 of tmpR
-    set out to out & "<<ROW " & di & ">>"
-    repeat with v in rowVals
-      set vv to ""
-      try
-        set vv to v as text
-      end try
-      set out to out & "<<F>>" & vv
-    end repeat
-  end repeat
-  return out
-end tell'''
+# read_range returns cell VALUES as text; a real date cell comes back in
+# AppleScript's long form ("Wednesday, November 25, 2026 at 12:00:00\u202fAM").
+_LONG_DATE_RE = re.compile(r"^[A-Za-z]+, ([A-Za-z]+) (\d{1,2}), (\d{4}) at ")
+_MONTH_NUM = {n: i for i, n in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], 1)}
+
+
+def _cell_date(text: str) -> _dt.date | None:
+    """A real date cell as read_range returns it, else None."""
+    m = _LONG_DATE_RE.match(text or "")
+    if not m or m.group(1) not in _MONTH_NUM:
+        return None
+    try:
+        return _dt.date(int(m.group(3)), _MONTH_NUM[m.group(1)], int(m.group(2)))
+    except ValueError:
+        return None
+
+
+CONTEXT_RANGE = "B3:T600"   # col B = the day (real date cells), E:T = the answers
+
+
+def context_raw(dates: list[_dt.date]) -> str | None:
+    """One daemon read of 0s897: each date's row (col B matched on the date
+    VALUE, year included: the sheet spans two years) with its E:T cells, in
+    the <<ROW n>>/<<F>> form parse_context reads. None when the read fails."""
+    r = neon_excel.read_range(DAILY_SHEET, CONTEXT_RANGE)
+    rows = r.get("rows") if r.get("ok") else None
+    if not isinstance(rows, list):
+        return None
+    want = {d: i for i, d in enumerate(dates)}
+    out, seen_date = [], False
+    for cells in rows:
+        d = _cell_date(str(cells[0])) if cells else None
+        seen_date = seen_date or d is not None
+        if d in want:
+            out.append("<<ROW %d>>" % want[d] + "".join("<<F>>" + str(v) for v in cells[3:19]))
+    # No date in col B at all = the dates did not come back as dates (not "no
+    # surveys this week"): a failed read, never seven missing days.
+    return "".join(out) if seen_date else None
 
 
 def parse_context(raw: str, dates: list[_dt.date]) -> dict[str, list[tuple[int, str]]]:
@@ -215,11 +217,10 @@ def parse_context(raw: str, dates: list[_dt.date]) -> dict[str, list[tuple[int, 
 
 
 def fetch_context(dates: list[_dt.date]) -> dict[str, list[tuple[int, str]]]:
-    script = build_context_script(dates)
-    proc = run_bounded([str(IX_OSA)], input=script, timeout=60)
-    if proc.returncode != 0:
+    raw = context_raw(dates)
+    if raw is None:
         return {k: [] for k in DAILY_COLS}
-    return parse_context(proc.stdout, dates)
+    return parse_context(raw, dates)
 
 
 def expand_selections(answers: dict, ctx: dict) -> dict:
@@ -253,41 +254,41 @@ def expand_selections(answers: dict, ctx: dict) -> dict:
 MIN_TRACKED_MIN = 20 * 60
 
 
-def build_0l_script(dates: list[_dt.date]) -> str:
-    """Read the 0n sheet's 0l column for each date (0n col C = real date
-    cells, so match displayed month/day; 0l column resolved via neon-cols)."""
-    sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+ZERO_L_ROWS = (3, 500)      # 0n data rows scanned for the week's days
+
+
+def read_0l_done(dates: list[_dt.date]) -> set[int] | None:
+    """Indexes into `dates` whose 0n row has 0l marked (a number > 0). 0n col
+    C holds real date cells, matched on month/day; the 0l column is resolved
+    via neon-cols. None when the daemon read fails."""
     try:
         from neon import cols as _cols
         col = _cols.maybe_col("0n", "0l") or "S"
     except Exception:
         col = "S"
-    conds = "\n".join(
-        '    if md = "%d/%d" then set end of hits to {%d, r}' % (d.month, d.day, i)
-        for i, d in enumerate(dates))
-    return f'''tell application "Microsoft Excel"
-  set ws to sheet "0n" of workbook "{WORKBOOK}"
-  set tmpC to value of range "C3:C500" of ws
-  set hits to {{}}
-  repeat with r from 3 to 500
-    set cv to item 1 of (item (r - 2) of tmpC)
-    if cv is not missing value then
-      try
-        set md to (((month of cv) as integer) as text) & "/" & ((day of cv) as text)
-{conds}
-      end try
-    end if
-  end repeat
-  set out to ""
-  repeat with h in hits
-    set vv to ""
-    try
-      set vv to (value of range ("{col}" & (item 2 of h)) of ws) as text
-    end try
-    set out to out & "<<D>>" & (item 1 of h) & "<<F>>" & vv
-  end repeat
-  return out
-end tell'''
+    first, last = ZERO_L_ROWS
+    days = neon_excel.read_range("0n", f"C{first}:C{last}")
+    marks = neon_excel.read_range("0n", f"{col}{first}:{col}{last}")
+    if not (days.get("ok") and marks.get("ok")):
+        return None
+    drows, mrows = days.get("rows"), marks.get("rows")
+    if not isinstance(drows, list) or not isinstance(mrows, list):
+        return None
+    want = {(d.month, d.day): i for i, d in enumerate(dates)}
+    done: set[int] = set()
+    seen_date = False
+    for k, cells in enumerate(drows):
+        d = _cell_date(str(cells[0])) if cells else None
+        seen_date = seen_date or d is not None
+        if d is None or (d.month, d.day) not in want:
+            continue
+        vv = str(mrows[k][0]) if k < len(mrows) and mrows[k] else ""
+        try:
+            if float(vv.strip() or 0) > 0:
+                done.add(want[(d.month, d.day)])
+        except ValueError:
+            pass
+    return done if seen_date else None     # no date in col C = a failed read
 
 
 def _toggl_minutes_by_day(dates: list[_dt.date]) -> dict[_dt.date, int]:
@@ -334,16 +335,8 @@ def check_week(dates: list[_dt.date], ctx: dict | None = None) -> dict:
     missing_0s = [dates[i] for i in range(7) if i not in filled]
 
     missing_0l = list(dates)
-    proc = run_bounded([str(IX_OSA)], input=build_0l_script(dates), timeout=60)
-    if proc.returncode == 0:
-        done = set()
-        for chunk in proc.stdout.split("<<D>>")[1:]:
-            di, _, vv = chunk.partition("<<F>>")
-            try:
-                if float(vv.strip() or 0) > 0:
-                    done.add(int(di))
-            except ValueError:
-                pass
+    done = read_0l_done(dates)
+    if done is not None:
         missing_0l = [dates[i] for i in range(7) if i not in done]
 
     mins = _toggl_minutes_by_day(dates)

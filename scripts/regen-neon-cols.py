@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Regenerate ~/i446-monorepo/config/neon-cols.json from the live Neon spreadsheet on ix.
+Regenerate ~/i446-monorepo/config/neon-cols.json from the live Neon sheets,
+read through the excel-http daemon on ix.
 
 Reads row 1 of each tracked sheet, builds {header → column letter}, preserves the
 hand-curated alias maps (domain_aliases, to_0fen_col_map, daily_dozen, ate_bands).
@@ -8,7 +9,6 @@ hand-curated alias maps (domain_aliases, to_0fen_col_map, daily_dozen, ate_bands
 
 import json
 import re
-import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -27,55 +27,31 @@ def col_letter(n: int) -> str:
 
 
 def read_headers() -> dict:
-    """SSH to ix, read row 1 of each sheet, return {sheet: {header: letter}}."""
-    sheet_loop = "{" + ", ".join(f'"{s}"' for s in SHEETS) + "}"
-    # Named workbook, never `active workbook` — whatever happens to have
-    # focus on Ix (xk887.xlsx, a survey export) made this die with "object
-    # does not exist" (2026-07-28).
-    script = f'''
-tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set out to ""
-    repeat with sn in {sheet_loop}
-        set sh to sheet sn of wb
-        set out to out & "##" & sn & linefeed
-        repeat with c from 1 to {MAX_COL}
-            set v to value of cell 1 of column c of sh
-            if v is not missing value and (v as string) is not "" then
-                set out to out & c & "|" & (v as string) & linefeed
-            end if
-        end repeat
-    end repeat
-    return out
-end tell
-'''
-    # Pass script via stdin to avoid shell-escaping issues with `{}` and quotes
-    result = subprocess.run(
-        ["ssh", "ix", "osascript", "-"],
-        input=script,
-        capture_output=True, text=True, timeout=30,
-    )
-    if result.returncode != 0:
-        sys.exit(f"ssh ix failed: {result.stderr}")
+    """Row 1 of each sheet through the excel-http daemon (lib/neon/excel.py),
+    as {sheet: {header: letter}}. Exits on any failed or short read: a partial
+    answer must never be written over neon-cols.json."""
+    lib = str(Path(__file__).resolve().parent.parent / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from neon import excel as neon_excel
+    rng = f"A1:{col_letter(MAX_COL)}1"
     out: dict = {}
-    cur = None
-    for line in result.stdout.splitlines():
-        if line.startswith("##"):
-            cur = line[2:]
-            out[cur] = {}
-            continue
-        if not line or "|" not in line or cur is None:
-            continue
-        n, hdr = line.split("|", 1)
-        hdr = hdr.strip()
-        # Numeric headers come back AppleScript-stringified with a float tail
-        # ("-2" → "-2.0"), which breaks cols.col("0n", "-2") lookups (the
-        # media value-tag minute columns, 2026-07-28). Normalize to the
-        # header as typed in the sheet.
-        if re.fullmatch(r"-?\d+\.0", hdr):
-            hdr = hdr[:-2]
-        if hdr:
-            out[cur][hdr] = col_letter(int(n))
+    for sn in SHEETS:
+        res = neon_excel.read_range(sn, rng)
+        rows = res.get("rows") if res.get("ok") else None
+        if not rows or len(rows[0]) != MAX_COL:
+            sys.exit(f"excel-http read_range {sn}!{rng} failed: {res.get('error') or res}")
+        out[sn] = {}
+        for n, v in enumerate(rows[0], 1):
+            hdr = str(v).strip()
+            # Numeric headers come back stringified with a float tail
+            # ("-2" → "-2.0"), which breaks cols.col("0n", "-2") lookups (the
+            # media value-tag minute columns, 2026-07-28). Normalize to the
+            # header as typed in the sheet.
+            if re.fullmatch(r"-?\d+\.0", hdr):
+                hdr = hdr[:-2]
+            if hdr:
+                out[sn][hdr] = col_letter(n)
     return out
 
 

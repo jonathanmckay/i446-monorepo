@@ -96,87 +96,64 @@ def get_current_block():
     return idx, name, start, end
 
 
+def _neon_excel():
+    """The excel-http client (lib/neon/excel.py). Every Neon read here goes
+    through the daemon on Ix, never AppleScript against whatever Excel is open
+    on this machine; from another Mac the client reaches Ix over ssh."""
+    lib = str(Path.home() / "i446-monorepo" / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from neon import excel
+    return excel
+
+
+def _col_letter(n):
+    """1-based column number → letters (1→A, 27→AA)."""
+    out = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def _col_num(letters):
+    """Column letters → 1-based number (A→1, AK→37)."""
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n
+
+
+def _today_md():
+    now = datetime.now()
+    return f"{now.month}/{now.day}"
+
+
 def check_neon_column(col_name):
-    """Check if a 0₦ column has a value for today. Returns the value or None."""
-    script = f'''
-    tell application "Microsoft Excel"
-        set wb to workbook "Neon分v12.2.xlsx"
-        set theSheet to sheet "0n" of wb
-        set targetMonth to {datetime.now().month}
-        set targetDay to {datetime.now().day}
-        set habitCol to 0
-        repeat with c from 1 to 60
-            set cellVal to value of cell c of row 1 of theSheet
-            if cellVal is not missing value then
-                set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-                if trimmed = "{col_name}" then
-                    set habitCol to c
-                    exit repeat
-                end if
-            end if
-        end repeat
-        if habitCol = 0 then return "NOT_FOUND"
-        set todayRow to 0
-        repeat with r from 3 to 500
-            set cellDate to value of cell 3 of row r of theSheet
-            if cellDate is not missing value then
-                try
-                    set m to (month of (cellDate as date)) as integer
-                    set d to day of (cellDate as date)
-                    if m = targetMonth and d = targetDay then
-                        set todayRow to r
-                        exit repeat
-                    end if
-                end try
-            end if
-        end repeat
-        if todayRow = 0 then return "NO_ROW"
-        set v to value of cell habitCol of row todayRow of theSheet
-        if v is missing value then return ""
-        return v as text
-    end tell
-    '''
+    """Check if a 0₦ column has a value for today. Returns the value or None.
+
+    Header from the live row 1 (A:BH, trailing whitespace ignored), today's
+    row from the daemon's date lookup, then the one cell. Values come back in
+    the daemon's text form ("1.0", "449.0"). None on any failure."""
     try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=15
-        )
-        val = result.stdout.strip()
+        excel = _neon_excel()
+        hdr = excel.read_range("0n", "A1:BH1")
+        if not hdr.get("ok"):
+            return None
+        heads = [str(h).rstrip() for h in hdr["rows"][0]]
+        if not col_name or col_name not in heads:
+            return None
+        col = _col_letter(heads.index(col_name) + 1)
+        row = excel.lookup_row("0n", _today_md())
+        if not row:
+            return None
+        cell = excel.read_range("0n", f"{col}{row}:{col}{row}")
+        if not cell.get("ok"):
+            return None
+        val = str(cell["rows"][0][0]).strip()
         if val in ("", "0", "0.0", "NOT_FOUND", "NO_ROW"):
             return None
         return val
-    except Exception:
-        return None
-
-
-_IX_OSA = None
-
-
-def _ix_osa_run(script, timeout=8.0):
-    """Run AppleScript on ix via the shared `_lib/ix-osa.py` helper. The canonical
-    Neon workbook lives on ix, so reads must route there (the TUI may run on a
-    box without Neon open). Best-effort: returns stdout on success, else None.
-    Never raises — a slow/unreachable ix must not wedge the card."""
-    global _IX_OSA
-    if _IX_OSA is None:
-        try:
-            import importlib.util
-            p = Path.home() / ".claude/skills/_lib/ix-osa.py"
-            spec = importlib.util.spec_from_file_location("_ix_osa", p)
-            mod = importlib.util.module_from_spec(spec)
-            # Register BEFORE exec: ix-osa.py defines a @dataclass, whose
-            # field-type resolution looks the module up in sys.modules (Python
-            # 3.9). Without this it raises during import.
-            sys.modules["_ix_osa"] = mod
-            spec.loader.exec_module(mod)
-            _IX_OSA = mod
-        except Exception:
-            _IX_OSA = False
-    if not _IX_OSA:
-        return None
-    try:
-        res = _IX_OSA.run(script, timeout=timeout)
-        return res.stdout.strip() if res.returncode == 0 else None
     except Exception:
         return None
 
@@ -190,42 +167,29 @@ _HCBI_BANDS = [("卯", "AK"), ("辰", "AN"), ("巳", "AQ"), ("午", "AT"),
 
 def last_meal_today():
     """Return (food_text, band_glyph) for today's most-recent hcbi food entry —
-    the latest populated time band — or None. Read from Neon via ix; best-effort
-    so the eat card still renders if ix is unreachable or nothing's logged yet."""
-    bands_al = "{" + ", ".join(f'{{"{g}", "{c}"}}' for g, c in _HCBI_BANDS) + "}"
-    script = f'''
-    tell application "Microsoft Excel"
-        set sh to sheet "hcbi" of workbook "Neon分v12.2.xlsx"
-        set m to ((month of (current date)) * 1) as text
-        set d to ((day of (current date)) * 1) as text
-        set today to m & "/" & d
-        set rowNum to 0
-        repeat with r from 2 to 400
-            if (string value of range ("B" & r) of sh) = today then
-                set rowNum to r
-                exit repeat
-            end if
-        end repeat
-        if rowNum = 0 then return ""
-        set lastG to ""
-        set lastV to ""
-        repeat with b in {bands_al}
-            set v to string value of range ((item 2 of b) & rowNum) of sh
-            if v is not "" and v is not missing value then
-                set lastG to (item 1 of b)
-                set lastV to v
-            end if
-        end repeat
-        if lastV is "" then return ""
-        return lastG & "|||" & lastV
-    end tell
-    '''
-    out = _ix_osa_run(script, timeout=8.0)
-    if not out or "|||" not in out:
+    the latest populated time band — or None. Read through the excel-http
+    daemon; best-effort so the eat card still renders if the daemon is
+    unreachable or nothing's logged yet."""
+    try:
+        excel = _neon_excel()
+        row = excel.lookup_row("hcbi", _today_md())
+        if not row:
+            return None
+        nums = [_col_num(c) for _, c in _HCBI_BANDS]
+        lo, hi = min(nums), max(nums)
+        res = excel.read_range("hcbi", f"{_col_letter(lo)}{row}:{_col_letter(hi)}{row}")
+        if not res.get("ok"):
+            return None
+        cells = res["rows"][0]
+        glyph, food = "", ""
+        for (g, _), n in zip(_HCBI_BANDS, nums):
+            v = str(cells[n - lo])
+            if v != "":
+                glyph, food = g, v
+        food = food.strip()
+        return (food, glyph.strip()) if food else None
+    except Exception:
         return None
-    glyph, _, food = out.partition("|||")
-    food = food.strip()
-    return (food, glyph.strip()) if food else None
 
 
 PRAYER_MARKER = "☀️"
@@ -1331,7 +1295,7 @@ def _open_daily_goals():
 
 def _unfinished_0n_today():
     """Return list of {habit, col} for habit columns in today's 0n row that
-    are blank. One AppleScript batch read. Returns [] on any error."""
+    are blank. One daemon range read of today's row. Returns [] on any error."""
     headers_path = Path.home() / ".claude/skills/did/headers.json"
     if not headers_path.exists():
         return []
@@ -1345,48 +1309,18 @@ def _unfinished_0n_today():
               if name.lower() not in skip and name.lower() not in {n.lower() for n in skip}]
     if not habits:
         return []
-    cols_list = ",".join(str(c) for _, c in habits)
-    names_list = ",".join(f'"{n}"' for n, _ in habits)
-    today = datetime.now()
-    script = f'''tell application "Microsoft Excel"
-        set wb to workbook "Neon分v12.2.xlsx"
-        set theSheet to sheet "0n" of wb
-        set targetMonth to {today.month}
-        set targetDay to {today.day}
-        set todayRow to 0
-        repeat with r from 3 to 500
-            set cellDate to value of cell 3 of row r of theSheet
-            if cellDate is not missing value then
-                try
-                    set m to (month of (cellDate as date)) as integer
-                    set d to day of (cellDate as date)
-                    if m = targetMonth and d = targetDay then
-                        set todayRow to r
-                        exit repeat
-                    end if
-                end try
-            end if
-        end repeat
-        if todayRow = 0 then return ""
-        set cols to {{{cols_list}}}
-        set names to {{{names_list}}}
-        set out to ""
-        repeat with i from 1 to count of cols
-            set v to value of cell (item i of cols) of row todayRow of theSheet
-            if v is missing value or v as text = "" then
-                set out to out & (item i of names) & linefeed
-            end if
-        end repeat
-        return out
-    end tell'''
     try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
+        excel = _neon_excel()
+        row = excel.lookup_row("0n", _today_md())
+        if not row:
             return []
-        return [{"habit": h.strip(), "col": ""} for h in result.stdout.splitlines() if h.strip()]
+        last = max(int(c) for _, c in habits)
+        res = excel.read_range("0n", f"A{row}:{_col_letter(last)}{row}")
+        if not res.get("ok"):
+            return []
+        cells = res["rows"][0]
+        return [{"habit": name.strip(), "col": ""} for name, c in habits
+                if name.strip() and str(cells[int(c) - 1]) == ""]
     except Exception:
         return []
 
@@ -1395,53 +1329,31 @@ def _open_weekly_1g(domain_hint: str = ""):
     """Read open weekly goals from the '1g' sheet. Returns
     [{text, domain, fen, pct_done}] sorted by domain match then 分 desc.
     'Open' = % Done (col G) is empty or < 1.0. Caps at 25 rows."""
-    script = '''tell application "Microsoft Excel"
-        set wb to workbook "Neon分v12.2.xlsx"
-        set theSheet to sheet "1g" of wb
-        set currentDomain to ""
-        set out to ""
-        repeat with r from 1 to 50
-            set aVal to value of cell 1 of row r of theSheet
-            set dVal to value of cell 4 of row r of theSheet
-            set eVal to value of cell 5 of row r of theSheet
-            set gVal to value of cell 7 of row r of theSheet
-            if aVal is not missing value and (aVal as text) is not "" then
-                set currentDomain to aVal as text
-            end if
-            if dVal is not missing value and (dVal as text) is not "" then
-                set fen to ""
-                if eVal is not missing value then set fen to eVal as text
-                set pct to ""
-                if gVal is not missing value then set pct to gVal as text
-                set out to out & currentDomain & (character id 9) & (dVal as text) & (character id 9) & fen & (character id 9) & pct & linefeed
-            end if
-        end repeat
-        return out
-    end tell'''
     try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=12,
-        )
-        if result.returncode != 0:
+        res = _neon_excel().read_range("1g", "A1:G50")
+        if not res.get("ok"):
             return []
+        grid = res["rows"]
     except Exception:
         return []
     rows = []
-    for line in result.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 2:
+    current_domain = ""
+    for r in grid:
+        r = [str(c) for c in r] + [""] * 7
+        if r[0] != "":
+            current_domain = r[0]
+        if r[3] == "":
             continue
-        domain = parts[0].strip()
-        text = parts[1].strip()
+        domain = current_domain.strip()
+        text = r[3].strip()
         if not text:
             continue
         try:
-            fen = float(parts[2]) if len(parts) > 2 and parts[2].strip() else 0.0
+            fen = float(r[4]) if r[4].strip() else 0.0
         except ValueError:
             fen = 0.0
         try:
-            pct = float(parts[3]) if len(parts) > 3 and parts[3].strip() else 0.0
+            pct = float(r[6]) if r[6].strip() else 0.0
         except ValueError:
             pct = 0.0
         if pct >= 1.0:

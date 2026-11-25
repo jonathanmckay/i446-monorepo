@@ -34,10 +34,9 @@ from zoneinfo import ZoneInfo
 MONO = Path.home() / "i446-monorepo"
 sys.path.insert(0, str(MONO / "lib"))
 from neon import monthly as _monthly  # noqa: E402 - bound before tests swap sys.modules["neon"]
+from neon import excel as _excel  # noqa: E402 - excel-http daemon client (0n reads); bound here for the same reason
 
 TZ = ZoneInfo("America/Los_Angeles")
-IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
-NEON_WB = "Neon分v12.2.xlsx"
 HABITS = ["1st hci", "2nd hci"]
 WINDOW_DAY = 26  # window starts on the 26th, ends on the 25th
 
@@ -83,44 +82,91 @@ def parse_month(s: str, today: date) -> tuple[int, int]:
 
 # ── Neon 0n ──────────────────────────────────────────────────────────────────
 
-def read_0n() -> tuple[dict, dict]:
-    """One osascript on Ix: header-located 1st/2nd hci columns → their row-2
-    weights and every data row's (M/D, value). Returns (weights, rows) with
-    rows[habit] = {"M/D": "value"}."""
-    finds = "\n".join(
-        f'''        if h is "{h}" then set c{i} to c''' for i, h in enumerate(HABITS))
-    script = f'''tell application "Microsoft Excel"
-    set s to sheet "0n" of workbook "{NEON_WB}"
-    set c0 to 0
-    set c1 to 0
-    repeat with c from 1 to 80
-        set h to string value of (cell 1 of column c of s)
-{finds}
-    end repeat
-    if c0 = 0 or c1 = 0 then return "ERROR: hci headers not found in 0n row 1"
-    set out to (string value of (cell 2 of column c0 of s)) & "|" & (string value of (cell 2 of column c1 of s)) & linefeed
-    repeat with r from 5 to 400
-        set d to string value of (cell r of column 3 of s)
-        if d is not "" then
-            set out to out & d & "|" & (string value of (cell r of column c0 of s)) & "|" & (string value of (cell r of column c1 of s)) & linefeed
-        end if
-    end repeat
+# read_range returns cell VALUES as text: a real date cell in AppleScript's
+# long form ("Wednesday, November 25, 2026 at 12:00:00\u202fAM"), a number as
+# "26.0", where the old `string value` reads returned display text ("11/25",
+# "26").
+_LONG_DATE_RE = re.compile(r"^[A-Za-z]+, ([A-Za-z]+) (\d{1,2}), (\d{4}) at ")
+_MONTH_NUM = {n: i for i, n in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], 1)}
+_NUM_TEXT_RE = re.compile(r"^-?\d+\.\d+(?:[eE][-+]?\d+)?$")
+HEADER_COLS = 80                 # row-1 headers are searched in columns 1..80
+FIRST_DAY_ROW, LAST_DAY_ROW = 5, 400
+DATE_COL = "C"
+
+
+def _cell_date(text: str) -> date | None:
+    """A real date cell as read_range returns it, else None."""
+    m = _LONG_DATE_RE.match(text or "")
+    if not m or m.group(1) not in _MONTH_NUM:
+        return None
+    try:
+        return date(int(m.group(3)), _MONTH_NUM[m.group(1)], int(m.group(2)))
+    except ValueError:
+        return None
+
+
+def _general(text: str) -> str:
+    """A number value the way a General-format cell shows it ("15.0" → "15").
+    Anything that is not a number value passes through untouched."""
+    t = (text or "").strip()
+    return "%.10g" % float(t) if _NUM_TEXT_RE.match(t) else (text or "")
+
+
+def _letter(n: int) -> str:
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
     return out
-end tell'''
-    p = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
-                       text=True, timeout=120)
-    if p.returncode != 0 or p.stdout.startswith("ERROR"):
-        sys.exit(f"ERROR: 0n read failed: {(p.stdout or p.stderr).strip()}")
-    lines = p.stdout.replace("\r", "\n").strip().split("\n")
-    w = lines[0].split("|")
-    weights = {HABITS[i]: float(w[i] or 0) for i in range(2)}
+
+
+def _read(rng: str) -> list:
+    r = _excel.read_range("0n", rng)
+    rows = r.get("rows") if r.get("ok") else None
+    if not isinstance(rows, list) or not rows:
+        sys.exit(f"ERROR: 0n read failed: {r.get('error') or r}")
+    return rows
+
+
+def read_0n() -> tuple[dict, dict]:
+    """Header-located 1st/2nd hci columns → their row-2 weights and every data
+    row's (M/D, value), through the excel-http daemon (no raw AppleScript,
+    2026-11-25). Returns (weights, rows) with rows[habit] = {"M/D": "value"}.
+    A value is the cell's VALUE ("45", "" for blank), not its display text: a
+    cell Excel shows as "##" (column too narrow) or in Arabic-Indic digits
+    comes back as the plain number."""
+    head = _read(f"A1:{_letter(HEADER_COLS)}2")
+    if len(head) < 2:
+        sys.exit("ERROR: 0n read failed: header rows missing")
+    cols = [0, 0]
+    for c, h in enumerate(head[0], start=1):
+        for i, name in enumerate(HABITS):
+            if str(h) == name:
+                cols[i] = c                      # last match wins, as before
+    if not all(cols):
+        sys.exit("ERROR: 0n read failed: ERROR: hci headers not found in 0n row 1")
+    weights = {HABITS[i]: float(str(head[1][cols[i] - 1]).strip() or 0) for i in range(2)}
+
+    def column(letter: str) -> list:
+        return [str(r[0]) if r else "" for r in
+                _read(f"{letter}{FIRST_DAY_ROW}:{letter}{LAST_DAY_ROW}")]
+    days = column(DATE_COL)
+    vals = [column(_letter(c)) for c in cols]
+    if not any(_cell_date(d) for d in days):
+        # Dates that did not come back as dates would score the whole window
+        # "not in sheet" without an error.
+        sys.exit("ERROR: 0n read failed: no date cells in column C")
     rows: dict[str, dict[str, str]] = {h: {} for h in HABITS}
-    for ln in lines[1:]:
-        parts = ln.split("|")
-        if len(parts) < 3:
+    for k, raw in enumerate(days):
+        d = _cell_date(raw)
+        key = f"{d.month}/{d.day}" if d else _general(raw).strip()
+        if not key:
             continue
         for i, h in enumerate(HABITS):
-            rows[h][parts[0].strip()] = parts[1 + i].strip()
+            v = vals[i][k] if k < len(vals[i]) else ""
+            rows[h][key] = _general(v).strip()
     return weights, rows
 
 

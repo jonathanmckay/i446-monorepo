@@ -10,7 +10,7 @@ The answer lives in Neon `1分+1s` column AO (the media "Notes" column, next to 
 新闻/词汇/-1/-2/-3/书 counts) on the row of the current Sunday-anchored fiscal week,
 the same row `/book finished` bumps for books (col AM), unless last week's note is
 blank: then it fills last week first. The write goes through the excel-http
-daemon (journaled); ix-osa.sh does the reads and is the daemon-down fallback.
+daemon (journaled), reads included; ix-osa.sh is the write's daemon-down fallback only.
 
 Usage:
   hcmc-survey.py --show                 print last week's and this week's AO notes + the target row
@@ -119,19 +119,40 @@ def osa(script: str) -> str:
     return out
 
 
-def show_script(label: str, prev_label: str) -> str:
-    return "\n".join([
-        'tell application "Microsoft Excel"',
-        f'  set ws to sheet "{SHEET}" of workbook "{WORKBOOK}"',
-        '  set out to ""',
-        f'  repeat with r from {FIRST_ROW} to {LAST_ROW}',
-        '    set a to string value of cell 1 of row r of ws',
-        f'    if a is "{prev_label}" then set out to out & "PREV\t" & r & "\t" & (string value of range ("{COL}" & r) of ws) & linefeed & "END" & linefeed',
-        f'    if a is "{label}" then set out to out & "CUR\t" & r & "\t" & (string value of range ("{COL}" & r) of ws) & linefeed & "END" & linefeed',
-        '  end repeat',
-        '  return out',
-        'end tell',
-    ])
+_NUM_TEXT_RE = re.compile(r"^-?\d+\.\d+(?:[eE][-+]?\d+)?$")
+
+
+def _general(text: str) -> str:
+    """A number value the way a General-format cell shows it: read_range gives
+    the week label as its value ("11.299999999999999", the cell is
+    =A(n-1)+0.1) where the old `string value` read gave "11.3". Text passes."""
+    t = (text or "").strip()
+    return "%.10g" % float(t) if _NUM_TEXT_RE.match(t) else (text or "")
+
+
+def read_show(label: str, prev_label: str) -> dict:
+    """{"PREV": (row, AO text), "CUR": (row, AO text)} for the rows of col A
+    labelled prev_label / label (absent when there is no such row), through
+    the excel-http daemon (no raw AppleScript, 2026-11-25). Exits like the old
+    ix-osa read did when the daemon cannot answer."""
+    out = {}
+    cols = []
+    for col in ("A", COL):
+        r = neon_excel.read_range(SHEET, f"{col}{FIRST_ROW}:{col}{LAST_ROW}")
+        rows = r.get("rows") if r.get("ok") else None
+        if not isinstance(rows, list):
+            raise SystemExit(f"{SHEET}!{col} read failed: {r.get('error') or r}")
+        cols.append([str(c[0]) if c else "" for c in rows])
+    for k, a in enumerate(cols[0]):
+        a = _general(a)
+        note = cols[1][k] if k < len(cols[1]) else ""
+        # Same clean-up the line-based parse of the osascript output did.
+        cell = (FIRST_ROW + k, "\n".join(note.splitlines()).strip())
+        if a == prev_label:
+            out["PREV"] = cell
+        if a == label:
+            out["CUR"] = cell
+    return out
 
 
 def write_script(row: int, text: str) -> str:
@@ -166,19 +187,6 @@ def write_answer(label: str, row: int, text: str) -> str:
     return osa(write_script(row, text))
 
 
-def parse_show(raw: str) -> dict:
-    out, cur = {}, None
-    for line in raw.splitlines():
-        if cur is None and line.startswith(("PREV\t", "CUR\t")):
-            kind, row, first = line.split("\t", 2)
-            cur = [kind, int(row), [first]]
-        elif cur and line == "END":
-            out[cur[0]] = (cur[1], "\n".join(cur[2]).strip()); cur = None
-        elif cur:
-            cur[2].append(line)
-    return out
-
-
 def target(info: dict, label: str, prev_label: str) -> tuple[str, int, str]:
     """(label, row, text in the cell) the answer writes to: a blank last week
     first, else this week. Week 1.1's previous row is last year's."""
@@ -211,7 +219,7 @@ def main() -> None:
     label = _bf.week_row_label(sun)
     prev_label = _bf.week_row_label(sun - datetime.timedelta(days=7))
 
-    info = parse_show(osa(show_script(label, prev_label)))
+    info = read_show(label, prev_label)
     if "CUR" not in info:
         raise SystemExit(f"no row labelled {label} in {SHEET}!A")
     prev = info.get("PREV", (None, ""))[1]

@@ -107,14 +107,31 @@ def test_applescript_targets_week_row_and_skips_blanks():
     assert "save wb" in script
 
 
+def _fake_0l(m, monkeypatch, dates, done):
+    """0n through a faked excel-http client (2026-11-25: the 0l read left raw
+    ix-osa): col C = the week's days as read_range returns date cells, the 0l
+    column = 1.0 on the `done` day indexes. Any raw call fails the test."""
+    long = ["%s, %s %d, %d at 12:00:00\u202fAM" % (d.strftime("%A"), d.strftime("%B"), d.day, d.year)
+            for d in dates]
+    marks = ["1.0" if i in set(done) else "" for i in range(7)]
+
+    def read_range(sheet, rng):
+        assert sheet == "0n"
+        col = long if rng.startswith("C") else marks
+        return {"ok": True, "rows": [[v] for v in col]}
+    monkeypatch.setattr(m.neon_excel, "read_range", read_range)
+
+    def no_raw(*a, **k):
+        raise AssertionError("raw ix-osa must not run")
+    monkeypatch.setattr(m, "run_bounded", no_raw)
+
+
 def test_check_week_flags_missing_days(monkeypatch):
     m = _load()
     dates = [dt.date(2026, 7, 12) + dt.timedelta(days=i) for i in range(7)]
     ctx = {"titles": [(0, "t"), (1, "t"), (3, "t"), (4, "t"), (5, "t"), (6, "t")]}
     # 0l done every day except day 2; tracking fine except day 6.
-    raw_0l = "".join("<<D>>%d<<F>>1.0" % i for i in range(7) if i != 2)
-    monkeypatch.setattr(m, "run_bounded",
-                        lambda *a, **k: type("P", (), {"returncode": 0, "stdout": raw_0l, "stderr": ""})())
+    _fake_0l(m, monkeypatch, dates, [i for i in range(7) if i != 2])
     monkeypatch.setattr(m, "_toggl_minutes_by_day",
                         lambda ds: {d: (600 if i == 6 else 1400) for i, d in enumerate(ds)})
     b = m.check_week(dates, ctx)
@@ -129,9 +146,7 @@ def test_check_week_clear_when_complete(monkeypatch):
     m = _load()
     dates = [dt.date(2026, 7, 12) + dt.timedelta(days=i) for i in range(7)]
     ctx = {"titles": [(i, "t") for i in range(7)]}
-    raw_0l = "".join("<<D>>%d<<F>>1.0" % i for i in range(7))
-    monkeypatch.setattr(m, "run_bounded",
-                        lambda *a, **k: type("P", (), {"returncode": 0, "stdout": raw_0l, "stderr": ""})())
+    _fake_0l(m, monkeypatch, dates, range(7))
     monkeypatch.setattr(m, "_toggl_minutes_by_day",
                         lambda ds: {d: 1400 for d in ds})
     b = m.check_week(dates, ctx)
@@ -147,14 +162,18 @@ def test_survey_save_marks_1s_done_in_source():
     assert "--no-mark" in src
 
 
-def test_daily_context_matches_date_value_not_display():
+def test_daily_context_matches_date_value_not_display(monkeypatch):
     """Col B holds real date cells. A date's `as text` is the long locale form
     (bug found live 2026-07-21), and matching the displayed string broke when
-    the display moved m/d/yy -> yyyy.mm.dd (2026-11-03). Compare y-m-d of the value."""
+    the display moved m/d/yy -> yyyy.mm.dd (2026-11-03). Match the date VALUE,
+    year included (2026-11-25: read through excel-http, see test_1s_reads.py)."""
     m = _load()
-    script = m.build_context_script([dt.date(2026, 7, 12)])
-    assert 'set tmpB to value of range "B3:B600"' in script and "string value of range \"B3" not in script
-    assert '((class of cv) as text) is "date"' in script and 'if bv = "2026-7-12"' in script
+    rows = [["Sunday, July 12, 2026 at 12:00:00\u202fAM"] + [""] * 18,
+            ["Saturday, July 12, 2025 at 12:00:00\u202fAM", "", "", "last year"] + [""] * 15,
+            ["2026.07.12"] + [""] * 18]
+    rows[0][3] = "Title"
+    monkeypatch.setattr(m.neon_excel, "read_range", lambda sheet, rng: {"ok": True, "rows": rows})
+    assert m.fetch_context([dt.date(2026, 7, 12)])["titles"] == [(0, "Title")]
 
 
 # ── Shared BackgroundWriter adoption (2026-08-11) ───────────────────────────

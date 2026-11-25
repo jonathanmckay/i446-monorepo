@@ -101,18 +101,19 @@ def test_ctrl_c_aborts(hm):
 # ── 2026-11-03: 0s897!B display moved m/d/yy -> yyyy.mm.dd ──────────────────
 # Both col-B lookups key on the date VALUE (y-m-d), never the displayed text.
 
-def test_fetch_and_label_scripts_match_date_value_not_display(hm):
+def test_fetch_script_matches_date_value_not_display(hm):
     import datetime as dt
     f = hm.build_fetch_script([dt.date(2026, 10, 29)])
     assert 'set tmpB to value of range "B2:B600"' in f and "10/29/26" not in f
     assert '((class of cv) as text) is "date"' in f and 'if bv = "2026-10-29"' in f
-    lab = hm.build_label_script("11.1")
-    assert 'set tmpB to value of range "B2:B600"' in lab
-    assert 'return "OK|" & ((year of cv) as text)' in lab
 
 
-def test_thursday_for_label_parses_ymd_key(hm, monkeypatch):
+def test_thursday_for_label_reads_date_value(hm, monkeypatch):
+    """2026-11-25: the label lookup left raw ix-osa for excel-http (more in
+    test_1hcme_label.py). Col B is still matched as a date value."""
     import datetime as dt
-    import types
-    monkeypatch.setattr(hm, "run_bounded", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="OK|2026-10-29\n", stderr=""))
+    rows = [["", "Wednesday, October 28, 2026 at 12:00:00\u202fAM", "W"],
+            ["11.1", "Thursday, October 29, 2026 at 12:00:00\u202fAM", "Th"]]
+    monkeypatch.setattr(hm.neon_excel, "read_range", lambda sheet, rng: {"ok": True, "rows": rows})
+    monkeypatch.setattr(hm, "run_bounded", lambda *a, **k: pytest.fail("raw path must not run"))
     assert hm.thursday_for_label("11.1") == dt.date(2026, 10, 29)

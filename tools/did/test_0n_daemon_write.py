@@ -30,7 +30,7 @@ def _w(df, name, col_num, value=1):
 def test_daemon_path_synthesizes_echo_and_pre_images(df, monkeypatch):
     seen = {}
 
-    def fake_batch_write(sheet, writes, *, date=None, row=None, src=None):
+    def fake_batch_write(sheet, writes, *, date=None, row=None, src=None, fallback=True):
         seen.update(sheet=sheet, writes=writes, date=date, src=src)
         return {"ok": True, "row": 293, "results": [
             {"ok": True, "col": "AE", "value": "1", "formula": "1", "chain": "ok",
@@ -91,7 +91,7 @@ def _w1n(df, name, col, value=1, cumulative=0, variable=False):
 def test_1n_daemon_path_maps_modes_and_synthesizes_echo(df, monkeypatch):
     seen = {}
 
-    def fake_bw(sheet, writes, *, date=None, row=None, src=None):
+    def fake_bw(sheet, writes, *, date=None, row=None, src=None, fallback=True):
         seen.update(sheet=sheet, writes=writes, date=date, src=src)
         return {"ok": True, "row": 20, "results": [
             {"ok": True, "col": "D", "value": "75", "formula": "=0+30+45", "before": "=0+30",

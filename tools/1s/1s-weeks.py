@@ -18,14 +18,16 @@ import argparse
 import datetime as _dt
 import importlib.util
 import json
+import re
 import statistics
-import subprocess
 import sys
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client
+
 HERE = Path(__file__).resolve().parent
-IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
-WORKBOOK = "Neon分v12.2.xlsx"
 SHEET = "1分+1s"
 
 # One source of truth for week labels: reuse 1s-survey.py's quota logic.
@@ -64,28 +66,6 @@ NUM_KEYS = [k for _, k, kind in COLS if kind == "num"]
 TABLE_KEYS = ["∑分", "分/d", "i9", "m7", "-2g", "hcmc", "hcmp", "hcb", "s89",
               "xk87", "-1₦/d", "0₲/d", "-1n", "avg"]
 FLAG_PCT = 15.0  # |Δ vs trailing mean| at or above this is called out
-SEP = "\x1f"
-
-
-def build_script(first_row: int = 2, last_row: int = 400) -> str:
-    cols = ", ".join('"%s"' % c for c, _, _ in COLS)
-    return f'''
-tell application "Microsoft Excel"
-    set wb to workbook "{WORKBOOK}"
-    set s to sheet "{SHEET}" of wb
-    set out to ""
-    repeat with i from {first_row} to {last_row}
-        set a to string value of range ("A" & i) of s
-        if a is "" then exit repeat
-        set rowTxt to ""
-        repeat with c in {{{cols}}}
-            set rowTxt to rowTxt & (string value of range ((c as string) & i) of s) & "{SEP}"
-        end repeat
-        set out to out & rowTxt & linefeed
-    end repeat
-    return out
-end tell
-'''
 
 
 def _num(s: str) -> float | None:
@@ -98,27 +78,74 @@ def _num(s: str) -> float | None:
         return None
 
 
-def parse_rows(raw: str) -> list[dict]:
+# The sheet's number formats, which the old `string value` read applied for us:
+# points, rates and ritual percentages show as whole numbers, the three ratings
+# to one decimal. read_range returns the unrounded VALUE ("1590.857142857143",
+# "1.079542857143E+4"), so the display rounding is applied here to keep every
+# figure (and the means and deltas built on them) what the sheet shows.
+# Verified against all 52 week rows 2026-11-25. _fmt below prints at the same
+# precision. If a column's format changes in the sheet, change it here too.
+DISPLAY_DP = {"avg": 1, "high": 1, "low": 1}     # every other num column: 0
+FIRST_ROW, LAST_ROW = 2, 400
+LAST_COL = "AA"                                   # rightmost column in COLS
+_NUM_TEXT_RE = re.compile(r"^-?\d+\.\d+(?:[eE][-+]?\d+)?$")
+
+
+def _col_index(letters: str) -> int:
+    """0-based index of a column letter within an A.. range read."""
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
+def _general(text: str) -> str:
+    """A number value the way a General-format cell shows it: the week label
+    "11.299999999999999" (=A(n-1)+0.1) → "11.3", "1.0" → "1". Text passes."""
+    t = (text or "").strip()
+    return "%.10g" % float(t) if _NUM_TEXT_RE.match(t) else (text or "")
+
+
+def _shown(text: str, dp: int) -> float | None:
+    """A numeric cell's value rounded the way its number format shows it
+    (half away from zero, like Excel). Blank → None; text falls back to _num."""
+    t = (text or "").strip()
+    if not _NUM_TEXT_RE.match(t):
+        return _num(t)
+    q = Decimal(1).scaleb(-dp)
+    return float(Decimal(t).quantize(q, rounding=ROUND_HALF_UP))
+
+
+def parse_rows(grid: list) -> list[dict]:
+    """read_range rows of A..LAST_COL (from FIRST_ROW) → one dict per week,
+    stopping at the first blank col A like the old row loop did."""
     rows = []
-    for line in raw.split("\n"):
-        if SEP not in line:
-            continue
-        parts = line.split(SEP)
+    for cells in grid:
+        cells = [str(c) for c in cells]
+        if not cells or not cells[0].strip():
+            break
         row: dict = {}
-        for (_, key, kind), val in zip(COLS, parts):
-            row[key] = _num(val) if kind == "num" else val.strip()
+        for col, key, kind in COLS:
+            i = _col_index(col)
+            val = cells[i] if i < len(cells) else ""
+            if key == "week":
+                row[key] = _general(val).strip()
+            elif kind == "num":
+                row[key] = _shown(val, DISPLAY_DP.get(key, 0))
+            else:
+                row[key] = val.strip()
         if row.get("week"):
             rows.append(row)
     return rows
 
 
 def fetch_rows() -> list[dict]:
-    proc = subprocess.run([str(IX_OSA)], input=build_script(),
-                          capture_output=True, text=True, timeout=180)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stdout.strip() or proc.stderr.strip()
-                           or "ix-osa failed")
-    return parse_rows(proc.stdout)
+    """One excel-http read (no raw AppleScript, 2026-11-25)."""
+    r = neon_excel.read_range(SHEET, f"A{FIRST_ROW}:{LAST_COL}{LAST_ROW}")
+    grid = r.get("rows") if r.get("ok") else None
+    if not isinstance(grid, list):
+        raise RuntimeError(f"{SHEET} read failed: {r.get('error') or r}")
+    return parse_rows(grid)
 
 
 def select_window(rows: list[dict], label: str, n: int) -> tuple[dict, list[dict]]:

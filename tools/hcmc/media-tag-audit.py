@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -50,9 +50,8 @@ sys.path.insert(0, str(MCP))
 from toggl_server import toggl_api  # noqa: E402
 from toggl_server import tag_credits  # noqa: E402
 
-_IX = importlib.util.spec_from_file_location("ix_osa", Path.home() / ".claude/skills/_lib/ix-osa.py")
-_ix = importlib.util.module_from_spec(_IX); sys.modules["ix_osa"] = _ix; _IX.loader.exec_module(_ix)
-ix_run = _ix.run
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (0n reads)
 
 
 def toggl_minutes(start: dt.date, end: dt.date) -> dict[dt.date, dict[str, int]]:
@@ -82,50 +81,81 @@ def toggl_minutes(start: dt.date, end: dt.date) -> dict[dt.date, dict[str, int]]
     return out
 
 
-def sheet_minutes(start: dt.date, end: dt.date) -> dict[dt.date, dict[str, float]]:
-    days = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
-    keys = " or ".join(f"(m = {d.month} and dd = {d.day})" for d in days)
-    script = f'''tell application "Microsoft Excel"
-    set ws to sheet "0n" of workbook "Neon分v12.2.xlsx"
-    set out to ""
-    repeat with r from 3 to 500
-        set cd to value of cell 3 of row r of ws
-        if cd is not missing value then
-            try
-                set m to (month of (cd as date)) as integer
-                set dd to day of (cd as date)
-                if {keys} then
-                    set ln to m & "/" & dd
-                    repeat with c in {{{COLS["-1"]}, {COLS["-2"]}, {COLS["-3"]}, {N_COL}, {O_COL}}}
-                        set v to value of cell c of row r of ws
-                        if v is missing value then set v to 0
-                        set ln to ln & (character id 9) & (v as text)
-                    end repeat
-                    set out to out & ln & linefeed
-                end if
-            end try
-        end if
-    end repeat
+# read_range returns cell VALUES as text; a real date cell comes back in
+# AppleScript's long form ("Wednesday, November 25, 2026 at 12:00:00\u202fAM").
+_LONG_DATE_RE = re.compile(r"^[A-Za-z]+, ([A-Za-z]+) (\d{1,2}), (\d{4}) at ")
+_MONTH_NUM = {n: i for i, n in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], 1)}
+FIRST_ROW, LAST_ROW = 3, 500
+DATE_COL = 3                            # 0n col C: the day
+
+
+def _cell_date(text: str) -> dt.date | None:
+    """A real date cell as read_range returns it, else None."""
+    m = _LONG_DATE_RE.match(text or "")
+    if not m or m.group(1) not in _MONTH_NUM:
+        return None
+    try:
+        return dt.date(int(m.group(3)), _MONTH_NUM[m.group(1)], int(m.group(2)))
+    except ValueError:
+        return None
+
+
+def _letter(n: int) -> str:
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
     return out
-end tell'''
-    res = ix_run(script, timeout=60.0)
-    if res.returncode != 0:
-        raise SystemExit(f"ERROR: 0n read failed: {res.stderr or res.stdout}")
+
+
+def _read(rng: str) -> list:
+    r = neon_excel.read_range("0n", rng)
+    rows = r.get("rows") if r.get("ok") else None
+    if not isinstance(rows, list):
+        raise SystemExit(f"ERROR: 0n read failed: {r.get('error') or r}")
+    return rows
+
+
+def sheet_minutes(start: dt.date, end: dt.date) -> dict[dt.date, dict[str, float]]:
+    """{day: {tag: minutes}} from 0n, through the excel-http daemon (no raw
+    AppleScript, 2026-11-25). Rows are matched on month/day of col C, as
+    before: 0n holds one year."""
+    days = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
+    dates = [_cell_date(str(c[0])) if c else None for c in _read(
+        f"{_letter(DATE_COL)}{FIRST_ROW}:{_letter(DATE_COL)}{LAST_ROW}")]
+    if not any(dates):
+        # Dates that did not come back as dates would read as "nothing in the
+        # sheet", and --fix would then append every tagged minute again.
+        raise SystemExit("ERROR: 0n read failed: no date cells in column C")
+    hits = []                           # (sheet row, day), in row order
+    for k, cd in enumerate(dates):
+        if cd is None:
+            continue
+        day = next((x for x in days if x.month == cd.month and x.day == cd.day), None)
+        if day is not None:
+            hits.append((FIRST_ROW + k, day))
     out: dict[dt.date, dict[str, float]] = {}
-    for line in res.stdout.splitlines():
-        p = line.split("\t")
-        if len(p) < 6:
-            continue
-        m, d = (int(x) for x in p[0].split("/"))
-        day = next((x for x in days if x.month == m and x.day == d), None)
-        if day is None:
-            continue
-        def f(s):  # noqa: E306
-            try:
-                return float(s)
-            except ValueError:
-                return 0.0
-        av, aw, ax, n, o = (f(x) for x in p[1:6])
+    if not hits:
+        return out
+    want = [COLS["-1"], COLS["-2"], COLS["-3"], N_COL, O_COL]
+    lo_c, hi_c = min(want), max(want)
+    lo_r, hi_r = min(r for r, _ in hits), max(r for r, _ in hits)
+    # One block over the matched rows: at most 498 rows x 37 columns (N..AX),
+    # inside the daemon's 20,000-cell limit.
+    block = _read(f"{_letter(lo_c)}{lo_r}:{_letter(hi_c)}{hi_r}")
+
+    def f(s):
+        try:
+            return float(s)             # blank / text → 0, like the old read
+        except ValueError:
+            return 0.0
+    for row, day in hits:
+        cells = block[row - lo_r] if row - lo_r < len(block) else []
+        if len(cells) != hi_c - lo_c + 1:
+            raise SystemExit(f"ERROR: 0n read failed: short row {row}")
+        av, aw, ax, n, o = (f(str(cells[c - lo_c])) for c in want)
         # AX normally = N + O + tagged extras; a hand-entered AX below N + O
         # makes the derived tagged part negative — clamp, never "fix" it upward.
         out[day] = {"-1": av, "-2": aw, "-3": max(0.0, ax - n - o)}

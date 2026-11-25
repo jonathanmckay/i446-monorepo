@@ -29,6 +29,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
+sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
+from neon import excel as neon_excel  # noqa: E402  excel-http daemon client (Neon reads)
+
 IX_OSA = Path.home() / ".claude/skills/_lib/ix-osa.sh"
 SCORECARD = "计分卡  2s, 3s.xlsx"   # note: two spaces before 2s
 # Path on IX (OneDrive-Personal), where the write runs; moved from Dropbox
@@ -61,36 +64,46 @@ def parse_month(s: str, default_year: int) -> tuple[int, int]:
 
 
 def read_neon_month(month: int) -> list:
-    """One osascript on IX: find the M.1 row in 1分+1s, return its source values
-    tab-separated (AQ..BA + BC)."""
-    cells = SRC_COLS + [SRC_EXTRA]
-    # NB: AppleScript's `tab` constant arrives as the literal text "tab" through
-    # the ix-osa ssh path — use an explicit delimiter instead.
-    reads = ' & "|~|" & '.join(
-        f'(get value of range ("{c}" & theRow) of theSheet) as text' for c in cells)
-    script = f'''tell application "Microsoft Excel"
-    set theSheet to sheet "{SHEET_1S}" of workbook "{NEON_WB}"
-    set theRow to 0
-    repeat with r from 2 to 80
-        try
-            set a to value of range ("A" & r) of theSheet
-            if a is not missing value and a is not "" then
-                if (a as real) > {month}.05 and (a as real) < {month}.15 then
-                    set theRow to r
-                    exit repeat
-                end if
-            end if
-        end try
-    end repeat
-    if theRow = 0 then return "ERROR: no {month}.1 row in {SHEET_1S}"
-    return (theRow as text) & "|~|" & {reads}
-end tell'''
-    r = subprocess.run([str(IX_OSA)], input=script, capture_output=True,
-                       text=True, timeout=60)
-    out = (r.stdout or "").strip()
-    if r.returncode != 0 or out.startswith("ERROR"):
-        sys.exit(f"ERROR reading Neon on ix: {out or r.stderr.strip()}")
-    return out.split("|~|")
+    """Find the M.1 row in 1分+1s (col A, rows 2-80) and return [row, AQ..BA,
+    BC] as text, through the excel-http daemon (no raw AppleScript,
+    2026-11-25). Values, not display text: "239.0", "116.958418367347"; a
+    blank cell is "" (the old osascript read said "missing value";
+    normalize_value takes both)."""
+    def fail(msg: str):
+        sys.exit(f"ERROR reading Neon on ix: {msg}")
+
+    r = neon_excel.read_range(SHEET_1S, "A2:A80")
+    labels = r.get("rows") if r.get("ok") else None
+    if not isinstance(labels, list):
+        fail(r.get("error") or str(r))
+    the_row = 0
+    for i, cells in enumerate(labels, start=2):
+        try:
+            a = float(str(cells[0]).strip())
+        except (ValueError, IndexError):
+            continue                      # blank or text label
+        # M.1 is stored as a float (=A(n-1)+0.1): match a window, not equality.
+        if month + 0.05 < a < month + 0.15:
+            the_row = i
+            break
+    if the_row == 0:
+        fail(f"ERROR: no {month}.1 row in {SHEET_1S}")
+    first, last = SRC_COLS[0], SRC_EXTRA      # AQ..BC, one contiguous read
+    r = neon_excel.read_range(SHEET_1S, f"{first}{the_row}:{last}{the_row}")
+    rows = r.get("rows") if r.get("ok") else None
+    width = _col_num(last) - _col_num(first) + 1
+    if not isinstance(rows, list) or not rows or len(rows[0]) != width:
+        fail(r.get("error") or str(r))
+    cells = [str(v) for v in rows[0]]
+    base = _col_num(first)
+    return [str(the_row)] + [cells[_col_num(c) - base] for c in SRC_COLS + [SRC_EXTRA]]
+
+
+def _col_num(letters: str) -> int:
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n
 
 
 def write_scorecard(year: int, month: int, values: list[str], dry: bool) -> str:
@@ -164,7 +177,7 @@ def main() -> None:
     src_row, vals = raw[0], raw[1:]
     if len(vals) != 12:
         sys.exit(f"ERROR: expected 12 values, got {len(vals)}: {vals}")
-    # Normalize: AppleScript renders missing as "missing value"
+    # Normalize: a blank cell is "" (was AppleScript's "missing value")
     norm = [normalize_value(v) for v in vals]
     empty = sum(1 for v in norm if v == '""')
     if empty >= len(norm):

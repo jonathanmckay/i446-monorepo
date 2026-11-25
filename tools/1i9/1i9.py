@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import time
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "i446-monorepo/lib"))
@@ -111,6 +112,9 @@ def _osa(script: str, timeout: int = 120) -> str:
 
 
 def points_script(first: int, last: int) -> str:
+    """UNUSED since 2026-11-25 (i9_points reads through the daemon, points_raw
+    below). Kept only because tools/did/test_dtd_1i9_survey_route.py still
+    asserts on it; delete both together."""
     return "\n".join([
         'tell application "Microsoft Excel"',
         f'  set wb to workbook "{WORKBOOK}"',
@@ -144,17 +148,83 @@ def parse_points(raw: str, start: _dt.date, end: _dt.date) -> int:
     return total
 
 
+# ── reads: excel-http daemon only (no raw AppleScript, 2026-11-25) ───────────
+# read_range returns cell VALUES as text, where the old `string value` reads
+# returned display text: a date cell comes back in AppleScript's long form
+# ("Wednesday, November 25, 2026 at 12:00:00\u202fAM") instead of "11/25", and
+# a number as "481.0" / "11.299999999999999" instead of "481" / "11.3".
+_LONG_DATE_RE = re.compile(r"^[A-Za-z]+, ([A-Za-z]+) (\d{1,2}), (\d{4}) at ")
+_MONTH_NUM = {n: i for i, n in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], 1)}
+_NUM_TEXT_RE = re.compile(r"^-?\d+\.\d+(?:[eE][-+]?\d+)?$")
+
+
+def _cell_date(text: str) -> _dt.date | None:
+    """A real date cell as read_range returns it, else None."""
+    m = _LONG_DATE_RE.match(text or "")
+    if not m or m.group(1) not in _MONTH_NUM:
+        return None
+    try:
+        return _dt.date(int(m.group(3)), _MONTH_NUM[m.group(1)], int(m.group(2)))
+    except ValueError:
+        return None
+
+
+def _general(text: str) -> str:
+    """A number value the way a General-format cell shows it ("11.0" → "11",
+    "11.299999999999999" → "11.3": week labels are =A(n-1)+0.1). Anything that
+    is not a number value passes through untouched."""
+    t = (text or "").strip()
+    return "%.10g" % float(t) if _NUM_TEXT_RE.match(t) else (text or "")
+
+
+def _shown_int(text: str) -> str:
+    """A points value as the sheet shows it: a whole number, half away from
+    zero (分 are integers when presented). 0分!R is General in a narrow column,
+    so the old display-text read saw 140.5 as "141" (R79, week of 2026-03-22),
+    and parse_points truncates: without this that week reads 1分 low."""
+    t = (text or "").strip()
+    if not _NUM_TEXT_RE.match(t):
+        return text or ""
+    return str(int(Decimal(t).quantize(Decimal(1), rounding=ROUND_HALF_UP)))
+
+
+def points_raw(first: int, last: int) -> str:
+    """0分 B (date) and R (i9 points) for rows first..last, in the tab-separated
+    "row, M/D, points" lines parse_points reads (what points_script used to
+    return from Excel). One daemon read; RuntimeError when it fails."""
+    r = neon_excel.read_range(POINTS_SHEET, f"B{first}:R{last}")
+    rows = r.get("rows") if r.get("ok") else None
+    if not isinstance(rows, list):
+        raise RuntimeError(f"{POINTS_SHEET} read failed: {r.get('error') or r}")
+    lines, seen_date = [], False
+    for i, cells in enumerate(rows, start=first):
+        b = str(cells[0]) if cells else ""
+        d = _cell_date(b)
+        seen_date = seen_date or d is not None
+        md = f"{d.month}/{d.day}" if d else b
+        pts = _shown_int(str(cells[-1])) if len(cells) == 17 else ""    # B..R is 17 columns
+        lines.append(f"{i}\t{md}\t{pts}")
+    if not seen_date:
+        # Dates that did not come back as dates would sum to a silent 0分.
+        raise RuntimeError(f"{POINTS_SHEET} read failed: no date cells in B{first}:B{last}")
+    return "\n".join(lines) + "\n"
+
+
 def i9_points(start: _dt.date, end: _dt.date) -> int:
     """Col R of the 0分 tab, summed over the week's day rows (col B is M/D)."""
-    raw = _osa(points_script(1, 400))
-    return parse_points(raw, start, end)
+    return parse_points(points_raw(1, 400), start, end)
 
 
 def check_label(row: int, expected: str) -> str:
-    out = _osa('tell application "Microsoft Excel"\n  set wb to workbook "%s"\n'
-               '  return string value of cell 1 of row %d of sheet "%s" of wb\nend tell'
-               % (WORKBOOK, row, I9_SHEET))
-    return out.strip()
+    """Col A of the i9+m5x2 row, as the sheet shows it (the M.W week label)."""
+    # read_range, not read: read() falls back to raw osascript when the daemon is down.
+    r = neon_excel.read_range(I9_SHEET, f"A{row}:A{row}")
+    rows = r.get("rows") if r.get("ok") else None
+    if not rows or not rows[0]:
+        raise RuntimeError(f"{I9_SHEET}!A{row} read failed: {r.get('error') or r}")
+    return _general(str(rows[0][0])).strip()
 
 
 def _as_applescript(s: str) -> str:

@@ -1105,61 +1105,56 @@ def load_headers() -> dict:
     return refresh_headers()
 
 
-def refresh_headers() -> dict:
-    """Read 0n and 1n+ row 1 headers from Excel via one AppleScript call."""
-    script = '''tell application "Microsoft Excel"
-    set wb to workbook "Neon分v12.2.xlsx"
-    set ws0 to sheet "0n" of wb
-    set ws1 to sheet "1n+" of wb
-    set colLetters to {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AO","AP","AQ","AR","AS","AT","AU","AV","AW","AX","AY","AZ","BA","BB","BC","BD","BE","BF","BG","BH","BI","BJ","BK","BL"}
-    set r0 to ""
-    repeat with c from 1 to 62
-        set cellVal to value of cell c of row 1 of ws0
-        if cellVal is not missing value then
-            set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-            if trimmed is not "" then
-                set r0 to r0 & c & "\\t" & trimmed & "\\n"
-            end if
-        end if
-    end repeat
-    set r1 to ""
-    repeat with c from 3 to 40
-        set cellVal to value of cell c of row 1 of ws1
-        if cellVal is not missing value then
-            set trimmed to do shell script "printf '%s' " & quoted form of (cellVal as text) & " | sed 's/[[:space:]]*$//'"
-            if trimmed is not "" then
-                set colLetter to item c of colLetters
-                set r1 to r1 & colLetter & "\\t" & trimmed & "\\n"
-            end if
-        end if
-    end repeat
-    return "0N\\n" & r0 & "1N\\n" & r1
-end tell'''
+# Row-1 header ranges: 0n columns 1..62 (keyed by 1-based column number) and
+# 1n+ columns C..AN (keyed by letter). Same cells the old AppleScript walked.
+HEADERS_0N_RANGE = "A1:BJ1"
+HEADERS_1N_RANGE = "C1:AN1"
+HEADERS_1N_FIRST_COL = 3  # C
 
-    res = ix_run(script, timeout=30.0)
-    if res.returncode != 0:
-        print(f"ERROR: refresh_headers failed: {res.stderr}", file=sys.stderr)
+
+def _header_name(cell) -> str:
+    """Header text as the old AppleScript reader kept it: the first line only
+    (its per-line output parser dropped whatever followed a line break inside
+    a cell), trailing whitespace removed, leading whitespace kept."""
+    return re.split(r"[\r\n]", str(cell or ""), maxsplit=1)[0].rstrip()
+
+
+def _read_header_row(sheet: str, rng: str, width: int) -> list:
+    """Row 1 of `sheet` over `rng` as at most `width` cell texts, via
+    excel-http. Raises RuntimeError when the daemon does not answer with that
+    one row (unreachable, Excel error, reads refused behind queued writes)."""
+    resp = neon_excel.read_range(sheet, rng)
+    if not isinstance(resp, dict) or resp.get("ok") is not True:
+        err = resp.get("error") if isinstance(resp, dict) else None
+        raise RuntimeError(f"{sheet}!{rng}: {err or 'no usable reply from excel-http'}")
+    rows = resp.get("rows") or []
+    if len(rows) != 1 or not isinstance(rows[0], list):
+        raise RuntimeError(f"{sheet}!{rng}: expected 1 row, got {len(rows)}")
+    # Cells are indexed from the range's first column, so a row that stops
+    # early still maps every header it has to the right column.
+    return rows[0][:width]
+
+
+def refresh_headers() -> dict:
+    """Read 0n and 1n+ row 1 headers through the excel-http daemon (two
+    /read_range calls; 2026-11-25, was one raw AppleScript)."""
+    try:
+        row_0n = _read_header_row("0n", HEADERS_0N_RANGE, 62)
+        row_1n = _read_header_row("1n+", HEADERS_1N_RANGE, 38)
+    except Exception as e:  # noqa: BLE001 — same exit the failed osascript took
+        print(f"ERROR: refresh_headers failed: {e}", file=sys.stderr)
         sys.exit(3)
 
     headers_0n: dict[str, int] = {}
     headers_1n: dict[str, str] = {}
-    section = None
-
-    for line in res.stdout.strip().split("\n"):
-        line = line.strip()
-        if line == "0N":
-            section = "0n"
-            continue
-        elif line == "1N":
-            section = "1n"
-            continue
-        if not line or "\t" not in line:
-            continue
-        key, name = line.split("\t", 1)
-        if section == "0n":
-            headers_0n[name.lower()] = int(key)
-        elif section == "1n":
-            headers_1n[name.lower()] = key  # column letter
+    for col_num, cell in enumerate(row_0n, start=1):
+        name = _header_name(cell)
+        if name:
+            headers_0n[name.lower()] = col_num
+    for col_num, cell in enumerate(row_1n, start=HEADERS_1N_FIRST_COL):
+        name = _header_name(cell)
+        if name:
+            headers_1n[name.lower()] = neon_cols.col_letter(col_num)  # column letter
 
     # Exit 0 with nothing read must not replace good headers: for 24 h every
     # habit would look unknown (bug 2026-11-05: janus asked for points on 一起饭).
@@ -2403,9 +2398,15 @@ def write_0n_via_daemon(writes: list[RouteResult], target_date: str,
         body.append({"col": neon_cols.col_letter(w.col_num), "value": w.write_value,
                      "mode": "add" if _adds_0n(w) else "set"})
     try:
+        # fallback=False: with the daemon unreachable the client must not write
+        # on its own. Its per-cell ssh fallback applies "set" cells and returns
+        # fallback=True, which is read below as "unavailable", and the caller
+        # then runs build_0n_script over the same cells: two writers. The raw
+        # script is the only writer when the daemon is down.
         resp = neon_excel.batch_write(
             "0n", body, date=target_date,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"0n daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
@@ -2541,9 +2542,16 @@ def write_1n_via_daemon(writes: list[RouteResult], week_mw: str,
         else:
             body.append({"col": w.col_letter, "value": w.write_value or 1, "mode": "set"})
     try:
+        # fallback=False (bug 2026-11-25): with the daemon unreachable the
+        # client's own ssh fallback appended each cell and returned
+        # fallback=True; that is read below as "unavailable", the caller ran
+        # build_1n_script, and the minutes were appended a second time. The
+        # client now writes nothing in that case, so the raw script is the
+        # only writer.
         resp = neon_excel.batch_write(
             "1n+", body, date=week_mw,
-            src=src or ("did " + ", ".join(w.item.name for w in writes)))
+            src=src or ("did " + ", ".join(w.item.name for w in writes)),
+            fallback=False)
     except Exception as e:  # noqa: BLE001
         print(f"1n+ daemon write failed, falling back to ix-osa: {e}", file=sys.stderr)
         return None
