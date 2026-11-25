@@ -1,12 +1,12 @@
 ---
 name: "1s897"
-description: "Weekly social review. Reads Toggl s897+家+#s897/#家-tagged entries >20m, writes event list + sum to Neon 0s897 col AA, then compares against priorities and provides improvement analysis. Usage: /1s897 [M.W or YYYY-MM-DD]"
+description: "Use when JM runs /1s897, opens the weekly '1 s897' card, or asks to review a week's social time (Toggl s897 and 家 entries against his social priorities). Asks him for his own notes and closes the card once they are in. Not for editing the people database (/s897), not the family and marriage survey (/xk887), not for logging a social event's time (/tg, /do). Usage: /1s897 [M.W or YYYY-MM-DD]"
 user-invocable: true
 ---
 
 # Weekly Social Review (1s897)
 
-Review a week's social activities from Toggl, write raw data to the Neon spreadsheet, then provide improvement analysis.
+Review a week's social activities from Toggl, write raw data to the Neon spreadsheet, add the bot's analysis as 😈 lines, ask JM for his own notes, then close the `1 s897` card.
 
 **Target week**: defaults to the most recent complete week. An optional arg
 picks a different week instead: an `M.W` label (e.g. `7.4`) — the canonical
@@ -126,30 +126,87 @@ Compare the week's activities against:
 3. **Priorities**: Were the activities aligned with stated goals (consistent quality time, double-booking, prep-driven events)?
 4. **Patterns**: Any feast-or-famine signals? Over-indexing on one type?
 
-### Step 6: Write analysis to Neon
+### Step 6: Write the bot's analysis to Neon (😈 lines)
 
-Write the improvement analysis to **column AB** ("Notes for Improvement / Upcoming") of the same row.
+Column **AB** ("Notes for Improvement / Upcoming") of the same row holds two
+voices: JM's own notes as `• ` lines on top, the bot's commentary as `😈 `
+lines below. JM does not open Excel (2026-11-25), so the prefix is the only
+thing that tells him which lines are his. Never write AB with
+`neon-review-write.py` directly: it replaces the whole cell and takes his
+notes with it.
 
-Format as bullet points matching the existing style:
+Save the analysis to `/tmp/1s897-ab.txt`, one observation per line, no
+prefix (the script adds `😈 `):
+
 ```
-• Key observation about the week
-• What went well and should continue
-• What to improve next week
-• Specific suggestion for next week
+Key observation about the week
+What went well and should continue
+What to improve next week
+Specific suggestion for next week
 ```
 
-Save the bullets to `/tmp/1s897-ab.txt` and rerun Step 4's command with
-`AB=@/tmp/1s897-ab.txt` as the only cell (same `--date <week_start> --merge-col Z`).
+```bash
+python3 ~/.claude/skills/1s897/ab_notes.py --date <week_start> --bot @/tmp/1s897-ab.txt
+```
 
-### Step 7: Report
+It reads the cell, keeps JM's lines, replaces only the `😈 ` lines, writes
+through the daemon and prints the cell as it now stands. Exit 1 = nothing
+written; surface the error verbatim.
 
-Tell the user:
+### Step 7: Report, then ask JM for his notes
+
+Give the report:
 - Week range (W date - Tu date)
 - Activities found (the list)
 - Total social time
 - Social capital points used
 - Week grade (A/B/C/D)
 - Top improvement suggestion
+
+If the cell printed by Step 6 already has `• ` lines, show them as "your
+notes so far". Then ask, in chat:
+
+> **Notes for this week?**
+
+Wait for the answer. Write it (one thought per line; the script bulletizes
+and keeps the 😈 lines):
+
+```bash
+python3 ~/.claude/skills/1s897/ab_notes.py --date <week_start> --jm @/tmp/1s897-jm.txt
+```
+
+An answer replaces his earlier lines for that week. If he asks to change or
+drop the 😈 lines, rerun Step 6's command with the new text (`--bot ""`
+removes them all).
+
+| JM's reply | Do |
+|---|---|
+| Notes | Write them, then Step 8 |
+| "none" / "nothing to add" / keeps the notes already there | Write nothing, then Step 8 |
+| No reply, or moves to another topic | Write nothing, leave the card open and the claim held |
+
+### Step 8: Close the card (self-clearing)
+
+JM's notes are his part of the survey; once Step 7 has them, the week's
+`1 s897` card is done and the skill closes it.
+
+Close **only when both hold**:
+
+1. `/1s897` ran with **no week argument**.
+2. The claim hook printed `😈 claimed: 1 s897 … (id <id>)` for this prompt.
+
+```bash
+python3 ~/i446-monorepo/tools/did/did-fast.py "1 s897" --task-id <id>
+python3 ~/i446-monorepo/tools/did/did-fast.py --refresh-cache
+python3 ~/i446-monorepo/tools/did/agent_claims.py release >/dev/null 2>&1
+```
+
+Run `--refresh-cache` in the foreground. Then one line: `✓ 1 s897 closed`.
+
+With a week argument, or with no claim (the card is already closed or not on
+today's list), stop after Step 7 and say `card left alone`. did-fast credits
+the current week's 1n+ cell and today's 0分 whether or not a card is open, so
+closing on a backfill or a rerun pays the week twice.
 
 ## Example output
 
@@ -168,12 +225,17 @@ Written to 0s897 row 98, cols Z + AA.
 Points: 255₹ / 240₹ budget (family 210m = 210₹, self 130m = 65₹)
 Grade: A (2+ in-person, daily touchpoints unclear from Toggl)
 
-Analysis written to col AB.
-Top suggestion: Double-book more — zoo + family friends was high-ROI.
+😈 analysis written to col AB.
+Top suggestion: Double-book more, zoo + family friends was high-ROI.
+
+Notes for this week?
 ```
+
+After his answer: `Notes written to col AB. ✓ 1 s897 closed`
 
 ## Dependencies
 
 - Toggl MCP server (toggl_date or toggl_today tools)
 - Microsoft Excel with Neon分v12.2.xlsx open
+- `ab_notes.py` (AB merge, tests in `test_ab_notes.py`), `scripts/neon-review-write.py`
 - Files: ~/vault/s897/weekly-social-system.md, ~/vault/s897/s897.md

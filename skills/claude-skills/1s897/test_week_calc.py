@@ -96,9 +96,12 @@ def test_skill_md_has_unambiguous_wednesday_rule():
 
 
 def test_skill_md_requires_topRow_date_check():
+    """The row must be found by week_start's date and be the top of the Z
+    merge. Until 2026-10-30 the skill spelled that out as a `B{topRow}`
+    AppleScript check; neon-review-write.py's --date / --merge-col do it now."""
     text = SKILL.read_text()
-    assert "B{topRow}" in text and "week_start" in text, \
-        "SKILL.md must require verifying B[topRow] == week_start before writing."
+    assert "--date <week_start> --merge-col Z" in text, \
+        "SKILL.md must write Z/AA through --date <week_start> --merge-col Z."
 
 
 # ── New: week_calc.py's arg parsing (M.W label / ISO date / no-arg) ────────

@@ -624,14 +624,16 @@ def test_zsh_hook_prefilter_routes_0t_to_python():
     assert _hook_alternations() == ["d|claim|dt|" + "|".join(ac.SKILL_CLAIMS)] * 2
 
 
-def test_1s897_claims_weekly_card_and_keeps_it(hooked, monkeypatch):
-    """2026-10-07: /1s897 claims '1 s897' like /0t, but has a manual part, so
-    nothing releases or completes it; JM closes the card in dtd."""
+def test_1s897_claims_weekly_card_and_releases_it(hooked, monkeypatch):
+    """2026-10-07: /1s897 claims '1 s897' like /0t; the plain 's897' and
+    'ibx s897' cards must not make the match ambiguous. 2026-11-25: the skill
+    now asks JM for his notes in chat and closes the card itself once they are
+    in, so it is a releaser."""
     monkeypatch.setattr(ac, "_did", lambda: _FakeDid([TASK, {"id": "W1", "content": "1 s897 (25) [30]"},
                                                       {"id": "W2", "content": "ibx s897 (15) [5]"},
                                                       {"id": "W3", "content": "s897 (120) [30]"}]))
     out = _fast("/1s897 7.4")
-    assert "😈 claimed: 1 s897 (25) [30]" in out and "leave the card open" in out
+    assert "😈 claimed: 1 s897 (25) [30]" in out and "releases the claim" in out
     assert (hooked / "by-session" / "S9").read_text().strip() == "W1"
 
 

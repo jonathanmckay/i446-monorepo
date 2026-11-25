@@ -67,5 +67,5 @@ Current roster: `/0t` (0t card), `/0g` (0g card), `/-1g` (😈 -1g ritual card,
 current block only), `/notes` (notes card), `/ibx0` (inbox habit set),
 `/allcolors` (⎣∀clr stamp), `/1hcme` (1 hcme weekly card: writes
 0s897!X then runs the 1n+ /did path), `/2hci` (2 hci monthly card: report, did-fast `--task-id`, then its 2₦ block cell),
-`/2n1` (5^2 1 n Efficiency Clearance monthly card: report, did-fast `--task-id`, then its 2₦ block cell), `/-1l` (😈 -1l ritual card, only when the previous block has no hole over 5m and no unpointed task). When adding a skill that corresponds to a dtd
+`/2n1` (5^2 1 n Efficiency Clearance monthly card: report, did-fast `--task-id`, then its 2₦ block cell), `/1s897` (1 s897 weekly card: 😈 analysis, then JM's notes in chat, then did-fast `--task-id`; only with no week arg and a held claim), `/-1l` (😈 -1l ritual card, only when the previous block has no hole over 5m and no unpointed task). When adding a skill that corresponds to a dtd
 card, make it self-clearing and add it to this list.
