@@ -468,7 +468,7 @@ def test_mark_night_hcmc_daemon_path_keeps_manual_value_and_writes_number():
          patch.object(zerot_fast, "ix_run") as ix_run:
         out = zerot_fast.mark_night_hcmc(35, date(2026, 5, 6))
     assert out == {"write": "OK: night hcmc=35 row=180"}
-    assert writes == [("0n", [{"col": "P", "value": 35}], {"row": 180, "src": "0t night hcmc 2026-05-06"})]
+    assert writes == [("0n", [{"col": "P", "value": 35}], {"row": 180, "src": "0t night hcmc 2026-05-06", "fallback": False})]
     assert ix_run.call_count == 0
 
 
@@ -481,7 +481,7 @@ def test_write_sleep_daemon_first_then_raw_fallback():
     with patch.object(zerot_fast.neon_excel, "batch_write", side_effect=fake_bw), \
          patch.object(zerot_fast, "ix_run") as ix_run:
         assert zerot_fast.write_sleep(493, date(2026, 10, 19)) == "OK: sleep=493.0 row=293"
-    assert calls == [("0n", [{"col": "D", "value": 493}], {"date": "10/19", "src": "0t sleep"})]
+    assert calls == [("0n", [{"col": "D", "value": 493}], {"date": "10/19", "src": "0t sleep", "fallback": False})]
     assert ix_run.call_count == 0
 
     class _Res:
@@ -597,3 +597,47 @@ def test_unfinished_day_is_refused(monkeypatch, capsys):
         _main_with(monkeypatch, capsys, ["2026-11-06"])
     assert e.value.code == zerot_fast.USAGE_EXIT
     assert "isn't over" in capsys.readouterr().err
+
+
+# ── queued writes are accepted, never rewritten raw (2026-11-25) ─────────────
+
+_QUEUED = {"ok": False, "queued": True, "rid": "r1", "error": "queued: ..."}
+
+
+def test_write_sleep_accepts_a_queued_write_without_the_raw_script():
+    with patch.object(zerot_fast.neon_excel, "batch_write", return_value=dict(_QUEUED)) as bw, \
+         patch.object(zerot_fast, "ix_run") as raw:
+        out = zerot_fast.write_sleep(431, date(2026, 11, 25))
+    assert out.startswith("QUEUED: sleep=431")
+    raw.assert_not_called()
+    assert bw.call_args.kwargs["fallback"] is False        # the client must not write on its own
+
+
+def test_write_sleep_uses_the_raw_script_only_when_the_daemon_is_unreachable():
+    class R:
+        returncode, stdout, stderr = 0, "OK: sleep=431 row=330", ""
+    with patch.object(zerot_fast.neon_excel, "batch_write",
+                      return_value={"ok": False, "error": "daemon_unreachable", "fallback": True}), \
+         patch.object(zerot_fast, "ix_run", return_value=R()) as raw:
+        out = zerot_fast.write_sleep(431, date(2026, 11, 25))
+    assert out == "OK: sleep=431 row=330"
+    assert raw.call_count == 1
+
+
+def test_mark_night_hcmc_queued_write_and_refused_read_do_not_go_raw():
+    with patch.object(zerot_fast.neon_excel, "read",
+                      return_value={"ok": True, "row": 329, "value": "", "formula": ""}), \
+         patch.object(zerot_fast.neon_excel, "batch_write", return_value=dict(_QUEUED)) as bw, \
+         patch.object(zerot_fast, "ix_run") as raw:
+        out = zerot_fast.mark_night_hcmc(35, date(2026, 11, 24))
+    assert out == {"write": "QUEUED: night hcmc=35 row=329"}
+    assert bw.call_args.kwargs["fallback"] is False
+    raw.assert_not_called()
+    with patch.object(zerot_fast.neon_excel, "read",
+                      return_value={"ok": False, "error": "queue_pending", "pending": 2}), \
+         patch.object(zerot_fast.neon_excel, "batch_write") as bw, \
+         patch.object(zerot_fast, "ix_run") as raw:
+        out = zerot_fast.mark_night_hcmc(35, date(2026, 11, 24))
+    assert out["write"].startswith("SKIPPED: Neon writes are queued")
+    bw.assert_not_called()
+    raw.assert_not_called()

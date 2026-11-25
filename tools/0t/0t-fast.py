@@ -231,14 +231,27 @@ def mark_night_hcmc(minutes: int, target_date: date) -> dict:
     # read, keep a manual value, else write the detected minutes as a NUMBER.
     try:
         rd = neon_excel.read("0n", col, date=md)
+        if rd.get("error") == "queue_pending":
+            # Writes are queued behind a down Excel and the daemon refuses
+            # reads: the cell cannot be checked for a manual value, and a raw
+            # write now would land ahead of the queued ones (2026-11-25).
+            return {"write": "SKIPPED: Neon writes are queued, cell not readable; rerun /0t later"}
         if rd.get("ok") and not rd.get("fallback"):
             prev = str(rd.get("value") or "").strip()
             if prev not in ("", "0", "0.0"):
                 return {"write": f"SKIPPED: manual value {prev} kept, row={rd.get('row')}"}
+            # fallback=False: the client must not write the cell on its own
+            # when the daemon is unreachable; the raw script below is the one
+            # fallback, so the cell is never written twice.
             wr = neon_excel.batch_write("0n", [{"col": col, "value": int(minutes)}],
-                                        row=rd.get("row"), src=f"0t night hcmc {target_date.isoformat()}")
+                                        row=rd.get("row"), src=f"0t night hcmc {target_date.isoformat()}",
+                                        fallback=False)
             if wr.get("ok") and not wr.get("fallback"):
                 return {"write": f"OK: night hcmc={minutes} row={wr.get('row')}"}
+            if neon_excel.is_queued(wr):
+                # Recorded by the daemon; it lands when Excel answers. Writing
+                # it another way is what the queue forbids.
+                return {"write": f"QUEUED: night hcmc={minutes} row={rd.get('row')}"}
     except Exception as e:  # noqa: BLE001 — fall through to the raw script
         print(f"night hcmc daemon path failed ({e}); using ix-osa", file=sys.stderr)
     script = f'''tell application "Microsoft Excel"
@@ -436,11 +449,16 @@ def write_sleep(sleep_minutes: int, today: date) -> str:
     month = today.month
     day = today.day
     try:
+        # fallback=False: see mark_night_hcmc. A queued write is accepted, not
+        # rewritten raw (2026-11-25: the old test, "not ok", sent queued and
+        # timed-out replies to the raw script).
         wr = neon_excel.batch_write("0n", [{"col": "D", "value": int(sleep_minutes)}],
-                                    date=f"{month}/{day}", src="0t sleep")
+                                    date=f"{month}/{day}", src="0t sleep", fallback=False)
         if wr.get("ok") and not wr.get("fallback"):
             r0 = (wr.get("results") or [{}])[0]
             return f"OK: sleep={r0.get('value', sleep_minutes)} row={wr.get('row')}"
+        if neon_excel.is_queued(wr):
+            return f"QUEUED: sleep={sleep_minutes} (recorded by excel-http; lands when Excel answers)"
         print(f"sleep daemon write unavailable ({wr.get('error')}); using ix-osa", file=sys.stderr)
     except Exception as e:  # noqa: BLE001
         print(f"sleep daemon write failed ({e}); using ix-osa", file=sys.stderr)
