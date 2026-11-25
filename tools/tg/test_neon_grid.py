@@ -283,3 +283,40 @@ def test_0n_view_carries_the_2026_11_22_overrides():
     stats_blue = "2979ff"
     assert v["cf"]["W"][0][3] not in (stats_blue, "00a3ee")           # ibx i9 != stats/notes, != push's old header
     assert v["cf"]["X"][0][3] != "b3b3b3" and v["fills"]["X"]["body"] is None
+
+
+def test_split_sheet_cuts_tabs_out_of_one_sheet():
+    """JM 2026-11-25: "1n+ Let's break it into 1n, 2n, 3n"."""
+    cols = ["A", "B", "C", "D", "E"]
+    rows = [[["", 0], ["wk", 0], ["x", 0], ["", 0], ["q", 0]]]
+    rows += [[["sf", 0] if r == 1 else ["", 0, r - 1], ["1.%d" % r, 0], [str(r), 0], ["", 0], ["", 0]] for r in range(1, 4)]
+    rows += [[["", 0, 4], ["month", 0], ["m", 0], ["", 0], ["Q1", 0]]]
+    full = {"name": "1n+", "tab": "#111111", "header_rows": 1, "frozen_cols": 2, "today_row": 2,
+            "cols": cols, "row_nums": [1, 2, 3, 4, 6], "widths": [4, 5, 6, 3, 7], "styles": [[None, None, 0, "l"]],
+            "rows": rows, "skipped_rules": 0, "live": {"row": 2, "excel_row": 3, "cells": {"C": {}}}}
+    wk, mo, last = ng.split_sheet(full, [
+        {"name": "1n", "rows": [1, 4]},
+        {"name": "2n", "rows": [6, 9], "cols": ["A", "C"], "header_rows": 1, "frozen": "B", "widths": {"B": 14}},
+        {"name": "3n", "rows": [6, 6], "cols": ["E", "E"], "last": True}])
+    assert (wk["name"], wk["source"], wk["cols"], wk["frozen_cols"]) == ("1n", "1n+", ["A", "B", "C", "E"], 2)
+    assert wk["today_row"] == 2 and wk["live"]["row"] == 2 and wk["live"]["excel_row"] == 3
+    assert wk["rows"][3][0] == ["", 0, 2]                   # the merge still points at its label
+    assert mo["cols"] == ["B", "C"] and mo["widths"] == [14, 6] and mo["frozen_cols"] == 1   # blank A dropped
+    assert mo["rows"] == [[["month", 0], ["m", 0]]] and mo["today_row"] is None and mo["live"] is None
+    assert mo["row_nums"] == [6] and last["last"] is True and last["rows"] == [[["Q1", 0]]]
+    wk["styles"].append(["#000000", None, 0, "l"])
+    assert len(mo["styles"]) == 1                           # parts do not share one style table
+
+
+def test_ratings_and_points_are_colour_coded():
+    """JM 2026-11-25: "i9 + m5x2 color code the ratings and the points"."""
+    view = ng.SHEETS["i9+m5x2"]
+    def colour(col, value):
+        return ng.paint(value, "General", [None, None, False, None], view["cf"][col], 6)[1][0]
+    assert colour("B", "EE") == colour("G", "EE ") == "#1c7c3c"       # a rating typed with a trailing space
+    assert len({colour("B", r) for r in ("EE", "MA", "MM", "MS", "OL")}) == 5
+    assert colour("B", "") is None
+    assert colour("C", 425) == "#10253f" and colour("C", 90) == "#a5b6cb" and colour("C", 0) == "#d9d9d9"
+    assert colour("J", 237) == "#602827" and colour("J", 147) == "#d99694"
+    names = [p["name"] for p in ng.SHEETS["1n+"]["split"]]
+    assert names == ["1n", "2n", "3n", "4n"]

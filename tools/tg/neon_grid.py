@@ -19,7 +19,8 @@ Snapshot shape (see build()):
    "sheets": [{"name", "tab": "#rrggbb"|None, "header_rows", "frozen_cols",
                "today_row": index into rows | None, "widths": [chars],
                "styles": [[bg|None, fg|None, bold 0/1, align "l"|"r"|"c"]],
-               "rows": [[[text, style_idx, up]]], "skipped_rules"}]}
+               "rows": [[[text, style_idx, up]]], "skipped_rules",
+               "source"?: the workbook sheet a part of a split sheet was cut from}]}
 `up` > 0 marks a cell inside a vertical merge: its text lives `up` rows above
 (the renderer shows it on the first visible row of the merge).
 
@@ -44,13 +45,23 @@ from pathlib import Path
 
 SRC = Path.home() / "Library" / "CloudStorage" / "OneDrive-Personal" / "vault-excel" / "Neon分v12.2.xlsx"
 OUT = Path.home() / ".cache" / "janus" / "neon-grid.json"
-VERSION = 16
+VERSION = 17
 
 # Per-sheet view settings. Neon has no usable freeze panes (only 0s897 has
 # one, and openpyxl reports its scroll position, not the split), so the pinned
 # header rows and the frozen columns are declared here. `date_col` is where
 # the day lives (the same table as services/excel-http DATE_COL); frozen
 # columns default to everything up to and including it.
+def _rating(bg: str, fg: str, *texts) -> list:
+    return [[1, "equal", [t], bg, fg, True, True] for t in texts]
+
+
+# /1i9 and /1m5x2's scale, best to worst, then OL (out: week not rated). The
+# sheet has a few ratings typed with a trailing space; cellIs does not trim.
+_RATING_RULES = (_rating("1c7c3c", "ffffff", "EE", "EE ") + _rating("a8dba8", "000000", "MA", "MA ")
+                 + _rating("f2d16b", "000000", "MM", "MM ", "MM+", "MM+ ") + _rating("d9534f", "ffffff", "MS", "MS ")
+                 + _rating("808080", "ffffff", "OL", "OL "))
+
 SHEETS = {
     # 周 is white on black down the whole column (JM 2026-11-21); n156 and the
     # unlabelled column after it are not part of the view.
@@ -75,8 +86,29 @@ SHEETS = {
                        "X": [[4, "greaterThan", [0.0], "bfbfbf", "000000", False, False]]}},
     "0s897":   {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
     "hcbi":    {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
-    "i9+m5x2": {"header_rows": 1, "date_col": "A", "frozen_cols": 1},
-    "1n+":     {"header_rows": 3, "date_col": "B", "frozen_cols": 2},
+    # Ratings and weekly points colour-coded (JM 2026-11-25): the workbook has
+    # no rules here. The 分 columns are formulas into 1分+1s G/H and take that
+    # sheet's own rules for them.
+    "i9+m5x2": {"header_rows": 2, "date_col": "A", "frozen_cols": 1,
+                "cf": {"B": _RATING_RULES, "G": _RATING_RULES,
+                       "C": [[1, "between", [0.0, 50.0], "d9d9d9", None, None, True],
+                             [2, "greaterThan", [199.0], "10253f", "ffffff", False, False],
+                             [3, "greaterThan", [49.0], "a5b6cb", None, None, False]],
+                       "J": [[1, "between", [0.0, 50.0], "d9d9d9", None, None, True],
+                             [2, "greaterThan", [199.0], "602827", "ffffff", False, False],
+                             [3, "between", [50.0, 199.0], "d99694", None, None, False]]}},
+    # One Excel sheet, four tables (JM 2026-11-25: "break it into 1n, 2n, 3n"):
+    # the weekly grid, the monthly list under it, the quarterly list to its
+    # right, and the annual table at the bottom, which goes last as 4n.
+    # "frozen" names the last frozen column of a part.
+    "1n+":     {"header_rows": 3, "date_col": "B", "frozen_cols": 2,
+                "split": [{"name": "1n", "rows": [1, 57]},
+                          {"name": "2n", "rows": [61, 90], "cols": ["A", "P"], "header_rows": 1,
+                           "frozen": "B", "widths": {"A": 3, "B": 14}},
+                          {"name": "3n", "rows": [61, 102], "cols": ["Y", "AI"], "header_rows": 1,
+                           "frozen": "AA", "widths": {"AA": 14, "AD": 6}},
+                          {"name": "4n", "rows": [92, 130], "cols": ["B", "T"], "header_rows": 1,
+                           "frozen": "C", "widths": {"C": 14}, "last": True}]},
     "1分+1s":  {"header_rows": 1, "date_col": "A", "frozen_cols": 1},
 }
 # Visible in Excel, not wanted as janus tabs (JM 2026-11-21; 1g may return in another form).
@@ -709,6 +741,48 @@ def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> d
             "skipped_rules": skipped, "live": live}
 
 
+def split_sheet(full: dict, parts: list) -> list:
+    """Cut one built sheet into several tabs (SHEETS[...]["split"]): each part
+    is a block of Excel rows and, optionally, a span of columns. Columns blank
+    throughout a part are left out. A part carries "source" (the workbook
+    sheet), and keeps today's row and its live recipe only when that row is
+    inside it."""
+    out = []
+    for p in parts:
+        lo, hi = p["rows"]
+        ridx = [i for i, n in enumerate(full["row_nums"]) if lo <= n <= hi]
+        clo, chi = (_col_index(p["cols"][0]), _col_index(p["cols"][1])) if p.get("cols") else (1, 1 << 20)
+        cidx = [j for j, letter in enumerate(full["cols"]) if clo <= _col_index(letter) <= chi
+                and any(full["rows"][i][j][0].strip() for i in ridx)]
+        rows = []
+        for k, i in enumerate(ridx):
+            line = []
+            for j in cidx:
+                cell = list(full["rows"][i][j])
+                if len(cell) > 2 and (cell[2] > k or ridx[k - cell[2]] != i - cell[2]):
+                    cell = cell[:2]                 # the merge's label row is outside this part
+                line.append(cell)
+            rows.append(line)
+        cols = [full["cols"][j] for j in cidx]
+        fixed = p.get("widths") or {}
+        if p.get("frozen"):
+            frozen = sum(1 for letter in cols if _col_index(letter) <= _col_index(p["frozen"]))
+        else:
+            frozen = sum(1 for j in cidx if j < full["frozen_cols"])
+        today = ridx.index(full["today_row"]) if full["today_row"] in ridx else None
+        live = None
+        if today is not None and full.get("live") and full["live"]["row"] == full["today_row"]:
+            live = dict(full["live"], row=today)
+        out.append({"name": p["name"], "source": full["name"], "tab": full["tab"],
+                    "header_rows": min(len(rows), p.get("header_rows", full["header_rows"])),
+                    "frozen_cols": frozen, "today_row": today, "cols": cols,
+                    "row_nums": [full["row_nums"][i] for i in ridx],
+                    "widths": [fixed.get(full["cols"][j], full["widths"][j]) for j in cidx],
+                    "styles": [list(st) for st in full["styles"]], "rows": rows,
+                    "skipped_rules": full["skipped_rules"], "live": live, "last": bool(p.get("last"))})
+    return out
+
+
 def paint(value, fmt: str, base: list, rules: list, width: int, recolor: dict | None = None):
     """(text, [bg, fg, bold, align]) for one value: number format, static
     style, then the cell's cellIs rules. The same steps build_sheet applies,
@@ -809,7 +883,10 @@ def build(src: Path = SRC, today: dt.date | None = None) -> dict:
         for ws in wb.worksheets:
             if ws.sheet_state != "visible" or ws.title not in wv.sheetnames or ws.title in SKIP_SHEETS:
                 continue
-            sheets.append(build_sheet(ws, wv[ws.title], theme, today, label))
+            sheet = build_sheet(ws, wv[ws.title], theme, today, label)
+            parts = (SHEETS.get(ws.title) or {}).get("split")
+            sheets.extend(split_sheet(sheet, parts) if parts else [sheet])
+        sheets.sort(key=lambda sh: bool(sh.get("last")))        # stable: the "last" parts go to the end
     body = json.dumps(sheets, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     # the day is part of the hash: at midnight "today's row" moves even when no
     # cell did, and an unchanged hash would leave yesterday's file in place
@@ -869,7 +946,7 @@ def emit(src: Path = SRC, out: Path = OUT) -> dict:
             live = sh.get("live") or {}
             if not live.get("excel_row"):
                 continue
-            values, through = neon_book_reads.row(sh["name"], live["excel_row"], list(sh["cols"]))
+            values, through = neon_book_reads.row(sh.get("source") or sh["name"], live["excel_row"], list(sh["cols"]))
             if values is None:
                 continue
             row = sh["rows"][live["row"]]

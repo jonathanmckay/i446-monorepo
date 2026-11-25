@@ -106,6 +106,13 @@ def _login_if_needed(page) -> bool:
     return False
 
 
+# The interstitial's dismiss control, as AppFolio has worded it over time. 2026-11-25: it became
+# "Not now" (under "Log in faster next time ... Set up with 1 click"); only "Remind Me Later"
+# was known, so every auto-relogin parked on the page and raised the "do 2fa with Ix" card
+# although no 2FA was being asked for.
+PASSKEY_DISMISS = ("Not now", "Remind Me Later")
+
+
 def _skip_passkey_prompt(page) -> bool:
     """Dismiss AppFolio's post-login "add a Passkey" interstitial.
 
@@ -117,20 +124,21 @@ def _skip_passkey_prompt(page) -> bool:
     """
     if "webauthn-register" not in page.url.lower():
         try:
-            if not page.get_by_text("Remind Me Later").first.is_visible(timeout=1000):
+            if not any(page.get_by_text(t).first.is_visible(timeout=1000) for t in PASSKEY_DISMISS):
                 return False
         except Exception:
             return False
-    for sel in ('button:has-text("Remind Me Later")', 'a:has-text("Remind Me Later")',
-                'input[value="Remind Me Later"]', 'text=Remind Me Later'):
-        try:
-            el = page.locator(sel).first
-            if el.is_visible(timeout=1000):
-                el.click()
-                _wait(page, 5000)
-                return True
-        except Exception:
-            continue
+    for text in PASSKEY_DISMISS:
+        for sel in (f'button:has-text("{text}")', f'a:has-text("{text}")',
+                    f'input[value="{text}"]', f'text={text}'):
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=1000):
+                    el.click()
+                    _wait(page, 5000)
+                    return True
+            except Exception:
+                continue
     return False
 
 
@@ -291,6 +299,10 @@ def check_session(headless: bool = True) -> dict:
                 email_visible = False
             if email_visible:
                 return {"ok": False, "url": page.url, "error": "still on the login form after submitting credentials"}
+            if "login-actions" in page.url.lower():
+                # Parked on a Keycloak step it could not get past (2026-11-24: the probe called
+                # the unskipped passkey page OK, so the breakage surfaced only at the next lease).
+                return {"ok": False, "url": page.url, "error": "parked on a login step: " + page.url.split("?")[0]}
             return {"ok": True, "url": page.url, "error": ""}
         finally:
             ctx.close()

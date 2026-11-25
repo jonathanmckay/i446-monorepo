@@ -55,39 +55,146 @@ def test_tabs_cycle_and_persist(tmp_path):
 def test_sheet_opens_on_today_and_clamps(tmp_path):
     t = _tabs(tmp_path)
     t.select(1)
-    lines = _text(t.render(40, 24)).split("\n")
+    lines = _text(t.render(80, 24)).split("\n")             # wide enough for one line per row
     assert len(lines) == 24                                 # exactly fills the pane
     body = lines[2:-1]
     assert body[-1 - nt.TODAY_FROM_BOTTOM].lstrip().startswith("w50")   # today sits a few rows above the bottom
     t.move(drow=999, body_h=t.body_height(24))
-    assert "w59" in _text(t.render(40, 24))
+    assert "w59" in _text(t.render(80, 24))
     t.move(drow=-9999, body_h=t.body_height(24))
-    assert _text(t.render(40, 24)).split("\n")[2].lstrip().startswith("w1")
+    assert _text(t.render(80, 24)).split("\n")[2].lstrip().startswith("w1")
     t.home(t.body_height(24))
-    assert _text(t.render(40, 24)).split("\n")[2:-1][-1 - nt.TODAY_FROM_BOTTOM].lstrip().startswith("w50")
+    assert _text(t.render(80, 24)).split("\n")[2:-1][-1 - nt.TODAY_FROM_BOTTOM].lstrip().startswith("w50")
 
 
-def test_frozen_columns_stay_while_others_scroll(tmp_path):
+def test_a_wide_sheet_wraps_instead_of_scrolling_sideways(tmp_path):
+    """JM 2026-11-25: "2-3 lines (so I get the full horizontal width) per day.
+    That way I don't have to h-scroll, which I'll almost never do"."""
     t = _tabs(tmp_path)
     t.select(1)
-    head = _text(t.render(31, 12)).split("\n")[1]
-    assert head.split() == ["H0", "H1", "H2", "H3", "H4", "H5"]         # 5+6 frozen, four 5-wide columns fit
-    t.move(dcol=3, body_h=10)
-    assert _text(t.render(31, 12)).split("\n")[1].split() == ["H0", "H1", "H5", "H6", "H7", "H8"]
-    t.move(dcol=99, body_h=10)
-    assert _text(t.render(31, 12)).split("\n")[1].split() == ["H0", "H1", "H11"]
-    assert "L–L" in _text(t.render(31, 12)).split("\n")[-1]
+    lines = _text(t.render(31, 13)).split("\n")
+    assert len(lines) == 13
+    assert lines[1].split() == ["H0", "H1", "H2", "H3", "H4", "H5"]     # 5+6 frozen, four 5-wide columns
+    assert lines[2].split() == ["H6", "H7", "H8", "H9", "H10", "H11"]   # the rest, from the left edge
+    assert t.body_height(13, 31) == 4                       # (13 - strip - status - 2 header lines) // 2
+    first, second = lines[3].split(), lines[4].split()
+    assert first[0].startswith("w") and len(first) == 6 and len(second) == 6
+    assert int(second[0]) == int(first[-1]) + 1             # one row, continued
+    assert "C–L" in lines[-1] and "1/" not in lines[-1]     # everything is on screen: no pages
+
+
+def test_columns_past_three_lines_are_a_second_page(tmp_path):
+    t = _tabs(tmp_path)
+    t.select(1)
+    lines = _text(t.render(20, 20)).split("\n")
+    assert [ln.split() for ln in lines[1:4]] == [["H0", "H1", "H2"], ["H3", "H4", "H5", "H6"], ["H7", "H8", "H9", "H10"]]
+    assert "1/2→" in lines[-1]
+    rows = t.body_height(20, 20)
+    t.move(dcol=1, body_h=rows)
+    lines = _text(t.render(20, 20)).split("\n")
+    assert [ln.split() for ln in lines[1:4]] == [["H0", "H1", "H11"], [], []]
+    assert t.body_height(20, 20) == rows                    # the short last page keeps three lines per row
+    assert "L–L" in lines[-1] and "←2/2" in lines[-1]
+    t.move(dcol=99, body_h=rows)
+    assert t.scroll["0分"][1] == 1                           # clamped to the last page, not to a column
+    t.home(rows)
+    assert t.scroll["0分"][1] == 0
+
+
+def test_today_date_cell_is_highlighted_and_wrapped_rows_striped(tmp_path):
+    """JM 2026-11-25: "0分 can we highlight today in the date column? That way I can find it"."""
+    t = _tabs(tmp_path)
+    t.select(1)
+    frags = t.render(80, 24)
+    marked = [f for f in frags if f[0] == nt.TODAY_STYLE]
+    assert [f[1].strip() for f in marked] == ["d50"]        # the last frozen column of today's row, nothing else
+    assert not any(nt.ZEBRA_BG in f[0] for f in frags)      # one line per row: no stripes needed
+    t.home(t.body_height(24, 31))                           # fewer rows fit now: back to today
+    frags = t.render(31, 24)
+    assert [f[1].strip() for f in frags if f[0] == nt.TODAY_STYLE] == ["d50"]
+    striped = [f for f in frags if nt.ZEBRA_BG in f[0]]
+    assert striped and ("bg:#ff0000 #ffffff bold", " 4903") in frags     # a filled cell keeps its own colour
+    t2 = _tabs(tmp_path, [_sheet("0n", today=None)])
+    t2.select(1)
+    assert not [f for f in t2.render(80, 24) if f[0] == nt.TODAY_STYLE]
 
 
 def test_cell_styles_and_merge_label(tmp_path):
     t = _tabs(tmp_path)
     t.select(1)
     t.scroll["0分"] = [12, 0]                                # top of the merge (row 10) is off-screen
-    frags = t.render(40, 12)
+    frags = t.render(80, 12)
     assert ("bg:#ff0000 #ffffff bold", " 1303") in frags    # coloured cell, right-aligned in 5 chars
     first_body = _text(frags).split("\n")[2]
     assert first_body.startswith(" 11.1")                   # the merged week label shows on the first visible row
     assert _text(frags).split("\n")[3].startswith("     ")
+
+
+def _hcbi(today=6):
+    cols = ["A", "B", "C"] + [m[1] for m in nt.HCBI_PLAN]
+    styles = [[None, None, 0, "r"]]
+    rows = [[[c, 0] for c in cols]]
+    for r in range(1, 9):
+        rows.append([["", 0], ["11/%d" % (18 + r), 0], ["M", 0]] + [["", 0] for _ in nt.HCBI_PLAN])
+    def put(r, **kw):
+        for col, v in kw.items():
+            rows[r][cols.index(col)] = [v, 0]
+    put(4, E="3", F="1", G="0", P="120", U="1,810", AA="90", Y="45")
+    put(5, E="2", U="730", AA="-50", Y="0")
+    put(6, E="1", P="16", U="450", AA="15")
+    return {"name": "hcbi", "tab": None, "header_rows": 1, "frozen_cols": 2, "today_row": today,
+            "cols": cols, "row_nums": list(range(1, 10)), "widths": [5, 6, 3] + [4] * len(nt.HCBI_PLAN),
+            "styles": styles, "rows": rows, "skipped_rules": 0}
+
+
+def test_hcbi_opens_with_three_days_against_plan(tmp_path):
+    """JM 2026-11-25: "the main thing it shows me is today and like the last
+    two days, how I'm doing against plan"."""
+    t = _tabs(tmp_path, [_hcbi()])
+    t.select(1)
+    frags = t.render(47, 60)
+    lines = _text(frags).split("\n")
+    assert len(lines) == 60
+    assert lines[1].split() == ["vs", "plan", "plan", "11/22", "11/23", "11/24"]
+    assert (nt.TODAY_STYLE, "  11/24") in frags              # today is the rightmost day
+    row = {ln.split()[0]: ln.split() for ln in lines[2:2 + len(nt.HCBI_PLAN)]}
+    assert row["beans"] == ["beans", "3", "3", "2", "1"]
+    assert row["kcal"] == ["kcal", "≤1800", "1,810", "730", "450"]
+    assert (nt._MET, "      3") in frags and (nt._MISS, "      2") in frags     # beans: met, then missed
+    assert (nt._OPEN, "      1") in frags                   # today's shortfall is still open, not a miss
+    assert (nt._MISS, "  1,810") in frags and (nt._MET, "    730") in frags     # kcal is a ceiling
+    assert row["food"] == ["food", "分", "86", "90", "–", "15"]          # -50 = nothing logged that day
+    assert row["grains"] == ["grains", "·", "·", "·"]       # no goal: not scored
+    assert [ln for ln in lines if ln.split()[:1] == ["met"]][0].split() == ["met", "5/14", "1/14", "1/14"]
+    assert t.body_height(60, 47) == (60 - 2 - (len(nt.HCBI_PLAN) + 3) - 2) // 2
+    short = _text(t.render(47, 14)).split("\n")
+    assert len(short) == 14 and "vs plan" not in "".join(short)          # a short pane keeps the grid
+    bare = _hcbi()
+    bare["cols"], bare["rows"], bare["widths"] = bare["cols"][:5], [r[:5] for r in bare["rows"]], bare["widths"][:5]
+    assert nt.hcbi_panel(bare, 47) == []                    # not the hcbi we know: no panel
+
+
+def test_hcbi_plan_matches_the_weekly_review():
+    spec = importlib.util.spec_from_file_location("hcb1", HERE.parent / "1hcb" / "1hcb.py")
+    hcb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hcb)
+    plan = {m[1]: m[2] for m in nt.HCBI_PLAN}
+    assert [plan[c] for c in "EFGHIJKLMNO"] == [g[2] for g in hcb.FOOD_GROUPS]
+    assert (plan["P"], plan["U"], plan["AA"], plan["Y"]) == (
+        hcb.PROTEIN_TARGET, hcb.CAL_CEILING, hcb.FOOD_TARGET, hcb.HCBP_TARGET)
+
+
+def test_a_split_part_reads_its_source_sheet(tmp_path):
+    sh = _sheet("1n")
+    sh["source"] = "1n+"
+    sh["live"] = {"row": 50, "excel_row": 51, "cells": {"D": {"fmt": "0", "base": [None, None, False, None], "rules": []}}}
+    t = _tabs(tmp_path, [sh])
+    asked = []
+    t.row_source = lambda name, row, cols: asked.append((name, row)) or ({"D": 77}, "10:00:00")
+    assert t.refresh_live() is True
+    assert asked == [("1n+", 51)] and "1n" in t.book_through
+    t.select(1)
+    assert t.names() == ["janus", "1n"] and "   77" in _text(t.render(80, 24))
 
 
 def test_strip_marks_current_tab_and_scrolls(tmp_path):
@@ -191,7 +298,7 @@ def test_janus_tab_keys_and_render(tmp_path, monkeypatch):
 
 def test_janus_arrows_scroll_the_grid_not_the_selection(tmp_path, monkeypatch):
     mod = _load_janus()
-    mod.NEON = _tabs(tmp_path)
+    mod.NEON = _tabs(tmp_path, [_sheet(ncols=90)])           # wide enough for a second page of columns
     monkeypatch.setattr(mod, "_bg_fetch", lambda app, fn: None)
     ev = _Event(_App())
     live = lambda key: [b for b in _binding(mod, key) if b.filter()]
@@ -250,14 +357,14 @@ def test_janus_feeds_0fen_from_the_ledger(monkeypatch):
 
 
 def test_entering_a_tab_lands_on_today_again(tmp_path):
-    t = _tabs(tmp_path)
+    t = _tabs(tmp_path, [_sheet(ncols=60)])
     t.select(1)
     t.render(58, 12)
     home = list(t.scroll["0分"])
     t.move(-5, 1, body_h=9)
     assert t.scroll["0分"] != home
     t.select(0)
-    t.select(1)                                             # back in: today's row, same column
+    t.select(1)                                             # back in: today's row, same page of columns
     t.render(58, 12)
     assert t.scroll["0分"] == [home[0], 1]
     again = _tabs(tmp_path)                                 # and the pending re-anchor survives a reload

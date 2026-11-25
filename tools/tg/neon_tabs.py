@@ -9,6 +9,12 @@ rebuild, and turns a sheet into formatted-text fragments for a pane of a given
 size: a tab strip, the pinned header rows, a window of body rows with the
 frozen columns on the left, and a status line.
 
+2026-11-25, "2-3 lines per day": a sheet wider than the pane is not scrolled
+sideways any more. Each row (a day, a week) wraps onto up to WRAP_LINES lines
+that use the whole pane width, the header wrapping the same way above it; what
+still does not fit is a further PAGE of columns (left/right). hcbi opens with a
+"vs plan" panel: today and the two days before it against the daily targets.
+
 janus.py holds the glue (key bindings, the render_all branch, the ticker).
 Everything here is plain data in / plain tuples out, so tests need no tty.
 """
@@ -44,6 +50,9 @@ def on_ix() -> bool:
 BUILD_TIMEOUT_S = 120
 WRITE_MARGIN_S = 30         # ledger writes this long before the save still overlay (a save in flight)
 TODAY_FROM_BOTTOM = 3       # a sheet opens with today's row this far above the last line
+WRAP_LINES = 3              # lines one row may wrap onto; columns past that are the next page (←/→)
+TODAY_STYLE = "bg:#c3fc0d #000000 bold"     # today's date cell (janus's NEON_ACCENT)
+ZEBRA_BG = "#262626"        # every other wrapped row, so a 3-line day reads as one block
 STRIP_STYLE = "bg:#303030 #9a9a9a"
 STATUS_STYLE = "#8a8a8a"
 
@@ -67,7 +76,8 @@ class Tabs:
         self.grid_file = grid_file or neon_grid.OUT
         self.src = src or neon_grid.SRC
         self.tab = 0                    # 0 = janus timeline, i = sheets[i-1]
-        self.scroll: dict = {}          # sheet name -> [top body row, first scrolling col]
+        self.scroll: dict = {}          # sheet name -> [top body row, page of columns]
+        self.cols = 80                  # pane width last rendered / asked about (wrapping depends on it)
         self.snap: dict | None = None
         self.snap_mtime = 0.0
         self.building = False
@@ -177,10 +187,10 @@ class Tabs:
                 changed = True
             if sh["name"] in self.book_through:
                 continue
-            fn = self.live_sources.get(sh["name"])
+            fn = self.live_sources.get(_source(sh))
             if fn is None:
                 row = (sh.get("live") or {}).get("excel_row")
-                mine = {k[2]: v for k, v in writes.items() if k[0] == sh["name"] and k[1] == row}
+                mine = {k[2]: v for k, v in writes.items() if k[0] == _source(sh) and k[1] == row}
                 through = max((str(v[1])[11:19] for v in mine.values()), default="") or None
                 if mine and neon_grid.overlay(sh, {c: v[0] for c, v in mine.items()}, zeros=True):
                     changed = True
@@ -213,7 +223,7 @@ class Tabs:
         values, through = None, None
         if self.row_source is not None and live.get("excel_row"):
             try:
-                values, through = self.row_source(sh["name"], live["excel_row"], list(sh["cols"]))
+                values, through = self.row_source(_source(sh), live["excel_row"], list(sh["cols"]))
             except Exception:
                 values, through = None, None
         if values is None:
@@ -336,10 +346,12 @@ class Tabs:
                 top = sh["today_row"] - sh["header_rows"] - max(0, body_h - 1 - TODAY_FROM_BOTTOM)
             pos = self.scroll[sh["name"]] = [top, pos[1] if pos else 0]
         pos[0] = max(0, min(pos[0], max(0, self._body(sh) - body_h)))
-        pos[1] = max(0, min(pos[1], max(0, len(sh["widths"]) - sh["frozen_cols"] - 1)))
+        pos[1] = max(0, min(pos[1], len(_pages(sh, self.cols)) - 1))
         return pos
 
     def move(self, drow: int = 0, dcol: int = 0, body_h: int = 20) -> None:
+        """`drow` rows down; `dcol` PAGES of columns right (a page is what
+        WRAP_LINES lines hold at this pane width)."""
         sh = self.sheet()
         if sh is None:
             return
@@ -350,7 +362,7 @@ class Tabs:
         self.save()
 
     def home(self, body_h: int = 20) -> None:
-        """Back to today's row (and the first column)."""
+        """Back to today's row (and the first page of columns)."""
         sh = self.sheet()
         if sh is None:
             return
@@ -366,14 +378,31 @@ class Tabs:
             self.save()
 
     # --- rendering -----------------------------------------------------------
-    def body_height(self, lines: int) -> int:
+    def _layout(self, sh: dict, cols: int, lines: int) -> tuple:
+        """(pages, lines per row, panel fragments-by-line, body rows that fit).
+        The lines per row are the same on every page of columns (the widest
+        page's), so paging sideways never changes how many rows fit."""
+        pages = _pages(sh, cols)
+        per = max(len(p) for p in pages)
+        fixed = 2 + sh["header_rows"] * per                 # strip + status line + pinned header
+        panel = hcbi_panel(sh, cols) if sh["name"] == "hcbi" else []
+        if panel and lines - fixed - len(panel) < 3 * per:
+            panel = []                                      # short pane: the grid wins
+        return pages, per, panel, max(1, (lines - fixed - len(panel)) // per)
+
+    def body_height(self, lines: int, cols: int | None = None) -> int:
+        """Body ROWS (days, weeks) that fit in a pane `lines` tall: each takes
+        as many lines as the sheet wraps onto at `cols` wide."""
+        if cols:
+            self.cols = max(20, cols)
         sh = self.sheet()
-        return max(1, lines - 2 - (sh["header_rows"] if sh else 0))     # strip + status line
+        return self._layout(sh, self.cols, max(4, lines))[3] if sh else max(1, lines - 2)
 
     def render(self, cols: int, lines: int, handler=None) -> list:
         """Fragments for a `cols` x `lines` pane. `handler` (optional) is
         attached to every fragment so the mouse wheel can scroll the grid."""
         cols, lines = max(20, cols), max(4, lines)
+        self.cols = cols
         sh = self.sheet()
         key = (self.tab, cols, lines, (self.snap or {}).get("hash"), self.building, self.error,
                tuple(self.scroll.get(sh["name"], ())) if sh else (), handler)
@@ -384,19 +413,28 @@ class Tabs:
             msg = "building the Neon snapshot…" if self.building or not self.error else "Neon snapshot failed: " + self.error
             out.append(("", "\n " + msg + "\n"))
         else:
-            body_h = self.body_height(lines)
-            top, first = self._pos(sh, body_h)
+            pages, per, panel, body_h = self._layout(sh, cols, lines)
+            top, page = self._pos(sh, body_h)
             # recompute the key now that _pos may have initialised the scroll
             key = key[:6] + (tuple(self.scroll[sh["name"]]), handler)
-            shown = _visible_cols(sh, first, cols)
+            segs = pages[page] + [[]] * (per - len(pages[page]))
             hdr = sh["header_rows"]
-            for r in range(hdr):
-                out += _row(sh, r, shown, cols, r)
+            today = sh.get("today_row")
+            mark = (today, sh["frozen_cols"] - 1) if today is not None and sh["frozen_cols"] else None
+            for line in panel:
+                out += line
+            for seg in segs:                                # each wrapped line's labels sit above its values
+                for r in range(hdr):
+                    out += _row(sh, r, seg, cols, r)
             last = min(len(sh["rows"]), hdr + top + body_h)
             for r in range(hdr + top, last):
-                out += _row(sh, r, shown, cols, hdr + top)
-            out += [("", "\n")] * max(0, body_h - (last - hdr - top))
-            out.append((STATUS_STYLE, self._status(sh, top, body_h, shown, cols)))
+                zebra = per > 1 and r % 2 == 1
+                for seg in segs:
+                    out += _row(sh, r, seg, cols, hdr + top, zebra, mark)
+            body_lines = lines - 2 - len(panel) - hdr * per
+            out += [("", "\n")] * max(0, body_lines - per * (last - hdr - top))
+            out.append((STATUS_STYLE, self._status(sh, top, body_h, [c for seg in segs for c in seg], cols,
+                                                   page, len(pages))))
         if handler is not None:
             out = [(f[0], f[1], handler) for f in out]
         self._memo = (key, out)
@@ -434,10 +472,13 @@ class Tabs:
         out.append(("", "\n"))
         return out
 
-    def _status(self, sh: dict, top: int, body_h: int, shown: list, cols: int) -> str:
+    def _status(self, sh: dict, top: int, body_h: int, shown: list, cols: int,
+                page: int = 0, npages: int = 1) -> str:
         body = self._body(sh)
         scrolling = [c for c in shown if c >= sh["frozen_cols"]]
         span = "%s–%s" % (sh["cols"][scrolling[0]], sh["cols"][scrolling[-1]]) if scrolling else "-"
+        if npages > 1:
+            span += " %s%d/%d%s" % ("←" if page else "", page + 1, npages, "→" if page < npages - 1 else "")
         saved_at = time.localtime((self.snap or {}).get("src_mtime", 0))
         built = time.strftime("%H:%M", saved_at)
         if ((self.snap or {}).get("src_mtime") or 0) > 1e9 and saved_at[:3] != time.localtime()[:3]:
@@ -486,24 +527,115 @@ def _clip(text: str, width: int) -> str:
     return out
 
 
-def _visible_cols(sh: dict, first: int, cols: int) -> list:
-    """Column indexes that fit: the frozen ones, then as many scrolling ones
-    as fit starting at `first` (a column is never drawn partly)."""
-    widths, frozen = sh["widths"], sh["frozen_cols"]
-    shown, used = [], 0
-    for c in range(min(frozen, len(widths))):
-        if used + widths[c] > cols:
+def _source(sh: dict) -> str:
+    """The workbook sheet a tab reads from: its own name, or for a part of a
+    split sheet (1n / 2n / 3n / 4n) the sheet it was cut out of."""
+    return sh.get("source") or sh["name"]
+
+
+def _pages(sh: dict, cols: int, max_lines: int = WRAP_LINES) -> list:
+    """How a sheet's columns lay out in a pane `cols` wide: a list of pages,
+    each a list of lines, each a list of column indexes. A page's first line
+    starts with the frozen columns; the scrolling columns then fill up to
+    `max_lines` lines greedily (a column is never drawn partly unless it is
+    wider than the pane), and whatever is left over starts the next page."""
+    widths = sh["widths"]
+    n, frozen = len(widths), min(sh["frozen_cols"], len(widths))
+    head, head_w = [], 0
+    for c in range(frozen):
+        if head_w + widths[c] > cols:
             break
-        shown.append(c)
-        used += widths[c]
-    for c in range(frozen + first, len(widths)):
-        if used + widths[c] > cols:
-            break
-        shown.append(c)
-        used += widths[c]
-    if len(shown) <= frozen and frozen + first < len(widths):
-        shown.append(frozen + first)            # pane narrower than one column: show it clipped
-    return shown
+        head.append(c)
+        head_w += widths[c]
+    pages, c = [], frozen
+    while c < n or not pages:
+        page, line, used, placed = [], list(head), head_w, 0
+        while c < n:
+            if used + widths[c] <= cols or not line:        # an empty line always takes one column
+                line.append(c)
+                used += widths[c]
+                c += 1
+                placed += 1
+                continue
+            if len(page) + 1 >= max_lines:
+                if not placed:                              # frozen columns alone fill the page: show one anyway
+                    line.append(c)
+                    c += 1
+                break
+            page.append(line)
+            line, used = [], 0
+        page.append(line)
+        pages.append(page)
+    return pages
+
+
+# --- hcbi: the last three days against plan ----------------------------------
+# Targets are tools/1hcb/1hcb.py's (FOOD_GROUPS, PROTEIN_TARGET, CAL_CEILING,
+# FOOD_TARGET, HCBP_TARGET); test_neon_tabs holds the two in step. Grains have
+# no goal. (label, column, target, ">=" floor | "<=" ceiling | None)
+HCBI_PLAN = (("beans", "E", 3, ">="), ("berries", "F", 1, ">="), ("fruit", "G", 3, ">="),
+             ("cruciferous", "H", 1, ">="), ("greens", "I", 2, ">="), ("vegetables", "J", 2, ">="),
+             ("flax", "K", 1, ">="), ("grains", "L", None, None), ("nuts", "M", 1, ">="),
+             ("spices", "N", 1, ">="), ("water", "O", 3, ">="), ("protein g", "P", 100, ">="),
+             ("kcal", "U", 1800, "<="), ("food 分", "AA", 86, ">="), ("hcbp 分", "Y", 45, ">="))
+HCBI_DAYS = 3
+HCBI_UNLOGGED = -50         # the food columns' "nothing logged that day"
+_PL, _PP, _PD = 13, 6, 7    # panel column widths: label, plan, one day
+_MET, _MISS, _OPEN, _DIM = "#5fd75f", "#ff5f5f", "#d7af00", "#6c6c6c"
+
+
+def _num(text: str):
+    try:
+        return float(text.replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def _rpad(text: str, width: int) -> str:
+    return " " * max(0, width - neon_grid.cwidth(text)) + text
+
+
+def hcbi_panel(sh: dict, cols: int) -> list:
+    """Lines (each a list of fragments ending in a newline) comparing the last
+    HCBI_DAYS days, today rightmost, with the daily plan: green met, red
+    missed, amber still open today. [] when the sheet lacks the columns or a
+    today row, or the pane is narrower than the table."""
+    today, hdr = sh.get("today_row"), sh["header_rows"]
+    have = [m for m in HCBI_PLAN if m[1] in sh["cols"]]
+    if today is None or len(have) < 8 or cols < _PL + _PP + _PD:
+        return []
+    days = [r for r in range(today - HCBI_DAYS + 1, today + 1) if r >= hdr]
+    days = days[-max(1, min(HCBI_DAYS, (cols - _PL - _PP) // _PD)):]
+    date_c = max(0, sh["frozen_cols"] - 1)
+    out = [[("bold", " " + "vs plan".ljust(_PL - 1) + _rpad("plan", _PP))]
+           + [(TODAY_STYLE if r == today else "bold", _rpad(sh["rows"][r][date_c][0].strip(), _PD)) for r in days]
+           + [("", "\n")]]
+    hit, of = {r: 0 for r in days}, {r: 0 for r in days}
+    for label, col, target, kind in have:
+        ci = sh["cols"].index(col)
+        plan = "" if target is None else ("≤" if kind == "<=" else "") + "%g" % target
+        line = [("", " " + label + " " * (_PL - 1 - neon_grid.cwidth(label))), (_DIM, _rpad(plan, _PP))]
+        for r in days:
+            text = sh["rows"][r][ci][0].strip()
+            v = _num(text)
+            if v is None or (v == HCBI_UNLOGGED and col in ("AA", "X")) or (kind == "<=" and not v):
+                # nothing logged: an open question today, a miss on a finished day
+                style, text = (_DIM, "·") if r == today or target is None else (_MISS, "–")
+                ok = False
+            elif target is None:
+                style, ok = "", False
+            else:
+                ok = v >= target if kind == ">=" else v <= target
+                style = _MET if ok else (_OPEN if r == today and kind == ">=" else _MISS)
+            if target is not None:
+                of[r] += 1
+                hit[r] += ok
+            line.append((style, _rpad(text, _PD)))
+        out.append(line + [("", "\n")])
+    out.append([(_DIM, " " + "met".ljust(_PL - 1) + _rpad("", _PP))]
+               + [(_DIM, _rpad("%d/%d" % (hit[r], of[r]), _PD)) for r in days] + [("", "\n")])
+    out.append([("", "\n")])
+    return out
 
 
 def _cell_text(sh: dict, r: int, c: int, first_visible: int) -> str:
@@ -513,7 +645,11 @@ def _cell_text(sh: dict, r: int, c: int, first_visible: int) -> str:
     return cell[0]
 
 
-def _row(sh: dict, r: int, shown: list, cols: int, first_visible: int) -> list:
+def _row(sh: dict, r: int, shown: list, cols: int, first_visible: int,
+         zebra: bool = False, mark: tuple | None = None) -> list:
+    """One line of row `r`: the columns in `shown`. `zebra` tints the unfilled
+    cells (and the rest of the line); `mark` = (row, column) of today's date
+    cell, drawn in TODAY_STYLE."""
     out, used = [], 0
     styles, widths = sh["styles"], sh["widths"]
     for c in shown:
@@ -535,8 +671,12 @@ def _row(sh: dict, r: int, shown: list, cols: int, first_visible: int) -> list:
             text = " " * (pad // 2) + text + " " * (pad - pad // 2)
         elif pad:
             text = " " + text + " " * (pad - 1)               # Excel's cell padding: text never touches the cell to its left
+        if zebra and not bg:
+            bg = ZEBRA_BG
         style = " ".join(x for x in (("bg:" + bg) if bg else "", fg or "", "bold" if bold else "") if x)
-        out.append((style, text))
+        out.append((TODAY_STYLE if mark == (r, c) else style, text))
         used += w
+    if zebra and used < cols:
+        out.append(("bg:" + ZEBRA_BG, " " * (cols - used)))
     out.append(("", "\n"))
     return out

@@ -734,7 +734,7 @@ STATE = State()
 # (values + Excel's colours; nothing here talks to Excel). All the tab logic is
 # in neon_tabs.py; janus only routes keys and hands over the pane.
 #   ^T next tab · ⌥1-⌥0 jump (⌥1 = timeline) · Esc back to the timeline
-#   on a Neon tab, input empty: arrows scroll, PgUp/PgDn page, Home = today
+#   on a Neon tab, input empty: ↑↓ scroll rows, ←→ page columns, PgUp/PgDn page, Home = today
 # Headless (pytest) gets a throwaway state file and no snapshot, so a tab JM
 # left open can never change what render_all() returns under test.
 import neon_tabs  # noqa: E402
@@ -805,7 +805,7 @@ def _neon_wheel(mouse_event):
     step = {MouseEventType.SCROLL_DOWN: 3, MouseEventType.SCROLL_UP: -3}.get(mouse_event.event_type)
     if step is None:
         return NotImplemented
-    NEON.move(drow=step, body_h=NEON.body_height(_neon_pane()[1]))
+    NEON.move(drow=step, body_h=_neon_body_h())
     return None
 
 
@@ -8760,7 +8760,10 @@ def _(event):
 # Neon grid scrolling. Registered AFTER the timeline's own ↑/↓ so those stay
 # the first `up`/`down` bindings in kb (their tests look them up by position).
 def _neon_body_h() -> int:
-    return NEON.body_height(_neon_pane()[1])
+    """Rows (days) the grid shows: a row wraps onto up to three lines, so this
+    depends on the pane's width as well as its height."""
+    cols, lines = _neon_pane()
+    return NEON.body_height(lines, cols)
 
 
 @kb.add("down", filter=_neon_tab & _input_empty)
