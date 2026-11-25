@@ -57,13 +57,21 @@ python3 ibx0.py --counts
 
 ## Report
 
-Three lines:
+Four lines:
 
 ```
 f695 ← N weekly-update links (who, …); M filed out of the inbox
 inbox → K of T filed to ai-no-response-needed; T−K left for you
 dtd ← ibx m5x2 ✉N · -1ibx eE sS
+cost ← $X.XX this run · $Y.YY last 30d
 ```
+
+The cost line is always present (JM 2026-11-25). This run's figure is the
+`agent cost $X.XX` at the end of the triage's `filed K of T` log line; the
+script omits it when no agent call was made (everything rule-filed or already
+in the kept cache), so report `$0.00` then. The 30-day figure is the
+`last 30d:` line of `python3 agent_triage.py cost`. Actual dollars, so `$` is
+right here.
 
 Then list the subjects the triage filed (from its `skip:` lines) so a wrong
 call is visible at a glance; give rule-filed mail as one line with its count
