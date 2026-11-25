@@ -242,8 +242,11 @@ def test_local_tmux_inner_exports_checkpoint(ct, monkeypatch, capsys):
 # after_ix_exit used to close the surface only when the workspace held another Claude tab and
 # otherwise relaunched a fresh thread in it; with one Claude tab per workspace that was every /fin.
 
+FIVE_OPEN = ('SURF-2', 'SURF-3', 'SURF-4', 'SURF-5')     # four siblings + this tab: above the keep threshold
+
+
 def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux', tmp_log=None, shell_sent=False,
-              siblings=('SURF-2',)):
+              siblings=FIVE_OPEN):
     """Run after_ix_exit with the ix marker faked; returns (result, cmux argvs, relaunches)."""
     import types
     if surface:
@@ -298,7 +301,7 @@ def test_fin_keeps_the_last_tab_in_its_window(ct, monkeypatch, capsys, tmp_path)
     assert done is False and relaunched == []          # plain exit: the tab drops to its shell
     assert not [c for c in calls if 'close-surface' in c]
     assert _steps(log) == ['start', 'siblings']        # no close, and no SIGHUP of the tab's shell
-    assert 'keeping it' in capsys.readouterr().out
+    assert '1 Claude tab(s) open' in capsys.readouterr().out
 
 
 def test_fin_keeps_the_tab_when_its_siblings_cannot_be_counted(ct, monkeypatch, capsys, tmp_path):
@@ -332,6 +335,44 @@ def test_sibling_tabs_is_unknown_unless_it_can_see_itself(ct):
     """A ps that hides environments lists nobody; that must not read as "no siblings"."""
     assert ct.sibling_tabs('  107 ttys004  -zsh\n', {'CMUX_WORKSPACE_ID': 'WS-A', 'CMUX_SURFACE_ID': 'SURF-1'}) is None
     assert ct.sibling_tabs(PS_ROWS, {}) is None        # not a cmux tab
+
+
+# --- ...and only above four open Claude instances (2026-11-25) --------------------------------
+# /bug "closed the only open tab in a CMUX window on straylight": his window is a split pane, the
+# panes share one workspace id, so "any sibling" closed a pane's only tab. JM: "close when there
+# are > 4 claude instances, don't close when it's less than or equal to 4."
+
+def test_fin_keeps_the_tab_at_four_claude_instances_and_closes_at_five(ct, monkeypatch, capsys, tmp_path):
+    log = tmp_path / 'fin.log'
+    done, calls, relaunched = _fin_exit(ct, monkeypatch, siblings=('SURF-2', 'SURF-3', 'SURF-4'),
+                                        shell_sent=True, tmp_log=log)
+    assert done is False and relaunched == []
+    assert not [c for c in calls if 'close-surface' in c]
+    assert _steps(log) == ['start', 'siblings']        # no close, no SIGHUP of the tab's shell
+    assert '4 Claude tab(s) open' in capsys.readouterr().out
+    done, calls, _ = _fin_exit(ct, monkeypatch, siblings=FIVE_OPEN)
+    assert done is True and calls[-1] == ['/x/cmux', 'close-surface', '--surface', 'SURF-1']
+    assert ct.FIN_KEEP_UP_TO == 4
+
+
+def test_sibling_tabs_counts_claude_tabs_not_every_tab(ct):
+    rows = PS_ROWS + '  108 ttys010  vim notes.md CMUX_WORKSPACE_ID=WS-A CMUX_SURFACE_ID=SURF-6\n'
+    assert ct.sibling_tabs(rows, {'CMUX_WORKSPACE_ID': 'WS-A', 'CMUX_SURFACE_ID': 'SURF-1'}) == ['SURF-2']
+
+
+def test_fin_marker_directory_is_versioned_and_agreed_by_every_reader_and_writer(ct):
+    """The 14:55 close was done by a launcher started before the 11-24 rule, still running the old
+    code from memory. Markers moved to a versioned directory: launchers already open read the
+    legacy one, find nothing and end as a plain exit. All four places must name the same one."""
+    import inspect, re
+    repo = Path(__file__).resolve().parents[1]
+    name = ct.FIN_CLOSE_DIR.name
+    assert name != 'fin-close' and re.fullmatch(r'fin-close-v\d+', name)
+    tail = f'.local/state/jm/{name}'
+    for fn in (ct.fin_marker_script, ct.fin_marker_purge):
+        assert inspect.signature(fn).parameters['marker_dir'].default == '~/' + tail
+    assert f'FIN_CLOSE_DIR = STATE_DIR / "{name}"' in (repo / 'tools/did/done_session.py').read_text()
+    assert f'$HOME/{tail}}}' in (repo / 'scripts/agent-claim-hook.sh').read_text()
 
 
 def test_fin_outside_cmux_never_calls_cmux(ct, monkeypatch):
@@ -393,7 +434,7 @@ def test_fin_tab_close_leaves_evidence_where_ix_can_read_it(ct, monkeypatch, tmp
     rows = [json.loads(l) for l in log.read_text().splitlines()]
     assert [r['step'] for r in rows] == ['start', 'siblings', 'layout', 'close', 'end-shell']
     assert rows[0]['CMUX_SURFACE_ID'] == 'SURF-1'
-    assert rows[1]['siblings'] == ['SURF-2']
+    assert rows[1]['siblings'] == list(FIVE_OPEN)
     assert rows[3]['rc'] == 1 and rows[3]['err'] == 'no such surface'
 
 

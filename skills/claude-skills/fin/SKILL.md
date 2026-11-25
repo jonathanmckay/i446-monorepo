@@ -152,14 +152,19 @@ with exactly one of:
   both stop the thread on ix and close the cmux tab on straylight", then "I'd
   like to keep consistent behavior"): on ix from a Straylight tab, off the LAN
   over Tailscale, local on Straylight, or from the phone (no tab there: the
-  ssh drops). done_session left two things: `fin-close/<tmux session>` for the
+  ssh drops). done_session left two things: `fin-close-v2/<tmux session>` for the
   launchers and `by-session/<sid>.exit` for the Stop hook
   (`scripts/agent-claim-hook.sh idle`), which types `/exit` about a second
   after this turn ends, once nothing is running in the background. The inner
   launcher then lets the tmux session end and the outer one closes the cmux
   tab, unless it is the last tab in its cmux window (2026-11-24: "should only
   exit if it is one of multiple tabs in a CMUX window"; closing the last one
-  took the window). That tab is left at its shell, with no new thread in it.
+  took the window). His "window" is a split pane and the panes share one
+  workspace, so that rule let a pane's only tab go; since 2026-11-25 ("close
+  when there are > 4 claude instances, don't close when it's less than or
+  equal to 4") the tab closes only when more than four Claude tabs are open,
+  this one included.
+  That tab is left at its shell, with no new thread in it.
   The launcher on Straylight decides; the line here is the same either way. So make this the
   last line and start nothing in the background after the script: a live
   background agent or shell holds the exit until it finishes, and any new

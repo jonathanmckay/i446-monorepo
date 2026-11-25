@@ -43,7 +43,7 @@ IFS= read -r -d '' -t 1 j 2>/dev/null
 # exit of this thread would end its tmux session and close the tab.
 if [[ "$1" == working && -n "$sid" && -f "$D/by-session/$sid.exit" ]]; then
   for _l in ${(f)"$(<"$D/by-session/$sid.exit")"}; do
-    [[ "$_l" == tmux=?* && "${_l#tmux=}" != */* ]] && rm -f "${FIN_CLOSE_DIR:-$HOME/.local/state/jm/fin-close}/${_l#tmux=}" 2>/dev/null
+    [[ "$_l" == tmux=?* && "${_l#tmux=}" != */* ]] && rm -f "${FIN_CLOSE_DIR:-$HOME/.local/state/jm/fin-close-v2}/${_l#tmux=}" 2>/dev/null
   done
   rm -f "$D/by-session/$sid.exit" 2>/dev/null
 fi

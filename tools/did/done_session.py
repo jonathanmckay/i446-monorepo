@@ -226,7 +226,7 @@ def defer_days(tid: str, days: int, run=subprocess.run) -> tuple[bool, str]:
     return True, f"→ {out.get('target_date', '?')}"
 
 
-FIN_CLOSE_DIR = STATE_DIR / "fin-close"
+FIN_CLOSE_DIR = STATE_DIR / "fin-close-v2"   # versioned with claude-tracked's FIN_CLOSE_DIR: see the note there
 CLAIMS_ROOT = Path.home() / "vault" / "z_ibx" / "agent-claims"   # agent_claims.CLAIMS_DIR, not imported here
 
 

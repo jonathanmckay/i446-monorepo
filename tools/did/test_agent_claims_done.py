@@ -230,7 +230,7 @@ def test_prompt_after_fin_voids_the_exit_request_and_the_tab_marker(tmp_path):
     ended its tmux session and closed the tab. Another thread's marker is not touched."""
     root = tmp_path / "vault/z_ibx/agent-claims"
     (root / "by-session").mkdir(parents=True)
-    fin = tmp_path / ".local/state/jm/fin-close"
+    fin = tmp_path / ".local/state/jm/fin-close-v2"
     fin.mkdir(parents=True)
     (fin / "cc-mine").write_text("S1\nsurface=SURF-1\n")
     (fin / "cc-other").write_text("S2\n")
