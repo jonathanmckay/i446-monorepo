@@ -46,6 +46,7 @@ CACHE = Path(__file__).parent / ".points-cache.json"
 # trailing window instead.
 CUTOFF_DAYS = None
 NEON_NAME_RE = r"Neon分v[\d.]+\.xlsx$"
+LIVE_NAME = "Neon分v12.2.xlsx"
 
 # 0分: per-domain points + block breakdown + day grand total (col D).
 # __total__ is read by neg1n's /api/day-points (quarter-circle arc complication).
@@ -103,7 +104,11 @@ def _connect_workbook():
     this process may not) over opening a fresh one."""
     import xlwings as xw
 
-    wb = next((b for b in xw.books if re.match(NEON_NAME_RE, b.name)), None)
+    # With several versions open, the live workbook (the one the daemon
+    # writes and the ledger is seeded from) wins: "first match" read a stale
+    # Neon分v13.xlsx open beside it (found 2026-11-24).
+    books = [b for b in xw.books if re.match(NEON_NAME_RE, b.name)]
+    wb = next((b for b in books if b.name == LIVE_NAME), books[0] if books else None)
     if wb is not None:
         return wb
     neon_path = Path.home() / "OneDrive/vault-excel/Neon分v12.2.xlsx"

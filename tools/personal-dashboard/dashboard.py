@@ -132,6 +132,12 @@ def _resolve_neon_path():
         except ValueError:
             continue
         candidates.append((ver, p))
+    # The workbook the ledger is seeded from wins over "newest version": v13
+    # (a stale copy) and v14 (the daily read-only export of the ledger) both
+    # outrank it by number and neither is where writes land.
+    for _ver, p in candidates:
+        if p.name == _NEON_FALLBACK_NAME:
+            return p
     if candidates:
         return max(candidates)[1]
     return _VAULT_EXCEL / _NEON_FALLBACK_NAME
@@ -242,6 +248,50 @@ def _points_col_letter(idx):
 
 
 _XLWINGS_BLOCK_RETRIES = 3
+
+
+def _neon_book_reads():
+    """tools/tg/neon_book_reads: the Neon book (seed + ledger) janus reads."""
+    tg = str(Path.home() / "i446-monorepo" / "tools" / "tg")
+    if tg not in sys.path:
+        sys.path.append(tg)
+    import neon_book_reads
+    return neon_book_reads
+
+
+def _book_block_window(window_days=_BLOCK_REFRESH_WINDOW_DAYS):
+    """The last `window_days` days of 0分's G:Y columns from the Neon book,
+    in _xlwings_block_window's shape. None when the book cannot answer, so
+    the caller falls back to live Excel. 2026-11-24 per JM: the dash reads
+    the ledger janus reads, not Excel."""
+    try:
+        today = date.today()
+        days = [today - timedelta(days=i) for i in range(window_days)]
+        min_idx, max_idx = 7, max(POINTS_COLS)   # G .. the last domain column
+        letters = {i: _points_col_letter(i) for i in range(min_idx, max_idx + 1)}
+        rows = _neon_book_reads().date_rows("0分", days, list(letters.values()))
+        if rows is None:
+            return None
+        result = {}
+        for day_str, vals in rows.items():
+            day_data = {}
+            for col_idx, meta in POINTS_COLS.items():
+                val = vals.get(letters[col_idx])
+                if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+                    day_data[meta["label"]] = int(round(float(val)))
+            block_data = {}
+            for j, (branch, _, _) in enumerate(BRANCH_BLOCKS):
+                val = vals.get(letters[min_idx + j])
+                if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+                    block_data[branch] = int(round(float(val)))
+            if block_data:
+                day_data["__block__"] = block_data
+            if day_data:
+                result[day_str] = day_data
+        return result
+    except Exception as e:
+        print(f"_book_block_window failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        return None
 
 
 def _xlwings_block_window(window_days=_BLOCK_REFRESH_WINDOW_DAYS):
@@ -362,6 +412,20 @@ def _get_points_cache():
         except Exception:
             cached = {}
 
+    # The Neon book first (2026-11-24): the same seed + ledger janus reads,
+    # current to the last journaled write, no Excel round trip and no mtime
+    # guess. Its window is merged over the on-disk history every call.
+    from_book = _book_block_window()
+    if from_book is not None:
+        merged = dict(cached)
+        merged.update(from_book)
+        if merged != cached:
+            try:
+                _POINTS_CACHE_PATH.write_text(json.dumps(merged))
+            except Exception:
+                pass
+        return merged
+
     try:
         cache_mtime = _POINTS_CACHE_PATH.stat().st_mtime if _POINTS_CACHE_PATH.exists() else 0
         excel_mtime = NEON_PATH.stat().st_mtime if NEON_PATH.exists() else 0
@@ -433,10 +497,7 @@ def _cache_from_book():
     -1413). Returns {label: value or None}, or None when the book cannot
     answer (no seed, seed behind the workbook, an unknown journaled write)."""
     try:
-        tg = str(Path.home() / "i446-monorepo" / "tools" / "tg")
-        if tg not in sys.path:
-            sys.path.append(tg)
-        import neon_book_reads as nbr
+        nbr = _neon_book_reads()
         result = {}
         for card in CACHE_CARDS:
             total = None
@@ -2171,8 +2232,17 @@ def api_points_today():
 
 
 def _build_points_today() -> dict:
-    """Live read of 0分 column D for today's row (today's #points total)."""
+    """0分 column D for today's row (today's #points total): from the Neon
+    book (what janus shows), else a live Excel read."""
     today = date.today()
+    try:
+        rows = _neon_book_reads().date_rows("0分", [today], ["D"])
+        if rows is not None:
+            v = (rows.get(today.isoformat()) or {}).get("D")
+            ok = isinstance(v, (int, float)) and not isinstance(v, bool)
+            return {"value": round(float(v), 1) if ok else None}
+    except Exception as e:
+        print(f"points-today book read failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     try:
         import xlwings as xw
         wb = xw.Book(str(NEON_PATH))

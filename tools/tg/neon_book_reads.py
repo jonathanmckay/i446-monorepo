@@ -172,6 +172,36 @@ def row(sheet: str, excel_row: int, cols):
             return None, None
 
 
+def date_rows(sheet: str, days, cols):
+    """{ISO date: {column letter: value}} for the rows of a date-keyed sheet
+    (0分, 0n, hcbi) whose date is in `days`, as the book computes them; None
+    when the book cannot answer. One pass over the date column. Blanks are
+    None, errors their code. For readers that want a window of days rather
+    than one row (the personal dashboard's points charts)."""
+    with _lock:
+        b = live_book()
+        if b is None:
+            return None
+        try:
+            from neon import book as nb, calc
+            dcol, ext = nb.DATE_COL.get(sheet), b._extent.get(sheet)
+            if dcol is None or ext is None:
+                return None
+            want = {int(calc.serial(d)): d for d in days}
+            dci, out = calc.col_index(dcol), {}
+            for r in range(1, ext[1] + 1):
+                v = b.value(sheet, dci, r)
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and int(v) in want:
+                    vals = {}
+                    for c in cols:
+                        x = b.value(sheet, calc.col_index(c), r)
+                        vals[c] = x.code if isinstance(x, calc.Err) else x
+                    out[want[int(v)].isoformat()] = vals
+            return out
+        except Exception:
+            return None
+
+
 _reseed = {"at": 0.0}
 RESEED_EVERY_S = 30 * 60
 
