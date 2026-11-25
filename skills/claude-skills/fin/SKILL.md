@@ -157,7 +157,10 @@ with exactly one of:
   (`scripts/agent-claim-hook.sh idle`), which types `/exit` about a second
   after this turn ends, once nothing is running in the background. The inner
   launcher then lets the tmux session end and the outer one closes the cmux
-  tab, always, including the workspace's only Claude tab. So make this the
+  tab, unless it is the last tab in its cmux window (2026-11-24: "should only
+  exit if it is one of multiple tabs in a CMUX window"; closing the last one
+  took the window). That tab is left at its shell, with no new thread in it.
+  The launcher on Straylight decides; the line here is the same either way. So make this the
   last line and start nothing in the background after the script: a live
   background agent or shell holds the exit until it finishes, and any new
   prompt from JM cancels it (the hook drops the marker too).

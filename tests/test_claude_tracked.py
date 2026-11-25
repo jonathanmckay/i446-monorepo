@@ -242,7 +242,8 @@ def test_local_tmux_inner_exports_checkpoint(ct, monkeypatch, capsys):
 # after_ix_exit used to close the surface only when the workspace held another Claude tab and
 # otherwise relaunched a fresh thread in it; with one Claude tab per workspace that was every /fin.
 
-def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux', tmp_log=None, shell_sent=False):
+def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='/x/cmux', tmp_log=None, shell_sent=False,
+              siblings=('SURF-2',)):
     """Run after_ix_exit with the ix marker faked; returns (result, cmux argvs, relaunches)."""
     import types
     if surface:
@@ -254,7 +255,7 @@ def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='
     monkeypatch.setattr(ct, 'cmux_bin', lambda: cmux, raising=False)
     monkeypatch.setattr(ct, 'end_tab_shell', lambda: {'sent': shell_sent}, raising=False)
     monkeypatch.setattr(ct, 'FIN_TAB_LOG', tmp_log or Path('/nonexistent-dir/fin.log'), raising=False)
-    monkeypatch.setattr(ct, 'other_claude_tabs', lambda: [], raising=False)   # the lone-tab case
+    monkeypatch.setattr(ct, 'sibling_tabs', lambda: None if siblings is None else list(siblings))
     relaunched, calls = [], []
     envs = _fin_exit.envs = []
     monkeypatch.setattr(ct, 'exec_on_ix', lambda *a, **k: relaunched.append(a))
@@ -267,7 +268,7 @@ def _fin_exit(ct, monkeypatch, marker=True, close_rc=0, surface='SURF-1', cmux='
     return ct.after_ix_exit('cc-081834', 'ix'), calls, relaunched
 
 
-def test_fin_closes_the_lone_claude_tab_instead_of_starting_a_fresh_thread(ct, monkeypatch):
+def test_fin_closes_the_tab_instead_of_starting_a_fresh_thread(ct, monkeypatch):
     done, calls, relaunched = _fin_exit(ct, monkeypatch)
     assert done is True
     assert relaunched == []                                   # no new claude session in the tab
@@ -280,6 +281,57 @@ def test_fin_close_failure_says_so_and_still_starts_no_thread(ct, monkeypatch, c
     assert relaunched == [] and len([c for c in calls if c[1:2] == ['close-surface'] and '--help' not in c]) == 1
     assert 'close it by hand' in capsys.readouterr().out
     assert done is False            # callers end the way a plain exit does
+
+
+# --- ...but not the last tab of its window (2026-11-24) ----------------------------------------
+# JM: "should only exit if it is one of multiple tabs in a CMUX window. It's exiting even if
+# it's the last tab in a window (but obv I have multiple cmux windows open)."
+
+def _steps(log):
+    import json
+    return [json.loads(l)['step'] for l in log.read_text().splitlines()]
+
+
+def test_fin_keeps_the_last_tab_in_its_window(ct, monkeypatch, capsys, tmp_path):
+    log = tmp_path / 'fin.log'
+    done, calls, relaunched = _fin_exit(ct, monkeypatch, siblings=(), shell_sent=True, tmp_log=log)
+    assert done is False and relaunched == []          # plain exit: the tab drops to its shell
+    assert not [c for c in calls if 'close-surface' in c]
+    assert _steps(log) == ['start', 'siblings']        # no close, and no SIGHUP of the tab's shell
+    assert 'keeping it' in capsys.readouterr().out
+
+
+def test_fin_keeps_the_tab_when_its_siblings_cannot_be_counted(ct, monkeypatch, capsys, tmp_path):
+    """Unknown is not "has siblings": a stray tab costs one keystroke, a closed window its layout."""
+    log = tmp_path / 'fin.log'
+    done, calls, relaunched = _fin_exit(ct, monkeypatch, siblings=None, shell_sent=True, tmp_log=log)
+    assert done is False and relaunched == [] and _steps(log) == ['start', 'siblings']
+    assert 'keeping this one' in capsys.readouterr().out
+
+
+PS_ROWS = """\
+  101 ttys001  /x/Python /v/claude-tracked CMUX_WORKSPACE_ID=WS-A CMUX_SURFACE_ID=SURF-1 TERM=xterm
+  102 ttys002  /x/Python /v/claude-tracked TERM=xterm CMUX_SURFACE_ID=SURF-2 CMUX_WORKSPACE_ID=WS-A
+  103 ttys002  mosh-client ix CMUX_SURFACE_ID=SURF-2 CMUX_WORKSPACE_ID=WS-A
+  104 ttys003  /x/Python /v/claude-tracked CMUX_WORKSPACE_ID=WS-B CMUX_SURFACE_ID=SURF-3
+  105 ??       /x/node server.js CMUX_WORKSPACE_ID=WS-A CMUX_SURFACE_ID=SURF-4
+  106 ttys009  /x/claude TMUX=/tmp/tmux-501/default,1,0 CMUX_WORKSPACE_ID=WS-A CMUX_SURFACE_ID=SURF-5
+  107 ttys004  -zsh
+"""
+
+
+def test_sibling_tabs_counts_other_surfaces_of_this_workspace_only(ct):
+    me = {'CMUX_WORKSPACE_ID': 'WS-A', 'CMUX_SURFACE_ID': 'SURF-1'}
+    # not: itself, another window's tab, a daemon without a tty, a tmux pane with inherited ids
+    assert ct.sibling_tabs(PS_ROWS, me) == ['SURF-2']
+    lone = {'CMUX_WORKSPACE_ID': 'WS-B', 'CMUX_SURFACE_ID': 'SURF-3'}
+    assert ct.sibling_tabs(PS_ROWS, lone) == []        # other windows hold tabs; this one does not
+
+
+def test_sibling_tabs_is_unknown_unless_it_can_see_itself(ct):
+    """A ps that hides environments lists nobody; that must not read as "no siblings"."""
+    assert ct.sibling_tabs('  107 ttys004  -zsh\n', {'CMUX_WORKSPACE_ID': 'WS-A', 'CMUX_SURFACE_ID': 'SURF-1'}) is None
+    assert ct.sibling_tabs(PS_ROWS, {}) is None        # not a cmux tab
 
 
 def test_fin_outside_cmux_never_calls_cmux(ct, monkeypatch):
@@ -339,9 +391,10 @@ def test_fin_tab_close_leaves_evidence_where_ix_can_read_it(ct, monkeypatch, tmp
     log = tmp_path / 'fin.log'
     _fin_exit(ct, monkeypatch, close_rc=1, tmp_log=log)
     rows = [json.loads(l) for l in log.read_text().splitlines()]
-    assert [r['step'] for r in rows] == ['start', 'layout', 'close', 'end-shell']
+    assert [r['step'] for r in rows] == ['start', 'siblings', 'layout', 'close', 'end-shell']
     assert rows[0]['CMUX_SURFACE_ID'] == 'SURF-1'
-    assert rows[2]['rc'] == 1 and rows[2]['err'] == 'no such surface'
+    assert rows[1]['siblings'] == ['SURF-2']
+    assert rows[3]['rc'] == 1 and rows[3]['err'] == 'no such surface'
 
 
 # Fixture values for the cmux socket tests. Kept away from any literal next to a
