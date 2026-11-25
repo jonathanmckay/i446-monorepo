@@ -35,6 +35,10 @@ Checks (v1, 2026-09-27):
                  daemon alive, no open 2FA alert, and a proof the AppFolio
                  session works (sign / auto-relogin / daily probe) under 2 days
                  old (added 2026-11-12 after the session sat expired for two weeks)
+  meta-work      i447 + infra hours as a share of waking Toggl hours, 8 trailing
+                 weeks; reporting only (added 2026-11-24, jm-ai-risks risk 4)
+  skill-prune    up to five skills unused for 60 days, suggested for retirement,
+                 and retired skills that came back (added 2026-11-24, risk 3)
   skill-claims   skills whose name matches a recurring Todoist card but that
                  aren't linked to dtd (agent_claims.SKILL_CLAIMS) or recorded
                  as declined (SKILL_NO_CLAIM) (added 2026-10-11)
@@ -1326,13 +1330,177 @@ def check_duplicates() -> Finding:
 
 
 # ---------------------------------------------------------------------------
+# meta-work (2026-11-24, jm-ai-risks.md risk 4): hours on the system itself as
+# a share of waking Toggl hours. Reporting only: one row, never a review item.
+# ---------------------------------------------------------------------------
+META_PROJECTS = ("i447", "infra")
+META_SLEEP = "睡觉"
+META_WEEKS = 8
+META_CAP: float | None = None    # e.g. 0.06 once JM sets a cap; until then the row never warns
+
+
+def scan_meta_work(now: dt.datetime, store: Path | None = None) -> list[dict]:
+    """META_WEEKS trailing 7-day windows, newest first: {start, end, meta_h, wake_h, share}.
+    Windows end the day BEFORE yesterday: the Saturday 04:40 run precedes the
+    05:10 Toggl sync, so yesterday's rows are not in the store yet."""
+    import sqlite3
+    store = store or TOGGL_STORE
+    end0 = now.astimezone(TZ).date() - dt.timedelta(days=2)
+    lo = end0 - dt.timedelta(days=7 * META_WEEKS - 1)
+    conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    try:
+        rows = conn.execute("SELECT day, project, SUM(seconds) FROM entries WHERE day BETWEEN ? AND ? "
+                            "AND seconds > 0 GROUP BY day, project", (lo.isoformat(), end0.isoformat())).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for k in range(META_WEEKS):
+        end = end0 - dt.timedelta(days=7 * k)
+        start = end - dt.timedelta(days=6)
+        meta = wake = 0.0
+        for day, project, sec in rows:
+            if start.isoformat() <= day <= end.isoformat() and project != META_SLEEP:
+                wake += sec / 3600
+                if project in META_PROJECTS:
+                    meta += sec / 3600
+        out.append({"start": start, "end": end, "meta_h": meta, "wake_h": wake,
+                    "share": (meta / wake) if wake else None})
+    return out
+
+
+def meta_work_finding(weeks: list[dict]) -> Finding:
+    if not weeks or weeks[0]["share"] is None:
+        return Finding("meta-work", "ok", "no Toggl hours in the last window (see toggl-store)")
+    w0 = weeks[0]
+    prior = [w["share"] for w in weeks[1:5] if w["share"] is not None]
+    trend = " · ".join(f"{w['share'] * 100:.0f}" if w["share"] is not None else "–" for w in reversed(weeks))
+    summary = (f"{'+'.join(META_PROJECTS)} {w0['share'] * 100:.1f}% of waking Toggl hours in the 7 days to "
+               f"{w0['end']:%m-%d} ({w0['meta_h']:.1f} h of {w0['wake_h']:.0f} h)")
+    if prior:
+        mean = sum(prior) / len(prior)
+        word = "up from" if w0["share"] > mean + 0.01 else "down from" if w0["share"] < mean - 0.01 else "level with"
+        summary += f"; {word} the prior 4-week mean {mean * 100:.1f}%"
+    summary += f"; {len(weeks)} weeks oldest first: {trend}%"
+    over = META_CAP is not None and w0["share"] > META_CAP
+    if META_CAP is not None:
+        summary += f"; cap {META_CAP * 100:.0f}%" + (" EXCEEDED" if over else "")
+    detail = [f"{w['start']:%m-%d}..{w['end']:%m-%d}: "
+              + (f"{w['share'] * 100:.1f}% ({w['meta_h']:.1f} h of {w['wake_h']:.0f} h)" if w["share"] is not None else "no hours")
+              for w in weeks]
+    return Finding("meta-work", "warn" if over else "ok", summary, detail)
+
+
+def check_meta_work(now: dt.datetime) -> Finding:
+    if not TOGGL_STORE.exists():
+        return Finding("meta-work", "ok", "no Toggl store (see toggl-store)")
+    return meta_work_finding(scan_meta_work(now, TOGGL_STORE))
+
+
+# ---------------------------------------------------------------------------
+# skill-prune (2026-11-24, jm-ai-risks.md risk 3): suggest skills to retire.
+# A skill counts as used when a Claude transcript on Ix from the last 60 days
+# holds a slash command, a Skill tool call or an attributionSkill stamp for it,
+# when a used skill's SKILL.md points at it (/-1l runs /auton156 by reading
+# it), or when it is linked to a dtd card. Tools that run outside Claude (the
+# ibx and -2n TUIs) leave no trace: a "keep" answer puts the name in
+# 1-i446-dismissed.json under "skill_keep" and the check stops asking.
+# ---------------------------------------------------------------------------
+SKILL_USE_DAYS = 60
+SKILL_MIN_AGE_DAYS = 30
+SKILL_PRUNE_MAX = 5
+SKILL_SKIP_DIRS = {"_archive", "synced"}
+_SKILL_USE_RE = re.compile(r'<command-name>/?([^<]+)</command-name>|"skill":"([^"]+)"|"attributionSkill":"([^"]+)"')
+_SKILL_USE_CMD = ("find ~/.claude/projects -name '*.jsonl' -mtime -%d -print0 | xargs -0 grep -ohE "
+                  "'<command-name>/?[^<]{1,60}</command-name>|\"name\":\"Skill\",\"input\":\\{\"skill\":\"[^\"]{1,60}\"|"
+                  "\"attributionSkill\":\"[^\"]{1,60}\"' | sort -u")
+
+
+def parse_skill_uses(grep_out: str) -> set[str]:
+    return {next(g for g in m.groups() if g).strip().lstrip("/") for m in _SKILL_USE_RE.finditer(grep_out)}
+
+
+def _skill_created() -> dict[str, float]:
+    """Skill dir -> unix time of the commit that added its SKILL.md. File
+    mtimes are useless here: the 2026-11-01 resync restamped 20 at once."""
+    out = sh(["git", "-C", str(MONO), "log", "--diff-filter=A", "--format=@%ct", "--name-only",
+              "--", "skills/claude-skills"], timeout=60)
+    created: dict[str, float] = {}
+    ts = 0.0
+    for line in out.splitlines():
+        if line.startswith("@"):
+            try:
+                ts = float(line[1:])
+            except ValueError:
+                ts = 0.0
+        elif line.endswith("/SKILL.md") and ts:
+            parts = line.split("/")
+            if len(parts) == 4:                       # skills/claude-skills/<name>/SKILL.md
+                created[parts[2]] = min(ts, created.get(parts[2], ts))
+    return created
+
+
+def skill_prune_candidates(texts: dict[str, str], created: dict[str, float], used: set[str], keep: set[str],
+                           archived: set[str], now_ts: float) -> tuple[list[str], list[str]]:
+    """(resurrected, candidates). texts = live skill -> SKILL.md text.
+    resurrected: live skills that also sit in _archive/ (retired once, back again).
+    candidates: at least SKILL_MIN_AGE_DAYS old, unused, not kept, and not
+    pointed at by a used skill; oldest first. A skill git never saw is skipped."""
+    resurrected = sorted(n for n in texts if n in archived and n not in keep)
+    used_text = "\n".join(t for n, t in texts.items() if n in used)
+    cands = []
+    for n in texts:
+        if n in used or n in keep or n in archived:
+            continue
+        born = created.get(n)
+        if born is None or now_ts - born < SKILL_MIN_AGE_DAYS * 86400:
+            continue
+        if re.search(r"(?<![\w/.-])/" + re.escape(n) + r"(?![\w-])", used_text):
+            continue
+        cands.append(n)
+    return resurrected, sorted(cands, key=lambda n: (created[n], n))
+
+
+def check_skill_prune(now: dt.datetime, grep_out: str | None = None) -> Finding:
+    if grep_out is None:
+        grep_out = ix(_SKILL_USE_CMD % SKILL_USE_DAYS, timeout=180)
+    used = parse_skill_uses(grep_out)
+    texts = {d.name: (d / "SKILL.md").read_text(errors="replace") for d in sorted(SKILLS.iterdir())
+             if d.name not in SKILL_SKIP_DIRS and (d / "SKILL.md").exists()}
+    if grep_out.startswith("ERROR") or not used & set(texts):
+        return Finding("skill-prune", "warn", "could not read skill usage from Ix's Claude transcripts", [grep_out[:160]])
+    arch = SKILLS / "_archive"
+    archived = {d.name for d in arch.iterdir() if d.is_dir()} if arch.is_dir() else set()
+    keep = {str(k) for k in _dismissed().get("skill_keep", [])}
+    try:
+        keep |= set(_agent_claims().SKILL_CLAIMS)       # run from a dtd card: in use by definition
+    except Exception:  # noqa: BLE001
+        pass
+    created = _skill_created()
+    resurrected, cands = skill_prune_candidates(texts, created, used, keep, archived, now.timestamp())
+    if not resurrected and not cands:
+        return Finding("skill-prune", "ok", f"{len(texts)} skills; none unused for {SKILL_USE_DAYS} days beyond those kept")
+    detail = [f"/{n}: retired to _archive/ but live again"
+              + (f" and used in the last {SKILL_USE_DAYS} days: un-retire it (delete the _archive copy)" if n in used
+                 else " (a sync peer brought it back?): delete the live copy, or keep")
+              for n in resurrected]
+    detail += [f"/{n}: no use in {SKILL_USE_DAYS} days (added {dt.datetime.fromtimestamp(created[n], TZ):%Y-%m-%d}): "
+               "retire to skills/claude-skills/_archive/, or keep" for n in cands[:SKILL_PRUNE_MAX]]
+    if len(cands) > SKILL_PRUNE_MAX:
+        detail.append(f"{len(cands) - SKILL_PRUNE_MAX} more unused skill(s) queued for later weeks")
+    detail.append('"keep" = add the name to skill_keep in z_meta/1-i446-dismissed.json')
+    bits = ([f"{len(resurrected)} retired skill(s) live again"] if resurrected else []) + \
+           ([f"{len(cands)} of {len(texts)} skills unused for {SKILL_USE_DAYS} days; {min(len(cands), SKILL_PRUNE_MAX)} suggested to retire"] if cands else [])
+    return Finding("skill-prune", "warn", "; ".join(bits), detail, review=True)
+
+
+# ---------------------------------------------------------------------------
 # Report + task
 # ---------------------------------------------------------------------------
 def run_all(now: dt.datetime) -> list[Finding]:
     out = []
-    for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_syncthing(now), lambda: check_git_autopush(now), lambda: check_github_contrib(now),
+    for fn in (check_singletons, check_duplicate_notes, lambda: check_root(VAULT, Path.home()), check_style, lambda: check_toggl_store(now), lambda: check_meta_work(now), lambda: check_syncthing(now), lambda: check_git_autopush(now), lambda: check_github_contrib(now),
                lambda: check_skills_backup(now), lambda: check_perm_sync(now), lambda: check_onedrive_neon(now), check_time_machine,
-               check_ix_cron, check_launchd, lambda: check_ix_memory(now), lambda: check_lease_signer(now), check_skill_claims, lambda: check_alerts(now), lambda: check_neon_rules(now),
+               check_ix_cron, check_launchd, lambda: check_ix_memory(now), lambda: check_lease_signer(now), check_skill_claims, lambda: check_skill_prune(now), lambda: check_alerts(now), lambda: check_neon_rules(now),
                check_duplicates):
         try:
             out.append(fn())
@@ -1352,6 +1520,7 @@ CHECK_WHAT = {
     "vault-root": "Loose files at the vault root (only folders, CLAUDE.md and dotfiles belong there) and items at the top of ~ outside the home-folder layout.",
     "style": "Live note filenames and titles: ASCII kebab-case, YYYY-MM-DD dates, no Arabic or CJK+English titles, titles ≤40 chars.",
     "toggl-store": "i156/toggl.sqlite: last completed sync under 36h old, entries on each of the last 7 days, no short sync windows, and the dashboard export caught up.",
+    "meta-work": "Reporting only: i447 + infra hours as a share of waking (non-睡觉) Toggl hours, for 8 trailing 7-day windows ending two days ago. Never a review item; warns only once META_CAP is set and exceeded.",
     "syncthing": "Syncthing on this host: every device connected, every folder idle and fully synced with no errors. Rescans out-of-sync folders.",
     "git-autopush": "~/vault and ~/i446-monorepo on Ix: no stuck rebase, a commit within 24h, nothing unpushed, no warnings in the autopush logs.",
     "github-contrib": "What GitHub holds and credits for ~/i446-monorepo and ~/vault: the pushed branch under 24h old, commits attributed to the account, nothing stranded off the default branch for over a week, at least half of the week's default-branch commits credited, a contribution on each of the last 7 days, and a week total at least half the prior 4-week average.",
@@ -1364,6 +1533,7 @@ CHECK_WHAT = {
     "ix-memory": "Ix over 7 days: reboots, jetsam/panic/Chrome hang reports, Chrome restarts or extra instances, Chrome over 6 GB, swap over 90%.",
     "lease-signer": "The AppFolio lease countersigner on Ix: daemon running, no open 2FA-expired alert, and the session proven to work (sign, auto-relogin or daily probe) within 2 days.",
     "skill-claims": "Skills named like a recurring Todoist card but neither linked to dtd (SKILL_CLAIMS) nor declined (SKILL_NO_CLAIM).",
+    "skill-prune": "Skills with no slash command, Skill call or attribution in 60 days of Ix's Claude transcripts (older than 30 days, not card-linked, not kept, not called by a used skill), five a week, plus retired skills that are live again.",
     "alerts": "Tool alerts in z_ibx/alerts.jsonl over 7 days, grouped by tool and reason, minus ones dismissed in 1-i446-dismissed.json.",
     "neon-rules": "The nightly Neon rule-engine parallel run is under 2 days old, and which 0分 columns the ledger derives differently from Excel.",
     "duplicates": "Downloads files sharing a name with a neighbour but differing in bytes (queued by triage). Trashes pairs that have become identical.",
@@ -1373,8 +1543,8 @@ CHECK_WHAT = {
 def build_report(findings: list[Finding], today: dt.date) -> str:
     lines = ["---", f'title: "1-i446 Vault Health {today.isoformat()}"', f"date: {today.isoformat()}",
              "type: audit", "tags: [z_meta, audit, i446, i447]", "source: vault_health.py", "status: active", "---",
-             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, Syncthing, git autopush, GitHub contributions, "
-             "skills backup, perm sync, OneDrive Neon, Time Machine, Ix cron, launchd agents, Ix memory, lease signer, skill claims, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
+             f"Weekly vault-health run on {socket.gethostname()}. Rules: singletons, duplicate notes, style (filenames/titles), Toggl store, meta-work share, Syncthing, git autopush, GitHub contributions, "
+             "skills backup, perm sync, OneDrive Neon, Time Machine, Ix cron, launchd agents, Ix memory, lease signer, skill claims, skill pruning, alerts, Neon rule-engine parallel run, Downloads duplicates. Review items are in the 😈 Todoist task.", "",
              "| # | Check | Status | Summary | Auto-fixed | What it checks |", "|---|---|---|---|---|---|"]
     # Numbered rows (user request 2026-10-17: "number each check") so the
     # conversation can refer to "check 6" and the detail sections match.

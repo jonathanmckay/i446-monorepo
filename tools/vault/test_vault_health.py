@@ -493,3 +493,92 @@ def test_neon_peer_without_a_usable_stamp_is_never_reported_in_step(tmp_path, mo
     _stamp(tmp_path, "straylight", now.timestamp() - 600, {"mtime": None, "error": "PermissionError: Operation not permitted"})
     r = vh._neon_peer_copies(now, now.timestamp(), tmp_path)
     assert r["unknown"] == ["straylight"] and "could not read" in r["detail"][0]
+
+
+# --- meta-work + skill-prune (2026-11-24, jm-ai-risks risks 4 and 3) ---------
+def _meta_store(tmp_path, rows):
+    import sqlite3
+    p = tmp_path / "toggl.sqlite"
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY, day TEXT, seconds INTEGER, project TEXT)")
+    c.executemany("INSERT INTO entries (day, seconds, project) VALUES (?, ?, ?)", rows)
+    c.commit(); c.close()
+    return p
+
+
+def test_meta_work_share_excludes_sleep_and_ends_two_days_back(tmp_path):
+    """JM 2026-11-24: 'do this as a reporting function'. The Saturday 04:40 run
+    precedes the 05:10 Toggl sync, so the newest window ends the day before yesterday."""
+    vh = _load()
+    now = dt.datetime(2026, 11, 24, 18, tzinfo=vh.TZ)
+    store = _meta_store(tmp_path, [
+        ("2026-11-22", 3600, "i447"), ("2026-11-22", 3600, "infra"), ("2026-11-22", 8 * 3600, "i9"),
+        ("2026-11-22", 7 * 3600, "睡觉"), ("2026-11-22", -5, "i447"),      # running timer: ignored
+        ("2026-11-23", 9 * 3600, "i447"),                                   # yesterday: outside every window
+        ("2026-11-15", 3600, "i447"), ("2026-11-15", 9 * 3600, "xk87"),
+    ])
+    weeks = vh.scan_meta_work(now, store)
+    assert len(weeks) == vh.META_WEEKS
+    assert (weeks[0]["start"].isoformat(), weeks[0]["end"].isoformat()) == ("2026-11-16", "2026-11-22")
+    assert weeks[0]["meta_h"] == 2 and weeks[0]["wake_h"] == 10 and weeks[0]["share"] == 0.2
+    assert weeks[1]["share"] == 0.1 and weeks[2]["share"] is None
+    f = vh.meta_work_finding(weeks)
+    assert f.check == "meta-work" and f.status == "ok" and not f.review
+    assert "20.0%" in f.summary and "up from the prior 4-week mean 10.0%" in f.summary
+
+
+def test_meta_work_warns_only_past_a_set_cap_and_never_asks_for_review(tmp_path, monkeypatch):
+    vh = _load()
+    weeks = [{"start": dt.date(2026, 11, 16), "end": dt.date(2026, 11, 22), "meta_h": 9.0, "wake_h": 100.0, "share": 0.09}]
+    assert vh.meta_work_finding(weeks).status == "ok"
+    monkeypatch.setattr(vh, "META_CAP", 0.06)
+    f = vh.meta_work_finding(weeks)
+    assert f.status == "warn" and not f.review and "EXCEEDED" in f.summary
+    empty = [{"start": dt.date(2026, 11, 16), "end": dt.date(2026, 11, 22), "meta_h": 0.0, "wake_h": 0.0, "share": None}]
+    assert vh.meta_work_finding(empty).status == "ok"
+
+
+def test_skill_uses_parsed_from_all_three_transcript_signals():
+    vh = _load()
+    out = ('<command-name>/d</command-name>\n<command-name>-1l</command-name>\n'
+           '"name":"Skill","input":{"skill":"auton156"\n"attributionSkill":"1-1n"\n')
+    assert vh.parse_skill_uses(out) == {"d", "-1l", "auton156", "1-1n"}
+
+
+def test_skill_prune_candidates_rules():
+    vh = _load()
+    day = 86400.0
+    now_ts = 1000 * day
+    texts = {"used": "run /helper first, see ~/tools/pathy/x.py", "helper": "h", "old": "o", "older": "o",
+             "new": "n", "kept": "k", "back": "b", "pathy": "p", "untracked": "u"}
+    created = {n: now_ts - 90 * day for n in texts if n != "untracked"}
+    created["new"] = now_ts - 5 * day
+    created["older"] = now_ts - 200 * day
+    resurrected, cands = vh.skill_prune_candidates(texts, created, used={"used"}, keep={"kept"},
+                                                   archived={"back"}, now_ts=now_ts)
+    assert resurrected == ["back"]
+    # helper is called by a used skill; new is under 30 days; kept was answered; untracked has no git date.
+    # pathy only appears inside a file path in the used skill, which is not a call.
+    assert cands == ["older", "old", "pathy"]
+
+
+def test_skill_prune_finding_caps_the_list_and_reads_keep_answers(tmp_path, monkeypatch):
+    vh = _load()
+    skills = tmp_path / "skills"
+    for n in ["d", "a1", "a2", "a3", "a4", "a5", "a6", "keepme", "gone"]:
+        (skills / n).mkdir(parents=True); (skills / n / "SKILL.md").write_text(n)
+    (skills / "_archive" / "gone").mkdir(parents=True)
+    dismissed = tmp_path / "dismissed.json"; dismissed.write_text(json.dumps({"skill_keep": ["keepme"]}))
+    now = dt.datetime(2026, 11, 24, 18, tzinfo=vh.TZ)
+    monkeypatch.setattr(vh, "SKILLS", skills)
+    monkeypatch.setattr(vh, "DISMISSED", dismissed)
+    monkeypatch.setattr(vh, "_skill_created", lambda: {n: now.timestamp() - 90 * 86400 for n in
+                                                       ["d", "a1", "a2", "a3", "a4", "a5", "a6", "keepme", "gone"]})
+    monkeypatch.setattr(vh, "_agent_claims", lambda: type("AC", (), {"SKILL_CLAIMS": {}})())
+    f = vh.check_skill_prune(now, grep_out="<command-name>/d</command-name>\n")
+    assert f.check == "skill-prune" and f.status == "warn" and f.review
+    assert "1 retired skill(s) live again" in f.summary and "6 of 9 skills unused" in f.summary
+    assert sum("no use in 60 days" in d for d in f.detail) == vh.SKILL_PRUNE_MAX
+    assert any("1 more unused" in d for d in f.detail) and not any("/keepme" in d for d in f.detail)
+    # No usable transcript read: say so instead of calling every skill unused.
+    assert "could not read" in vh.check_skill_prune(now, grep_out="ERROR: timeout").summary

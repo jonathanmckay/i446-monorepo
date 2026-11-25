@@ -1,6 +1,6 @@
 ---
 name: "1-i446"
-description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, vault-wide style: ASCII kebab filenames and short one-language titles, Toggl entries store freshness and last-7-days coverage, Syncthing, git autopush, GitHub contributions (pushes on GitHub and counted on the default branch), skills backup, OneDrive Neon parity, Time Machine, Ix memory leaks (reboots, jetsam/panic/Chrome hang reports, Chrome restarts and extra Chrome instances, Chrome footprint and swap peaks), the AppFolio lease countersigner on Ix (daemon alive, 2FA session proven within 2 days), skills not yet linked to a dtd card, 7-day alert sink, Downloads files queued by tools/triage that share a name but differ in content), auto-fixes what is safe (Syncthing rescans), writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
+description: "Weekly vault-health review. Runs the rule set in tools/vault/vault_health.py (singleton folders, duplicate note names, vault-wide style: ASCII kebab filenames and short one-language titles, Toggl entries store freshness and last-7-days coverage, Syncthing, git autopush, GitHub contributions (pushes on GitHub and counted on the default branch), skills backup, OneDrive Neon parity, Time Machine, Ix memory leaks (reboots, jetsam/panic/Chrome hang reports, Chrome restarts and extra Chrome instances, Chrome footprint and swap peaks), the AppFolio lease countersigner on Ix (daemon alive, 2FA session proven within 2 days), meta-work share of Toggl hours (reporting only), skills not yet linked to a dtd card, skills unused for 60 days suggested for retirement, 7-day alert sink, Downloads files queued by tools/triage that share a name but differ in content), auto-fixes what is safe (Syncthing rescans), writes z_meta/YYYY-MM-DD-1-i446.md, and then walks the review items with you one numbered decision at a time. Usage: /1-i446"
 user-invocable: true
 ---
 
@@ -84,5 +84,18 @@ hand does the same thing interactively, from whichever machine you are on
   one hides it only up to that date; if it is still true it is back next week.
   Stale claims are never auto-released: resume the thread (`cc <title>`) or
   release it.
+- Meta-work (`check_meta_work`, 2026-11-24, jm-ai-risks risk 4): one
+  reporting row, i447 + infra hours as a share of waking Toggl hours over 8
+  trailing 7-day windows ending two days back (the cron runs before the Toggl
+  sync). Never a review item. Read the number out with the table; it warns
+  only once `META_CAP` is set and exceeded.
+- Skill pruning (`check_skill_prune`, 2026-11-24, risk 3): up to five skills
+  with no slash command, Skill call or attribution in 60 days of Ix's Claude
+  transcripts, oldest first, plus retired skills that are live again. One
+  decision each: retire (`git mv` the folder into
+  `skills/claude-skills/_archive/`, and remove it on the other Mac if it
+  comes back) or keep (add the name to `skill_keep` in
+  `z_meta/1-i446-dismissed.json`). Skills whose tools run outside Claude
+  (`/ibx`, `/-2n`) look unused here: keep them. Never retire one unasked.
 - New rules go into `vault_health.py` as a `check_*` returning a `Finding`;
   set `review=True` only when JM has to decide something.
