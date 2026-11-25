@@ -52,6 +52,8 @@ WRITE_MARGIN_S = 30         # ledger writes this long before the save still over
 TODAY_FROM_BOTTOM = 3       # a sheet opens with today's row this far above the last line
 WRAP_LINES = 3              # lines one row may wrap onto; columns past that are the next page (←/→)
 TODAY_STYLE = "bg:#c3fc0d #000000 bold"     # today's date cell (janus's NEON_ACCENT)
+DATE_STYLE = "#bcbcbc"      # every frozen (week / date) body cell: one colour down the gutter, no fills, no
+                            # stripes (JM 2026-11-25: "keep the colors constant ... so I don't get a headache")
 ZEBRA_BG = "#262626"        # every other wrapped row, so a 3-line day reads as one block
 # A row's second and third lines hang under the frozen columns, leaving the
 # date column a clear gutter to scan down (JM 2026-11-25, 0n: "everything is
@@ -694,6 +696,8 @@ def _row(sh: dict, r: int, shown: list, cols: int, first_visible: int,
         if zebra and not bg:
             bg = ZEBRA_BG
         style = " ".join(x for x in (("bg:" + bg) if bg else "", fg or "", "bold" if bold else "") if x)
+        if c < sh["frozen_cols"] and r >= sh["header_rows"]:
+            style = DATE_STYLE
         out.append((TODAY_STYLE if mark == (r, c) else style, text))
         used += w
     if zebra and used < cols:

@@ -562,3 +562,19 @@ def test_continuation_lines_hang_under_the_date_columns(tmp_path):
     assert days and all(ln.lstrip().startswith("w") for ln in days)      # only a day's first line reaches the left edge
     assert len(days) == t.body_height(24, 31) == (24 - 2 - 3) // 3
     assert all(ng.cwidth(ln) <= 31 for ln in lines)
+
+
+def test_frozen_date_columns_are_one_colour(tmp_path):
+    """JM 2026-11-25: "keep the colors constant on the first two columns (i.e.
+    with the dates) so I don't get a headache"."""
+    sh = _sheet()
+    for r in range(1, 60):
+        sh["rows"][r][0][1] = sh["rows"][r][1][1] = r % 2  # Excel fills on alternate weeks / dates
+    t = _tabs(tmp_path, [sh])
+    t.select(1)
+    for width in (80, 31):                                  # one line per row, and wrapped with stripes
+        t.home(t.body_height(24, width))
+        frags = t.render(width, 24)
+        gutter = {f[0] for f in frags if f[1].strip()[:1] in ("w", "d") or f[1].strip() == "11.1"}
+        assert gutter == {nt.DATE_STYLE, nt.TODAY_STYLE}
+        assert ("bg:#ff0000 #ffffff bold", " 4903") in frags          # the data keeps its colours
