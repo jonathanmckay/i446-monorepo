@@ -17,8 +17,8 @@ them in, without affecting other time entries"):
   Never extend, move, rename or delete an entry that exists to close a gap
   (placeholders stay the one exception, as in `/auton156`). So a 1-3 minute
   seam gets its own short entry, which overrides `/auton156`'s "one entry per
-  5-10 minutes" for these; a blank with no evidence still stays empty and is
-  named in the report.
+  5-10 minutes" for these; a blank with no evidence is absorbed by the task
+  next to it, as in `/auton156` (a new entry with the neighbour's name).
 
 ```
 /-1l              # today, 00:00 to now

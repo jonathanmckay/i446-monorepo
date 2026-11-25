@@ -43,26 +43,32 @@ the approval, and an entry is one `toggl_delete` from gone.
    | Evidence in the range | Entry |
    |---|---|
    | Calendar event JM attended | The event's time clipped to the range, title as shorthand (`1:1 dana`, `kn47 standup`), project from the calendar account and attendees |
-   | Completed tasks | Work backward from each completion time by the task's `(N)` estimate, clipped to the range and to the previous evidence. Project from the task's label |
-   | cc prompts or neon writes | By the entry rules below |
+   | Completed tasks | Named for the task (its own name, minus `(N)` `[N]`). Work backward from each completion time by the task's `(N)` estimate, clipped to the range and to the previous evidence. Project from the task's label |
+   | cc prompts or neon writes | The task they served: a task completed nearby, or the open dtd task JM names (often by its dtd code, e.g. `xh`; resolve it in `~/vault/z_ibx/dtd-codes-<host>.json`). Shorthand by the entry rules only when no task fits |
    | 睡觉 on one side, nothing inside | No entry. Report it as `sleep?` with the times |
-   | Nothing | No entry |
+   | Nothing | Absorbed by the task next to it: a new entry carrying the neighbour's description, project and tags. Prefer the neighbour that is a completed task |
 
    A meeting outranks prompts typed during it. Evidence covering part of a
-   range fills that part only. Create each entry with `toggl_create_entry`.
+   range fills that part; the rest is absorbed by the task next to it (JM
+   2026-11-24: "tie these more to the tasks I completed, and then open times
+   should just be absorbed by the task next to it"). Absorbing never edits an
+   entry that exists: it is a new adjacent entry with the same description.
+   Create each entry with `toggl_create_entry`.
 4. Report the table of what was logged, plus any range left empty.
 
 ## Entry rules
 
-- **Description: 3-30 characters**, lowercase shorthand, like JM's own entries:
+- **Description: the task's name** when the stretch belongs to a task, as
+  JM's own entries do. Otherwise 3-30 characters of lowercase shorthand:
   `neon cutover plan`, `fin bug`. Name the work, not the mechanics. No
   sentences, no "(inferred)".
 - **One activity per entry, no commas.** Name the single most prominent thing
   in the stretch (most minutes or prompts) and drop the rest: `fin bug`, never
   `fin bug, janus data fix`.
-- **One entry per 5-10 minutes.** Merge the small actions in a stretch into one
-  entry, named for its most prominent activity. A 1-minute card close is part
-  of the entry around it, never its own.
+- **One entry per task, else per 5-10 minutes.** Small actions that serve one
+  task are one entry however long the stretch runs. Otherwise merge the small
+  actions in a stretch into one entry, named for its most prominent activity.
+  A 1-minute card close is part of the entry around it, never its own.
 - **Times at 1-minute granularity**, HH:MM. Consecutive entries share a
   boundary.
 - **Every entry gets a project**, from the task's Todoist label first, then the
@@ -73,19 +79,19 @@ the approval, and an entry is one `toggl_delete` from gone.
   can recognize, so skip any others you spot.
 - **Reading time counts.** A quiet stretch that ends in his reply to a report
   belongs to that work.
-- **No evidence, no entry.** A range with nothing on either side stays empty and
-  is named in the report. Never pad it with a neighbouring entry.
+- **No evidence: the neighbour absorbs it.** Only a `sleep?` range, or one with
+  no entry on either side, stays empty and is named in the report.
 
 ## Report
 
 ```
 | Time | Entry | Project | From |
 |---|---|---|---|
-| 06:12-06:22 | neon report | i447 | cc |
-| 06:22-06:31 | neon cutover plan | i447 | cc |
+| 06:12-06:31 | neon cutover plan | i447 | task |
+| 07:10-07:25 | neon cutover plan | i447 | absorbed |
 | 09:05-09:35 | kn47 standup | m5x2 | cal |
 
-Left empty: 05:40-06:10 sleep? (睡觉 ends 05:40), 07:10-07:25 nothing logged.
+Left empty: 05:40-06:10 sleep? (睡觉 ends 05:40).
 ```
 
 Add one line for any boundary that was a guess. Stop there.
