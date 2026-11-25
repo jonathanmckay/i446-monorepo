@@ -135,16 +135,22 @@ def gpatch(event_id, body):
 
 def existing_events(day):
     # +/-1 day window: Toggl buckets by UTC day; boundary entries land outside
-    # the local day. Returns {toggl_id: event} for our archive events.
-    params = urllib.parse.urlencode({"timeMin": (day-dt.timedelta(days=1)).isoformat()+"T00:00:00-07:00",
+    # the local day. Returns {toggl_id: event} for every archive event, the
+    # nightly /0r ones (src=0r) as well as ours: filtering on src=0r-backfill
+    # alone made this script write a second copy of an entry /0r had already
+    # archived (20 doubles on 2026-10-17, found by /1cal 2026-11-25).
+    base = {"timeMin": (day-dt.timedelta(days=1)).isoformat()+"T00:00:00-07:00",
         "timeMax": (day+dt.timedelta(days=2)).isoformat()+"T00:00:00-07:00",
-        "maxResults":"250","singleEvents":"true","privateExtendedProperty":f"src={SRC}"})
-    ev = gget(f"calendars/{urllib.parse.quote(JBM)}/events?"+params)
-    out = {}
-    for e in ev.get("items", []):
-        tid = ((e.get("extendedProperties") or {}).get("private") or {}).get("toggl_id")
-        if tid: out[str(tid)] = e
-    return out
+        "maxResults":"2500","singleEvents":"true"}
+    out = {}; page = None
+    while True:
+        ev = gget(f"calendars/{urllib.parse.quote(JBM)}/events?"
+                  + urllib.parse.urlencode(dict(base, pageToken=page) if page else base))
+        for e in ev.get("items", []):
+            tid = ((e.get("extendedProperties") or {}).get("private") or {}).get("toggl_id")
+            if tid: out[str(tid)] = e
+        page = ev.get("nextPageToken")
+        if not page: return out
 
 def entry_meta(e):
     pid = e.get("project_id")
@@ -174,6 +180,7 @@ def backfill_day(day):
             cur = (have[tid].get("extendedProperties") or {}).get("private") or {}
             if "tags" in cur and "project_id" in cur:
                 skipped += 1; continue
+            priv["src"] = cur.get("src") or SRC   # a nightly /0r event stays src=0r
             gpatch(have[tid]["id"], {"extendedProperties": {"private": priv}})
             patched += 1; time.sleep(0.2); continue
         gcreate({"summary": summary, "start": {"dateTime": e["start"]},
