@@ -64,7 +64,8 @@ def seed(src: Path = SRC, out: Path = SEED) -> dict:
     out.parent.mkdir(parents=True, exist_ok=True)
     part = out.with_suffix(".part")
     with open(part, "wb") as f:
-        pickle.dump({"meta": meta, "cells": book.cells, "arrays": book.arrays, "cached": cached}, f,
+        pickle.dump({"meta": meta, "cells": book.cells, "arrays": book.arrays, "cached": cached,
+                     "dates": book.dates}, f,
                     protocol=pickle.HIGHEST_PROTOCOL)
     os.replace(part, out)
     return meta
@@ -150,6 +151,7 @@ def load(seed_path: Path = SEED, conn: Optional[sqlite3.Connection] = None, db_p
         return None
     b = Live(dict(d["cells"]), today=today or _dt.date.today(), arrays=d["arrays"])
     b.meta, b.unknown = d["meta"], []
+    b.dates = d.get("dates")                     # None: a seed from before 2026-11-25
     since = _dt.datetime.fromtimestamp(d["meta"]["src_mtime"] - MARGIN_S).isoformat(timespec="seconds")
     for ts, sheet, col, row, content in writes_since(since, conn, db_path):
         if upto is not None and ts > upto:

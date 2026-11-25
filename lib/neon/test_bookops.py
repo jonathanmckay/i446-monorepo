@@ -78,3 +78,36 @@ def test_find_row_dates_and_week_labels():
     assert bookops.find_row(b, "0s897", "1/3/26") == 400            # a year picks the right January
     assert bookops.find_row(b, "1分+1s", "11.3") == 47               # 11.299999999999999 reads 11.3
     assert bookops.find_row(b, "1n+", "11.4") == 52 and bookops.find_row(b, "分ledger", "11/22") is None
+
+
+# ── /read_range from the book (2026-11-25) ───────────────────────────────────
+
+def test_date_text_is_applescripts_long_form():
+    s = calc.serial(dt.date(2026, 11, 25))
+    assert bookops.date_text(s) == "Wednesday, November 25, 2026 at 12:00:00\u202fAM"
+    assert bookops.date_text(s + 0.75) == "Wednesday, November 25, 2026 at 6:00:00\u202fPM"
+    assert bookops.date_text(calc.serial(dt.date(2026, 3, 1))) == "Sunday, March 1, 2026 at 12:00:00\u202fAM"
+
+
+def test_range_text_forms():
+    assert bookops.range_text(None) == ""
+    assert bookops.range_text(calc.Err("#DIV/0!")) == ""          # the daemon maps "missing value" to ""
+    assert bookops.range_text(60.0) == "60.0"
+    assert bookops.range_text(1.7142857142857142) == "1.714285714286"
+    assert bookops.range_text("Th") == "Th"
+    assert bookops.range_text(46351.0) == "46351.0"               # a number that is not date-formatted
+    assert bookops.range_text(46351.0, True).startswith("Wednesday, November 25, 2026")
+
+
+def test_read_range_rows_and_dates():
+    d = calc.serial(dt.date(2026, 11, 25))
+    b = calc.Book({("hcbi", 2, 3): d, ("hcbi", 2, 4): "=B3+1", ("hcbi", 3, 3): "W", ("hcbi", 4, 3): 2.0,
+                   ("hcbi", 4, 4): "=D3/0"})
+    b.dates = {("hcbi", 2, 3), ("hcbi", 2, 4)}
+    assert bookops.read_range(b, "hcbi", "b3:d4") == [
+        ["Wednesday, November 25, 2026 at 12:00:00\u202fAM", "W", "2.0"],
+        ["Thursday, November 26, 2026 at 12:00:00\u202fAM", "", ""],
+    ]
+    b.dates = None                                                # an older seed: serials, not text
+    assert bookops.read_range(b, "hcbi", "B3:B3") == [["%s.0" % int(d)]]
+    assert bookops.read_range(b, "hcbi", "B3") is None

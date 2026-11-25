@@ -523,6 +523,9 @@ class Book:
         # multi-cell array formula: their value is an element of the anchor's.
         self.arrays: dict = arrays or {}
         self.today = today
+        # {(sheet, col, row)} formatted as a date in the workbook, or None when
+        # this book was not loaded from one that says (an older seed).
+        self.dates: Optional[set] = None
         self._memo: dict = {}
         self._arr_memo: dict = {}
         self._stack: set = set()
@@ -923,9 +926,14 @@ def load_xlsx(path, today: Optional[_dt.date] = None) -> Tuple["Book", dict]:
     that share it with Excel should pass a copy."""
     import openpyxl
     from openpyxl.worksheet.formula import ArrayFormula
+    from openpyxl.styles.numbers import is_date_format
     wf = openpyxl.load_workbook(path)
     wv = openpyxl.load_workbook(path, data_only=True)
     cells, arrays, cached = {}, {}, {}
+    # Cells whose number format is a date/time one. The book keeps a date as
+    # its serial number; only the format says that Excel hands it to a range
+    # read as "Wednesday, November 25, 2026 at 12:00:00 AM" (bookops.range_text).
+    dates, fmt_memo = set(), {}
     for ws in wf.worksheets:
         name = ws.title
         vs = wv[name]._cells
@@ -933,6 +941,14 @@ def load_xlsx(path, today: Optional[_dt.date] = None) -> Tuple["Book", dict]:
             v = cell.value
             if v is None:
                 continue
+            nf = cell.number_format
+            if nf not in fmt_memo:
+                try:
+                    fmt_memo[nf] = bool(is_date_format(nf))
+                except Exception:  # noqa: BLE001 — an odd format string is not a date
+                    fmt_memo[nf] = False
+            if fmt_memo[nf]:
+                dates.add((name, col, row))
             if isinstance(v, ArrayFormula):
                 text = v.text or ""
                 text = text if text.startswith("=") else "=" + text
@@ -967,4 +983,5 @@ def load_xlsx(path, today: Optional[_dt.date] = None) -> Tuple["Book", dict]:
         cells.setdefault((ws.title, 1, 1), cells.get((ws.title, 1, 1)))
     cells = {k: v for k, v in cells.items() if v is not None or k[1:] == (1, 1)}
     book = Book(cells, today=today, arrays=arrays)
+    book.dates = {k for k in dates if k in cells}
     return book, cached

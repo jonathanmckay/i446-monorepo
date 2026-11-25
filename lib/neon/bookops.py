@@ -136,6 +136,47 @@ def apply(book: calc.Book, sheet: str, col: str, row: int, kind: str, value,
     return before, before_value, after_value, after
 
 
+# ── /read_range ──────────────────────────────────────────────────────────────
+
+_RANGE = re.compile(r"^([A-Z]{1,3})([0-9]{1,5}):([A-Z]{1,3})([0-9]{1,5})$")
+NNBSP = "\u202f"          # macOS puts a narrow no-break space before AM/PM
+
+
+def date_text(serial_value: float) -> str:
+    """An Excel date the way AppleScript's `as text` renders it inside a
+    list: "Wednesday, November 25, 2026 at 12:00:00\u202fAM". Callers parse
+    this (neon-task-checksum's dozen scan), so it is reproduced exactly."""
+    d = calc._EPOCH + _dt.timedelta(seconds=round(float(serial_value) * 86400))
+    hour = d.hour % 12 or 12
+    return "%s, %s %d, %d at %d:%02d:%02d%s%s" % (
+        d.strftime("%A"), d.strftime("%B"), d.day, d.year, hour, d.minute, d.second,
+        NNBSP, "AM" if d.hour < 12 else "PM")
+
+
+def range_text(value, is_date: bool = False) -> str:
+    """One cell of the daemon's /read_range reply: `value of range` items
+    `as text`. Numbers as value_text; a date-formatted number as date_text;
+    blanks and error cells "" (the daemon maps "missing value" to "")."""
+    if value is None or isinstance(value, calc.Err):
+        return ""
+    if is_date and isinstance(value, (int, float)) and not isinstance(value, bool) and 1 <= value < 2958466:
+        return date_text(value)
+    return value_text(value)
+
+
+def read_range(book: calc.Book, sheet: str, rng: str) -> Optional[list]:
+    """The rows of the daemon's /read_range for "B3:R400", as lists of text;
+    None for a range that does not parse. Date cells need `book.dates` (a
+    seed made since 2026-11-25); without it they come back as serials."""
+    m = _RANGE.match(str(rng).upper())
+    if not m:
+        return None
+    c1, r1, c2, r2 = calc.col_index(m.group(1)), int(m.group(2)), calc.col_index(m.group(3)), int(m.group(4))
+    dates = getattr(book, "dates", None) or ()
+    return [[range_text(book.value(sheet, ci, row), (sheet, ci, row) in dates)
+             for ci in range(c1, c2 + 1)] for row in range(r1, r2 + 1)]
+
+
 # ── row lookup ───────────────────────────────────────────────────────────────
 
 DATE_COL = {"0分": "B", "0n": "C", "1n+": "B", "hcbi": "B", "0s897": "B", "1分+1s": "A", "i9+m5x2": "A"}
