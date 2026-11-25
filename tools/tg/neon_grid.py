@@ -89,7 +89,13 @@ SHEETS = {
     # Ratings and weekly points colour-coded (JM 2026-11-25): the workbook has
     # no rules here. The 分 columns are formulas into 1分+1s G/H and take that
     # sheet's own rules for them.
+    # Drawn as a three-line record in a 47-column pane: week, ratings, 分 and
+    # minutes of both; then the i9 review and goals; then m5x2's.
     "i9+m5x2": {"header_rows": 2, "date_col": "A", "frozen_cols": 1,
+                "after": {"F": "C", "G": "F", "J": "G", "K": "J"},
+                "labels": {"C": "分", "D": "i9 last week", "E": "i9 goals", "H": "m5x2 last week", "I": "m5x2 goals"},
+                "widths": {"A": 5, "B": 4, "C": 5, "F": 6, "G": 5, "J": 5, "K": 5,
+                           "D": 23, "E": 23, "H": 23, "I": 23},
                 "cf": {"B": _RATING_RULES, "G": _RATING_RULES,
                        "C": [[1, "between", [0.0, 50.0], "d9d9d9", None, None, True],
                              [2, "greaterThan", [199.0], "10253f", "ffffff", False, False],
@@ -104,7 +110,7 @@ SHEETS = {
     "1n+":     {"header_rows": 3, "date_col": "B", "frozen_cols": 2,
                 "split": [{"name": "1n", "rows": [1, 57]},
                           {"name": "2n", "rows": [61, 90], "cols": ["A", "P"], "header_rows": 1,
-                           "frozen": "B", "widths": {"A": 3, "B": 14}},
+                           "frozen": "B", "widths": {"A": 3, "B": 20}},
                           {"name": "3n", "rows": [61, 102], "cols": ["Y", "AI"], "header_rows": 1,
                            "frozen": "AA", "widths": {"AA": 14, "AD": 6}},
                           {"name": "4n", "rows": [92, 130], "cols": ["B", "T"], "header_rows": 1,

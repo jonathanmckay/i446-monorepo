@@ -64,7 +64,11 @@ Already present: `rich` (unused but available), `prompt_toolkit`,
 janus also shows the Neon workbook's sheets, one per tab, with Excel's cell colours.
 
 - `^T` next tab · `⌥1`–`⌥0` jump (`⌥1` is the timeline) · `Esc` back to the timeline
-- On a Neon tab with the input box empty: arrows scroll, `PgUp`/`PgDn` page, `Home` returns to today's row, `End` goes to the bottom. The mouse wheel scrolls rows. The input box still takes /tg commands.
+- On a Neon tab with the input box empty: `↑`/`↓` scroll rows, `PgUp`/`PgDn` page, `Home` returns to today's row, `End` goes to the bottom. The mouse wheel scrolls rows. The input box still takes /tg commands.
+- No sideways scrolling (2026-11-25): a row wider than the pane wraps onto up to three lines (`neon_tabs.WRAP_LINES`) that use the full width, and the header wraps the same way above it. Columns that still do not fit are a further page: `←`/`→`, shown in the status line as `1/3→`. Wrapped rows are striped; today's date cell is lime on every sheet.
+- hcbi opens with a "vs plan" panel: the last three days, today rightmost, against the daily targets `/1hcb` uses (`neon_tabs.HCBI_PLAN`). Green met, red missed, amber still open today.
+- The `1n+` sheet is four tabs: `1n` (weekly), `2n` (monthly), `3n` (quarterly) and `4n` (annual, last in the strip). `neon_grid.SHEETS["1n+"]["split"]` holds the row and column spans; they follow the sheet's layout by hand.
+- i9+m5x2 colours its ratings (EE/MA/MM/MS/OL) and its weekly 分 (the rules `1分+1s` has for the same numbers) in the view only; the workbook is untouched.
 - Data comes from the workbook file on Ix, not from Excel: `neon_grid.py build` writes `~/.cache/janus/neon-grid.json` (text + resolved colours for every visible sheet) and janus re-runs it in a subprocess while a Neon tab is showing and the file has been re-saved. The view trails Excel by up to the daemon's save interval (~2 min) plus the 90 s rebuild floor.
 - Today's row (this week's row on the weekly sheets) does not wait for that: every 5 s janus repaints it with the cell writes the Neon ledger journaled since the save (`ledger.writes_since`; status line `ledger write HH:MM`). 0分 keeps its own ledger source (`view.day_view`). Not covered until the next save and rebuild: formula cells that depend on a written cell, writes to other rows (backfills), and hand edits the daemon has not noticed. A snapshot built on another day is never overlaid; it is rebuilt first.
 - Pinned header rows and frozen columns per sheet are declared in `neon_grid.SHEETS`.
