@@ -75,12 +75,13 @@ def test_a_wide_sheet_wraps_instead_of_scrolling_sideways(tmp_path):
     lines = _text(t.render(31, 13)).split("\n")
     assert len(lines) == 13
     assert lines[1].split() == ["H0", "H1", "H2", "H3", "H4", "H5"]     # 5+6 frozen, four 5-wide columns
-    assert lines[2].split() == ["H6", "H7", "H8", "H9", "H10", "H11"]   # the rest, from the left edge
-    assert t.body_height(13, 31) == 4                       # (13 - strip - status - 2 header lines) // 2
-    first, second = lines[3].split(), lines[4].split()
-    assert first[0].startswith("w") and len(first) == 6 and len(second) == 6
+    assert lines[2].split() == ["H6", "H7", "H8", "H9"]     # the rest, hanging under the frozen columns
+    assert lines[3].split() == ["H10", "H11"]
+    assert t.body_height(13, 31) == 2                       # (13 - strip - status - 3 header lines) // 3
+    first, second = lines[4].split(), lines[5].split()
+    assert first[0].startswith("w") and len(first) == 6 and len(second) == 4
     assert int(second[0]) == int(first[-1]) + 1             # one row, continued
-    assert "C–L" in lines[-1] and "1/" not in lines[-1]     # everything is on screen: no pages
+    assert "C–L" in lines[-1] and "→" not in lines[-1]     # everything is on screen: no pages
 
 
 def test_columns_past_three_lines_are_a_second_page(tmp_path):
@@ -541,9 +542,13 @@ def test_janus_header_marks_a_local_run(monkeypatch):
     assert mod._local_tag() == "" and "LOCAL" not in "".join(f[1] for f in mod.render_header())
 
 
-def test_0n_continuation_lines_hang_under_the_date_columns(tmp_path):
+def test_continuation_lines_hang_under_the_date_columns(tmp_path):
     """JM 2026-11-25: "For 0n let's do 3 lines / day, but everything is
-    indented after the first line so I can navigate"."""
+    indented after the first line so I can navigate", then "on 0s897 and hcbi
+    etc also". The task lists (2n, 3n, 4n) stay flush left."""
+    flush = _tabs(tmp_path, [_sheet("2n", ncols=14, today=None)])
+    flush.select(1)
+    assert _text(flush.render(31, 24)).split("\n")[2].split() == ["H6", "H7", "H8", "H9", "H10", "H11"]
     t = _tabs(tmp_path, [_sheet("0n", ncols=14)])
     t.select(1)
     frags = t.render(31, 24)

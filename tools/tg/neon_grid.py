@@ -95,7 +95,7 @@ SHEETS = {
                 "after": {"F": "C", "G": "F", "J": "G", "K": "J"},
                 "labels": {"C": "分", "D": "i9 last week", "E": "i9 goals", "H": "m5x2 last week", "I": "m5x2 goals"},
                 "widths": {"A": 5, "B": 4, "C": 5, "F": 6, "G": 5, "J": 5, "K": 5,
-                           "D": 23, "E": 23, "H": 23, "I": 23},
+                           "D": 21, "E": 21, "H": 21, "I": 21},
                 "cf": {"B": _RATING_RULES, "G": _RATING_RULES,
                        "C": [[1, "between", [0.0, 50.0], "d9d9d9", None, None, True],
                              [2, "greaterThan", [199.0], "10253f", "ffffff", False, False],

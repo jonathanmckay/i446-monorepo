@@ -53,10 +53,12 @@ TODAY_FROM_BOTTOM = 3       # a sheet opens with today's row this far above the 
 WRAP_LINES = 3              # lines one row may wrap onto; columns past that are the next page (←/→)
 TODAY_STYLE = "bg:#c3fc0d #000000 bold"     # today's date cell (janus's NEON_ACCENT)
 ZEBRA_BG = "#262626"        # every other wrapped row, so a 3-line day reads as one block
-# Sheets whose continuation lines hang under the frozen columns, leaving the
+# A row's second and third lines hang under the frozen columns, leaving the
 # date column a clear gutter to scan down (JM 2026-11-25, 0n: "everything is
-# indented after the first line so I can navigate"). Costs that width per line.
-HANGING = {"0n"}
+# indented after the first line so I can navigate", then "on 0s897 and hcbi
+# etc also"). Costs that width per line. Not on the lists whose frozen columns
+# are a long task label rather than a date.
+FLUSH = {"2n", "3n", "4n"}
 STRIP_STYLE = "bg:#303030 #9a9a9a"
 STATUS_STYLE = "#8a8a8a"
 
@@ -552,7 +554,7 @@ def _pages(sh: dict, cols: int, max_lines: int = WRAP_LINES) -> list:
             break
         head.append(c)
         head_w += widths[c]
-    hang = head_w if sh["name"] in HANGING and head_w < cols // 2 else 0
+    hang = head_w if sh["name"] not in FLUSH and head_w < cols // 2 else 0
     pages, c = [], frozen
     while c < n or not pages:
         page, line, used, placed = [], list(head), head_w, 0
@@ -645,8 +647,8 @@ def hcbi_panel(sh: dict, cols: int) -> list:
 
 
 def _hang(sh: dict, cols: int) -> int:
-    """Blank cells in front of a HANGING sheet's continuation lines."""
-    if sh["name"] not in HANGING:
+    """Blank cells in front of a row's continuation lines (0 on a FLUSH sheet)."""
+    if sh["name"] in FLUSH:
         return 0
     w = 0
     for c in range(min(sh["frozen_cols"], len(sh["widths"]))):
