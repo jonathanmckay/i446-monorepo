@@ -250,6 +250,7 @@ def test_user_requested_exclusions_are_skipped():
     assert "词汇" in mod._HABIT_STRIP_SKIP
     assert "slack github" in mod._HABIT_STRIP_SKIP
     assert "问学" in mod._HABIT_STRIP_SKIP
+    assert "qft" in mod._HABIT_STRIP_SKIP   # retired column, 2026-11-24
 
 
 class _FakeProc:

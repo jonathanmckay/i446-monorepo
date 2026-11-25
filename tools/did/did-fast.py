@@ -117,7 +117,7 @@ _DF_SPEC.loader.exec_module(_df)  # type: ignore[union-attr]
 # ---------------------------------------------------------------------------
 
 STOPWORDS = {"the", "a", "an", "to", "with", "and", "of"}
-ALIASES = {"skin2skin": "问学", "stats m5x2": "stats m5x2",
+ALIASES = {"stats m5x2": "stats m5x2",
            # The daily 夜neon card is named "evening hcmc"; the 0n header is
            # "night hcmc" (registry alias since 2026-07-25 — mirrored here so
            # DIRECT did-fast invocations, e.g. dtd's worker, route it too).

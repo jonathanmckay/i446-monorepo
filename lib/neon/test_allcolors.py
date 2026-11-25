@@ -67,6 +67,10 @@ def test_next_handicap():
 
 def test_habit_headers():
     assert not ac.is_habit_header("词汇")
+    # Retired 2026-11-24: a blank one must not be a miss once Excel's "=0"
+    # prefill is gone.
+    assert not ac.is_habit_header("问学")
+    assert not ac.is_habit_header("qft")
     assert not ac.is_habit_header("⎣∀clr")
     assert not ac.is_habit_header("N color")
     assert ac.is_habit_header("NVC\xa0+ e")

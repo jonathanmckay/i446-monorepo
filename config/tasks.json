@@ -333,20 +333,6 @@
       ],
       "todoist_label": "0neon"
     },
-    "问学": {
-      "name": "问学",
-      "category": "0n",
-      "neon_header": "问学",
-      "domain": "xk87",
-      "cumulative": true,
-      "aliases": [
-        "math",
-        "skin2skin"
-      ],
-      "toggl_desc": "math",
-      "toggl_project": "xk87",
-      "todoist_label": "0neon"
-    },
     "xk20": {
       "name": "xk20",
       "category": "0n",
@@ -366,13 +352,6 @@
       "category": "0n",
       "neon_header": "xk26",
       "domain": "xk87",
-      "todoist_label": "0neon"
-    },
-    "qft": {
-      "name": "qft",
-      "category": "0n",
-      "neon_header": "qft",
-      "domain": "i9",
       "todoist_label": "0neon"
     },
     "xk88": {

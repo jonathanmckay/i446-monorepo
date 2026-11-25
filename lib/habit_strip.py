@@ -32,6 +32,8 @@ HABIT_STRIP_SKIP = {
     "mee", "日", "n color", "⎣∀clr", "#",
     # User-requested exclusions (2026-07-20): tracked in Neon, not wanted here.
     "词汇", "slack github", "问学",
+    # Retired 0n column (2026-11-24).
+    "qft",
 }
 # Minimum-commitment habits: a ±N YTD standing (0n!AQ375:AS375), never a
 # daily done/pending chip.

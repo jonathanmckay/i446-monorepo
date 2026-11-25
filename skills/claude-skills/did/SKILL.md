@@ -103,11 +103,11 @@ commas are fine as long as every item is in this form.
 
 **Split:** `,` or `;` → separate items, process each independently.
 
-**Aliases:** `stats m5x2`→`stats m5x2`, `math`→`问学`, `skin2skin`→`问学`, `wake up`→`起`
+**Aliases:** `stats m5x2`→`stats m5x2`, `wake up`→`起`. (`math` is a teaching session, not an alias; the `问学` and `qft` columns were retired 2026-11-24.)
 
 **Split habit:** `bigs <minutes>` — time with both big kids. `did-fast.py` expands it into two 0₦ writes, splitting the minutes between `xk20` (Theo) and `xk22` (Ren). Odd minute goes to xk20. e.g. `did bigs 26` → xk20 +13, xk22 +13; `did bigs 31` → xk20 +16, xk22 +15. Accepts a time range too (`bigs 1430-1501`).
 
-**Cumulative columns:** `问学` — add to existing value instead of overwriting.
+**Cumulative columns:** `xk20`, `xk22`, `xk26` — add to existing value instead of overwriting.
 
 **一起饭** (2026-10-24) — routes to Step 1n: each meal adds **+15** to its 1n+ week cell, and today's 0分 xk column gets base + minutes written as two terms (`+15+30`), so the 15 flows to the day from the 1n habit and the minutes land on the day directly. `did-fast.py` `BASE_IN_CELL_1N` / `run.py` `_BASE_IN_CELL_1N`.
 
@@ -140,7 +140,7 @@ The dispatcher emits JSON with the routing decision. Use its output directly:
 | `"unknown"`  | Not in registry — one-off | Fall through to **0.3** (Todoist word-overlap) and **6** (variable). The dispatcher's `hint` field will say so. |
 
 The dispatcher has already:
-- handled aliases (`math` → 问学, `stats m5x2` → m5x2-stats, `wake up` → 起)
+- handled aliases (`stats m5x2` → m5x2-stats, `wake up` → 起)
 - stripped `@project` overrides into `toggl.project`
 - stripped `[N]`/`(N)`/`{N}` annotations from the routing query
 - resolved live column letters via neon-cols.json (so writes go to the right place even after a column reshuffle)
@@ -282,7 +282,7 @@ Matches 1n+ sheet header. Do NOT write to 0₦.
 | `/did ibx i9` — Todoist is "ibx - i9 [20]" | Step 3 dash-norm matches | Must NOT skip Todoist close |
 | `/did 30m session with lx` — Todoist has "30m lx session [30]" | Step 0 word-overlap → Step 5 | Must NOT create posthoc duplicate |
 | `/did stats m5x2` — Todoist is "m5x2 stats (4) [8]" | Step 3 word-overlap matches despite word order | Must NOT skip Todoist close |
-| `/did math` — alias→问学, Todoist is "math with kids (60) [70]" | Step 3 searches original "math" too, word-overlap matches | Must NOT skip Todoist close |
+| `/did math` — a teaching session (no 0n column since 问学 was retired 2026-11-24), Todoist is "math with kids (60) [70]" | Priced as a session; word-overlap still matches the card | Must NOT skip Todoist close |
 | `/did hiit` then `/did 0l` | completed-today filters hiit from suggestions | Must NOT re-suggest completed recurring tasks |
 | `/did 1 xk88` — 1n+ header is "1 xk88" | Step 0.2 matches 1n+ header → Step 1n, closes 1neon Todoist task | Must NOT treat leading "1" as points and route to Step 6 |
 | `/did 1 i9` — 1n+ header is "1 i9" | Step 0.2 matches 1n+ header → Step 1n | Must NOT route to Step 6 as "1 point to i9" |

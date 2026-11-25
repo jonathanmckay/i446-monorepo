@@ -3,7 +3,7 @@
 A day D gets all colors when
   * the core three (0t, 0l, 0g) are done (non-blank, nonzero), and
   * misses <= handicap, where misses = blank cells among the other 0n habit
-    columns (D:AS minus AF/AG/AH, 词汇, the core three and, from 2026-11-15,
+    columns (D:AS minus AF/AG/AH, the retired 词汇/问学/qft, the core three and, from 2026-11-15,
     the target habits xk20/xk22/xk26/o314/冥想/其他人) plus one virtual
     habit "1n": every 1n+ card whose row-3 weekday is D's weekday is filled
     in its week row.
@@ -24,9 +24,14 @@ DONE, NA, BLANK = "done", "na", "blank"
 CORE = ("0t", "0l", "0g")
 LATE_N_COLOR = 3000   # 0n!AF: 0t and 0l were done, but not both on the day
 LATE_ALL_COLORS = 3000   # 0n!AG: reached only with after-the-day writes
-# 0n columns that are not habits (bookkeeping) or are excluded by JM
-# ("词汇": retired, blank every day since 2026-10).
-NON_HABIT = {"n color", "⎣∀clr", "#", "词汇"}
+# Retired 0n habit columns: the column letter still exists (neon-cols.json
+# mirrors the sheet) but nothing reads it as a habit. 词汇: blank every day
+# since 2026-10. 问学, qft (JM 2026-11-24): N/A every day since 2026-05, and
+# only because Excel prefills "=0"; the ledger must not depend on that prefill.
+# Kid teaching time is tracked per kid in xk20/xk22.
+RETIRED = {"词汇", "问学", "qft"}
+# 0n columns that are not habits: bookkeeping, plus the retired ones.
+NON_HABIT = {"n color", "⎣∀clr", "#"} | RETIRED
 # Targets, not daily duties (JM 2026-11-15): a blank one is not a miss. Only
 # from TARGETS_SINCE on, so days closed under the old rule are not re-stamped
 # by the 14-day sweep.

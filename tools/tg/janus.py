@@ -2594,6 +2594,8 @@ _HABIT_STRIP_SKIP = {
     # User-requested exclusions (2026-07-20) — tracked in Neon, just not
     # wanted on this strip.
     "词汇", "slack github", "问学",
+    # Retired 0n column (2026-11-24).
+    "qft",
 }
 
 # Minimum-commitment habits: shown as a YTD standing (±N) instead of daily
