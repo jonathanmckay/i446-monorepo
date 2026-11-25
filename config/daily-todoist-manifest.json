@@ -269,36 +269,6 @@
    ],
    "priority": 2,
    "project_id": "6Crfmq5QFg895Mcw"
-  },
-  "琪琪中文": {
-   "match": "琪琪中文",
-   "content": "琪琪中文 (15) [20]",
-   "due_string": "every day",
-   "labels": [
-    "0neon",
-    "xk87"
-   ],
-   "priority": 2,
-   "project_id": "6Crfmq5QFg895Mcw",
-   "splits_to": [
-    "xk22"
-   ],
-   "_note": "minutes typed at /did go to 0n xk22 (did-fast SPLIT_HABITS); not itself a 0n header"
-  },
-  "轩轩中文": {
-   "match": "轩轩中文",
-   "content": "轩轩中文 (25) [30]",
-   "due_string": "every day",
-   "labels": [
-    "0neon",
-    "xk87"
-   ],
-   "priority": 2,
-   "project_id": "6Crfmq5QFg895Mcw",
-   "splits_to": [
-    "xk20"
-   ],
-   "_note": "minutes typed at /did go to 0n xk20 (did-fast SPLIT_HABITS); not itself a 0n header"
   }
  }
 }

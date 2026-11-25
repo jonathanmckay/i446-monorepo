@@ -28,9 +28,14 @@ MANIFEST = json.loads((ROOT / "config" / "daily-todoist-manifest.json").read_tex
 
 
 def test_kid_time_habits_are_manifest_covered():
-    """xk20/xk22/xk26 must all be in the manifest — the exact gap that let
-    "xk26 missing today" go undetected/unrepaired."""
-    for key in ("xk20", "xk22", "xk26"):
+    """xk26 must be in the manifest — the exact gap that let "xk26 missing
+    today" go undetected/unrepaired. xk20 / xk22 have no daily card any more
+    (JM 2026-11-24: the 轩轩中文 / 琪琪中文 cards were dropped; those columns
+    are derived from Toggl kid tags at day close), so they must NOT be here,
+    or --fix would recreate cards he removed."""
+    for key in ("xk20", "xk22", "轩轩中文", "琪琪中文"):
+        assert key not in MANIFEST["habits"], key
+    for key in ("xk26",):
         assert key in MANIFEST["habits"], (
             f"{key} is a daily 0neon habit in tasks.json but missing from "
             "daily-todoist-manifest.json — the --fix safety net cannot "
@@ -40,7 +45,7 @@ def test_kid_time_habits_are_manifest_covered():
 def test_kid_time_manifest_entries_match_tasks_json_domain():
     """Each xk entry's manifest labels must include its own habit code and
     the shared xk87 family domain, matching tasks.json's definition."""
-    for key in ("xk20", "xk22", "xk26"):
+    for key in ("xk26",):
         habit = TASKS["habits"][key]
         assert habit["domain"] == "xk87"
         entry = MANIFEST["habits"][key]
