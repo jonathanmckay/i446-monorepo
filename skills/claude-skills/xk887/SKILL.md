@@ -51,6 +51,9 @@ Sunday's month, `W` = which Sunday of that month it is — e.g. Sun 7/19 →
 | Better | F |
 | Notes | G |
 | Goals | H |
+| Chores (unprompted / reminded / skipped) | I |
+
+Chores (added 2026-11-24) is the weekly check on [[milestones-and-responsibilities]]: one short line per kid, e.g. `table 5/7 unprompted, shoes reminded`. Theo and Ren only.
 
 ### xk26 (Rori) — same as above, plus:
 

@@ -88,6 +88,7 @@ SHEETS = [
             ("better",       "Better",                                "F", "textml"),
             ("notes",        "Notes",                                 "G", "textml"),
             ("goals",        "Goals",                                 "H", "textml"),
+            ("chores",       "Chores (unprompted / reminded / skipped)", "I", "text"),
         ],
     },
     {
@@ -101,6 +102,7 @@ SHEETS = [
             ("better",       "Better",                                "F", "textml"),
             ("notes",        "Notes",                                 "G", "textml"),
             ("goals",        "Goals",                                 "H", "textml"),
+            ("chores",       "Chores (unprompted / reminded / skipped)", "I", "text"),
         ],
     },
     {

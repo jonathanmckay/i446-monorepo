@@ -131,7 +131,7 @@ def test_every_form_has_a_spec_from_its_script():
             assert f["type"] != "choice" or f["options"]
     keys = [f["key"] for f in forms.spec("0s")["fields"]]
     assert keys[0] == "title" and keys[-1] == "points_checked"
-    assert len(forms.spec("xk887")["fields"]) == 29
+    assert len(forms.spec("xk887")["fields"]) == 31   # +chores for Theo and Ren, 2026-11-24
 
 
 def test_build_tasks_carries_form(tmp_path, monkeypatch):
