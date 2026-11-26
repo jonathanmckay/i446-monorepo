@@ -82,7 +82,7 @@ def _workbook(path: Path) -> Path:
     hidden = wb.create_sheet("old")
     hidden.sheet_state = "hidden"
     wb.create_sheet("meta").append(["Time", "Cat"])       # in SKIP_SHEETS
-    wb.create_sheet("hcbi").append(["Time", "Cat"])
+    wb.create_sheet("0s897").append(["Time", "Cat"])
     wb.save(path)
     return path
 
@@ -101,7 +101,7 @@ def _cell(sheet, row, col):
 
 
 def test_build_sheets_text_and_extent(snap):
-    assert [s["name"] for s in snap["sheets"]] == ["0分", "hcbi"]        # hidden and skipped sheets dropped
+    assert [s["name"] for s in snap["sheets"]] == ["0分", "0s897"]        # hidden and skipped sheets dropped
     s = snap["sheets"][0]
     assert s["tab"] == "#123456" and s["header_rows"] == 1 and s["frozen_cols"] == 2
     assert len(s["rows"]) == 10 and 10 not in s["row_nums"]              # hidden row gone, stray row 2000 cut
@@ -320,3 +320,23 @@ def test_ratings_and_points_are_colour_coded():
     assert colour("J", 237) == "#602827" and colour("J", 147) == "#d99694"
     names = [p["name"] for p in ng.SHEETS["1n+"]["split"]]
     assert names == ["1n", "2n", "3n", "4n"]
+
+
+def test_hcbi_leads_the_strip_with_a_one_character_dozen_and_three_columns_out(tmp_path):
+    """JM 2026-11-26: hcbi is the first tab after janus's own; the Daily Dozen
+    (E:O) is one character a column; alcohol (R), 0s (T) and the weekly kcal
+    average (V) are not drawn."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active.title = "0分"
+    wb.active.append(["周", "Date"])
+    ws = wb.create_sheet("hcbi")
+    ws.append(["周", "Date", "d", None] + ["h%d" % i for i in range(20)])
+    ws.append([None, dt.datetime(TODAY.year, TODAY.month, TODAY.day), "M", None] + list(range(20)))
+    path = tmp_path / "neon.xlsx"
+    wb.save(path)
+    sheets = ng.build(path, today=TODAY)["sheets"]
+    assert [s["name"] for s in sheets] == ["hcbi", "0分"]
+    s = sheets[0]
+    assert not {"R", "T", "V"} & set(s["cols"]) and {"P", "U", "W"} <= set(s["cols"])
+    assert [s["widths"][s["cols"].index(c)] for c in "EFGHIJKLMNO"] == [1] * 11

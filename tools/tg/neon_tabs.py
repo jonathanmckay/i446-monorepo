@@ -601,11 +601,13 @@ HCBI_DOZEN = ("E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O")   # bn br f
 # test_neon_tabs holds the two in step. Grains and caffeine have no goal.
 HCBI_DOZEN_TARGETS = (3, 1, 3, 1, 2, 2, 1, None, 1, 1, 3)
 HCBI_EXTRA = (("P", 100, ">="), ("U", 1800, "<="), ("W", None, None))     # protein g, kcal (a ceiling), caf
-HCBI_MET = "bg:#5fd75f #000000"     # a met target in a column the sheet left unfilled all week
+HCBI_MET = "bg:#5fd75f #000000"     # on pace / reached, in a column the sheet left unfilled all week
 HCBI_BLOCKS = "卯辰巳午未申戌"     # header glyphs of the meal triads: name, kcal, protein g
 HCBI_HCBP = "Y"
 HCBI_TOTAL = (388, "X")         # the sheet's combined hcbc+hcbp cell (janus.HCBI_HCB_TOTAL_CELL)
+HCBI_WEEK_STARTS = "Th"         # column C's weekday of the first day of an hcb week
 HCBI_WEEK = 7
+HCBI_WINDOW = 8                 # days shown: the week being summed never fills it, so yesterday is always there
 HCBI_GRID_MIN = 8               # grid rows the panel must leave before its meals stop wrapping
 MEAL_SEP = " · "                # not ", ": meal names carry commas
 _DIM, _GLYPH = "#6c6c6c", "bold #d7af00"
@@ -627,24 +629,19 @@ def _cell_style(sh: dict, cell: list) -> str:
     return " ".join(x for x in (("bg:" + bg) if bg else "", fg or "", "bold" if bold else "") if x)
 
 
-def _one(text: str) -> str:
-    """A Daily Dozen count in one character: ½ for a half, # past nine."""
-    v = _num(text)
-    if v is None or neon_grid.cwidth(text) <= 1:
-        return text
-    return "½" if v == 0.5 else ("%d" % round(v) if 0 <= round(v) <= 9 else "#")
-
-
-def _hcbi_week(sh: dict) -> list:
-    """Row indexes of the current week, oldest first, ending on today: back to
-    the row carrying a week label in column A (the sheet's weeks start Sunday)."""
+def _hcbi_window(sh: dict) -> tuple:
+    """(rows shown, rows summed), oldest first, both ending on today. Shown:
+    the last HCBI_WINDOW days, so there is history on any weekday. Summed: the
+    hcb week so far, Thursday through Wednesday (the sheet's own weekly hcbp
+    runs Th-W; column A's Sunday weeks are not it)."""
     today, hdr = sh["today_row"], sh["header_rows"]
-    first = today
-    for r in range(today, max(hdr, today - HCBI_WEEK + 1) - 1, -1):
-        first = r
-        if sh["rows"][r][0][0].strip():
+    c = sh["cols"].index("C")
+    start = today
+    for r in range(today, max(hdr, today - 6) - 1, -1):
+        start = r
+        if sh["rows"][r][c][0].strip() == HCBI_WEEK_STARTS:
             break
-    return list(range(first, today + 1))
+    return list(range(max(hdr, today - HCBI_WINDOW + 1), today + 1)), list(range(start, today + 1))
 
 
 def _meals(sh: dict, r: int) -> list:
@@ -671,13 +668,13 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
     if today is None or any(c not in sh["cols"] for c in HCBI_DOZEN + (HCBI_HCBP, "B", "C")):
         return []
     rows, ci = sh["rows"], sh["cols"].index
-    days = _hcbi_week(sh)
+    days, week = _hcbi_window(sh)
     b, c_, y = ci("B"), ci("C"), ci(HCBI_HCBP)
     labels = [_rpad(rows[r][b][0].strip(), 5) + " " + rows[r][c_][0].strip().ljust(2) + " " for r in days]
     gutter = 9
 
-    def date(i, r):
-        return (TODAY_STYLE if r == today else DATE_STYLE, labels[i])
+    def date(i, r):                                         # last week's days sit back
+        return (TODAY_STYLE if r == today else DATE_STYLE if r in week else _DIM, labels[i])
 
     # 1. the sums
     bits = []
@@ -693,36 +690,35 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
             if v is not None:
                 bits.append("hcbp %s %+d" % (quarter, round(v)))
             break
-    bits.append("week %+d" % round(sum(_num(rows[r][y][0]) or 0 for r in days)))
+    bits.append("week %+d" % round(sum(_num(rows[r][y][0]) or 0 for r in week)))
     out = [[("bold", _clip(" " + MEAL_SEP.join(bits), cols)), ("", "\n")]]
 
-    # 2. the dozen, then protein / kcal / caf as the sheet fills them; 3. their
-    # sums (filled like each column's best day: the legend) over the targets
-    # for the days shown, a target filled only when the sum meets it
+    # 2. the dozen, then protein / kcal / caf as the sheet fills them, every
+    # column as wide as its total; 3. the hcb week's sums, coloured (like the
+    # column's best day) only when on pace for this many days of the week,
+    # over the week's targets, coloured once reached
     plan = [(col, t, ">=") for col, t in zip(HCBI_DOZEN, HCBI_DOZEN_TARGETS)]
     plan += [m for m in HCBI_EXTRA if m[0] in sh["cols"]]
-    sums, best, goals, texts = [], [], [], []
+    sums, goals, texts = [], [], []
     for col, target, kind in plan:
-        cells = [(_num(rows[r][ci(col)][0]), rows[r][ci(col)]) for r in days]
+        cells = [(_num(rows[r][ci(col)][0]), rows[r][ci(col)]) for r in week]
         cells = [x for x in cells if x[0] is not None]
         total = sum(x[0] for x in cells)
-        style = _cell_style(sh, max(cells, key=lambda x: x[0])[1]) if cells else ""
-        sums.append(("%g" % total, (style + " bold").strip()))
+        fill = _cell_style(sh, max(cells, key=lambda x: x[0])[1]) if cells else ""
+        fill = fill if "bg:" in fill else HCBI_MET
         if target is None:
+            sums.append(("%g" % total, "bold"))
             goals.append(("", ""))
-        else:
-            met = total >= target * len(days) if kind == ">=" else 0 < total <= target * len(days)
-            fill = style if "bg:" in style else HCBI_MET
-            goals.append((("≤" if kind == "<=" else "") + "%g" % (target * len(days)), fill if met else _DIM))
+            texts.append([rows[r][ci(col)][0].strip().replace(",", "") for r in days])
+            continue
+        pace, full = target * len(week), target * HCBI_WEEK
+        on_pace = total >= pace if kind == ">=" else 0 < total <= pace
+        done = total >= full if kind == ">=" else len(week) == HCBI_WEEK and 0 < total <= full
+        sums.append(("%g" % total, (fill + " bold") if on_pace else "bold"))
+        goals.append((("≤" if kind == "<=" else "") + "%g" % full, fill if done else _DIM))
         texts.append([rows[r][ci(col)][0].strip().replace(",", "") for r in days])
-    # A day's dozen is one character a column, flush; the sums and targets need
-    # more, so they run wider under it and protein / kcal / caf start where
-    # those rows end, on every line.
     nd = len(HCBI_DOZEN)
-    for k in range(nd):
-        texts[k] = [_one(t) for t in texts[k]]
-    w = max([1] + [neon_grid.cwidth(x[0]) for x in sums[:nd] + goals[:nd]])
-    w += w > 1 and any(neon_grid.cwidth(g[0]) == w for g in goals[:nd])    # unfilled targets must not run together
+    w = 1 + max(neon_grid.cwidth(x[0]) for x in sums[:nd] + goals[:nd])
     widths = [w] * nd + [1 + max(neon_grid.cwidth(t) for t in texts[k] + [sums[k][0], goals[k][0]])
                          for k in range(nd, len(plan))]
     fit, used = 0, gutter                                   # a pane too narrow drops the last columns
@@ -730,18 +726,13 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
         used += widths[fit]
         fit += 1
 
-    def cells_line(lead, items, day=False):
-        line = [lead]
-        for k, (t, st) in enumerate(items[:fit]):
-            line.append((st, _rpad(t, 1 if day and k < nd else widths[k])))
-            if day and k == nd - 1 and fit > nd:
-                line.append(("", " " * (nd * (w - 1))))
-        return line + [("", "\n")]
+    def cells_line(lead, items):
+        return [lead] + [(st, _rpad(t, widths[k])) for k, (t, st) in enumerate(items[:fit])] + [("", "\n")]
 
     out.append([("", "\n")])
     for i, r in enumerate(days):
         out.append(cells_line(date(i, r), [(texts[k][i], _cell_style(sh, rows[r][ci(plan[k][0])]))
-                                           for k in range(len(plan))], day=True))
+                                           for k in range(len(plan))]))
     out.append(cells_line((_DIM, "∑".ljust(gutter)), sums))
     out.append(cells_line((_DIM, "target".ljust(gutter)), goals))
     out.append([("", "\n")])

@@ -132,65 +132,92 @@ def test_cell_styles_and_merge_label(tmp_path):
 
 
 def _hcbi(today=6):
-    cols = ["A", "B", "C"] + list(nt.HCBI_DOZEN) + ["X", "Y", "AK", "AL", "AM", "AZ", "BA", "BB"]
-    styles = [[None, None, 0, "r"], ["#660200", "#ffffff", 0, "r"], ["#ffc7ce", "#000000", 0, "l"]]
+    cols = ["A", "B", "C"] + list(nt.HCBI_DOZEN) + ["P", "U", "W", "X", "Y", "AK", "AL", "AM", "AZ", "BA", "BB"]
+    styles = [[None, None, 0, "r"], ["#660200", "#ffffff", 0, "r"], ["#ffc7ce", "#000000", 0, "l"],
+              ["#f13df5", "#000000", 0, "r"]]
     head = {"AK": "卯", "AZ": "申"}
     rows = [[[head.get(c, c), 0] for c in cols]]
     for r in range(1, 9):
-        rows.append([["11.4" if r == 4 else "", 0], ["11/%d" % (18 + r), 0], ["MTWTFSSM"[r - 1], 0]]
+        rows.append([["", 0], ["11/%d" % (18 + r), 0], [("M", "T", "W", "Th", "F", "S", "S", "M")[r - 1], 0]]
                     + [["", 0] for _ in cols[3:]])
     def put(r, **kw):
         for col, v in kw.items():
             rows[r][cols.index(col)] = list(v) if isinstance(v, tuple) else [v, 0]
     put(3, E="9", Y="500")                                  # last week: outside the panel
-    put(4, E=("3", 1), F="1", G="0.5", Y="45", AK="mocha", AL="390", AM="12")
-    put(5, E=("1", 2), Y="0", AK="skyr, berries", AL="200", AM="20", AZ="面条 and a very long dinner name", BA="900", BB="40")
-    put(6, E="", G="1", Y="64")
+    put(4, E=("3", 1), F="1", G="0.5", J="12", P="120", U=("1,810", 3), W="60", Y="45", AK="mocha", AL="390", AM="12")
+    put(5, E=("7", 2), F="2", P="130", U=("1,500", 3), W="-60", Y="0", AK="skyr, berries", AL="200", AM="20",
+        AZ="面条 and a very long dinner name", BA="900", BB="40")
+    put(6, E="", F="1", G="1", P="60", U=("900", 3), Y="64")
     put(7, B="Q4", Y="928")
     put(8, X="-1,334")
     return {"name": "hcbi", "tab": None, "header_rows": 1, "frozen_cols": 2, "today_row": today,
             "cols": cols, "row_nums": [1, 325, 326, 327, 328, 329, 330, 380, 388],
-            "widths": [5, 6, 3] + [4] * (len(cols) - 3), "styles": styles, "rows": rows, "skipped_rules": 0}
+            "widths": [5, 6, 3] + [1] * 11 + [4] * (len(cols) - 14), "styles": styles, "rows": rows,
+            "skipped_rules": 0}
 
 
 def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
-    """JM 2026-11-26: the hcb / hcbp sums on top, a headerless Daily Dozen
-    block (date, weekday, the fills flush against each other), one row of
-    sums, then the same days' meals behind their block glyph; the full log
-    below keeps one line a day."""
+    """JM 2026-11-26: the hcb / hcbp sums on top, a blank line, a headerless
+    Daily Dozen block (date, weekday, the sheet's fills) with protein, kcal
+    and caf, padded to line up with the totals; the last eight days are shown
+    but the sums are the hcb week's, Thursday on, coloured only when on pace
+    for the days so far; under them the week's targets; then the same days'
+    meals behind their block glyph. The full log below keeps one line a day."""
     t = _tabs(tmp_path, [_hcbi()])
     t.select(1)
-    frags = t.render(60, 40)
+    frags = t.render(70, 40)
     lines = _text(frags).split("\n")
-    assert len(lines) == 40 and all(ng.cwidth(ln) <= 60 for ln in lines)
-    assert lines[1] == " hcb -1334 · hcbp Q4 +928 · week +109"       # week = 45 + 0 + 64; last week's 500 is out
-    w = 3                                                   # the widest cell ("0.5", "1.5") sets every column
-    assert lines[2] == "11/22 T  " + "  3" + "  1" + "0.5" + " " * (w * 8)
-    assert lines[3].startswith("11/23 F    1") and lines[4].startswith("11/24 S          1")
-    assert lines[5] == "∑        " + "  4" + "  1" + "1.5" + "  0" * 8
-    assert ("bg:#660200 #ffffff", "  3") in frags           # the sheet's own fill, no padding either side
-    assert ("bg:#ffc7ce #000000", "  1") in frags           # right-aligned whatever the cell's alignment
-    assert ("bg:#660200 #ffffff bold", "  4") in frags      # a sum wears its column's best day: the legend
+    assert len(lines) == 40 and all(ng.cwidth(ln) <= 70 for ln in lines)
+    assert lines[1] == " hcb -1334 · hcbp Q4 +928 · week +109"       # Th-S: 45 + 0 + 64; Wednesday's 500 is last week
+    assert lines[2] == ""
+    assert [ln[:9] for ln in lines[3:9]] == ["11/19 M  ", "11/20 T  ", "11/21 W  ", "11/22 Th ", "11/23 F  ", "11/24 S  "]
+    assert lines[5] == "11/21 W  " + "   9" + " " * 55      # history: shown, not summed
+    assert lines[6] == "11/22 Th " + "   3   1 0.5" + " " * 8 + "  12" + " " * 20 + " 120   1810  60"
+    assert lines[9] == "∑        " + "  10   4 1.5   0   0  12" + "   0" * 5 + " 310   4210   0"
+    assert lines[10] == "target   " + "  21   7  21   7  14  14   7       7   7  21" + " 700 ≤12600    "
+    assert (nt._DIM, "11/21 W  ") in frags and (nt.DATE_STYLE, "11/22 Th ") in frags    # last week sits back
     assert (nt.TODAY_STYLE, "11/24 S  ") in frags
-    assert lines[6] == ""
-    assert lines[7] == "11/22 T  卯 mocha 390 12"
-    assert lines[8] == "11/23 F  卯 skyr, berries 200 20"            # the second meal does not fit: next line,
-    assert lines[9] == "         申 面条 and a very long dinner name 900 40"      # under the date gutter
-    assert lines[10] == "11/24 S  ·" and lines[11] == ""
-    assert lines[12].split()[:3] == ["A", "B", "C"]         # then the log, one line a day
-    assert len(nt._pages(_hcbi(), 60)[0]) == 1 and len(nt._pages(_hcbi(), 60)) > 1
-    assert t.body_height(40, 60) == 40 - 2 - 11 - 1
+    assert ("bg:#660200 #ffffff", "   3") in frags          # the sheet's own fill
+    assert ("bg:#f13df5 #000000", "   1810") in frags       # kcal coloured as the sheet colours it
+    # three days in: beans 10 >= 9 wears its best day's fill; berries, vegetables and protein are on pace in
+    # columns the sheet left bare; fruit 1.5 < 9 and water 0 < 9 are plain; kcal 4210 is under 3 x 1800
+    assert ("bg:#ffc7ce #000000 bold", "  10") in frags and (nt.HCBI_MET + " bold", "   4") in frags
+    assert (nt.HCBI_MET + " bold", "  12") in frags and (nt.HCBI_MET + " bold", " 310") in frags
+    assert ("bold", " 1.5") in frags and ("bold", "   0") in frags
+    assert ("bg:#f13df5 #000000 bold", "   4210") in frags
+    assert (nt._DIM, "  21") in frags and (nt._DIM, " ≤12600") in frags      # no weekly target reached yet
+    assert lines[11] == ""
+    assert lines[12:15] == ["11/19 M  ·", "11/20 T  ·", "11/21 W  ·"]
+    assert lines[15] == "11/22 Th 卯 mocha 390 12"
+    assert lines[16] == "11/23 F  卯 skyr, berries 200 20"            # the second meal does not fit: next line,
+    assert lines[17] == "         申 面条 and a very long dinner name 900 40"      # under the date gutter
+    assert lines[18] == "11/24 S  ·" and lines[19] == ""
+    assert lines[20].split()[:2] == ["A", "B"] and lines[20].split()[2].startswith("CEFGHIJKLMNO")   # the log, a line a day
+    assert len(nt._pages(_hcbi(), 60)[0]) == 1 and len(nt._pages(_hcbi(), 40)) > 1
+    assert t.body_height(40, 70) == 40 - 2 - 19 - 1
     narrow = _text(t.render(30, 40)).split("\n")            # a meal wider than the pane keeps its numbers
     assert [ln for ln in narrow if "申" in ln][0].endswith(" 900 40") and all(ng.cwidth(ln) <= 30 for ln in narrow)
-    tight = _text(t.render(60, 21)).split("\n")             # under HCBI_GRID_MIN log rows: one meal line a day
-    assert len(tight) == 21 and not [ln for ln in tight if ln.startswith("         申")]
-    short = _text(t.render(60, 14)).split("\n")
+    tight = _text(t.render(70, 29)).split("\n")             # under HCBI_GRID_MIN log rows: one meal line a day
+    assert len(tight) == 29 and not [ln for ln in tight if ln.startswith("         申")]
+    short = _text(t.render(70, 14)).split("\n")
     assert len(short) == 14 and "hcbp Q4" not in "".join(short)      # a short pane keeps the grid
-    monday = _hcbi(today=5)
-    assert len(nt._hcbi_week(monday)) == 2 and nt._hcbi_week(_hcbi(today=4)) == [4]      # the week starts at its label
+    assert nt._hcbi_window(_hcbi(today=4)) == ([1, 2, 3, 4], [4])    # a Thursday starts its own week
+    assert nt._hcbi_window(_hcbi(today=3))[1] == [1, 2, 3]           # no Thursday in reach: what there is
+    done = _hcbi()
+    done["rows"][6][done["cols"].index("E")] = ["12", 1]    # beans 22 >= 21: the week's target is reached
+    assert ("bg:#660200 #ffffff", "  21") in [f for ln in nt.hcbi_panel(done, 70) for f in ln]
     bare = _hcbi()
     bare["cols"], bare["rows"], bare["widths"] = bare["cols"][:5], [r[:5] for r in bare["rows"]], bare["widths"][:5]
     assert nt.hcbi_panel(bare, 60) == []                    # not the hcbi we know: no panel
+
+
+def test_hcbi_targets_match_the_weekly_review():
+    spec = importlib.util.spec_from_file_location("hcb1", HERE.parent / "1hcb" / "1hcb.py")
+    hcb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hcb)
+    assert list(nt.HCBI_DOZEN_TARGETS) == [g[2] for g in hcb.FOOD_GROUPS]
+    extra = {m[0]: m[1:] for m in nt.HCBI_EXTRA}
+    assert extra["P"] == (hcb.PROTEIN_TARGET, ">=") and extra["U"] == (hcb.CAL_CEILING, "<=")
 
 
 def test_a_split_part_reads_its_source_sheet(tmp_path):
