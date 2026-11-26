@@ -1,5 +1,14 @@
 {
   "version": 1,
-  "tasks": {},
-  "last_sync": "2026-11-26T06:00:08.673874-08:00"
+  "tasks": {
+    "be helpful and happy": {
+      "todoist_id": "6j5CXFGwPgCc8JGR",
+      "minutes": 60
+    },
+    "2 hiit workeouts": {
+      "todoist_id": "6j5CXFH5vGX3fJWw",
+      "minutes": 40
+    }
+  },
+  "last_sync": "2026-11-26T07:00:52.908494-08:00"
 }
