@@ -660,18 +660,6 @@
     "rent": "1304.00"
   },
   {
-    "unit_id": 844,
-    "property_name": "kn47 K1",
-    "unit": "C102",
-    "tenant_name": "Steck, Walter S.",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2018-06-28",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2025-12-01",
-    "rent": "1089.00"
-  },
-  {
     "unit_id": 1028,
     "property_name": "kn47 K2",
     "unit": "C105",
@@ -706,18 +694,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "1025.00"
-  },
-  {
-    "unit_id": 1369,
-    "property_name": "c702",
-    "unit": "F201",
-    "tenant_name": "Safi, Sayed",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2024-11-22",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1499.00"
   },
   {
     "unit_id": 204,
@@ -3324,18 +3300,6 @@
     "rent": "1425.00"
   },
   {
-    "unit_id": 797,
-    "property_name": "v202",
-    "unit": "11",
-    "tenant_name": "Barton, Julia K.",
-    "status": "Eligible",
-    "lease_sign_date": "2026-03-22",
-    "move_in": "2026-04-24",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1475.00"
-  },
-  {
     "unit_id": 444,
     "property_name": "w226",
     "unit": "11",
@@ -3664,7 +3628,7 @@
     "property_name": "c702",
     "unit": "G304",
     "tenant_name": "Patterson, Uriah",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": null,
     "move_in": "2026-05-15",
     "renewal_start_date": null,
