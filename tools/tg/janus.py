@@ -738,6 +738,7 @@ STATE = State()
 # Headless (pytest) gets a throwaway state file and no snapshot, so a tab JM
 # left open can never change what render_all() returns under test.
 import neon_tabs  # noqa: E402
+import janus_ate  # noqa: E402  /ate from the input box
 import neon_book_reads  # noqa: E402
 if sys.stdout.isatty():
     NEON = neon_tabs.Tabs()
@@ -7842,6 +7843,25 @@ def _on_enter(event):
         return
     if _boot_grace_active():
         flash(f"ignored startup input: {text[:30]}", 4.0)
+        return
+
+    # /ate (JM 2026-11-26): a food entry for hcbi, not a timer. Routed before
+    # the project-code guard and the comma split below, both of which would
+    # mangle "name, kcal, protein (groups)". On a past-day view it lands on
+    # that day's row.
+    ate = janus_ate.parse(text)
+    if ate:
+        viewed = view_now().date()
+        ate_date = f"{viewed.month}/{viewed.day}" if STATE.day_offset else None
+        need = janus_ate.missing(ate)
+        flash(f"$ /ate {ate['name']}" + (f" · estimating {'/'.join(need)}…" if need else ""), 60.0)
+        event.app.invalidate()
+
+        async def _ate_run():
+            flash(await asyncio.to_thread(janus_ate.run_ate, ate, ate_date), 8.0)
+            event.app.invalidate()
+
+        event.app.create_background_task(_guarded(event.app, _ate_run(), quiet=True))
         return
 
     # Project-code typo guard (2026-10-17: "@9" cost a Toggl 400 and a

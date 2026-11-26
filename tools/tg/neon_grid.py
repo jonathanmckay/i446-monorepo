@@ -85,7 +85,11 @@ SHEETS = {
                        "L": [[16, "greaterThan", [0.1], "e5f8fc", None, None, False]],
                        "X": [[4, "greaterThan", [0.0], "bfbfbf", "000000", False, False]]}},
     "0s897":   {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
-    "hcbi":    {"header_rows": 1, "date_col": "B", "frozen_cols": 2},
+    # the Daily Dozen (E:O) is one character a column: the fill says which (JM 2026-11-26).
+    "hcbi":    {"header_rows": 1, "date_col": "B", "frozen_cols": 2,
+                "widths": {c: 1 for c in "EFGHIJKLMNO"},
+                # alcohol (R), the 0s tracking score (T) and the weekly kcal average (V) are out for now
+                "drop_cols": ["R", "T", "V"]},
     # Ratings and weekly points colour-coded (JM 2026-11-25): the workbook has
     # no rules here. The 分 columns are formulas into 1分+1s G/H and take that
     # sheet's own rules for them.
@@ -118,6 +122,7 @@ SHEETS = {
     "1分+1s":  {"header_rows": 1, "date_col": "A", "frozen_cols": 1},
 }
 # Visible in Excel, not wanted as janus tabs (JM 2026-11-21; 1g may return in another form).
+FIRST = {"hcbi"}            # the tab right after janus's own (JM 2026-11-26)
 SKIP_SHEETS = {"meta", "分ledger", "1g"}
 DEFAULT_VIEW = {"header_rows": 1, "frozen_cols": 1}
 MAX_COL_CHARS = 14          # a notes column must not eat a 58-column pane
@@ -575,6 +580,8 @@ def build_sheet(ws, wsv, theme: list, today: dt.date, week_label: str = "") -> d
             cell = wsv._cells.get((1, c))
             return str(cell.value).strip() if cell is not None and cell.value is not None else ""
         cols = [c for c in cols if _head(c) not in drop]
+    gone = {_col_index(k) for k in view.get("drop_cols") or ()}     # by letter: for columns with no header
+    cols = [c for c in cols if c not in gone]
     week_c = _col_index(view["week_col"]) if view.get("week_col") else None
     cols = [c for c in cols if c != week_c]
     # "after": draw a column right after another one. sheet["cols"] is then in
@@ -892,7 +899,8 @@ def build(src: Path = SRC, today: dt.date | None = None) -> dict:
             sheet = build_sheet(ws, wv[ws.title], theme, today, label)
             parts = (SHEETS.get(ws.title) or {}).get("split")
             sheets.extend(split_sheet(sheet, parts) if parts else [sheet])
-        sheets.sort(key=lambda sh: bool(sh.get("last")))        # stable: the "last" parts go to the end
+        # stable: FIRST leads the strip, the "last" parts go to the end
+        sheets.sort(key=lambda sh: (sh["name"] not in FIRST, bool(sh.get("last"))))
     body = json.dumps(sheets, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     # the day is part of the hash: at midnight "today's row" moves even when no
     # cell did, and an unchanged hash would leave yesterday's file in place

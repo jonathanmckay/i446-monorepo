@@ -597,6 +597,11 @@ def _pages(sh: dict, cols: int, max_lines: int | None = None) -> list:
 # columns either. Then one row for sums. Then a section for the same days the
 # meals that I had, listed with a block prefix (卯 mocha 390 12, 申 …)."
 HCBI_DOZEN = ("E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O")   # bn br fr cr gr vg fx g nt sp wtr
+# Daily targets, tools/1hcb/1hcb.py's (FOOD_GROUPS, PROTEIN_TARGET, CAL_CEILING);
+# test_neon_tabs holds the two in step. Grains and caffeine have no goal.
+HCBI_DOZEN_TARGETS = (3, 1, 3, 1, 2, 2, 1, None, 1, 1, 3)
+HCBI_EXTRA = (("P", 100, ">="), ("U", 1800, "<="), ("W", None, None))     # protein g, kcal (a ceiling), caf
+HCBI_MET = "bg:#5fd75f #000000"     # a met target in a column the sheet left unfilled all week
 HCBI_BLOCKS = "卯辰巳午未申戌"     # header glyphs of the meal triads: name, kcal, protein g
 HCBI_HCBP = "Y"
 HCBI_TOTAL = (388, "X")         # the sheet's combined hcbc+hcbp cell (janus.HCBI_HCB_TOTAL_CELL)
@@ -620,6 +625,14 @@ def _rpad(text: str, width: int) -> str:
 def _cell_style(sh: dict, cell: list) -> str:
     bg, fg, bold = sh["styles"][cell[1]][:3]
     return " ".join(x for x in (("bg:" + bg) if bg else "", fg or "", "bold" if bold else "") if x)
+
+
+def _one(text: str) -> str:
+    """A Daily Dozen count in one character: ½ for a half, # past nine."""
+    v = _num(text)
+    if v is None or neon_grid.cwidth(text) <= 1:
+        return text
+    return "½" if v == 0.5 else ("%d" % round(v) if 0 <= round(v) <= 9 else "#")
 
 
 def _hcbi_week(sh: dict) -> list:
@@ -683,21 +696,54 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
     bits.append("week %+d" % round(sum(_num(rows[r][y][0]) or 0 for r in days)))
     out = [[("bold", _clip(" " + MEAL_SEP.join(bits), cols)), ("", "\n")]]
 
-    # 2. the dozen, 3. its sums (filled like each column's best day: the legend)
-    sums, best = [], []
-    for col in HCBI_DOZEN:
+    # 2. the dozen, then protein / kcal / caf as the sheet fills them; 3. their
+    # sums (filled like each column's best day: the legend) over the targets
+    # for the days shown, a target filled only when the sum meets it
+    plan = [(col, t, ">=") for col, t in zip(HCBI_DOZEN, HCBI_DOZEN_TARGETS)]
+    plan += [m for m in HCBI_EXTRA if m[0] in sh["cols"]]
+    sums, best, goals, texts = [], [], [], []
+    for col, target, kind in plan:
         cells = [(_num(rows[r][ci(col)][0]), rows[r][ci(col)]) for r in days]
         cells = [x for x in cells if x[0] is not None]
-        sums.append("%g" % sum(x[0] for x in cells))
-        best.append(_cell_style(sh, max(cells, key=lambda x: x[0])[1]) if cells else "")
-    texts = [[rows[r][ci(col)][0].strip() for col in HCBI_DOZEN] for r in days]
-    w = max([2] + [neon_grid.cwidth(t) for line in texts + [sums] for t in line])
-    fit = max(0, min(len(HCBI_DOZEN), (cols - gutter) // w))      # a pane too narrow drops the last columns
+        total = sum(x[0] for x in cells)
+        style = _cell_style(sh, max(cells, key=lambda x: x[0])[1]) if cells else ""
+        sums.append(("%g" % total, (style + " bold").strip()))
+        if target is None:
+            goals.append(("", ""))
+        else:
+            met = total >= target * len(days) if kind == ">=" else 0 < total <= target * len(days)
+            fill = style if "bg:" in style else HCBI_MET
+            goals.append((("≤" if kind == "<=" else "") + "%g" % (target * len(days)), fill if met else _DIM))
+        texts.append([rows[r][ci(col)][0].strip().replace(",", "") for r in days])
+    # A day's dozen is one character a column, flush; the sums and targets need
+    # more, so they run wider under it and protein / kcal / caf start where
+    # those rows end, on every line.
+    nd = len(HCBI_DOZEN)
+    for k in range(nd):
+        texts[k] = [_one(t) for t in texts[k]]
+    w = max([1] + [neon_grid.cwidth(x[0]) for x in sums[:nd] + goals[:nd]])
+    w += w > 1 and any(neon_grid.cwidth(g[0]) == w for g in goals[:nd])    # unfilled targets must not run together
+    widths = [w] * nd + [1 + max(neon_grid.cwidth(t) for t in texts[k] + [sums[k][0], goals[k][0]])
+                         for k in range(nd, len(plan))]
+    fit, used = 0, gutter                                   # a pane too narrow drops the last columns
+    while fit < len(plan) and used + widths[fit] <= cols:
+        used += widths[fit]
+        fit += 1
+
+    def cells_line(lead, items, day=False):
+        line = [lead]
+        for k, (t, st) in enumerate(items[:fit]):
+            line.append((st, _rpad(t, 1 if day and k < nd else widths[k])))
+            if day and k == nd - 1 and fit > nd:
+                line.append(("", " " * (nd * (w - 1))))
+        return line + [("", "\n")]
+
+    out.append([("", "\n")])
     for i, r in enumerate(days):
-        out.append([date(i, r)] + [(_cell_style(sh, rows[r][ci(col)]), _rpad(t, w))
-                                   for col, t in list(zip(HCBI_DOZEN, texts[i]))[:fit]] + [("", "\n")])
-    out.append([(_DIM, "∑".ljust(gutter))] + [((s + " bold").strip(), _rpad(t, w)) for s, t in list(zip(best, sums))[:fit]]
-               + [("", "\n")])
+        out.append(cells_line(date(i, r), [(texts[k][i], _cell_style(sh, rows[r][ci(plan[k][0])]))
+                                           for k in range(len(plan))], day=True))
+    out.append(cells_line((_DIM, "∑".ljust(gutter)), sums))
+    out.append(cells_line((_DIM, "target".ljust(gutter)), goals))
     out.append([("", "\n")])
 
     # 4. the meals
