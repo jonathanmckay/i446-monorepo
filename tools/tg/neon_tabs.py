@@ -12,8 +12,11 @@ frozen columns on the left, and a status line.
 2026-11-25, "2-3 lines per day": a sheet wider than the pane is not scrolled
 sideways any more. Each row (a day, a week) wraps onto up to WRAP_LINES lines
 that use the whole pane width, the header wrapping the same way above it; what
-still does not fit is a further PAGE of columns (left/right). hcbi opens with a
-"vs plan" panel: today and the two days before it against the daily targets.
+still does not fit is a further PAGE of columns (left/right).
+
+2026-11-26: hcbi opens with the current week (hcb / hcbp sums, a headerless
+Daily Dozen block with its sums, each day's meals) above the full log, which
+keeps one line a day there (ONE_LINE) and pages sideways.
 
 janus.py holds the glue (key bindings, the render_all branch, the ticker).
 Everything here is plain data in / plain tuples out, so tests need no tty.
@@ -61,6 +64,9 @@ ZEBRA_BG = "#262626"        # every other wrapped row, so a 3-line day reads as 
 # etc also"). Costs that width per line. Not on the lists whose frozen columns
 # are a long task label rather than a date.
 FLUSH = {"2n", "3n", "4n"}
+# One line a day, the rest of the columns on further pages (JM 2026-11-26, hcbi:
+# "each day can have a row and I'm willing to scroll for it").
+ONE_LINE = {"hcbi"}
 STRIP_STYLE = "bg:#303030 #9a9a9a"
 STATUS_STYLE = "#8a8a8a"
 
@@ -394,6 +400,8 @@ class Tabs:
         per = max(len(p) for p in pages)
         fixed = 2 + sh["header_rows"] * per                 # strip + status line + pinned header
         panel = hcbi_panel(sh, cols) if sh["name"] == "hcbi" else []
+        if panel and lines - fixed - len(panel) < HCBI_GRID_MIN * per:
+            panel = hcbi_panel(sh, cols, wrap=False)        # tight: one line of meals a day
         if panel and lines - fixed - len(panel) < 3 * per:
             panel = []                                      # short pane: the grid wins
         return pages, per, panel, max(1, (lines - fixed - len(panel)) // per)
@@ -542,12 +550,15 @@ def _source(sh: dict) -> str:
     return sh.get("source") or sh["name"]
 
 
-def _pages(sh: dict, cols: int, max_lines: int = WRAP_LINES) -> list:
+def _pages(sh: dict, cols: int, max_lines: int | None = None) -> list:
     """How a sheet's columns lay out in a pane `cols` wide: a list of pages,
     each a list of lines, each a list of column indexes. A page's first line
     starts with the frozen columns; the scrolling columns then fill up to
     `max_lines` lines greedily (a column is never drawn partly unless it is
-    wider than the pane), and whatever is left over starts the next page."""
+    wider than the pane), and whatever is left over starts the next page. A
+    ONE_LINE sheet keeps each row on a single line."""
+    if max_lines is None:
+        max_lines = 1 if sh["name"] in ONE_LINE else WRAP_LINES
     widths = sh["widths"]
     n, frozen = len(widths), min(sh["frozen_cols"], len(widths))
     head, head_w = [], 0
@@ -579,19 +590,20 @@ def _pages(sh: dict, cols: int, max_lines: int = WRAP_LINES) -> list:
     return pages
 
 
-# --- hcbi: the last three days against plan ----------------------------------
-# Targets are tools/1hcb/1hcb.py's (FOOD_GROUPS, PROTEIN_TARGET, CAL_CEILING,
-# FOOD_TARGET, HCBP_TARGET); test_neon_tabs holds the two in step. Grains have
-# no goal. (label, column, target, ">=" floor | "<=" ceiling | None)
-HCBI_PLAN = (("beans", "E", 3, ">="), ("berries", "F", 1, ">="), ("fruit", "G", 3, ">="),
-             ("cruciferous", "H", 1, ">="), ("greens", "I", 2, ">="), ("vegetables", "J", 2, ">="),
-             ("flax", "K", 1, ">="), ("grains", "L", None, None), ("nuts", "M", 1, ">="),
-             ("spices", "N", 1, ">="), ("water", "O", 3, ">="), ("protein g", "P", 100, ">="),
-             ("kcal", "U", 1800, "<="), ("food 分", "AA", 86, ">="), ("hcbp 分", "Y", 45, ">="))
-HCBI_DAYS = 3
-HCBI_UNLOGGED = -50         # the food columns' "nothing logged that day"
-_PL, _PP, _PD = 13, 6, 7    # panel column widths: label, plan, one day
-_MET, _MISS, _OPEN, _DIM = "#5fd75f", "#ff5f5f", "#d7af00", "#6c6c6c"
+# --- hcbi: the current week above the full log --------------------------------
+# JM 2026-11-26: "at the top should be my overall sum on hcbp, then a section
+# for daily dozen, but I don't need headers. Just date and day of week and the
+# color fill will tell me which color it is. I don't need padding between these
+# columns either. Then one row for sums. Then a section for the same days the
+# meals that I had, listed with a block prefix (卯 mocha 390 12, 申 …)."
+HCBI_DOZEN = ("E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O")   # bn br fr cr gr vg fx g nt sp wtr
+HCBI_BLOCKS = "卯辰巳午未申戌"     # header glyphs of the meal triads: name, kcal, protein g
+HCBI_HCBP = "Y"
+HCBI_TOTAL = (388, "X")         # the sheet's combined hcbc+hcbp cell (janus.HCBI_HCB_TOTAL_CELL)
+HCBI_WEEK = 7
+HCBI_GRID_MIN = 8               # grid rows the panel must leave before its meals stop wrapping
+MEAL_SEP = " · "                # not ", ": meal names carry commas
+_DIM, _GLYPH = "#6c6c6c", "bold #d7af00"
 
 
 def _num(text: str):
@@ -605,45 +617,113 @@ def _rpad(text: str, width: int) -> str:
     return " " * max(0, width - neon_grid.cwidth(text)) + text
 
 
-def hcbi_panel(sh: dict, cols: int) -> list:
-    """Lines (each a list of fragments ending in a newline) comparing the last
-    HCBI_DAYS days, today rightmost, with the daily plan: green met, red
-    missed, amber still open today. [] when the sheet lacks the columns or a
-    today row, or the pane is narrower than the table."""
-    today, hdr = sh.get("today_row"), sh["header_rows"]
-    have = [m for m in HCBI_PLAN if m[1] in sh["cols"]]
-    if today is None or len(have) < 8 or cols < _PL + _PP + _PD:
+def _cell_style(sh: dict, cell: list) -> str:
+    bg, fg, bold = sh["styles"][cell[1]][:3]
+    return " ".join(x for x in (("bg:" + bg) if bg else "", fg or "", "bold" if bold else "") if x)
+
+
+def _hcbi_week(sh: dict) -> list:
+    """Row indexes of the current week, oldest first, ending on today: back to
+    the row carrying a week label in column A (the sheet's weeks start Sunday)."""
+    today, hdr = sh["today_row"], sh["header_rows"]
+    first = today
+    for r in range(today, max(hdr, today - HCBI_WEEK + 1) - 1, -1):
+        first = r
+        if sh["rows"][r][0][0].strip():
+            break
+    return list(range(first, today + 1))
+
+
+def _meals(sh: dict, r: int) -> list:
+    """[(block glyph, name, "kcal protein")] for the meals logged on row `r`."""
+    out, n = [], len(sh["cols"])
+    for c, head in enumerate(sh["rows"][0]):
+        glyph = head[0].strip()
+        if len(glyph) != 1 or glyph not in HCBI_BLOCKS:
+            continue
+        parts = [sh["rows"][r][i][0].strip() for i in range(c, min(n, c + 3))]
+        if parts[0]:
+            out.append((glyph, parts[0], " ".join(x for x in parts[1:] if x)))
+    return out
+
+
+def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
+    """The current week, as lines (each a list of fragments ending in a
+    newline): the hcb / hcbp sums; a headerless Daily Dozen block, one line a
+    day, the cells flush against each other in the sheet's own fills; their
+    sums; then each day's meals behind their block glyph. `wrap` False keeps a
+    day's meals to one clipped line. [] when the sheet lacks the columns or a
+    today row."""
+    today = sh.get("today_row")
+    if today is None or any(c not in sh["cols"] for c in HCBI_DOZEN + (HCBI_HCBP, "B", "C")):
         return []
-    days = [r for r in range(today - HCBI_DAYS + 1, today + 1) if r >= hdr]
-    days = days[-max(1, min(HCBI_DAYS, (cols - _PL - _PP) // _PD)):]
-    date_c = max(0, sh["frozen_cols"] - 1)
-    out = [[("bold", " " + "vs plan".ljust(_PL - 1) + _rpad("plan", _PP))]
-           + [(TODAY_STYLE if r == today else "bold", _rpad(sh["rows"][r][date_c][0].strip(), _PD)) for r in days]
-           + [("", "\n")]]
-    hit, of = {r: 0 for r in days}, {r: 0 for r in days}
-    for label, col, target, kind in have:
-        ci = sh["cols"].index(col)
-        plan = "" if target is None else ("≤" if kind == "<=" else "") + "%g" % target
-        line = [("", " " + label + " " * (_PL - 1 - neon_grid.cwidth(label))), (_DIM, _rpad(plan, _PP))]
-        for r in days:
-            text = sh["rows"][r][ci][0].strip()
-            v = _num(text)
-            if v is None or (v == HCBI_UNLOGGED and col in ("AA", "X")) or (kind == "<=" and not v):
-                # nothing logged: an open question today, a miss on a finished day
-                style, text = (_DIM, "·") if r == today or target is None else (_MISS, "–")
-                ok = False
-            elif target is None:
-                style, ok = "", False
+    rows, ci = sh["rows"], sh["cols"].index
+    days = _hcbi_week(sh)
+    b, c_, y = ci("B"), ci("C"), ci(HCBI_HCBP)
+    labels = [_rpad(rows[r][b][0].strip(), 5) + " " + rows[r][c_][0].strip().ljust(2) + " " for r in days]
+    gutter = 9
+
+    def date(i, r):
+        return (TODAY_STYLE if r == today else DATE_STYLE, labels[i])
+
+    # 1. the sums
+    bits = []
+    if HCBI_TOTAL[0] in sh.get("row_nums", []) and HCBI_TOTAL[1] in sh["cols"]:
+        v = _num(rows[sh["row_nums"].index(HCBI_TOTAL[0])][ci(HCBI_TOTAL[1])][0])
+        if v is not None:
+            bits.append("hcb %+d" % round(v))
+    m = _num(rows[today][b][0].split("/")[0])
+    quarter = "Q%d" % ((int(m) - 1) // 3 + 1) if m else ""
+    for r in range(today + 1, len(rows)):
+        if quarter and rows[r][b][0].strip() == quarter:
+            v = _num(rows[r][y][0])
+            if v is not None:
+                bits.append("hcbp %s %+d" % (quarter, round(v)))
+            break
+    bits.append("week %+d" % round(sum(_num(rows[r][y][0]) or 0 for r in days)))
+    out = [[("bold", _clip(" " + MEAL_SEP.join(bits), cols)), ("", "\n")]]
+
+    # 2. the dozen, 3. its sums (filled like each column's best day: the legend)
+    sums, best = [], []
+    for col in HCBI_DOZEN:
+        cells = [(_num(rows[r][ci(col)][0]), rows[r][ci(col)]) for r in days]
+        cells = [x for x in cells if x[0] is not None]
+        sums.append("%g" % sum(x[0] for x in cells))
+        best.append(_cell_style(sh, max(cells, key=lambda x: x[0])[1]) if cells else "")
+    texts = [[rows[r][ci(col)][0].strip() for col in HCBI_DOZEN] for r in days]
+    w = max([2] + [neon_grid.cwidth(t) for line in texts + [sums] for t in line])
+    fit = max(0, min(len(HCBI_DOZEN), (cols - gutter) // w))      # a pane too narrow drops the last columns
+    for i, r in enumerate(days):
+        out.append([date(i, r)] + [(_cell_style(sh, rows[r][ci(col)]), _rpad(t, w))
+                                   for col, t in list(zip(HCBI_DOZEN, texts[i]))[:fit]] + [("", "\n")])
+    out.append([(_DIM, "∑".ljust(gutter))] + [((s + " bold").strip(), _rpad(t, w)) for s, t in list(zip(best, sums))[:fit]]
+               + [("", "\n")])
+    out.append([("", "\n")])
+
+    # 4. the meals
+    room = max(8, cols - gutter)
+    for i, r in enumerate(days):
+        line, used, first = [date(i, r)], 0, True
+        for glyph, name, tail in _meals(sh, r) or [("", "·", "")]:
+            # a meal wider than the pane loses the end of its name, never its numbers
+            keep = room - 3 - (neon_grid.cwidth(tail) + 1 if tail else 0)
+            text = _clip(name, max(4, keep)) + (" " + tail if tail else "")
+            need = neon_grid.cwidth(glyph) + 1 + neon_grid.cwidth(text) if glyph else 1
+            sep = 0 if first else neon_grid.cwidth(MEAL_SEP)
+            if not first and used + sep + need > room:
+                if not wrap:
+                    break
+                out.append(line + [("", "\n")])
+                line, used, sep = [("", " " * gutter)], 0, 0
+            if sep:
+                line.append((_DIM, MEAL_SEP))
+            if glyph:
+                line += [(_GLYPH, glyph + " "), ("", text)]
             else:
-                ok = v >= target if kind == ">=" else v <= target
-                style = _MET if ok else (_OPEN if r == today and kind == ">=" else _MISS)
-            if target is not None:
-                of[r] += 1
-                hit[r] += ok
-            line.append((style, _rpad(text, _PD)))
+                line.append((_DIM, text))
+            used += sep + need
+            first = False
         out.append(line + [("", "\n")])
-    out.append([(_DIM, " " + "met".ljust(_PL - 1) + _rpad("", _PP))]
-               + [(_DIM, _rpad("%d/%d" % (hit[r], of[r]), _PD)) for r in days] + [("", "\n")])
     out.append([("", "\n")])
     return out
 
