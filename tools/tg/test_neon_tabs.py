@@ -138,7 +138,7 @@ def _hcbi(today=6):
     head = {"AK": "卯", "AZ": "申"}
     rows = [[[head.get(c, c), 0] for c in cols]]
     for r in range(1, 9):
-        rows.append([["", 0], ["11/%d" % (18 + r), 0], [("T", "W", "Th", "F", "S", "S", "M", "T")[r - 1], 0]]
+        rows.append([["", 0], ["11/%d" % (18 + r), 0], [("M", "T", "W", "Th", "F", "S", "S", "M")[r - 1], 0]]
                     + [["", 0] for _ in cols[3:]])
     def put(r, **kw):
         for col, v in kw.items():
@@ -160,7 +160,7 @@ def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
     """JM 2026-11-26: the hcb / hcbp sums on top, a blank line, a headerless
     Daily Dozen block (date, weekday, the sheet's fills) with protein, kcal
     and caf, padded to line up with the totals; the last eight days are shown
-    but the sums are the week's, Friday on, coloured only when on pace
+    but the sums are the hcb week's, Thursday on, coloured only when on pace
     for the days so far; under them the week's targets; then the same days'
     meals behind their block glyph. The full log below keeps one line a day."""
     t = _tabs(tmp_path, [_hcbi()])
@@ -168,14 +168,14 @@ def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
     frags = t.render(70, 40)
     lines = _text(frags).split("\n")
     assert len(lines) == 40 and all(ng.cwidth(ln) <= 70 for ln in lines)
-    assert lines[1] == " hcb -1334 · hcbp Q4 +928 · week +109"       # F-S: 45 + 0 + 64; Thursday's 500 is last week
+    assert lines[1] == " hcb -1334 · hcbp Q4 +928 · week +109"       # Th-S: 45 + 0 + 64; Wednesday's 500 is last week
     assert lines[2] == ""
-    assert [ln[:9] for ln in lines[3:9]] == ["11/19 T  ", "11/20 W  ", "11/21 Th ", "11/22 F  ", "11/23 S  ", "11/24 S  "]
-    assert lines[5] == "11/21 Th " + "   9" + " " * 55      # history: shown, not summed
-    assert lines[6] == "11/22 F  " + "   3   1 0.5" + " " * 8 + "  12" + " " * 20 + " 120   1810  60"
+    assert [ln[:9] for ln in lines[3:9]] == ["11/19 M  ", "11/20 T  ", "11/21 W  ", "11/22 Th ", "11/23 F  ", "11/24 S  "]
+    assert lines[5] == "11/21 W  " + "   9" + " " * 55      # history: shown, not summed
+    assert lines[6] == "11/22 Th " + "   3   1 0.5" + " " * 8 + "  12" + " " * 20 + " 120   1810  60"
     assert lines[9] == "∑        " + "  10   4 1.5   0   0  12" + "   0" * 5 + " 310   4210   0"
     assert lines[10] == "target   " + "  21   7  21   7  14  14   7       7   7  21" + " 700 ≤12600    "
-    assert (nt._DIM, "11/21 Th ") in frags and (nt.DATE_STYLE, "11/22 F  ") in frags    # last week sits back
+    assert (nt._DIM, "11/21 W  ") in frags and (nt.DATE_STYLE, "11/22 Th ") in frags    # last week sits back
     assert (nt.TODAY_STYLE, "11/24 S  ") in frags
     assert ("bg:#660200 #ffffff", "   3") in frags          # the sheet's own fill
     assert ("bg:#f13df5 #000000", "   1810") in frags       # kcal coloured as the sheet colours it
@@ -187,9 +187,9 @@ def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
     assert ("bg:#f13df5 #000000 bold", "   4210") in frags
     assert (nt._DIM, "  21") in frags and (nt._DIM, " ≤12600") in frags      # no weekly target reached yet
     assert lines[11] == ""
-    assert lines[12:15] == ["11/19 T  ·", "11/20 W  ·", "11/21 Th ·"]
-    assert lines[15] == "11/22 F  卯 mocha 390 12"
-    assert lines[16] == "11/23 S  卯 skyr, berries 200 20"            # the second meal does not fit: next line,
+    assert lines[12:15] == ["11/19 M  ·", "11/20 T  ·", "11/21 W  ·"]
+    assert lines[15] == "11/22 Th 卯 mocha 390 12"
+    assert lines[16] == "11/23 F  卯 skyr, berries 200 20"            # the second meal does not fit: next line,
     assert lines[17] == "         申 面条 and a very long dinner name 900 40"      # under the date gutter
     assert lines[18] == "11/24 S  ·" and lines[19] == ""
     assert lines[20].split()[:2] == ["A", "B"] and lines[20].split()[2].startswith("CEFGHIJKLMNO")   # the log, a line a day
@@ -201,8 +201,9 @@ def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
     assert len(tight) == 29 and not [ln for ln in tight if ln.startswith("         申")]
     short = _text(t.render(70, 14)).split("\n")
     assert len(short) == 14 and "hcbp Q4" not in "".join(short)      # a short pane keeps the grid
-    assert nt._hcbi_window(_hcbi(today=4)) == ([1, 2, 3, 4], [4])    # a Friday starts its own week
-    assert nt._hcbi_window(_hcbi(today=3))[1] == [1, 2, 3]           # no Friday in reach: what there is
+    assert nt._hcbi_window(_hcbi(today=4)) == ([1, 2, 3, 4], [1, 2, 3, 4])    # a Thursday closes the week before it
+    assert nt._hcbi_window(_hcbi(today=5))[1] == [4, 5]              # and its own week shows from Friday
+    assert nt._hcbi_window(_hcbi(today=3))[1] == [1, 2, 3]           # no Thursday in reach: what there is
     done = _hcbi()
     done["rows"][6][done["cols"].index("E")] = ["12", 1]    # beans 22 >= 21: the week's target is reached
     assert ("bg:#660200 #ffffff", "  21") in [f for ln in nt.hcbi_panel(done, 70) for f in ln]
@@ -211,12 +212,13 @@ def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
     assert nt.hcbi_panel(bare, 60) == []                    # not the hcbi we know: no panel
 
 
-def test_hcbi_thursday_sums_friday_through_thursday_and_shows_hcbp():
-    """JM 2026-11-26 (a Thursday): "the sum row is off, it should show the sum
-    for F-Th, not just copy the Thursday ... Since this is Thursday, the
-    numbers should be equal to target if they are going to show color. Also,
-    can you show the hcbp column?" The week was Th-W, so a Thursday summed
-    itself alone and was coloured against one day's pace."""
+def test_hcbi_thursday_sums_thursday_through_thursday_and_shows_hcbp():
+    """JM 2026-11-26 (a Thursday): "the sum row is off ... not just copy the
+    Thursday ... Since this is Thursday, the numbers should be equal to target
+    if they are going to show color. Also, can you show the hcbp column?", then
+    "1hcb is the right frame. So it should show Thursday through Thursday (i.e.
+    8 days)". A Thursday used to start its own week, so it summed itself alone
+    and was coloured against one day's pace."""
     sh = _hcbi()
     cols, blank = sh["cols"], lambda: [["", 0] for _ in sh["cols"]]
     sh["rows"][7:7] = [blank(), blank()]                    # eight day rows, then Q4 and the X388 row
@@ -227,29 +229,33 @@ def test_hcbi_thursday_sums_friday_through_thursday_and_shows_hcbp():
     def put(r, **kw):
         for col, v in kw.items():
             sh["rows"][r][cols.index(col)] = list(v) if isinstance(v, tuple) else [v, 0]
-    put(1, E="9", F="9", Y="500")                           # last Thursday: last week's
-    for r in range(2, 9):
-        put(r, E=("3", 1), Y=("45", 2))                     # beans and hcbp: exactly the week's target
+    for r in range(1, 9):
+        put(r, U=("1,800", 3))                              # kcal: at the ceiling all eight days
         if r < 8:
+            put(r, E=("3", 1), Y=("45", 2))                 # beans and hcbp: exactly the week's target
+        if r < 7:
             put(r, F="1", P="100")                          # berries 6 of 7 and protein 600 of 700: short
     put(8, G="3")                                           # today's fruit alone: one day's worth, not a week's
     sh["today_row"] = 8
-    assert nt._hcbi_window(sh) == (list(range(1, 9)), list(range(2, 9)))
-    panel = nt.hcbi_panel(sh, 80)
-    frags = [f for ln in panel for f in ln]
+    assert nt._hcbi_window(sh) == (list(range(1, 9)), list(range(1, 9)))
+    frags = [f for ln in nt.hcbi_panel(sh, 80) for f in ln]
     lines = "".join(f[1] for f in frags).split("\n")
     assert lines[0] == " hcb -1334 · hcbp Q4 +928 · week +315"
-    assert lines[2] == "11/19 Th   9  9" + " " * 41 + "500"                 # last Thursday: shown, not summed
-    assert lines[9] == "11/26 Th   3     3" + " " * 39 + "45"
-    assert lines[10] == "∑         21  6  3" + "  0" * 8 + " 600      0 0 315"
-    assert lines[11] == "target    21  7 21  7 14 14  7     7  7 21 700 ≤12600   315"
+    assert lines[2] == "11/19 Th   3  1" + " " * 28 + "100   1800    45"       # last Thursday: summed too
+    assert lines[9] == "11/26 Th         3" + " " * 31 + "1800      "
+    assert lines[10] == "∑         21  6  3" + "  0" * 8 + " 600  14400 0 315"
+    assert lines[11] == "target    21  7 21  7 14 14  7     7  7 21 700 ≤14400   315"       # the ceiling: eight days'
+    assert (nt.DATE_STYLE, "11/19 Th ") in frags and (nt.TODAY_STYLE, "11/26 Th ") in frags
     assert ("bg:#660200 #ffffff bold", " 21") in frags and ("bg:#660200 #ffffff", " 21") in frags        # beans: met
     assert ("bg:#ffc7ce #000000 bold", " 315") in frags and ("bg:#ffc7ce #000000", " 315") in frags      # hcbp: met
+    assert ("bg:#f13df5 #000000 bold", "  14400") in frags and ("bg:#f13df5 #000000", " ≤14400") in frags
     # berries 6 of 7, protein 600 of 700 and a single day's fruit: on a Thursday short of the week is uncoloured
     assert ("bold", "  6") in frags and ("bold", "  3") in frags and ("bold", " 600") in frags
     assert not [f for f in frags if f[0].endswith("bold") and "bg:" in f[0] and f[1].strip() in ("6", "600")]
+    put(8, U=("1,801", 3))                                  # one kcal over eight days' ceiling: plain
+    assert ("bold", "  14401") in [f for ln in nt.hcbi_panel(sh, 80) for f in ln]
     narrow = "".join(f[1] for ln in nt.hcbi_panel(sh, 58) for f in ln).split("\n")
-    assert narrow[10].endswith(" 600      0 0")             # too narrow: hcbp, the last column, is the one dropped
+    assert narrow[10].endswith(" 600  14401 0")             # too narrow: hcbp, the last column, is the one dropped
 
 
 def test_hcbi_targets_match_the_weekly_review():

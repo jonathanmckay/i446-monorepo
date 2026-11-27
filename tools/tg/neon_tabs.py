@@ -606,13 +606,14 @@ HCBI_MET = "bg:#5fd75f #000000"     # on pace / reached, in a column the sheet l
 HCBI_BLOCKS = "卯辰巳午未申戌"     # header glyphs of the meal triads: name, kcal, protein g
 HCBI_HCBP = "Y"
 HCBI_TOTAL = (388, "X")         # the sheet's combined hcbc+hcbp cell (janus.HCBI_HCB_TOTAL_CELL)
-# Column C's weekday of the first day of the week summed here: Friday through
-# Thursday (JM 2026-11-26: "it should show the sum for F-Th, not just copy the
-# Thursday"), so on a Thursday pace and the week's target are the same number.
-# /1hcb's own review week is still Th-W.
-HCBI_WEEK_STARTS = "F"
+# Column C's weekday of the first day of an hcb week, /1hcb's Th-W frame. A
+# Thursday is summed with the week it closes, Thursday through Thursday, eight
+# days (JM 2026-11-26: "the sum row ... not just copy the Thursday", then
+# "1hcb is the right frame. So it should show Thursday through Thursday (i.e.
+# 8 days)"); its own week shows from Friday.
+HCBI_WEEK_STARTS = "Th"
 HCBI_WEEK = 7
-HCBI_WINDOW = 8                 # days shown: the week being summed never fills it, so yesterday is always there
+HCBI_WINDOW = 8                 # days shown: a Thursday's Th-Th sum fills it, any other day leaves history above
 HCBI_GRID_MIN = 8               # grid rows the panel must leave before its meals stop wrapping
 MEAL_SEP = " · "                # not ", ": meal names carry commas
 _DIM, _GLYPH = "#6c6c6c", "bold #d7af00"
@@ -637,12 +638,13 @@ def _cell_style(sh: dict, cell: list) -> str:
 def _hcbi_window(sh: dict) -> tuple:
     """(rows shown, rows summed), oldest first, both ending on today. Shown:
     the last HCBI_WINDOW days, so there is history on any weekday. Summed: the
-    week so far, Friday through Thursday (HCBI_WEEK_STARTS; column A's Sunday
-    weeks are not it)."""
+    hcb week so far, from the last Thursday BEFORE today (HCBI_WEEK_STARTS;
+    column A's Sunday weeks are not it), so a Thursday sums Thursday through
+    Thursday rather than itself alone."""
     today, hdr = sh["today_row"], sh["header_rows"]
     c = sh["cols"].index("C")
     start = today
-    for r in range(today, max(hdr, today - 6) - 1, -1):
+    for r in range(today - 1, max(hdr, today - HCBI_WEEK) - 1, -1):
         start = r
         if sh["rows"][r][c][0].strip() == HCBI_WEEK_STARTS:
             break
@@ -716,9 +718,15 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
             goals.append(("", ""))
             texts.append([rows[r][ci(col)][0].strip().replace(",", "") for r in days])
             continue
-        pace, full = target * len(week), target * HCBI_WEEK
-        on_pace = total >= pace if kind == ">=" else 0 < total <= pace
-        done = total >= full if kind == ">=" else len(week) == HCBI_WEEK and 0 < total <= full
+        # a goal is the 7-day week's however many days are summed; a ceiling
+        # (kcal) grows with them, or a Thursday's eighth day would be eaten free
+        n = len(week)
+        if kind == ">=":
+            pace, full = target * min(n, HCBI_WEEK), target * HCBI_WEEK
+            on_pace, done = total >= pace, total >= full
+        else:
+            pace, full = target * n, target * max(n, HCBI_WEEK)
+            on_pace, done = 0 < total <= pace, n >= HCBI_WEEK and 0 < total <= full
         sums.append(("%g" % total, (fill + " bold") if on_pace else "bold"))
         goals.append((("≤" if kind == "<=" else "") + "%g" % full, fill if done else _DIM))
         texts.append([rows[r][ci(col)][0].strip().replace(",", "") for r in days])
