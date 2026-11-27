@@ -600,12 +600,17 @@ HCBI_DOZEN = ("E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O")   # bn br f
 # Daily targets, tools/1hcb/1hcb.py's (FOOD_GROUPS, PROTEIN_TARGET, CAL_CEILING);
 # test_neon_tabs holds the two in step. Grains and caffeine have no goal.
 HCBI_DOZEN_TARGETS = (3, 1, 3, 1, 2, 2, 1, None, 1, 1, 3)
-HCBI_EXTRA = (("P", 100, ">="), ("U", 1800, "<="), ("W", None, None))     # protein g, kcal (a ceiling), caf
+# protein g, kcal (a ceiling), caf, hcbp 分 (JM 2026-11-26: "can you show the hcbp column?")
+HCBI_EXTRA = (("P", 100, ">="), ("U", 1800, "<="), ("W", None, None), ("Y", 45, ">="))
 HCBI_MET = "bg:#5fd75f #000000"     # on pace / reached, in a column the sheet left unfilled all week
 HCBI_BLOCKS = "卯辰巳午未申戌"     # header glyphs of the meal triads: name, kcal, protein g
 HCBI_HCBP = "Y"
 HCBI_TOTAL = (388, "X")         # the sheet's combined hcbc+hcbp cell (janus.HCBI_HCB_TOTAL_CELL)
-HCBI_WEEK_STARTS = "Th"         # column C's weekday of the first day of an hcb week
+# Column C's weekday of the first day of the week summed here: Friday through
+# Thursday (JM 2026-11-26: "it should show the sum for F-Th, not just copy the
+# Thursday"), so on a Thursday pace and the week's target are the same number.
+# /1hcb's own review week is still Th-W.
+HCBI_WEEK_STARTS = "F"
 HCBI_WEEK = 7
 HCBI_WINDOW = 8                 # days shown: the week being summed never fills it, so yesterday is always there
 HCBI_GRID_MIN = 8               # grid rows the panel must leave before its meals stop wrapping
@@ -632,8 +637,8 @@ def _cell_style(sh: dict, cell: list) -> str:
 def _hcbi_window(sh: dict) -> tuple:
     """(rows shown, rows summed), oldest first, both ending on today. Shown:
     the last HCBI_WINDOW days, so there is history on any weekday. Summed: the
-    hcb week so far, Thursday through Wednesday (the sheet's own weekly hcbp
-    runs Th-W; column A's Sunday weeks are not it)."""
+    week so far, Friday through Thursday (HCBI_WEEK_STARTS; column A's Sunday
+    weeks are not it)."""
     today, hdr = sh["today_row"], sh["header_rows"]
     c = sh["cols"].index("C")
     start = today
@@ -693,7 +698,7 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
     bits.append("week %+d" % round(sum(_num(rows[r][y][0]) or 0 for r in week)))
     out = [[("bold", _clip(" " + MEAL_SEP.join(bits), cols)), ("", "\n")]]
 
-    # 2. the dozen, then protein / kcal / caf as the sheet fills them, every
+    # 2. the dozen, then protein / kcal / caf / hcbp as the sheet fills them, every
     # column as wide as its total; 3. the hcb week's sums, coloured (like the
     # column's best day) only when on pace for this many days of the week,
     # over the week's targets, coloured once reached
