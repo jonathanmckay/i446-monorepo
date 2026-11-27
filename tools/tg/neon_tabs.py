@@ -626,6 +626,12 @@ def _num(text: str):
         return None
 
 
+def _big(v: float) -> str:
+    """A sum or a target: 13260 reads 13.3k (JM 2026-11-26: "for the big
+    numbers of total, show 13.3k rather than 13260, same with target")."""
+    return "%.1fk" % (v / 1000) if abs(v) >= 10000 else "%g" % v
+
+
 def _rpad(text: str, width: int) -> str:
     return " " * max(0, width - neon_grid.cwidth(text)) + text
 
@@ -668,7 +674,8 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
     """The current week, as lines (each a list of fragments ending in a
     newline): the hcb / hcbp sums; a headerless Daily Dozen block, one line a
     day, the cells flush against each other in the sheet's own fills; their
-    sums; then each day's meals behind their block glyph. `wrap` False keeps a
+    sums, the week's targets and the year's standing; then each day's meals
+    behind their block glyph. `wrap` False keeps a
     day's meals to one clipped line. [] when the sheet lacks the columns or a
     today row."""
     today = sh.get("today_row")
@@ -714,7 +721,7 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
         fill = _cell_style(sh, max(cells, key=lambda x: x[0])[1]) if cells else ""
         fill = fill if "bg:" in fill else HCBI_MET
         if target is None:
-            sums.append(("%g" % total, "bold"))
+            sums.append((_big(total), "bold"))
             goals.append(("", ""))
             texts.append([rows[r][ci(col)][0].strip().replace(",", "") for r in days])
             continue
@@ -727,13 +734,29 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
         else:
             pace, full = target * n, target * max(n, HCBI_WEEK)
             on_pace, done = 0 < total <= pace, n >= HCBI_WEEK and 0 < total <= full
-        sums.append(("%g" % total, (fill + " bold") if on_pace else "bold"))
-        goals.append((("≤" if kind == "<=" else "") + "%g" % full, fill if done else _DIM))
+        sums.append((_big(total), (fill + " bold") if on_pace else "bold"))
+        goals.append((("≤" if kind == "<=" else "") + _big(full), fill if done else _DIM))
         texts.append([rows[r][ci(col)][0].strip().replace(",", "") for r in days])
+    # 3b. the year's standing against its targets (JM 2026-11-26: "also show
+    # the annual total targets below target but above the food area"): the
+    # sheet's block under the first year label below today, which splits the
+    # dozen across two rows (odd columns on the label row, even on the next)
+    year, annual = "", []
+    for r in range(today + 1, len(rows) - 1):
+        label = rows[r][b][0].strip()
+        if len(label) == 4 and label.isdigit():
+            for col, _t, _k in plan:
+                cell = next((x for x in (rows[r][ci(col)], rows[r + 1][ci(col)]) if x[0].strip()), None)
+                annual.append((cell[0].strip().replace(",", ""), _cell_style(sh, cell))
+                              if cell and col in HCBI_DOZEN else ("", ""))
+            year = label
+            break
     nd = len(HCBI_DOZEN)
     w = 1 + max(neon_grid.cwidth(x[0]) for x in sums[:nd] + goals[:nd])
-    widths = [w] * nd + [1 + max(neon_grid.cwidth(t) for t in texts[k] + [sums[k][0], goals[k][0]])
-                         for k in range(nd, len(plan))]
+    # one width across the dozen; a column is wider only where its year figure needs it
+    widths = [max(w, 1 + neon_grid.cwidth(annual[k][0]) if annual else 0) for k in range(nd)]
+    widths += [1 + max(neon_grid.cwidth(t) for t in texts[k] + [sums[k][0], goals[k][0]])
+               for k in range(nd, len(plan))]
     fit, used = 0, gutter                                   # a pane too narrow drops the last columns
     while fit < len(plan) and used + widths[fit] <= cols:
         used += widths[fit]
@@ -748,6 +771,8 @@ def hcbi_panel(sh: dict, cols: int, wrap: bool = True) -> list:
                                            for k in range(len(plan))]))
     out.append(cells_line((_DIM, "∑".ljust(gutter)), sums))
     out.append(cells_line((_DIM, "target".ljust(gutter)), goals))
+    if year:
+        out.append(cells_line((_DIM, year.ljust(gutter)), annual))
     out.append([("", "\n")])
 
     # 4. the meals

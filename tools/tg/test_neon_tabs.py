@@ -174,7 +174,7 @@ def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
     assert lines[5] == "11/21 W  " + "   9" + " " * 55      # history: shown, not summed
     assert lines[6] == "11/22 Th " + "   3   1 0.5" + " " * 8 + "  12" + " " * 20 + " 120   1810  60"
     assert lines[9] == "∑        " + "  10   4 1.5   0   0  12" + "   0" * 5 + " 310   4210   0"
-    assert lines[10] == "target   " + "  21   7  21   7  14  14   7       7   7  21" + " 700 ≤12600    "
+    assert lines[10] == "target   " + "  21   7  21   7  14  14   7       7   7  21" + " 700 ≤12.6k    "
     assert (nt._DIM, "11/21 W  ") in frags and (nt.DATE_STYLE, "11/22 Th ") in frags    # last week sits back
     assert (nt.TODAY_STYLE, "11/24 S  ") in frags
     assert ("bg:#660200 #ffffff", "   3") in frags          # the sheet's own fill
@@ -185,7 +185,7 @@ def test_hcbi_opens_with_the_current_week_above_the_log(tmp_path):
     assert (nt.HCBI_MET + " bold", "  12") in frags and (nt.HCBI_MET + " bold", " 310") in frags
     assert ("bold", " 1.5") in frags and ("bold", "   0") in frags
     assert ("bg:#f13df5 #000000 bold", "   4210") in frags
-    assert (nt._DIM, "  21") in frags and (nt._DIM, " ≤12600") in frags      # no weekly target reached yet
+    assert (nt._DIM, "  21") in frags and (nt._DIM, " ≤12.6k") in frags      # no weekly target reached yet
     assert lines[11] == ""
     assert lines[12:15] == ["11/19 M  ·", "11/20 T  ·", "11/21 W  ·"]
     assert lines[15] == "11/22 Th 卯 mocha 390 12"
@@ -243,19 +243,46 @@ def test_hcbi_thursday_sums_thursday_through_thursday_and_shows_hcbp():
     assert lines[0] == " hcb -1334 · hcbp Q4 +928 · week +315"
     assert lines[2] == "11/19 Th   3  1" + " " * 28 + "100   1800    45"       # last Thursday: summed too
     assert lines[9] == "11/26 Th         3" + " " * 31 + "1800      "
-    assert lines[10] == "∑         21  6  3" + "  0" * 8 + " 600  14400 0 315"
-    assert lines[11] == "target    21  7 21  7 14 14  7     7  7 21 700 ≤14400   315"       # the ceiling: eight days'
+    assert lines[10] == "∑         21  6  3" + "  0" * 8 + " 600  14.4k 0 315"
+    assert lines[11] == "target    21  7 21  7 14 14  7     7  7 21 700 ≤14.4k   315"       # the ceiling: eight days', and big numbers in k
     assert (nt.DATE_STYLE, "11/19 Th ") in frags and (nt.TODAY_STYLE, "11/26 Th ") in frags
     assert ("bg:#660200 #ffffff bold", " 21") in frags and ("bg:#660200 #ffffff", " 21") in frags        # beans: met
     assert ("bg:#ffc7ce #000000 bold", " 315") in frags and ("bg:#ffc7ce #000000", " 315") in frags      # hcbp: met
-    assert ("bg:#f13df5 #000000 bold", "  14400") in frags and ("bg:#f13df5 #000000", " ≤14400") in frags
+    assert ("bg:#f13df5 #000000 bold", "  14.4k") in frags and ("bg:#f13df5 #000000", " ≤14.4k") in frags
     # berries 6 of 7, protein 600 of 700 and a single day's fruit: on a Thursday short of the week is uncoloured
     assert ("bold", "  6") in frags and ("bold", "  3") in frags and ("bold", " 600") in frags
     assert not [f for f in frags if f[0].endswith("bold") and "bg:" in f[0] and f[1].strip() in ("6", "600")]
     put(8, U=("1,801", 3))                                  # one kcal over eight days' ceiling: plain
-    assert ("bold", "  14401") in [f for ln in nt.hcbi_panel(sh, 80) for f in ln]
+    assert ("bold", "  14.4k") in [f for ln in nt.hcbi_panel(sh, 80) for f in ln]
+    assert (nt._big(13260), nt._big(9999), nt._big(1.5)) == ("13.3k", "9999", "1.5")
     narrow = "".join(f[1] for ln in nt.hcbi_panel(sh, 58) for f in ln).split("\n")
-    assert narrow[10].endswith(" 600  14401 0")             # too narrow: hcbp, the last column, is the one dropped
+    assert narrow[10].endswith(" 600  14.4k 0")             # too narrow: hcbp, the last column, is the one dropped
+    assert not [ln for ln in lines if ln.startswith("2026")]        # no year block on the sheet: no year line
+
+
+def test_hcbi_year_standing_sits_between_target_and_meals():
+    """JM 2026-11-26: "can we also show the annual total targets below target
+    but above the food area?" The sheet's year block splits the dozen across
+    two rows; they are drawn as one line under `target`, in the sheet's fills."""
+    sh = _hcbi()
+    cols, blank = sh["cols"], lambda: [["", 0] for _ in sh["cols"]]
+    sh["rows"] += [blank(), blank(), blank(), blank()]
+    sh["row_nums"] += [384, 385, 386, 387]
+    def put(r, **kw):
+        for col, v in kw.items():
+            sh["rows"][r][cols.index(col)] = list(v) if isinstance(v, tuple) else [v, 0]
+    put(9, B="2026", E=("-305", 1), G="-730", K="0", O="0.5", X="-1,398")
+    put(10, F="-8", L=("1,324", 2), N="20")
+    put(11, B="2025", E="403")                              # last year's block: not this one
+    lines = "".join(f[1] for ln in nt.hcbi_panel(sh, 90) for f in ln).split("\n")
+    frags = [f for ln in nt.hcbi_panel(sh, 90) for f in ln]
+    assert lines[9].startswith("target   ") and lines[11] == "" and lines[12].startswith("11/19 M  ")
+    #                      bn   br   fr   cr  gr  vg  fx    g   nt  sp  wtr
+    assert lines[8] == "∑        " + "   10   4  1.5   0   0  12   0    0   0   0   0" + " 310   4210   0 109"
+    assert lines[10].rstrip() == "2026     " + " -305  -8 -730" + " " * 12 + "   0 1324      20 0.5"
+    assert ("bg:#660200 #ffffff", " -305") in frags and ("bg:#ffc7ce #000000", " 1324") in frags
+    assert (nt._DIM, "2026     ") in frags and "-1398" not in lines[10]          # the dozen only: hcb is the top line's
+    assert len(nt.hcbi_panel(sh, 90)) == len(nt.hcbi_panel(_hcbi(), 90)) + 1
 
 
 def test_hcbi_targets_match_the_weekly_review():
