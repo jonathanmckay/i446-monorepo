@@ -60,7 +60,8 @@ def test_header_badges_past_day_but_not_today():
     m.STATE.day_offset = -1
     past_hdr = "".join(t for _, t, *_ in m.render_header())
     assert "◀" in past_hdr, "past-day header shows the ◀ date badge"
-    assert "today" in past_hdr, "past-day header hints ⎋ resets to today"
+    # Relative day, not "⎋ today": that hint read as "this is today" (2026-11-26).
+    assert "◀ yesterday ⎋" in past_hdr and "today" not in past_hdr
 
 
 def test_header_shows_date_and_pins_clock_to_the_right():

@@ -1729,6 +1729,28 @@ def _split_edit_points(text: str) -> tuple[str, int | None]:
     return " ".join(rest.split()), int(m.group(1))
 
 
+def _split_edit_pairs(text: str) -> tuple[str, str | None]:
+    """Pull a multi-domain split ("[102] @xk87 [102] @家", lib/fen_split.py)
+    out of retyped edit text: (text_without_it, canonical split string), or
+    (text, None) when the text carries no real split. Same rule as did-fast's
+    parse_input: two or more [N], at least one bound to an @code; a bare [N]
+    beside the pairs rides along as the entry's own-domain share.
+
+    _split_edit_points reads the first bracket only, so a split typed on an
+    edit lost every pair but one and the rest was written into the Toggl
+    description (bug 2026-11-26: "GGP lightshow @家 [140]  @xk87 [140] @家
+    1640-1900" renamed the entry "GGP lightshow @家   @xk87 [140]")."""
+    pairs = list(fen_split.TYPED_PAIR_RE.finditer(text))
+    if not pairs or len(re.findall(r"\[\d+\]", text)) < 2:
+        return text, None
+    parts = [f"[{m.group(1)}] @{m.group(2)}" for m in pairs]
+    rest = " ".join(fen_split.TYPED_PAIR_RE.sub(" ", text).split())
+    rest, bare = _split_edit_points(rest)
+    if bare is not None:
+        parts.append(f"[{bare}]")
+    return rest, " ".join(parts)
+
+
 # ── Value-tag media-minute credits (user request 2026-07-28) ────────────────
 # Media-tier Toggl tags (-1/-2/-3) each have their OWN minutes column in the
 # 0n sheet (AV/AW/AX as of 2026-07-28) whose formulas apply the ratio
@@ -2506,6 +2528,13 @@ def _fit_clock_line(left: str, rights: list[str], width: int, fill: str = "─")
     return left + fill * max(0, room - dwidth(left)) + right
 
 
+def _rel_day_label(offset: int) -> str:
+    """The viewed day relative to today: 0 "today", -1 "yesterday", -3 "3d ago"."""
+    if offset == 0:
+        return "today"
+    return "yesterday" if offset == -1 else f"{-offset}d ago"
+
+
 _LOCAL_TAG: str | None = None
 
 
@@ -2562,10 +2591,13 @@ def render_header() -> list[tuple[str, str]]:
         left = f" {pts_str}janus{_local_tag()} "
         line = _fit_clock_line(left, [f"{now:%a %-m/%-d} " + clock, clock], width)
         return [("class:header", line + "\n")]
-    # Viewing a past day: badge it (◀ ... ⎋ today) so it's never mistaken for
-    # today; the viewed date itself rides the right edge with the clock.
+    # Viewing a past day: badge it with the RELATIVE day ("◀ yesterday",
+    # "◀ 3d ago") so it's never mistaken for today; the viewed date itself
+    # rides the right edge with the clock. The old badge read "◀ ⎋ today"
+    # (a hint that Esc returns to today), which read as "this is today"
+    # (JM 2026-11-26).
     viewed = view_now()
-    left = f" {pts_str}janus · ◀ ⎋ today "
+    left = f" {pts_str}janus · ◀ {_rel_day_label(STATE.day_offset)} ⎋ "
     line = _fit_clock_line(left, [f"{viewed:%a %-m/%-d} " + clock], width)
     return [("class:no_entry", line + "\n")]
 
@@ -7532,7 +7564,17 @@ def _on_enter(event):
         if not text:
             flash("edit cancelled")
             return
-        text, points = _split_edit_points(text)
+        # A typed per-domain split ("[102] @xk87 [102] @家") is carried whole
+        # to did-fast; points is its total (2026-11-26).
+        text, split = _split_edit_pairs(text)
+        if split:
+            points = fen_split.total_points(split)
+        else:
+            text, points = _split_edit_points(text)
+        if split and target.get("shown_pts") is not None:
+            flash(f"this row already has [{target['shown_pts']}] logged: a split can't be "
+                  "applied on top of it (undo its points first)", 8.0)
+            return
         # A [N] Enter showed (JM 2026-11-04) is the row's existing total, so
         # it is never a fresh credit: unchanged or deleted does nothing,
         # changed logs the difference once the edit lands.
@@ -7661,12 +7703,12 @@ def _on_enter(event):
                 done_cmd = f"{base_desc} {time_range[0]}-{time_range[1]}"
                 if done_code:
                     done_cmd += f" @{done_code}"
-                done_cmd += f" [{points}]"
+                done_cmd += f" {split}" if split else f" [{points}]"
                 done_cmd += "".join(f" #{t}" for t in (fields.get("tags") or ent.get("tags") or []))
                 if edit_date != dt.datetime.now(_tz()).date():
                     done_cmd += f" {edit_date.month}/{edit_date.day}"
             else:
-                fields["description"] = f"{base_desc} [{points}]".strip()
+                fields["description"] = f"{base_desc} {split or f'[{points}]'}".strip()
         if not fields:
             flash("nothing to update" + code_note, 4.0)
             return
@@ -7678,7 +7720,7 @@ def _on_enter(event):
             parts.append(f"{time_range[0]}-{time_range[1] or 'now'}")
         parts += [f"#{t}" for t in tags]
         if points is not None:
-            parts.append(f"[{points}]" + ("" if done_cmd else " (pending — ⌥↵ /done logs it)"))
+            parts.append((split or f"[{points}]") + ("" if done_cmd else " (pending — ⌥↵ /done logs it)"))
         if new_total is not None:
             parts.append(f"[{shown}] kept (running again)" if open_ended else f"[{shown}]→[{new_total}]")
             if open_ended:

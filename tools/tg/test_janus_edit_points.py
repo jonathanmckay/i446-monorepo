@@ -107,6 +107,44 @@ def test_closed_range_with_points_retimes_then_runs_done(monkeypatch):
     assert dids == [("did", "lx chat 0947-1002 @xk88 [17]")], calls
 
 
+def test_split_edit_pairs():
+    mod = _load()
+    assert mod._split_edit_pairs("to dolores @家 [102]  @xk87 [102] @家 1146-1328") == (
+        "to dolores @家 1146-1328", "[102] @xk87 [102] @家")
+    assert mod._split_edit_pairs("x [20] @m5x2 [10] 0900-0930") == ("x 0900-0930", "[20] @m5x2 [10]")
+    # A lone "[N] @code" is the ordinary points + project form, not a split.
+    assert mod._split_edit_pairs("lx chat 0947-1002 [17] @xk88") == ("lx chat 0947-1002 [17] @xk88", None)
+    assert mod._split_edit_pairs("lx chat @xk88 0947-1002 [17]")[1] is None
+
+
+def test_closed_range_with_split_hands_did_every_pair(monkeypatch):
+    """Bug 2026-11-26: the edit path read the first [N] only, so a typed
+    split lost a domain and its leftovers became the Toggl description."""
+    mod = _load()
+    calls, today = _arm_running(mod, monkeypatch)
+    mod.input_buffer.text = "lx chat @xk88 [102]  @xk87 [102] @家 0947-1002"
+    _enter(mod).handler(_Event())
+
+    updates = [c for c in calls if c[0] == "update"]
+    assert len(updates) == 1
+    assert updates[0][2]["description"] == "lx chat"
+    assert updates[0][2]["project_id"] == mod.PROJECT_MAP["xk88"]
+    dids = [c for c in calls if c[0] == "did"]
+    assert dids == [("did", "lx chat 0947-1002 @xk88 [102] @xk87 [102] @家")], calls
+
+
+def test_past_day_header_names_the_relative_day():
+    mod = _load()
+    assert mod._rel_day_label(-1) == "yesterday"
+    assert mod._rel_day_label(-3) == "3d ago"
+    mod.STATE.day_offset = -1
+    try:
+        line = "".join(t for _, t in mod.render_header())
+    finally:
+        mod.STATE.day_offset = 0
+    assert "◀ yesterday" in line and "⎋ today" not in line
+
+
 def test_open_ended_with_points_parks_value_inline_no_credit(monkeypatch):
     mod = _load()
     calls, _today = _arm_running(mod, monkeypatch)
