@@ -9618,5 +9618,15 @@
     "unit": "F204",
     "tenant": null,
     "baseline": false
+  },
+  {
+    "known": "2026-11-28",
+    "effective": "2026-11-28",
+    "kind": "movein",
+    "unit_id": "432",
+    "prop": "m221",
+    "unit": "33",
+    "tenant": null,
+    "baseline": false
   }
 ]

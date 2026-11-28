@@ -604,7 +604,7 @@
     "property_name": "b101",
     "unit": "7",
     "tenant_name": "Garcia Gonzalas, Juan",
-    "status": "Eligible",
+    "status": "Pending",
     "lease_sign_date": "2025-11-29",
     "move_in": "2025-12-01",
     "renewal_start_date": null,
@@ -1032,18 +1032,6 @@
     "rent": "1295.00"
   },
   {
-    "unit_id": 845,
-    "property_name": "kn47 K1",
-    "unit": "C103",
-    "tenant_name": "Cade, Shonie A.",
-    "status": "Pending",
-    "lease_sign_date": "2026-02-24",
-    "move_in": "2026-03-01",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "931.00"
-  },
-  {
     "unit_id": 865,
     "property_name": "kn47 K1",
     "unit": "D103",
@@ -1308,18 +1296,6 @@
     "rent": "1480.00"
   },
   {
-    "unit_id": 712,
-    "property_name": "c313",
-    "unit": "4",
-    "tenant_name": "Folland, Diane",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2018-08-16",
-    "renewal_start_date": null,
-    "last_lease_renewal": "2026-03-01",
-    "rent": "1480.00"
-  },
-  {
     "unit_id": 723,
     "property_name": "c313",
     "unit": "15",
@@ -1432,7 +1408,7 @@
     "property_name": "kn47 K1",
     "unit": "L207",
     "tenant_name": "Bjornstad, Makayla S.",
-    "status": "Pending",
+    "status": "Notice Given",
     "lease_sign_date": "2026-02-21",
     "move_in": "2026-02-21",
     "renewal_start_date": null,
@@ -1624,7 +1600,7 @@
     "property_name": "ps25",
     "unit": "A5",
     "tenant_name": "Medina, Jhoel  J.",
-    "status": "Pending",
+    "status": "Notice Given",
     "lease_sign_date": "2025-03-22",
     "move_in": "2025-03-22",
     "renewal_start_date": null,
@@ -1702,18 +1678,6 @@
     "renewal_start_date": null,
     "last_lease_renewal": null,
     "rent": "850.00"
-  },
-  {
-    "unit_id": 1166,
-    "property_name": "tc68",
-    "unit": "A17",
-    "tenant_name": "Crawford Jr, Curtis",
-    "status": "Pending",
-    "lease_sign_date": null,
-    "move_in": "2026-02-09",
-    "renewal_start_date": null,
-    "last_lease_renewal": null,
-    "rent": "1450.00"
   },
   {
     "unit_id": 452,
@@ -3628,8 +3592,8 @@
     "property_name": "c702",
     "unit": "G304",
     "tenant_name": "Patterson, Uriah",
-    "status": "Pending",
-    "lease_sign_date": null,
+    "status": "Eligible",
+    "lease_sign_date": "2026-11-27",
     "move_in": "2026-05-15",
     "renewal_start_date": null,
     "last_lease_renewal": null,
@@ -4516,10 +4480,10 @@
     "property_name": "s129",
     "unit": "18",
     "tenant_name": "Nugam, Sylvestria",
-    "status": "Renewed",
+    "status": "Eligible",
     "lease_sign_date": "2026-11-20",
     "move_in": "2024-06-28",
-    "renewal_start_date": "2026-11-27",
+    "renewal_start_date": null,
     "last_lease_renewal": "2026-11-27",
     "rent": "1385.00"
   },
